@@ -655,9 +655,11 @@ public final class AgentControlClient: ObservableObject {
         if let q = comps?.query, !q.isEmpty { path += "?\(q)" }
         let method = request.httpMethod ?? "GET"
         let resp = try await relay.request(method: method, path: path, body: request.httpBody)
-        let http = HTTPURLResponse(
+        guard let http = HTTPURLResponse(
             url: url, statusCode: resp.status, httpVersion: "HTTP/1.1", headerFields: nil
-        ) ?? HTTPURLResponse()
+        ) else {
+            throw URLError(.badServerResponse)
+        }
         return (resp.body ?? Data(), http)
     }
 

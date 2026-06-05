@@ -28,7 +28,21 @@ final class GrokHeadlessDriverTests: XCTestCase {
 
     func test_unknownType_isDropped() {
         XCTAssertNil(parse(#"{"type":"tool_call","data":"x"}"#))
-        XCTAssertNil(parse(#"{"type":"usage","data":"x"}"#))
+        XCTAssertNil(parse(#"{"type":"session_update","data":"x"}"#))
+    }
+
+    func test_usage_mapsToHarnessUsage() {
+        XCTAssertEqual(
+            parse(#"{"type":"usage","data":{"input_tokens":12,"output_tokens":7,"total_tokens":19}}"#),
+            .usage(HarnessUsage(inputTokens: 12, outputTokens: 7, totalTokens: 19))
+        )
+    }
+
+    func test_usageUpdate_mapsStringifiedPayload() {
+        XCTAssertEqual(
+            parse(#"{"type":"usage_update","data":"{\"prompt_tokens\":\"3\",\"completion_tokens\":4,\"total_tokens\":7}"}"#),
+            .usage(HarnessUsage(inputTokens: 3, outputTokens: 4, totalTokens: 7))
+        )
     }
 
     func test_malformed_isDropped() {

@@ -173,6 +173,7 @@ public extension TahoeProvider {
         case .gemini:   return ContinuumTokens.hex(0x5C9DFF) // Antigravity cool blue
         case .opencode: return ContinuumTokens.hex(0x9B87D4) // muted violet (OpenCode's brand hue)
         case .cursor:   return ContinuumTokens.hex(0x7FA8B5) // cool steel (Cursor's mono identity)
+        case .grok:     return ContinuumTokens.hex(0x6BD19E) // cool green
         }
     }
 
@@ -186,6 +187,7 @@ public extension TahoeProvider {
         case .gemini:   return [ContinuumTokens.hex(0x79ADFF), ContinuumTokens.hex(0x4A86E8)]
         case .opencode: return [ContinuumTokens.hex(0xB2A4E2), ContinuumTokens.hex(0x7C6CB6)] // muted violet
         case .cursor:   return [ContinuumTokens.hex(0x9BBFC9), ContinuumTokens.hex(0x5E8893)] // cool steel
+        case .grok:     return [ContinuumTokens.hex(0x8EDFB8), ContinuumTokens.hex(0x4C9F77)] // cool green
         }
     }
 }

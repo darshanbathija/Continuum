@@ -36,6 +36,7 @@ import AppKit
 /// the `UsageRecord`.
 public extension Notification.Name {
     static let opencodeUsageRecorded = Notification.Name("clawdmeter.opencode.usage.recorded")
+    static let grokUsageRecorded = Notification.Name("clawdmeter.grok.usage.recorded")
 }
 
 #if canImport(Darwin)
@@ -101,6 +102,7 @@ public final class UsageHistoryStore {
         /// SSE live-records bucket used for the menu-bar dollar gauge).
         case opencode
         case cursor
+        case grok
 
         public var label: String {
             switch self {
@@ -110,6 +112,7 @@ public final class UsageHistoryStore {
             case .gemini:     return "Gemini"
             case .opencode:   return "OpenCode"
             case .cursor:     return "Cursor"
+            case .grok:       return "Grok"
             }
         }
 
@@ -124,6 +127,7 @@ public final class UsageHistoryStore {
             case .gemini:     return provider == .gemini
             case .opencode:   return provider == .opencode
             case .cursor:     return provider == .cursor
+            case .grok:       return provider == .grok
             }
         }
     }
@@ -325,6 +329,29 @@ public final class UsageHistoryStore {
                 self?.scheduleOpencodeMirrorRefresh()
             }
         })
+
+        // Grok harness usage is written into Continuum's own JSONL ledger.
+        // Coalesce refreshes so streaming usage updates do not force a full
+        // analytics rebuild and iCloud mirror write for every token event.
+        observers.append(center.addObserver(
+            forName: .grokUsageRecorded,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.scheduleGrokMirrorRefresh()
+            }
+        })
+
+        observers.append(center.addObserver(
+            forName: .cursorUsageRecorded,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.scheduleLiveUsageRefresh()
+            }
+        })
     }
 
     /// v0.23.3 T9 — debounced trigger that asks the analytics loader to
@@ -345,6 +372,11 @@ public final class UsageHistoryStore {
     /// cost bounded.
     @MainActor
     private func scheduleOpencodeMirrorRefresh() {
+        scheduleLiveUsageRefresh()
+    }
+
+    @MainActor
+    private func scheduleLiveUsageRefresh() {
         let now = Date()
         let cooldown: TimeInterval = 10
         if let last = lastOpencodeMirrorRefreshAt,
@@ -360,6 +392,27 @@ public final class UsageHistoryStore {
     /// Timestamp of the last opencode-event-triggered refresh. Drives the
     /// 10s debounce in `scheduleOpencodeMirrorRefresh`.
     private var lastOpencodeMirrorRefreshAt: Date?
+
+    /// Debounced trigger for Grok's Continuum-owned JSONL ledger. The ledger can
+    /// receive several streaming `usage_update` events per turn, so this mirrors
+    /// opencode's bounded refresh cadence rather than force-refreshing per event.
+    @MainActor
+    private func scheduleGrokMirrorRefresh() {
+        let now = Date()
+        let cooldown: TimeInterval = 10
+        if let last = lastGrokMirrorRefreshAt,
+           now.timeIntervalSince(last) < cooldown {
+            return
+        }
+        lastGrokMirrorRefreshAt = now
+        Task { @MainActor in
+            await refresh()
+        }
+    }
+
+    /// Timestamp of the last Grok-ledger-triggered refresh. Drives the 10s
+    /// debounce in `scheduleGrokMirrorRefresh`.
+    private var lastGrokMirrorRefreshAt: Date?
 
     /// Append a live opencode UsageRecord. Trims to the 5000-item
     /// retention cap so memory stays bounded over a long-running day.

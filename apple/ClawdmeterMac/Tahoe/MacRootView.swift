@@ -2,6 +2,33 @@ import SwiftUI
 import AppKit
 import ClawdmeterShared
 
+private struct MacRootNotificationHandlers: ViewModifier {
+    var handleSwitchTab: (Notification) -> Void
+    var handleOpenSettingsSection: (Notification) -> Void
+    var handleFocusCodeSearch: (Notification) -> Void
+    var handleOpenGlobalPalette: (Notification) -> Void
+    var handleOpenShortcutSheet: (Notification) -> Void
+    var handleOpenFilePicker: (Notification) -> Void
+    var handleOpenPlanQueue: (Notification) -> Void
+    var handleExportSession: (Notification) -> Void
+    var handleTransientToast: (Notification) -> Void
+    var handleNextAttention: (Notification) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterSwitchTab), perform: handleSwitchTab)
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenSettingsSection), perform: handleOpenSettingsSection)
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterFocusCodeSearch), perform: handleFocusCodeSearch)
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenGlobalPalette), perform: handleOpenGlobalPalette)
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenShortcutSheet), perform: handleOpenShortcutSheet)
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenFilePicker), perform: handleOpenFilePicker)
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterShowPlanQueue), perform: handleOpenPlanQueue)
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterExportSession), perform: handleExportSession)
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterShowTransientToast), perform: handleTransientToast)
+            .onReceive(NotificationCenter.default.publisher(for: .sessionNextAttention), perform: handleNextAttention)
+    }
+}
+
 /// Tahoe 26 Mac window root — replaces `DashboardView` as the primary
 /// SwiftUI scene content. Owns the global `TahoeThemeStore`, paints the
 /// wallpaper layer, and hosts the four titlebar tabs (Chat / Usage / Code /
@@ -19,6 +46,7 @@ struct MacRootView: View {
     /// tap). Once a tab is in the set, its view stays mounted with
     /// `opacity: 0` while inactive.
     @State private var visitedTabs: Set<Tab> = []
+    @State private var requestedSettingsSection: String? = nil
 
     /// AppRuntime — drives the live Usage / Menu-bar surfaces via the
     /// `tahoeLive` adapter in `MacTahoeAdapter.swift`. Other surfaces
@@ -35,6 +63,7 @@ struct MacRootView: View {
     @ObservedObject private var claudeModel: AppModel
     @ObservedObject private var codexModel: AppModel
     @ObservedObject private var geminiModel: AppModel
+    @ObservedObject private var cursorModel: AppModel
     @ObservedObject private var skillCatalog = SkillCatalog.shared
 
     // v0.23: legacy chatMode + chatSoloProvider bindings retired with
@@ -85,6 +114,7 @@ struct MacRootView: View {
         self.claudeModel = runtime.claudeModel
         self.codexModel = runtime.codexModel
         self.geminiModel = runtime.geminiModel
+        self.cursorModel = runtime.cursorModel
         _theme = State(initialValue: TahoeThemeStore.loaded())
         _tab = State(initialValue: initialTab)
         // Seed the visited-tabs cache with the initial tab so the very
@@ -183,11 +213,13 @@ struct MacRootView: View {
                         let _ = claudeModel.usage
                         let _ = codexModel.usage
                         let _ = geminiModel.usage
+                        let _ = cursorModel.usage
                         MacUsageView(
                             data: runtime.tahoeLive,
                             claudeModel: claudeModel,
                             codexModel: codexModel,
                             geminiModel: geminiModel,
+                            cursorModel: cursorModel,
                             usageHistoryStore: runtime.usageHistoryStore
                         )
                         .modifier(TabSlotVisibility(active: tab == .usage))
@@ -203,7 +235,8 @@ struct MacRootView: View {
                             codexModel: codexModel,
                             geminiModel: geminiModel,
                             runtime: runtime,
-                            presentationStore: presentationStore
+                            presentationStore: presentationStore,
+                            requestedSection: $requestedSettingsSection
                         )
                         .modifier(TabSlotVisibility(active: tab == .settings))
                     }
@@ -240,15 +273,18 @@ struct MacRootView: View {
         // had focus, the shortcuts silently dropped. Menu-bar commands
         // are always-active and properly surface in the View menu so
         // users can discover them.
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterSwitchTab), perform: handleSwitchTab)
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterFocusCodeSearch), perform: handleFocusCodeSearch)
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenGlobalPalette), perform: handleOpenGlobalPalette)
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenShortcutSheet), perform: handleOpenShortcutSheet)
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenFilePicker), perform: handleOpenFilePicker)
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterShowPlanQueue), perform: handleOpenPlanQueue)
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterExportSession), perform: handleExportSession)
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterShowTransientToast), perform: handleTransientToast)
-        .onReceive(NotificationCenter.default.publisher(for: .sessionNextAttention), perform: handleNextAttention)
+        .modifier(MacRootNotificationHandlers(
+            handleSwitchTab: handleSwitchTab,
+            handleOpenSettingsSection: handleOpenSettingsSection,
+            handleFocusCodeSearch: handleFocusCodeSearch,
+            handleOpenGlobalPalette: handleOpenGlobalPalette,
+            handleOpenShortcutSheet: handleOpenShortcutSheet,
+            handleOpenFilePicker: handleOpenFilePicker,
+            handleOpenPlanQueue: handleOpenPlanQueue,
+            handleExportSession: handleExportSession,
+            handleTransientToast: handleTransientToast,
+            handleNextAttention: handleNextAttention
+        ))
         // v0.14.0 (D7): handoff toast overlay — top-anchored Tahoe chip
         // that autodismisses after 2s. Visible across all tabs.
         .overlay(alignment: .top) {
@@ -442,16 +478,26 @@ struct MacRootView: View {
         guard let name = note.userInfo?["tab"] as? String else { return }
         switch name {
         case "chat":
+            visitedTabs.insert(.chat)
             tab = .chat
         case "usage":
+            visitedTabs.insert(.usage)
             tab = .usage
         case "code":
+            visitedTabs.insert(.code)
             tab = .code
         case "settings":
+            visitedTabs.insert(.settings)
             tab = .settings
         default:
             break
         }
+    }
+
+    private func handleOpenSettingsSection(_ note: Notification) {
+        requestedSettingsSection = note.userInfo?["section"] as? String
+        visitedTabs.insert(.settings)
+        tab = .settings
     }
 
     private func handleFocusCodeSearch(_ note: Notification) {
@@ -562,7 +608,7 @@ struct MacRootView: View {
             .init(id: "code.workspaceSwitcher", title: "Open Workspace Switcher", subtitle: "Switch workspace or session", keywords: ["repo", "session", "switch"], scope: .code, kind: .navigation, shortcutID: "code.workspaceSwitcher"),
             .init(id: "code.reviewPane", title: "Toggle Review Pane", subtitle: "Show or hide Plan/Diff/PR/Terminal", keywords: ["plan", "diff", "terminal"], scope: .code, kind: .action, shortcutID: "code.reviewPane"),
             .init(id: "settings.pairIPhone", title: "Pair Or Manage iPhone", subtitle: "Open Settings for desktop sync", keywords: ["phone", "sync", "qr"], scope: .settings, kind: .setting),
-            .init(id: "settings.whatsNew", title: "What's New", subtitle: "Open the changelog", keywords: ["release", "updates"], scope: .settings, kind: .external),
+            .init(id: "settings.updates", title: "Updates", subtitle: "Check for app updates", keywords: ["release", "sparkle", "changelog"], scope: .settings, kind: .setting),
         ])
         if let session = sessionsModel.openSession {
             let transcriptURL = sessionsModel.chatStore(for: session)?.currentFileURL
@@ -629,10 +675,14 @@ struct MacRootView: View {
             tab = .usage
         case "nav.code":
             tab = .code
-        case "nav.settings", "settings.pairIPhone":
+        case "nav.settings", "settings.pairIPhone", "settings.updates":
+            if command.id.rawValue == "settings.pairIPhone" {
+                requestedSettingsSection = "devices"
+            } else if command.id.rawValue == "settings.updates" {
+                requestedSettingsSection = "updates"
+            }
+            visitedTabs.insert(.settings)
             tab = .settings
-        case "settings.whatsNew":
-            openChangelog()
         case "session.new":
             tab = .code
             sessionsModel.showingNewSessionSheet = true
@@ -1119,13 +1169,7 @@ struct MacTitlebar: View {
                     HStack(spacing: 10) {
                         tabStrip
                         Spacer(minLength: 0)
-                        // v0.24.0: in-app update chip. Always visible across
-                        // every tab when an update is available OR the bundle
-                        // is translocated. Self-hides via `chipState()` —
-                        // returns EmptyView when there's nothing to surface,
-                        // so the existing per-tab `secondaryRight` content
-                        // continues to render alone on quiet days.
-                        UpdateChip(coordinator: runtime?.updateCoordinator)
+                        UpdateAppControl(coordinator: runtime?.updateCoordinator)
                         secondaryRight
                     }
                     .padding(.horizontal, 14)
@@ -1149,6 +1193,7 @@ struct MacTitlebar: View {
     private var codeActions: some View {
         TahoeGlass(radius: 6, tone: .chip) {
             HStack(spacing: 2) {
+                UpdateAppControl(coordinator: runtime?.updateCoordinator, compact: true)
                 codeActionButton(icon: "sliders", help: "Focus Code filters") {
                     NotificationCenter.default.post(name: .focusSidebarSearch, object: nil)
                 }

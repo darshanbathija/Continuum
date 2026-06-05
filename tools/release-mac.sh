@@ -1,0 +1,441 @@
+#!/usr/bin/env bash
+# Single Mac release path for Continuum Sparkle updates.
+#
+# Required local credentials:
+#   CLAWDMETER_RELEASE_SIGNING_IDENTITY  Developer ID Application identity or SHA-1 hash
+#   CLAWDMETER_SPARKLE_PUBLIC_ED_KEY     public EdDSA key from Sparkle generate_keys
+# Optional env:
+#   CLAWDMETER_TEAM_ID                   expected Apple team id
+#   CLAWDMETER_NOTARY_PROFILE            keychain profile, default clawdmeter-notary
+#   CLAWDMETER_SPARKLE_KEY_ACCOUNT       Sparkle keychain account, default clawdmeter-mac-release
+#   SPARKLE_BIN_DIR                      directory containing generate_appcast/sign_update/generate_keys
+#   CLAWDMETER_ASC_KEY_PATH              App Store Connect API private key, if using ASC-backed provisioning
+#   CLAWDMETER_ASC_KEY_ID                App Store Connect API key id
+#   CLAWDMETER_ASC_ISSUER_ID             App Store Connect issuer id
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+source "$REPO_ROOT/tools/release-config.sh"
+
+MODE="publish"
+VERSION=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --validate-only) MODE="validate"; shift ;;
+    --no-publish) MODE="no-publish"; shift ;;
+    --publish) MODE="publish"; shift ;;
+    --version) VERSION="${2:-}"; shift 2 ;;
+    -h|--help)
+      sed -n '1,18p' "$0"
+      exit 0
+      ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+die() { echo "✗ $*" >&2; exit 1; }
+ok() { echo "✓ $*"; }
+need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
+
+project_value() {
+  local key="$1"
+  awk -F': ' -v key="$key" '$1 ~ key {gsub(/"/, "", $2); gsub(/[[:space:]]/, "", $2); print $2; exit}' apple/project.yml
+}
+
+project_team_id() {
+  awk -F': ' '/DEVELOPMENT_TEAM:/ {gsub(/"/, "", $2); gsub(/[[:space:]]/, "", $2); print $2; exit}' apple/project.yml
+}
+
+find_identity_line() {
+  local identity="$1"
+  security find-identity -p codesigning -v | awk -v identity="$identity" 'index($0, identity) {print; exit}'
+}
+
+identity_team_id() {
+  sed -nE 's/.*\(([A-Z0-9]{10})\)".*/\1/p'
+}
+
+extract_sparkle_public_key() {
+  awk '
+    /^[[:space:]]*[A-Za-z0-9+\/=]{20,}[[:space:]]*$/ {
+      gsub(/[[:space:]]/, "")
+      print
+      exit
+    }
+    /SUPublicEDKey/ {
+      if (match($0, /[A-Za-z0-9+\/=]{20,}/)) {
+        print substr($0, RSTART, RLENGTH)
+        exit
+      }
+    }
+  '
+}
+
+find_sparkle_tool() {
+  local tool="$1"
+  if [[ -n "${SPARKLE_BIN_DIR:-}" && -x "$SPARKLE_BIN_DIR/$tool" ]]; then
+    printf '%s\n' "$SPARKLE_BIN_DIR/$tool"
+    return 0
+  fi
+  if command -v "$tool" >/dev/null 2>&1; then
+    command -v "$tool"
+    return 0
+  fi
+  local derived
+  derived="$(find "${HOME}/Library/Developer/Xcode/DerivedData" \
+    -path "*/SourcePackages/artifacts/sparkle/Sparkle/bin/${tool}" \
+    -perm +111 \
+    -print 2>/dev/null | head -n1 || true)"
+  if [[ -n "$derived" ]]; then
+    printf '%s\n' "$derived"
+    return 0
+  fi
+  return 1
+}
+
+verify_static_config() {
+  local project_min_os info_min_os info_public_key marketing build project_team
+  project_min_os="$(awk -F': ' '/MACOSX_DEPLOYMENT_TARGET:/ {gsub(/"/, "", $2); gsub(/[[:space:]]/, "", $2); print $2; exit}' apple/project.yml)"
+  marketing="$(project_value MARKETING_VERSION)"
+  build="$(project_value CURRENT_PROJECT_VERSION)"
+  project_team="$(project_team_id)"
+  info_min_os="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' apple/ClawdmeterMac/Info.plist)"
+  info_public_key="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' apple/ClawdmeterMac/Info.plist)"
+
+  [[ -n "$marketing" ]] || die "MARKETING_VERSION missing from apple/project.yml"
+  [[ -n "$build" ]] || die "CURRENT_PROJECT_VERSION missing from apple/project.yml"
+  [[ -n "$project_team" ]] || die "DEVELOPMENT_TEAM missing from apple/project.yml"
+  [[ -z "${CLAWDMETER_TEAM_ID:-}" || "$CLAWDMETER_TEAM_ID" == "$project_team" ]] || die "CLAWDMETER_TEAM_ID $CLAWDMETER_TEAM_ID does not match project team $project_team"
+  [[ "$CLAWDMETER_MAC_MIN_OS" == "$project_min_os" ]] || die "release-config min OS $CLAWDMETER_MAC_MIN_OS != project $project_min_os"
+  [[ "$info_min_os" == '$(MACOSX_DEPLOYMENT_TARGET)' || "$info_min_os" == "$project_min_os" ]] || die "Info.plist LSMinimumSystemVersion is $info_min_os, expected project deployment target"
+  [[ "$info_public_key" == '$(SPARKLE_PUBLIC_ED_KEY)' || "$info_public_key" == "${CLAWDMETER_SPARKLE_PUBLIC_ED_KEY:-}" ]] || die "Info.plist SUPublicEDKey does not come from SPARKLE_PUBLIC_ED_KEY"
+  /usr/libexec/PlistBuddy -c 'Print :SUFeedURL' apple/ClawdmeterMac/Info.plist | grep -qx "$CLAWDMETER_PAGES_BASE_URL/$CLAWDMETER_APPCAST_PATH" || die "SUFeedURL does not match release config"
+  /usr/libexec/PlistBuddy -c 'Print :SUEnableInstallerLauncherService' apple/ClawdmeterMac/Info.plist | grep -qx 'true' || die "Sparkle installer launcher service is not enabled"
+  grep -q 'com.apple.security.temporary-exception.mach-lookup.global-name' apple/ClawdmeterMac/ClawdmeterMac-Release.entitlements || die "Sparkle sandbox mach lookup entitlement missing"
+  ok "static release config matches project and Info.plist"
+
+  if [[ -z "$VERSION" ]]; then VERSION="$marketing"; fi
+  CURRENT_BUILD="$build"
+  PROJECT_TEAM_ID="$project_team"
+}
+
+verify_credentials() {
+  local identity_line identity_team sparkle_output sparkle_public_key
+  [[ -n "${CLAWDMETER_RELEASE_SIGNING_IDENTITY:-}" ]] || die "CLAWDMETER_RELEASE_SIGNING_IDENTITY must name a Developer ID Application certificate"
+  [[ "$CLAWDMETER_RELEASE_SIGNING_IDENTITY" == *"Developer ID Application"* || "$CLAWDMETER_RELEASE_SIGNING_IDENTITY" =~ ^[A-Fa-f0-9]{40}$ ]] || die "signing identity must be Developer ID Application or a SHA-1 identity"
+  identity_line="$(find_identity_line "$CLAWDMETER_RELEASE_SIGNING_IDENTITY")"
+  [[ -n "$identity_line" ]] || die "Developer ID identity not found in keychain"
+  [[ "$identity_line" == *"Developer ID Application"* ]] || die "resolved signing identity is not a Developer ID Application certificate: $identity_line"
+  identity_team="$(printf '%s\n' "$identity_line" | identity_team_id)"
+  [[ -n "$identity_team" ]] || die "could not extract Apple team id from signing identity: $identity_line"
+  [[ "$identity_team" == "$PROJECT_TEAM_ID" ]] || die "Developer ID team $identity_team does not match project team $PROJECT_TEAM_ID"
+  [[ -n "${CLAWDMETER_SPARKLE_PUBLIC_ED_KEY:-}" ]] || die "CLAWDMETER_SPARKLE_PUBLIC_ED_KEY is required"
+  [[ "$CLAWDMETER_SPARKLE_PUBLIC_ED_KEY" != *REPLACE* ]] || die "Sparkle public key is still a placeholder"
+  sparkle_output="$("$GENERATE_KEYS" --account "$CLAWDMETER_SPARKLE_KEY_ACCOUNT" -p 2>/dev/null)" || die "Sparkle private key not found in keychain account '$CLAWDMETER_SPARKLE_KEY_ACCOUNT'"
+  sparkle_public_key="$(printf '%s\n' "$sparkle_output" | extract_sparkle_public_key)"
+  [[ -n "$sparkle_public_key" ]] || die "could not read Sparkle public key from keychain account '$CLAWDMETER_SPARKLE_KEY_ACCOUNT'"
+  [[ "$sparkle_public_key" == "$CLAWDMETER_SPARKLE_PUBLIC_ED_KEY" ]] || die "Sparkle keychain public key does not match CLAWDMETER_SPARKLE_PUBLIC_ED_KEY"
+  xcrun notarytool history --keychain-profile "$CLAWDMETER_NOTARY_PROFILE" >/dev/null || die "notary profile '$CLAWDMETER_NOTARY_PROFILE' is unavailable"
+  ok "Developer ID team, Sparkle keypair, and notary profile are available"
+}
+
+verify_provisioning_auth() {
+  grep -q 'com.apple.security.application-groups' apple/ClawdmeterMac/ClawdmeterMac-Release.entitlements || return 0
+  if [[ -z "${CLAWDMETER_ASC_KEY_PATH:-}${CLAWDMETER_ASC_KEY_ID:-}${CLAWDMETER_ASC_ISSUER_ID:-}" ]]; then
+    ok "App Store Connect provisioning auth not configured; using installed Developer ID profiles"
+    return 0
+  fi
+  [[ -r "$CLAWDMETER_ASC_KEY_PATH" ]] || die "CLAWDMETER_ASC_KEY_PATH is not readable: $CLAWDMETER_ASC_KEY_PATH"
+  [[ -n "${CLAWDMETER_ASC_KEY_ID:-}" ]] || die "CLAWDMETER_ASC_KEY_ID is required for Developer ID provisioning"
+  [[ "$CLAWDMETER_ASC_KEY_ID" =~ ^[A-Z0-9]{10}$ ]] || die "CLAWDMETER_ASC_KEY_ID does not look like a 10-character Apple key id"
+  [[ -n "${CLAWDMETER_ASC_ISSUER_ID:-}" ]] || die "CLAWDMETER_ASC_ISSUER_ID is required for Developer ID provisioning"
+  [[ "$CLAWDMETER_ASC_ISSUER_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || die "CLAWDMETER_ASC_ISSUER_ID does not look like a UUID"
+  ok "App Store Connect provisioning auth is configured"
+}
+
+profile_file_for_name() {
+  local expected_name="$1"
+  local profile_dir file tmp name team
+  local profile_dirs=(
+    "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+    "$HOME/Library/MobileDevice/Provisioning Profiles"
+  )
+  for profile_dir in "${profile_dirs[@]}"; do
+    [[ -d "$profile_dir" ]] || continue
+    while IFS= read -r -d '' file; do
+      tmp="$(mktemp)"
+      if /usr/bin/security cms -D -i "$file" >"$tmp" 2>/dev/null; then
+        name="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$tmp" 2>/dev/null || true)"
+        team="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$tmp" 2>/dev/null || true)"
+        rm -f "$tmp"
+        if [[ "$name" == "$expected_name" && "$team" == "$PROJECT_TEAM_ID" ]]; then
+          printf '%s\n' "$file"
+          return 0
+        fi
+      else
+        rm -f "$tmp"
+      fi
+    done < <(find "$profile_dir" -maxdepth 1 -type f \( -name '*.provisionprofile' -o -name '*.mobileprovision' \) -print0 2>/dev/null)
+  done
+  return 1
+}
+
+verify_developer_id_profiles() {
+  [[ -n "${CLAWDMETER_MAC_PROFILE_NAME:-}" ]] || die "CLAWDMETER_MAC_PROFILE_NAME is required"
+  [[ -n "${CLAWDMETER_MAC_WIDGET_PROFILE_NAME:-}" ]] || die "CLAWDMETER_MAC_WIDGET_PROFILE_NAME is required"
+  profile_file_for_name "$CLAWDMETER_MAC_PROFILE_NAME" >/dev/null || die "Developer ID profile not installed: $CLAWDMETER_MAC_PROFILE_NAME"
+  profile_file_for_name "$CLAWDMETER_MAC_WIDGET_PROFILE_NAME" >/dev/null || die "Developer ID profile not installed: $CLAWDMETER_MAC_WIDGET_PROFILE_NAME"
+  ok "Developer ID direct provisioning profiles are installed"
+}
+
+verify_tools() {
+  need xcodebuild
+  need xcrun
+  need codesign
+  need spctl
+  need hdiutil
+  need curl
+  need gh
+  need git
+  need python3
+  GENERATE_APPCAST="$(find_sparkle_tool generate_appcast)" || die "generate_appcast not found; set SPARKLE_BIN_DIR to Sparkle/bin"
+  SIGN_UPDATE="$(find_sparkle_tool sign_update)" || die "sign_update not found; set SPARKLE_BIN_DIR to Sparkle/bin"
+  GENERATE_KEYS="$(find_sparkle_tool generate_keys)" || die "generate_keys not found; set SPARKLE_BIN_DIR to Sparkle/bin"
+  export GENERATE_APPCAST SIGN_UPDATE GENERATE_KEYS
+  gh auth status >/dev/null || die "GitHub CLI is not authenticated"
+  ok "release tooling is available"
+}
+
+verify_feed_preconditions() {
+  local notes="docs/${CLAWDMETER_RELEASE_NOTES_PATH}/${VERSION}.md"
+  [[ -f "$notes" ]] || die "release notes missing at $notes"
+  [[ -s "$notes" ]] || die "release notes file is empty: $notes"
+  mkdir -p "docs/$(dirname "$CLAWDMETER_APPCAST_PATH")" "docs/$CLAWDMETER_RELEASE_NOTES_PATH"
+  ok "release notes are ready"
+}
+
+verify_publish_git_preconditions() {
+  local branch
+  branch="$(git branch --show-current)"
+  [[ "$branch" == "main" ]] || die "publish mode must run from main so GitHub Pages publishes atomically; current branch is '$branch'"
+  git diff --quiet || die "working tree has unstaged changes before release publish"
+  git diff --cached --quiet || die "index has staged changes before release publish"
+  [[ -z "$(git ls-files --others --exclude-standard)" ]] || die "working tree has untracked files before release publish"
+  git fetch origin main >/dev/null 2>&1 || die "could not fetch origin/main"
+  [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || die "main is not up to date with origin/main"
+  ok "publish git preconditions passed"
+}
+
+publish_asset() {
+  local tag="$1" dmg="$2" notes="$3"
+  if gh release view "$tag" >/dev/null 2>&1; then
+    gh release upload "$tag" "$dmg" --clobber
+  else
+    gh release create "$tag" "$dmg" \
+      --title "${CLAWDMETER_APP_NAME} ${VERSION}" \
+      --notes-file "$notes" \
+      --latest
+  fi
+  ok "GitHub release asset uploaded for $tag"
+}
+
+verify_asset_url() {
+  local url="$1" expected_size="$2"
+  local headers content_length
+  headers="$(curl -fsSIL "$url")"
+  content_length="$(printf '%s\n' "$headers" | awk 'BEGIN{IGNORECASE=1} /^content-length:/ {gsub("\r", "", $2); value=$2} END{print value}')"
+  [[ -n "$content_length" ]] || die "asset URL has no content-length: $url"
+  [[ "$content_length" == "$expected_size" ]] || die "asset byte length mismatch: url=$content_length local=$expected_size"
+  ok "asset URL and byte length verified"
+}
+
+update_release_history() {
+  local tag="$1" dmg="$2"
+  local history_path="docs/${CLAWDMETER_RELEASE_HISTORY_PATH}"
+  local dmg_name notes_public_name notes_url published_at
+  dmg_name="$(basename "$dmg")"
+  notes_public_name="${dmg_name%.dmg}.md"
+  notes_url="${CLAWDMETER_PAGES_BASE_URL}/${CLAWDMETER_RELEASE_NOTES_PATH}/${notes_public_name}"
+  published_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  mkdir -p "$(dirname "$history_path")"
+  python3 - "$history_path" "$VERSION" "$CURRENT_BUILD" "${CLAWDMETER_APP_NAME} ${VERSION}" "$published_at" "$notes_url" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+entry = {
+    "version": sys.argv[2],
+    "build": sys.argv[3],
+    "title": sys.argv[4],
+    "publishedAt": sys.argv[5],
+    "notesURL": sys.argv[6],
+}
+try:
+    data = json.loads(path.read_text())
+    if not isinstance(data, list):
+        data = []
+except FileNotFoundError:
+    data = []
+
+data = [row for row in data if row.get("version") != entry["version"]]
+data.insert(0, entry)
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+  ok "release history updated for $tag"
+}
+
+generate_pages_appcast() {
+  local tag="$1" dmg="$2"
+  local appcast_stage=".build/sparkle-appcast/$tag"
+  local notes_dir="$appcast_stage/${CLAWDMETER_RELEASE_NOTES_PATH}"
+  local dmg_name notes_public_name
+  dmg_name="$(basename "$dmg")"
+  notes_public_name="${dmg_name%.dmg}.md"
+  rm -rf "$appcast_stage"
+  mkdir -p "$appcast_stage" "$notes_dir"
+  cp "$dmg" "$appcast_stage/"
+  cp "docs/${CLAWDMETER_RELEASE_NOTES_PATH}/${VERSION}.md" "$appcast_stage/$notes_public_name"
+
+  "$GENERATE_APPCAST" \
+    --account "$CLAWDMETER_SPARKLE_KEY_ACCOUNT" \
+    --download-url-prefix "https://github.com/${CLAWDMETER_RELEASE_OWNER}/${CLAWDMETER_RELEASE_REPO}/releases/download/${tag}/" \
+    --release-notes-url-prefix "${CLAWDMETER_PAGES_BASE_URL}/${CLAWDMETER_RELEASE_NOTES_PATH}/" \
+    "$appcast_stage"
+
+  [[ -f "$appcast_stage/appcast.xml" ]] || die "generate_appcast did not create appcast.xml"
+  cp "$appcast_stage/appcast.xml" "docs/${CLAWDMETER_APPCAST_PATH}"
+  cp "$appcast_stage/$notes_public_name" "docs/${CLAWDMETER_RELEASE_NOTES_PATH}/$notes_public_name"
+  grep -q "sparkle:edSignature" "docs/${CLAWDMETER_APPCAST_PATH}" || die "appcast is missing Sparkle edSignature"
+  grep -q "$CLAWDMETER_MAC_MIN_OS" "docs/${CLAWDMETER_APPCAST_PATH}" || die "appcast is missing minimum OS $CLAWDMETER_MAC_MIN_OS"
+  update_release_history "$tag" "$dmg"
+  ok "GitHub Pages appcast generated at docs/${CLAWDMETER_APPCAST_PATH}"
+}
+
+publish_pages_feed() {
+  local tag="$1"
+  git add "docs/${CLAWDMETER_APPCAST_PATH}" "docs/${CLAWDMETER_RELEASE_NOTES_PATH}" "docs/${CLAWDMETER_RELEASE_HISTORY_PATH}"
+  if git diff --cached --quiet; then
+    ok "GitHub Pages feed unchanged"
+  else
+    git commit -m "release: publish Mac appcast $tag"
+    ok "GitHub Pages feed committed for $tag"
+  fi
+  git push origin main
+  ok "GitHub Pages feed pushed to origin/main"
+}
+
+notarize_and_verify_dmg() {
+  local dmg="$1"
+  local timeout="${CLAWDMETER_NOTARY_TIMEOUT:-30m}"
+  local log_dir=".build/notary"
+  local log_path="$log_dir/$(basename "${dmg%.dmg}").notarytool.log"
+  local status=0
+  local submission_id=""
+  if xcrun stapler validate "$dmg" >/dev/null 2>&1; then
+    ok "DMG already stapled"
+  else
+    mkdir -p "$log_dir"
+    set +e
+    xcrun notarytool submit "$dmg" \
+      --keychain-profile "$CLAWDMETER_NOTARY_PROFILE" \
+      --wait \
+      --timeout "$timeout" \
+      2>&1 | tee "$log_path"
+    status="${PIPESTATUS[0]}"
+    set -e
+    submission_id="$(awk '/^[[:space:]]*id:/ {print $2; exit}' "$log_path")"
+    if [[ "$status" -ne 0 ]]; then
+      if [[ -n "$submission_id" ]]; then
+        xcrun notarytool info "$submission_id" --keychain-profile "$CLAWDMETER_NOTARY_PROFILE" || true
+        xcrun notarytool log "$submission_id" --keychain-profile "$CLAWDMETER_NOTARY_PROFILE" "$log_path.json" || true
+      fi
+      die "DMG notarization failed or did not complete within $timeout; see $log_path"
+    fi
+    grep -q 'status: Accepted' "$log_path" || die "DMG notarization did not return Accepted; see $log_path"
+    xcrun stapler staple "$dmg"
+  fi
+  spctl --assess --type open --context context:primary-signature "$dmg"
+  ok "DMG notarized, stapled, and accepted by spctl"
+}
+
+export_release_env() {
+  export CLAWDMETER_RELEASE_OWNER
+  export CLAWDMETER_RELEASE_REPO
+  export CLAWDMETER_APP_NAME
+  export CLAWDMETER_BUNDLE_ID
+  export CLAWDMETER_RELEASE_TAG_PREFIX
+  export CLAWDMETER_RELEASE_TAG_SUFFIX
+  export CLAWDMETER_RELEASE_ASSET_PREFIX
+  export CLAWDMETER_PAGES_BASE_URL
+  export CLAWDMETER_APPCAST_PATH
+  export CLAWDMETER_RELEASE_NOTES_PATH
+  export CLAWDMETER_RELEASE_HISTORY_PATH
+  export CLAWDMETER_NOTARY_PROFILE
+  export CLAWDMETER_MAC_MIN_OS
+  export CLAWDMETER_SPARKLE_KEY_ACCOUNT
+  export CLAWDMETER_TEAM_ID
+  export CLAWDMETER_RELEASE_SIGNING_IDENTITY
+  export CLAWDMETER_SPARKLE_PUBLIC_ED_KEY
+  export CLAWDMETER_MAC_PROFILE_NAME
+  export CLAWDMETER_MAC_WIDGET_PROFILE_NAME
+  [[ -z "${CLAWDMETER_ASC_KEY_PATH:-}" ]] || export CLAWDMETER_ASC_KEY_PATH
+  [[ -z "${CLAWDMETER_ASC_KEY_ID:-}" ]] || export CLAWDMETER_ASC_KEY_ID
+  [[ -z "${CLAWDMETER_ASC_ISSUER_ID:-}" ]] || export CLAWDMETER_ASC_ISSUER_ID
+}
+
+verify_static_config
+verify_tools
+verify_credentials
+verify_provisioning_auth
+verify_developer_id_profiles
+verify_feed_preconditions
+
+if [[ "$MODE" == "validate" ]]; then
+  ok "release validation passed"
+  exit 0
+fi
+
+if [[ "$MODE" == "publish" ]]; then
+  verify_publish_git_preconditions
+fi
+
+TAG="${CLAWDMETER_RELEASE_TAG_PREFIX}${VERSION}${CLAWDMETER_RELEASE_TAG_SUFFIX}"
+DMG_NAME="${CLAWDMETER_RELEASE_ASSET_PREFIX}-${VERSION}-arm64.dmg"
+DMG_PATH="$REPO_ROOT/dist/$DMG_NAME"
+NOTES_PATH="docs/${CLAWDMETER_RELEASE_NOTES_PATH}/${VERSION}.md"
+ASSET_URL="https://github.com/${CLAWDMETER_RELEASE_OWNER}/${CLAWDMETER_RELEASE_REPO}/releases/download/${TAG}/${DMG_NAME}"
+
+export_release_env
+CLAWDMETER_RELEASE_HARDENED_RUNTIME=1 CLAWDMETER_SKIP_BUILD_SCRIPT_NOTARIZATION=1 ./tools/build-mac-dmg.sh
+[[ -f "$DMG_PATH" ]] || die "expected DMG missing at $DMG_PATH"
+
+notarize_and_verify_dmg "$DMG_PATH"
+
+if [[ "$MODE" == "publish" ]]; then
+  publish_asset "$TAG" "$DMG_PATH" "$NOTES_PATH"
+  verify_asset_url "$ASSET_URL" "$(stat -f%z "$DMG_PATH")"
+else
+  ok "skipping GitHub asset publish (--no-publish)"
+fi
+
+generate_pages_appcast "$TAG" "$DMG_PATH"
+
+if [[ "$MODE" == "publish" ]]; then
+  publish_pages_feed "$TAG"
+else
+  ok "skipping GitHub Pages publish (--no-publish)"
+fi
+
+cat <<EOF
+✓ Mac release artifacts ready
+  tag:       $TAG
+  dmg:       $DMG_PATH
+  appcast:   docs/${CLAWDMETER_APPCAST_PATH}
+  pages:     ${CLAWDMETER_PAGES_BASE_URL}/${CLAWDMETER_APPCAST_PATH}
+
+If a bad feed is published, revert docs/${CLAWDMETER_APPCAST_PATH} on main and
+rerun this script after fixing the release notes or artifact.
+EOF

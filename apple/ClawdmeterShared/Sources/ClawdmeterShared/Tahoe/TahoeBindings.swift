@@ -23,6 +23,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
     public var autoReviveAgo: String       // "4h ago" / "" if never fired
     public var supportsAutoRevive: Bool
     public var hasWeekly: Bool
+    public var cursorQuota: UsageData.CursorQuota?
     /// v0.22.18: true when this row's numbers came from a fallback /
     /// cached source rather than a live API poll. Today the only path
     /// that sets this is CodexSource's JSONL fallback (when the wham
@@ -42,6 +43,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
         autoReviveAgo: String = "",
         supportsAutoRevive: Bool = true,
         hasWeekly: Bool = true,
+        cursorQuota: UsageData.CursorQuota? = nil,
         stale: Bool = false
     ) {
         self.sessionPercent = sessionPercent
@@ -53,6 +55,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
         self.autoReviveAgo = autoReviveAgo
         self.supportsAutoRevive = supportsAutoRevive
         self.hasWeekly = hasWeekly
+        self.cursorQuota = cursorQuota
         self.stale = stale
     }
 
@@ -87,11 +90,12 @@ public struct TahoeLiveRow: Equatable, Sendable {
                 // meaningfully in Previews.
                 case .opencode: return "via opencode"
                 case .cursor: return "Cursor Auto"
+                case .grok: return "grok-build"
                 }
             }(),
             autoReviveOn: d.reviveOn, autoReviveAgo: d.reviveAgo,
             supportsAutoRevive: true,
-            hasWeekly: true
+            hasWeekly: provider != .cursor
         )
     }
 }
@@ -104,17 +108,20 @@ public struct TahoeLiveBindings: Equatable, Sendable {
     public var gemini: TahoeLiveRow
     public var opencode: TahoeLiveRow
     public var cursor: TahoeLiveRow
+    public var grok: TahoeLiveRow
 
     public init(
         claude: TahoeLiveRow = .demo(.claude),
         codex:  TahoeLiveRow = .demo(.codex),
         gemini: TahoeLiveRow = .demo(.gemini),
         opencode: TahoeLiveRow = .demo(.opencode),
-        cursor: TahoeLiveRow = .demo(.cursor)
+        cursor: TahoeLiveRow = .demo(.cursor),
+        grok: TahoeLiveRow = .demo(.grok)
     ) {
         self.claude = claude; self.codex = codex; self.gemini = gemini
         self.opencode = opencode
         self.cursor = cursor
+        self.grok = grok
     }
 
     public func row(for provider: TahoeProvider) -> TahoeLiveRow {
@@ -124,6 +131,7 @@ public struct TahoeLiveBindings: Equatable, Sendable {
         case .gemini: return gemini
         case .opencode: return opencode
         case .cursor: return cursor
+        case .grok: return grok
         }
     }
 

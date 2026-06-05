@@ -79,32 +79,39 @@ struct MenuBarGaugeView {
 
         let composite = NSMutableAttributedString()
 
-        // Session portion. When the 5h window isn't active, show a dash
-        // instead of a misleading "0% 5h" reading.
+        let badgeSize: CGFloat = 18
+        let badge = NSTextAttachment()
+        badge.image = providerBadgeImage(
+            assetName: assetName,
+            size: badgeSize,
+            template: template
+        )
+        badge.bounds = CGRect(x: 0, y: -4, width: badgeSize, height: badgeSize)
+
+        // Providers with no weekly window (Antigravity/Cursor) still need
+        // their provider badge; otherwise a lone Cursor item renders as
+        // text-only and looks like the logo/toggle failed.
+        if !hasWeekly {
+            composite.append(NSAttributedString(attachment: badge))
+            composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
+        }
+
+        // Session portion. When the 5h/monthly window isn't active, show a
+        // dash instead of a misleading "0% 5h" reading.
         if notStarted {
-            composite.append(NSAttributedString(string: "—  ", attributes: textAttrs))
+            composite.append(NSAttributedString(string: "—", attributes: textAttrs))
         } else {
             composite.append(NSAttributedString(
                 string: "\(usage.sessionPct)% \(compactTime(usage.sessionResetMins))",
                 attributes: textAttrs
             ))
-            composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
         }
 
-        // No-weekly providers (Gemini/Antigravity) stop after the session
-        // portion — the badge separator + weekly segment only make sense
-        // when there's a real weekly window to read.
+        // Weekly-cap providers use the badge as a separator between session
+        // and weekly readings.
         if hasWeekly {
-            let badgeSize: CGFloat = 18
-            let attach = NSTextAttachment()
-            attach.image = providerBadgeImage(
-                assetName: assetName,
-                size: badgeSize,
-                template: template
-            )
-            attach.bounds = CGRect(x: 0, y: -4, width: badgeSize, height: badgeSize)
-            composite.append(NSAttributedString(attachment: attach))
-
+            composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
+            composite.append(NSAttributedString(attachment: badge))
             composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
             composite.append(NSAttributedString(
                 string: "\(usage.weeklyPct)% \(compactTime(usage.weeklyResetMins))",
@@ -148,6 +155,36 @@ struct MenuBarGaugeView {
         composite.append(NSAttributedString(attachment: attach))
 
         composite.append(NSAttributedString(string: "  —", attributes: attrs))
+        let image = imageFromAttributedString(composite, template: template)
+        cacheLock.lock()
+        cache[cacheKey] = image
+        cacheLock.unlock()
+        return image
+    }
+
+    /// Badge + short text label for providers whose menu-bar surface is
+    /// historical analytics rather than a live quota gauge.
+    static func renderHistoryLabel(assetName: String, text: String, template: Bool) -> NSImage {
+        let cacheKey = "history-\(assetName)-\(template ? "t" : "c")-\(text)"
+        cacheLock.lock()
+        if let cached = cache[cacheKey] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.labelColor,
+        ]
+        let composite = NSMutableAttributedString()
+        let badgeSize: CGFloat = 18
+        let attach = NSTextAttachment()
+        attach.image = providerBadgeImage(assetName: assetName, size: badgeSize, template: template)
+        attach.bounds = CGRect(x: 0, y: -4, width: badgeSize, height: badgeSize)
+        composite.append(NSAttributedString(attachment: attach))
+        composite.append(NSAttributedString(string: "  \(text)", attributes: attrs))
         let image = imageFromAttributedString(composite, template: template)
         cacheLock.lock()
         cache[cacheKey] = image
@@ -237,7 +274,7 @@ struct MenuBarGaugeView {
     ///     is Apple's standard "template" PNG (alpha mask, tints with menu bar)
     ///   - GeminiLogo: 4-pointed Gemini star (SVG, fill auto-tinted)
     static func isTemplateAsset(_ name: String) -> Bool {
-        name == "ClaudeLogo" || name == "CodexLogo" || name == "GeminiLogo"
+        name == "ClaudeLogo" || name == "CodexLogo" || name == "GeminiLogo" || name == "GrokLogo"
     }
 
     /// Backwards-compat shim until callers migrate to `providerBadgeImage`.

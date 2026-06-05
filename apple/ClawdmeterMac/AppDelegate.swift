@@ -12,7 +12,7 @@ import ClawdmeterShared
 ///      has `isVisible` plus `NSStatusBar.system.removeStatusItem(_:)`, both of
 ///      which work as expected without any Tahoe quirks.
 ///
-/// One `ProviderStatusController` per provider — Claude and Codex. The
+/// One `ProviderStatusController` per provider. The
 /// controller owns its `NSStatusItem` and `NSPopover`, subscribes to the
 /// `AppModel`'s `objectWillChange` to refresh the button image on each poll,
 /// and hides itself when the user toggles its preference off.
@@ -29,6 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var claudeController: ProviderStatusController?
     private var codexController: ProviderStatusController?
     private var geminiController: ProviderStatusController?
+    private var grokController: GrokStatusController?
+    private var cursorController: ProviderStatusController?
 
     private var prefsObserver: NSObjectProtocol?
     private var windowCloseObserver: NSObjectProtocol?
@@ -36,10 +38,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Perf: `UserDefaults.didChangeNotification` (object:nil) fires on EVERY
     /// app-wide defaults write, so `applyVisibilityFromPrefs` must filter to
-    /// the 4 `menuBarShown` keys it cares about — otherwise unrelated pref
+    /// the provider `menuBarShown` keys it cares about — otherwise unrelated pref
     /// writes thrash `setVisible(_:)` across all controllers. `nil` means
     /// "not yet applied" so the first call always runs.
-    private var lastAppliedVisibility: (claude: Bool, codex: Bool, gemini: Bool, opencode: Bool)?
+    private var lastAppliedVisibility: (
+        claude: Bool,
+        codex: Bool,
+        gemini: Bool,
+        opencode: Bool,
+        grok: Bool,
+        cursor: Bool
+    )?
 
     /// Notification posted by the menu bar popover's "Show dashboard" button.
     /// Handled here so the AppDelegate can flip the activation policy and
@@ -73,6 +82,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if geminiController == nil {
             geminiController = ProviderStatusController(model: runtime.geminiModel, runtime: runtime)
+        }
+        if grokController == nil {
+            grokController = GrokStatusController(runtime: runtime)
+        }
+        if cursorController == nil {
+            cursorController = ProviderStatusController(model: runtime.cursorModel, runtime: runtime)
         }
         installObserversIfNeeded()
         applyVisibilityFromPrefs()
@@ -292,16 +307,182 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Live tab toggle behaves).
         let opencodeShown = (defaults.object(forKey: ProviderStatusController.prefKey("opencode")) as? Bool ?? false)
             && ProviderEnablement.isEnabled("opencode")
+        let grokShown = (defaults.object(forKey: ProviderStatusController.prefKey("grok")) as? Bool ?? true)
+            && ProviderEnablement.isEnabled("grok")
+        let cursorShown = (defaults.object(forKey: ProviderStatusController.prefKey("cursor")) as? Bool ?? false)
+            && ProviderEnablement.isEnabled("cursor")
         // Perf: this fires on every app-wide defaults write via
-        // `didChangeNotification`; bail unless one of the 4 menu-bar keys
+        // `didChangeNotification`; bail unless one of the menu-bar keys
         // actually moved so we don't re-toggle every NSStatusItem on
         // unrelated pref changes.
-        let next = (claude: claudeShown, codex: codexShown, gemini: geminiShown, opencode: opencodeShown)
+        let next = (
+            claude: claudeShown,
+            codex: codexShown,
+            gemini: geminiShown,
+            opencode: opencodeShown,
+            grok: grokShown,
+            cursor: cursorShown
+        )
         guard lastAppliedVisibility == nil || lastAppliedVisibility! != next else { return }
         lastAppliedVisibility = next
         claudeController?.setVisible(claudeShown)
         codexController?.setVisible(codexShown)
         geminiController?.setVisible(geminiShown)
+        grokController?.setVisible(grokShown)
+        cursorController?.setVisible(cursorShown)
+    }
+}
+
+// MARK: - Grok history-backed menu-bar controller
+
+@MainActor
+final class GrokStatusController: NSObject {
+    private weak var runtime: AppRuntime?
+    private var statusItem: NSStatusItem?
+    private var popover: NSPopover?
+    private var pairingPopover: NSPopover?
+    private var cancellables: Set<AnyCancellable> = []
+    private var observer: NSObjectProtocol?
+    private lazy var selection = MenuBarPopoverSelection(initial: .grok)
+    private var todayTokens: Int = 0
+
+    init(runtime: AppRuntime) {
+        self.runtime = runtime
+        super.init()
+        todayTokens = runtime.usageHistoryStore.snapshot?.grok.today.totals.totalTokens ?? 0
+        runtime.usageHistoryStore.snapshotPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] snapshot in
+                guard let self else { return }
+                self.todayTokens = snapshot?.grok.today.totals.totalTokens ?? 0
+                self.refreshImage()
+            }
+            .store(in: &cancellables)
+        observer = NotificationCenter.default.addObserver(
+            forName: .grokUsageRecorded,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            Task { @MainActor in
+                if let record = note.userInfo?["record"] as? UsageRecord,
+                   record.timestamp >= Calendar.current.startOfDay(for: Date()) {
+                    self?.todayTokens += record.tokens.totalTokens
+                }
+                self?.refreshImage()
+            }
+        }
+    }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    func setVisible(_ visible: Bool) {
+        if visible {
+            ensureStatusItem()
+            statusItem?.isVisible = true
+            refreshImage()
+        } else {
+            statusItem?.isVisible = false
+        }
+    }
+
+    private func ensureStatusItem() {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.target = self
+        item.button?.action = #selector(togglePopover(_:))
+        item.button?.image = currentImage()
+        statusItem = item
+
+        let pop = NSPopover()
+        pop.behavior = .transient
+        pop.contentSize = NSSize(width: 380, height: 600)
+        let popoverView: MacMenubarPopover
+        if let runtime {
+            popoverView = MacMenubarPopover(
+                initialProvider: .grok,
+                onOpenDashboard: { [weak self] in
+                    guard let self else { return }
+                    self.popover?.performClose(nil)
+                    NotificationCenter.default.post(name: AppDelegate.openDashboardRequest, object: nil)
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
+                },
+                onSyncIPhone: { [weak self] in
+                    self?.showPairingPopover()
+                },
+                claudeModel: runtime.claudeModel,
+                codexModel: runtime.codexModel,
+                geminiModel: runtime.geminiModel,
+                cursorModel: runtime.cursorModel,
+                selectionDriver: selection,
+                usageHistoryStore: runtime.usageHistoryStore
+            )
+        } else {
+            popoverView = MacMenubarPopover(initialProvider: .grok)
+        }
+        let themedPopover = popoverView
+            .tahoeTheme(TahoeThemeStore.loaded())
+            .frame(width: 388)
+        let host = NSHostingController(rootView: themedPopover)
+        host.sizingOptions = NSHostingSizingOptions.preferredContentSize
+        pop.contentViewController = host
+        popover = pop
+    }
+
+    private func showPairingPopover() {
+        popover?.performClose(nil)
+        guard let runtime, let button = statusItem?.button else { return }
+        let pop = pairingPopover ?? {
+            let p = NSPopover()
+            p.behavior = .transient
+            p.contentSize = NSSize(width: 340, height: 460)
+            let view = PairingQRPopoverContent(runtime: runtime)
+                .tahoeTheme(TahoeThemeStore.loaded())
+                .padding(16)
+                .frame(width: 340)
+            let host = NSHostingController(rootView: view)
+            host.sizingOptions = NSHostingSizingOptions.preferredContentSize
+            p.contentViewController = host
+            pairingPopover = p
+            return p
+        }()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            pop.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
+    }
+
+    private func refreshImage() {
+        statusItem?.button?.image = currentImage()
+    }
+
+    private func currentImage() -> NSImage {
+        let text = todayTokens > 0 ? Self.formatTokens(todayTokens) : "\u{2014}"
+        return MenuBarGaugeView.renderHistoryLabel(
+            assetName: "GrokLogo",
+            text: text,
+            template: MenuBarGaugeView.isTemplateAsset("GrokLogo")
+        )
+    }
+
+    @objc private func togglePopover(_ sender: Any?) {
+        guard let popover, let button = statusItem?.button else { return }
+        if popover.isShown {
+            popover.performClose(sender)
+        } else {
+            runtime?.usageHistoryStore.forceRefresh()
+            selection.request(.grok)
+            refreshImage()
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.becomeKey()
+        }
+    }
+
+    private static func formatTokens(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
+        return "\(n)"
     }
 }
 
@@ -505,6 +686,7 @@ final class ProviderStatusController: NSObject {
                 runtime.claudeModel.forcePoll()
                 runtime.codexModel.forcePoll()
                 runtime.geminiModel.forcePoll()
+                runtime.cursorModel.forcePoll()
             }
             // #38: re-target the cached popover to this provider's tab so
             // re-opening always lands on the clicked provider, not the last

@@ -74,6 +74,7 @@ public struct AnalyticsRepoList: View {
         var geminiByRepo: [RepoKey: TokenTotals] = [:]
         var opencodeByRepo: [RepoKey: TokenTotals] = [:]
         var cursorByRepo: [RepoKey: TokenTotals] = [:]
+        var grokByRepo: [RepoKey: TokenTotals] = [:]
         if providerFilter.includes(.claude) {
             for row in snapshot.claude.window(window).byRepo where row.repo != "__rest__" {
                 claudeByRepo[row.repo, default: .zero] += row.totals
@@ -90,13 +91,18 @@ public struct AnalyticsRepoList: View {
             }
         }
         if providerFilter.includes(.opencode) {
-            for row in snapshot.totals(for: .opencode).window(window).byRepo where row.repo != "__rest__" {
+            for row in snapshot.opencode.window(window).byRepo where row.repo != "__rest__" {
                 opencodeByRepo[row.repo, default: .zero] += row.totals
             }
         }
         if providerFilter.includes(.cursor) {
-            for row in snapshot.totals(for: .cursor).window(window).byRepo where row.repo != "__rest__" {
+            for row in snapshot.cursor.window(window).byRepo where row.repo != "__rest__" {
                 cursorByRepo[row.repo, default: .zero] += row.totals
+            }
+        }
+        if providerFilter.includes(.grok) {
+            for row in snapshot.grok.window(window).byRepo where row.repo != "__rest__" {
+                grokByRepo[row.repo, default: .zero] += row.totals
             }
         }
 
@@ -107,28 +113,34 @@ public struct AnalyticsRepoList: View {
             .union(geminiByRepo.keys)
             .union(opencodeByRepo.keys)
             .union(cursorByRepo.keys)
-        var combinedByRepo: [RepoKey: (claude: Decimal, codex: Decimal, opencode: Decimal, cursor: Decimal, total: Decimal, tokens: Int, geminiReqs: Int)] = [:]
+            .union(grokByRepo.keys)
+        var combinedByRepo: [RepoKey: (claude: Decimal, codex: Decimal, opencode: Decimal, cursor: Decimal, grok: Decimal, total: Decimal, tokens: Int, geminiReqs: Int, grokTokens: Int)] = [:]
         for key in allRepoKeys {
             let cl = claudeByRepo[key, default: .zero]
             let cx = codexByRepo[key, default: .zero]
             let gm = geminiByRepo[key, default: .zero]
             let op = opencodeByRepo[key, default: .zero]
             let cu = cursorByRepo[key, default: .zero]
+            let gr = grokByRepo[key, default: .zero]
+            let total = cl.costUSD + cx.costUSD + op.costUSD + cu.costUSD + gr.costUSD
             combinedByRepo[key] = (
                 claude: cl.costUSD,
                 codex: cx.costUSD,
                 opencode: op.costUSD,
                 cursor: cu.costUSD,
-                total: cl.costUSD + cx.costUSD + op.costUSD + cu.costUSD,
-                tokens: cl.totalTokens + cx.totalTokens + op.totalTokens + cu.totalTokens,
-                geminiReqs: gm.requestCount
+                grok: gr.costUSD,
+                total: total,
+                tokens: cl.totalTokens + cx.totalTokens + op.totalTokens + cu.totalTokens + gr.totalTokens,
+                geminiReqs: gm.requestCount,
+                grokTokens: gr.totalTokens
             )
         }
 
         let totalCost = combinedByRepo.values.reduce(Decimal.zero, { $0 + $1.total })
         let totalGeminiReqs = combinedByRepo.values.reduce(0, { $0 + $1.geminiReqs })
+        let totalTokenActivity = combinedByRepo.values.reduce(0, { $0 + $1.tokens })
         // Skip the list when there's neither cost nor request data.
-        guard totalCost > 0 || totalGeminiReqs > 0 else { return [] }
+        guard totalCost > 0 || totalGeminiReqs > 0 || totalTokenActivity > 0 else { return [] }
 
         // Composite rank: cost-bearing repos sort by $, ties / cost-zero
         // rows fall through to gemini request count. Per X3-C trunk-level
@@ -137,7 +149,10 @@ public struct AnalyticsRepoList: View {
             if a.value.total != b.value.total {
                 return a.value.total > b.value.total
             }
-            return a.value.geminiReqs > b.value.geminiReqs
+            if a.value.geminiReqs != b.value.geminiReqs {
+                return a.value.geminiReqs > b.value.geminiReqs
+            }
+            return a.value.tokens > b.value.tokens
         }
         let top = Array(sorted.prefix(8))
         let rest = Array(sorted.dropFirst(8))
@@ -151,6 +166,9 @@ public struct AnalyticsRepoList: View {
             let geminiShare: Double = (totalGeminiReqs > 0 && totalCost == 0)
                 ? Double(value.geminiReqs) / Double(totalGeminiReqs)
                 : 0
+            let tokenShare: Double = (totalTokenActivity > 0 && value.total == 0)
+                ? Double(value.tokens) / Double(totalTokenActivity)
+                : 0
             let costShare = NSDecimalNumber(decimal: costShareDec).doubleValue
             return Row(
                 id: key,
@@ -161,9 +179,11 @@ public struct AnalyticsRepoList: View {
                 codexCost: value.codex,
                 opencodeCost: value.opencode,
                 cursorCost: value.cursor,
+                grokCost: value.grok,
                 tokens: value.tokens,
                 geminiRequests: value.geminiReqs,
-                share: max(costShare, geminiShare),
+                grokTokens: value.grokTokens,
+                share: max(costShare, max(geminiShare, tokenShare)),
                 isRest: false,
                 restCount: 0
             )
@@ -173,13 +193,15 @@ public struct AnalyticsRepoList: View {
             let restCodex = rest.map(\.value.codex).reduce(Decimal.zero, +)
             let restOpencode = rest.map(\.value.opencode).reduce(Decimal.zero, +)
             let restCursor = rest.map(\.value.cursor).reduce(Decimal.zero, +)
+            let restGrok = rest.map(\.value.grok).reduce(Decimal.zero, +)
             let restGemini = rest.map(\.value.geminiReqs).reduce(0, +)
-            let restCost = restClaude + restCodex + restOpencode + restCursor
+            let restGrokTokens = rest.map(\.value.grokTokens).reduce(0, +)
+            let restCost = restClaude + restCodex + restOpencode + restCursor + restGrok
             let restTokens = rest.map(\.value.tokens).reduce(0, +)
             let restShareDec: Decimal = totalCost > 0 ? (restCost / totalCost) : 0
-            let restShare: Double = totalCost > 0
-                ? NSDecimalNumber(decimal: restShareDec).doubleValue
-                : (totalGeminiReqs > 0 ? Double(restGemini) / Double(totalGeminiReqs) : 0)
+            let restCostShare: Double = totalCost > 0 ? NSDecimalNumber(decimal: restShareDec).doubleValue : 0
+            let restGeminiShare: Double = (totalGeminiReqs > 0 && totalCost == 0) ? Double(restGemini) / Double(totalGeminiReqs) : 0
+            let restTokenShare: Double = (totalTokenActivity > 0 && restCost == 0) ? Double(restTokens) / Double(totalTokenActivity) : 0
             out.append(Row(
                 id: "__rest__",
                 repo: "__rest__",
@@ -189,9 +211,11 @@ public struct AnalyticsRepoList: View {
                 codexCost: restCodex,
                 opencodeCost: restOpencode,
                 cursorCost: restCursor,
+                grokCost: restGrok,
                 tokens: restTokens,
                 geminiRequests: restGemini,
-                share: restShare,
+                grokTokens: restGrokTokens,
+                share: max(restCostShare, max(restGeminiShare, restTokenShare)),
                 isRest: true,
                 restCount: rest.count
             ))
@@ -225,17 +249,21 @@ public struct AnalyticsRepoList: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("By repo")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.body(13, weight: .semibold))
+                    .foregroundStyle(ContinuumTokens.fg2)
                 Spacer()
-                Text("$").font(.caption).foregroundStyle(.secondary)
-                Text("Share").font(.caption).foregroundStyle(.secondary)
+                Text("$")
+                    .font(ContinuumFont.mono(11))
+                    .foregroundStyle(ContinuumTokens.fg3)
+                Text("Share")
+                    .font(ContinuumFont.mono(11))
+                    .foregroundStyle(ContinuumTokens.fg3)
             }
 
             if data.isEmpty {
                 Text("No usage in this window")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.body(12))
+                    .foregroundStyle(ContinuumTokens.fg3)
             } else {
                 ForEach(data) { row in
                     RepoRow(row: row)
@@ -245,8 +273,8 @@ public struct AnalyticsRepoList: View {
             if !snapshot.unpricedModelTokens.isEmpty {
                 let totalUnpricedTokens = snapshot.unpricedModelTokens.values.map(\.totalTokens).reduce(0, +)
                 Text("\(AnalyticsTokenFormatter.format(totalUnpricedTokens)) tokens against \(snapshot.unpricedModelTokens.count) unpriced model\(snapshot.unpricedModelTokens.count == 1 ? "" : "s") — update pricing.json")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.body(11))
+                    .foregroundStyle(ContinuumTokens.fg3)
                     .padding(.top, 4)
             }
         }
@@ -267,6 +295,7 @@ public struct AnalyticsRepoList: View {
         let codexCost: Decimal
         let opencodeCost: Decimal
         let cursorCost: Decimal
+        let grokCost: Decimal
         let tokens: Int
         /// Gemini's contribution to this repo, expressed as request count.
         /// cloudcode-pa doesn't surface tokens or cost, so this is a
@@ -274,6 +303,7 @@ public struct AnalyticsRepoList: View {
         /// small "+N gem" badge in the row instead of a stacked bar segment
         /// to keep the cost-comparable bar honest.
         let geminiRequests: Int
+        let grokTokens: Int
         let share: Double
         let isRest: Bool
         let restCount: Int
@@ -302,6 +332,10 @@ private struct RepoRow: View {
         guard row.cost > 0 else { return 0 }
         return NSDecimalNumber(decimal: row.cursorCost / row.cost).doubleValue
     }
+    private var grokShare: Double {
+        guard row.cost > 0 else { return 0 }
+        return NSDecimalNumber(decimal: row.grokCost / row.cost).doubleValue
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -326,6 +360,18 @@ private struct RepoRow: View {
                     .background(ContinuumTokens.surface2, in: Capsule())
                     .overlay(Capsule().strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5))
                 }
+                if row.grokTokens > 0 {
+                    HStack(spacing: 4) {
+                        ProviderDot(.grok, size: 5)
+                        Text("+\(AnalyticsTokenFormatter.format(row.grokTokens))")
+                            .font(ContinuumFont.mono(10, weight: .semibold))
+                            .foregroundStyle(ContinuumTokens.fg3)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(ContinuumTokens.surface2, in: Capsule())
+                    .overlay(Capsule().strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5))
+                }
                 Spacer()
                 if row.cost > 0 {
                     Text(AnalyticsCurrencyFormatter.format(row.cost))
@@ -334,6 +380,11 @@ private struct RepoRow: View {
                         .monospacedDigit()
                 } else if row.geminiRequests > 0 {
                     Text("\(row.geminiRequests) reqs")
+                        .font(ContinuumFont.mono(12, weight: .semibold))
+                        .foregroundStyle(ContinuumTokens.fg)
+                        .monospacedDigit()
+                } else if row.grokTokens > 0 {
+                    Text(AnalyticsTokenFormatter.format(row.grokTokens) + " tok")
                         .font(ContinuumFont.mono(12, weight: .semibold))
                         .foregroundStyle(ContinuumTokens.fg)
                         .monospacedDigit()
@@ -379,13 +430,16 @@ private struct RepoRow: View {
             let codexWidth = totalWidth * codexShare * row.share
             let opencodeWidth = totalWidth * opencodeShare * row.share
             let cursorWidth = totalWidth * cursorShare * row.share
+            let grokWidth = row.cost > 0
+                ? totalWidth * grokShare * row.share
+                : (row.grokTokens > 0 ? totalWidth * row.share : 0)
             ZStack(alignment: .leading) {
                 // Track
                 Rectangle()
                     .fill(ContinuumTokens.railTrack)
                 HStack(spacing: 0) {
                     // Horizontal by-repo order: Claude -> Codex -> Antigravity
-                    // request pill -> OpenCode -> Cursor.
+                    // request pill -> OpenCode -> Cursor -> Grok.
                     Rectangle()
                         .fill(ProviderFill.gradient(for: .claude))
                         .frame(width: claudeWidth)
@@ -398,6 +452,9 @@ private struct RepoRow: View {
                     Rectangle()
                         .fill(ProviderFill.gradient(for: .cursor))
                         .frame(width: cursorWidth)
+                    Rectangle()
+                        .fill(ProviderFill.gradient(for: .grok))
+                        .frame(width: grokWidth)
                     Spacer(minLength: 0)
                 }
             }
@@ -419,8 +476,14 @@ private struct RepoRow: View {
         if row.cursorCost > 0 {
             parts.append("Cursor " + AnalyticsCurrencyFormatter.format(row.cursorCost))
         }
+        if row.grokCost > 0 {
+            parts.append("Grok " + AnalyticsCurrencyFormatter.format(row.grokCost))
+        }
         if row.geminiRequests > 0 {
             parts.append("Antigravity \(row.geminiRequests) reqs")
+        }
+        if row.grokTokens > 0 {
+            parts.append("Grok \(AnalyticsTokenFormatter.format(row.grokTokens)) tok")
         }
         return parts.joined(separator: " · ")
     }

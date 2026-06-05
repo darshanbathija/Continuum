@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import XCTest
 import ClawdmeterShared
 @testable import Clawdmeter
@@ -134,6 +135,61 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         let clientSnapshot = await client.fetchLifecycle(sessionId: session.id)
         XCTAssertEqual(clientSnapshot?.sessionId, session.id)
         XCTAssertEqual(clientSnapshot?.phase, .awaitingApproval)
+    }
+
+    func test_usageRouteIncludesCursorMonthlyQuota() async throws {
+        let expected = UsageData(
+            sessionPct: 48,
+            sessionResetMins: 10_000,
+            sessionEpoch: 1_782_259_911,
+            weeklyPct: 48,
+            weeklyResetMins: 10_000,
+            weeklyEpoch: 1_782_259_911,
+            status: .allowed,
+            representativeClaim: .unknown,
+            updatedAt: Date(timeIntervalSince1970: 1_777_777_777),
+            organizationID: "Included in Ultra",
+            cursorQuota: UsageData.CursorQuota(
+                totalPct: 48,
+                autoPct: 25,
+                apiPct: 95,
+                resetMins: 10_000,
+                resetEpoch: 1_782_259_911,
+                includedUsageLabel: "Included in Ultra",
+                extraUsageLabel: "Free extra usage may vary."
+            )
+        )
+        let cursorModel = AppModel(
+            config: .cursor,
+            source: StaticUsageSource(usage: expected),
+            tokenProvider: NoopTokenProvider()
+        )
+        let published = expectation(description: "Cursor usage published")
+        let token = cursorModel.$usage.compactMap { $0 }.sink { value in
+            if value.cursorQuota?.totalPct == 48 {
+                published.fulfill()
+            }
+        }
+        defer {
+            token.cancel()
+            cursorModel.stop()
+        }
+
+        server.attachUsageSources(claude: nil, codex: nil, cursor: cursorModel, history: nil)
+        cursorModel.start()
+        await fulfillment(of: [published], timeout: 5)
+
+        let raw = try await requestRaw(path: "/usage", method: "GET")
+        XCTAssertEqual(raw.status, 200, bodySnippet(raw.data))
+        let envelope = try decode(UsageEnvelope.self, from: raw.data)
+        let usage = try XCTUnwrap(envelope.usage)
+        let cursor = try XCTUnwrap(usage["cursor"])
+        XCTAssertEqual(cursor.sessionPct, 48)
+        XCTAssertEqual(cursor.cursorQuota?.totalPct, 48)
+        XCTAssertEqual(cursor.cursorQuota?.autoPct, 25)
+        XCTAssertEqual(cursor.cursorQuota?.apiPct, 95)
+        XCTAssertEqual(cursor.cursorQuota?.extraUsageLabel, "Free extra usage may vary.")
+        XCTAssertNil(envelope.claude)
     }
 
     func test_oneSlotFrontierRequest_isRejectedByActualRoute() async throws {
@@ -614,6 +670,31 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     private struct RawResponse {
         let status: Int
         let data: Data
+    }
+
+    private final class StaticUsageSource: AISource, @unchecked Sendable {
+        let providerID = "cursor"
+        let displayName = "Cursor"
+        let isAuthenticated = true
+        private let usage: UsageData
+
+        init(usage: UsageData) {
+            self.usage = usage
+        }
+
+        func poll() async throws -> UsageData {
+            usage
+        }
+
+        func refreshCredentialsIfNeeded() async throws -> Bool {
+            true
+        }
+    }
+
+    private struct NoopTokenProvider: TokenProvider {
+        var currentAccessToken: String? { "token" }
+        var hasToken: Bool { true }
+        func refreshIfNeeded() async throws -> Bool { false }
     }
 
     private func postJSON<T: Encodable>(

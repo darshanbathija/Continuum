@@ -47,6 +47,7 @@
 		180979EE1D21A4EC76344D81 /* IOSChatV2View.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFCA10DE26C860C326DE2FDB /* IOSChatV2View.swift */; };
 		180F0F522D2CF2CBD7EEE500 /* MacMenubarPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 015F6FD7463F3710A54A36EB /* MacMenubarPopover.swift */; };
 		183FABC95728764FF9DEFCD6 /* TahoeDiffPreviewPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6964337810D3098CE9F66CBE /* TahoeDiffPreviewPane.swift */; };
+		18C4FE86D1BF35A5D58AEF99 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = DE6BEDE0A35F7DD92C64E87F /* Sparkle */; };
 		19AC672180B4FBF70EB9FE37 /* RelayTransportFlag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175F5A857A4FA1D0F0C3C6D2 /* RelayTransportFlag.swift */; };
 		19CFD32B283E9A931390BD4B /* KeyboardCheatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2D094B6FFC14AA31CD6E63E /* KeyboardCheatSheet.swift */; };
 		1A33BCE35CFE5B8AFC5BD284 /* ClawdmeterMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44830246BE8DE33251B9CE1B /* ClawdmeterMacApp.swift */; };
@@ -319,6 +320,7 @@
 		D0FA4EF3B888EFA7C45DBC11 /* PathAllowList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AE0957459712F018ACC76C5 /* PathAllowList.swift */; };
 		D2D67A3555F9EE2A3BEC40B0 /* IOSRelayClientCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DC85826013E1F3EE2672116 /* IOSRelayClientCoordinator.swift */; };
 		D2FF1EA36DA1BF4CD9450D2C /* SessionChatStore+ChatSnapshotSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31DB05FB7CD0E566FC1EA2BF /* SessionChatStore+ChatSnapshotSource.swift */; };
+		D535EA7FFC2A1AAF11116950 /* GrokAnalyticsRangeAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0212D82878893E944B18EC31 /* GrokAnalyticsRangeAdapterTests.swift */; };
 		D609B22B0D306509093B09D2 /* AutopilotState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5239318D643E1B51443A7C3 /* AutopilotState.swift */; };
 		D64E0EA5E4866E7E56001DE4 /* MenuBarGaugeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA1C225091C6434AB97D2E8 /* MenuBarGaugeView.swift */; };
 		D7A28926EB707252DBBE4B28 /* IOSRelayMuxDispatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 369B7DB04E482DB32EE6A6C9 /* IOSRelayMuxDispatchTests.swift */; };
@@ -482,6 +484,7 @@
 /* Begin PBXFileReference section */
 		012447D961770BC6D8F59436 /* F1dWireChatParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = F1dWireChatParityTests.swift; sourceTree = "<group>"; };
 		015F6FD7463F3710A54A36EB /* MacMenubarPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMenubarPopover.swift; sourceTree = "<group>"; };
+		0212D82878893E944B18EC31 /* GrokAnalyticsRangeAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokAnalyticsRangeAdapterTests.swift; sourceTree = "<group>"; };
 		028DE0E9D5008C3A4F3E78C6 /* ChatThreadScroll.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatThreadScroll.swift; sourceTree = "<group>"; };
 		044B37D86860F63D469721AA /* SessionLifecycleReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLifecycleReducerTests.swift; sourceTree = "<group>"; };
 		052C6AEF07A486E8A35669C5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -866,6 +869,7 @@
 			files = (
 				5473F8C335F80F264D922703 /* ClawdmeterShared in Frameworks */,
 				8355A4F7DE0095DD542880B4 /* SwiftTerm in Frameworks */,
+				18C4FE86D1BF35A5D58AEF99 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1243,6 +1247,7 @@
 				483357794C2704F3A1892570 /* F1cWireChatParityTests.swift */,
 				012447D961770BC6D8F59436 /* F1dWireChatParityTests.swift */,
 				C7E5B17BFEC181317FE13905 /* GitDiffStoreTests.swift */,
+				0212D82878893E944B18EC31 /* GrokAnalyticsRangeAdapterTests.swift */,
 				856C7552A929C04A22490BB6 /* GrokHeadlessDriverTests.swift */,
 				B402D2971401AAA603A1AC75 /* HarnessProcessReaperTests.swift */,
 				A1441677BF0D54C2F2B6D382 /* HarnessProviderOptInTests.swift */,
@@ -1691,6 +1696,7 @@
 			packageProductDependencies = (
 				793208666036735B121CD318 /* ClawdmeterShared */,
 				289E3F086FDE9A532EFCEC2C /* SwiftTerm */,
+				DE6BEDE0A35F7DD92C64E87F /* Sparkle */,
 			);
 			productName = ClawdmeterMac;
 			productReference = 063A99FE19DBEB6CBE38A400 /* ClawdmeterMac.app */;
@@ -1795,6 +1801,7 @@
 			mainGroup = 8355AE2A6C5D497C97998BEB;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				3EFEBF6C6944639E064525FB /* XCRemoteSwiftPackageReference "Sparkle" */,
 				F5E1A507D97EBE82D7AB889E /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				FD128F39121EA338B1462B1B /* XCLocalSwiftPackageReference "ClawdmeterShared" */,
 			);
@@ -1953,6 +1960,7 @@
 				36C488FE08B36947E3A98EF9 /* F1cWireChatParityTests.swift in Sources */,
 				2E243A6E1AC3086560AA1038 /* F1dWireChatParityTests.swift in Sources */,
 				8EADCCDA5DD5DDD4F91F3334 /* GitDiffStoreTests.swift in Sources */,
+				D535EA7FFC2A1AAF11116950 /* GrokAnalyticsRangeAdapterTests.swift in Sources */,
 				EE224D95613FEF7BB1DE849D /* GrokHeadlessDriverTests.swift in Sources */,
 				07107E18CE3DA43EC7619E2F /* HarnessProcessReaperTests.swift in Sources */,
 				4A5E2E079789F857DA43058F /* HarnessProviderOptInTests.swift in Sources */,
@@ -2452,6 +2460,7 @@
 				PRODUCT_MODULE_NAME = Clawdmeter;
 				PRODUCT_NAME = Continuum;
 				SDKROOT = macosx;
+				SPARKLE_PUBLIC_ED_KEY = "dA6tbvVkaBnCj16gub64AzmBY+peo39LeTOowaFHRIY=";
 			};
 			name = Release;
 		};
@@ -2603,6 +2612,7 @@
 				PRODUCT_MODULE_NAME = Clawdmeter;
 				PRODUCT_NAME = Continuum;
 				SDKROOT = macosx;
+				SPARKLE_PUBLIC_ED_KEY = "dA6tbvVkaBnCj16gub64AzmBY+peo39LeTOowaFHRIY=";
 			};
 			name = Debug;
 		};
@@ -2975,6 +2985,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		3EFEBF6C6944639E064525FB /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.9.2;
+			};
+		};
 		F5E1A507D97EBE82D7AB889E /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
@@ -3023,6 +3041,11 @@
 		BE3F00806303DA92CDA654D3 /* ClawdmeterShared */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ClawdmeterShared;
+		};
+		DE6BEDE0A35F7DD92C64E87F /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3EFEBF6C6944639E064525FB /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 		E5841B9F5A902887629FD6BF /* ClawdmeterShared */ = {
 			isa = XCSwiftPackageProductDependency;

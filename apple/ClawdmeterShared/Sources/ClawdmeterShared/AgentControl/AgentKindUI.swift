@@ -20,7 +20,7 @@ public enum AgentKindUI {
         case .gemini: return "GeminiLogo"
         case .opencode: return "OpencodeLogo" // PR #29: alpha-shaped silhouette
         case .cursor: return "CodexLogo"
-        case .grok: return "CodexLogo" // TODO: add GrokLogo asset; silhouette for now
+        case .grok: return "GrokLogo"
         case .unknown: return "ClaudeLogo" // neutral fallback; UI shows "Other"
         }
     }
@@ -87,6 +87,7 @@ public enum AgentKindUI {
         case .gemini: return "Gemini"
         case .opencode: return "OpenCode"
         case .cursor: return "Cursor"
+        case .grok: return "Grok"
         }
     }
 
@@ -97,13 +98,14 @@ public enum AgentKindUI {
         case .gemini: return "GeminiLogo"
         case .opencode: return "OpencodeLogo"
         case .cursor: return "CodexLogo"
+        case .grok: return "GrokLogo"
         }
     }
 
     public static func isTemplate(for provider: UsageRecord.Provider) -> Bool {
         switch provider {
         case .claude: return false
-        case .codex, .gemini, .opencode, .cursor: return true
+        case .codex, .gemini, .opencode, .cursor, .grok: return true
         }
     }
 }

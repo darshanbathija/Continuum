@@ -92,7 +92,7 @@ public struct AnalyticsDailyChart: View {
     fileprivate static func costProviders(in snapshot: UsageHistorySnapshot, filter: UsageHistoryStore.ProviderFilter) -> [UsageRecord.Provider] {
         // Cost-bearing providers only. Gemini's $0 doesn't go in the
         // stacked dollar chart — it gets a separate request-count panel.
-        let order: [UsageRecord.Provider] = [.claude, .codex, .opencode, .cursor]
+        let order: [UsageRecord.Provider] = [.claude, .codex, .opencode, .cursor, .grok]
         return order.filter { snapshot.byProvider[$0] != nil && filter.includes($0) }
     }
 
@@ -226,6 +226,7 @@ public struct AnalyticsDailyChart: View {
                 "Codex": ProviderFill.gradient(for: .codex),
                 "OpenCode": ProviderFill.gradient(for: .opencode),
                 "Cursor": ProviderFill.gradient(for: .cursor),
+                "Grok": ProviderFill.gradient(for: .grok),
             ])
             .chartLegend(.hidden)
             .chartXAxis {
@@ -256,8 +257,8 @@ public struct AnalyticsDailyChart: View {
 
             if let max = maxCostDay(data) {
                 Text("Max day \(AnalyticsCurrencyFormatter.format(max.cost)) · \(max.day.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.body(11))
+                    .foregroundStyle(ContinuumTokens.fg3)
             }
         }
     }
@@ -317,6 +318,10 @@ public struct AnalyticsDailyChart: View {
                 legendItem(asset: "CodexLogo", isTemplate: true,
                            provider: .cursor, label: "Cursor")
             }
+            if providerFilter.includes(.grok) {
+                legendItem(asset: "GrokLogo", isTemplate: true,
+                           provider: .grok, label: "Grok")
+            }
             Spacer()
         }
     }
@@ -346,9 +351,10 @@ public struct AnalyticsDailyChart: View {
         switch p {
         case .claude: return "Claude"
         case .codex:  return "Codex"
-        case .gemini: return "Gemini"
+        case .gemini: return "Antigravity"
         case .opencode: return "OpenCode"
         case .cursor: return "Cursor"
+        case .grok: return "Grok"
         }
     }
 }

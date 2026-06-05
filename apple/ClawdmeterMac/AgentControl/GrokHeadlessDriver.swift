@@ -145,7 +145,7 @@ public actor GrokHeadlessDriver: AgentDriver {
 
     /// Map one grok streaming-json line to a HarnessEvent. Pure + nonisolated so
     /// it is unit-testable without spawning grok. Shape (verified live 2026-06-03):
-    /// `{"type":"thought"|"text"|"error","data":"<delta>"}`. Empty deltas and
+    /// `{"type":"thought"|"text"|"error"|"usage","data":...}`. Empty deltas and
     /// unmodeled types (tool calls, etc.) return nil.
     nonisolated static func parseLine(_ data: Data) -> HarnessEvent? {
         guard !data.isEmpty,
@@ -156,8 +156,41 @@ public actor GrokHeadlessDriver: AgentDriver {
         case "text":    return payload.isEmpty ? nil : .agentMessageDelta(payload)
         case "thought": return payload.isEmpty ? nil : .agentThoughtDelta(payload)
         case "error":   return .error(code: "grok", message: payload)
+        case "usage", "usage_update":
+            return parseUsagePayload(from: obj).map { .usage($0) }
         default:        return nil
         }
+    }
+
+    private nonisolated static func parseUsagePayload(from obj: [String: Any]) -> HarnessUsage? {
+        let raw = obj["usage"] ?? obj["data"] ?? obj
+        let usageObj: [String: Any]
+        if let dict = raw as? [String: Any] {
+            usageObj = dict
+        } else if let string = raw as? String,
+                  let data = string.data(using: .utf8),
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            usageObj = dict
+        } else {
+            usageObj = obj
+        }
+
+        let input = intValue(usageObj, keys: ["inputTokens", "input_tokens", "promptTokens", "prompt_tokens"])
+        let output = intValue(usageObj, keys: ["outputTokens", "output_tokens", "completionTokens", "completion_tokens"])
+        let total = intValue(usageObj, keys: ["totalTokens", "total_tokens", "tokens", "total"])
+        let observed = [input, output, total].compactMap { $0 }.reduce(0, +)
+        guard observed > 0 else { return nil }
+        return HarnessUsage(inputTokens: input, outputTokens: output, totalTokens: total)
+    }
+
+    private nonisolated static func intValue(_ obj: [String: Any], keys: [String]) -> Int? {
+        for key in keys {
+            guard let raw = obj[key] else { continue }
+            if let int = raw as? Int { return int }
+            if let number = raw as? NSNumber { return number.intValue }
+            if let string = raw as? String, let int = Int(string) { return int }
+        }
+        return nil
     }
 
     /// Idempotent turn completion — EOF and terminationHandler can both fire;

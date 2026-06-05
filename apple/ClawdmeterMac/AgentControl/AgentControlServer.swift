@@ -105,6 +105,7 @@ public final class AgentControlServer {
     private weak var claudeModel: AppModel?
     private weak var codexModel: AppModel?
     private weak var geminiModel: AppModel?
+    private weak var cursorModel: AppModel?
     private weak var usageHistory: UsageHistoryStore?
 
     private var listener: NWListener?
@@ -302,11 +303,13 @@ public final class AgentControlServer {
         claude: AppModel?,
         codex: AppModel?,
         gemini: AppModel? = nil,
+        cursor: AppModel? = nil,
         history: UsageHistoryStore?
     ) {
         self.claudeModel = claude
         self.codexModel = codex
         self.geminiModel = gemini
+        self.cursorModel = cursor
         self.usageHistory = history
     }
 
@@ -4288,6 +4291,7 @@ public final class AgentControlServer {
         if let c = claudeModel?.usage { dict["claude"] = c }
         if let x = codexModel?.usage  { dict["codex"]  = x }
         if let g = geminiModel?.usage { dict["gemini"] = g }
+        if let cursor = cursorModel?.usage { dict["cursor"] = cursor }
         let payload = UsageEnvelope(
             claude: claudeModel?.usage,
             codex: codexModel?.usage,
@@ -5016,7 +5020,9 @@ public final class AgentControlServer {
                 makeBridge: { sid, store in
                     .acp(sessionId: sid, support: support, store: store,
                          model: req.model, agentDisplayName: display,
-                         trustGate: trustGate, onFileAccess: auditFs)
+                         trustGate: trustGate, onFileAccess: auditFs,
+                         cursorUsageSurface: .code,
+                         cursorUsageRepo: cwd)
                 })
             return
         }
@@ -5040,7 +5046,9 @@ public final class AgentControlServer {
                 makeBridge: { sid, store in
                     .transportOwning(sessionId: sid, store: store, model: req.model,
                                      agentDisplayName: display,
-                                     driver: GrokHeadlessDriver(binaryPath: grokPath))
+                                     driver: GrokHeadlessDriver(binaryPath: grokPath),
+                                     usageProvider: .grok,
+                                     usageRepo: cwd)
                 })
             return
         }
@@ -5841,7 +5849,9 @@ public final class AgentControlServer {
             bridge = .acp(
                 sessionId: session.id, support: support, store: store,
                 model: model, agentDisplayName: display,
-                trustGate: nil, onFileAccess: nil
+                trustGate: nil, onFileAccess: nil,
+                cursorUsageSurface: .chat,
+                cursorUsageRepo: nil
             )
         case .grok:
             // Grok has no ACP server — it drives headless. Transport-owning: the
@@ -5858,7 +5868,9 @@ public final class AgentControlServer {
             bridge = .transportOwning(
                 sessionId: session.id, store: store,
                 model: model, agentDisplayName: display,
-                driver: GrokHeadlessDriver(binaryPath: grokPath)
+                driver: GrokHeadlessDriver(binaryPath: grokPath),
+                usageProvider: .grok,
+                usageRepo: chatCwd
             )
         case .gemini:
             // Antigravity 2.0: headless `agy` CLI (no app, no gRPC). The Cascade

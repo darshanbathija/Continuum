@@ -19,6 +19,16 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 
 - All four targets build (Mac/iOS/Watch + widget extensions); the `ClawdmeterShared` suite is green (new `ContinuumTokenTests` lock the palette/radii/meter-tick/provider values). The three legacy theme types remain as thin forwarding shims (the palette is already consolidated to `ContinuumTokens`); deleting them + migrating every consumer directly is a no-user-visible-change refactor deferred to a follow-up. A light variant, LiveTicker composer wiring, and the Linux (Cairo/GTK) port are deliberate follow-ups.
 
+## [0.30.1 build 199] - 2026-06-06 - Correct Cursor monthly usage and analytics (`darshanbathija/cursor-usage-fix`)
+
+### Fixed
+
+- Cursor usage now uses monthly Total, Auto, and API quota data across the Usage tab, menu bar, chat/code usage chips, and `/usage`, instead of the old 5-hour/weekly labels.
+- Cursor chat and code usage events now feed analytics, tokens-by-model, and repo spend through app-owned usage records.
+- Cursor Composer hook records now resolve to bundled OpenRouter Kimi K2.5 pricing so analytics can show real dollars where token records include Composer usage.
+
+Bumps `MARKETING_VERSION` 0.30.0 → 0.30.1, `CURRENT_PROJECT_VERSION` 198 → 199.
+
 ## [0.29.46 build 185] - 2026-06-02 - Code tab world-class pass: live feedback, motion, and a themeable accent (`darshanbathija/code-tab-audit-revamp`)
 
 ### Added

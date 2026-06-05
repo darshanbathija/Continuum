@@ -120,6 +120,30 @@ final class PricingTests: XCTestCase {
         XCTAssertTrue(pricing.isPriced("gemini-3.5-flash"))
     }
 
+    func test_cursorComposer25_pricesViaOpenRouterKimi25Alias() {
+        // OpenRouter catalog on 2026-06-06 exposes MoonshotAI Kimi K2.5 at:
+        //   input $0.40/M, output $1.90/M, cache-read $0.09/M.
+        // Cursor hook logs emit `composer-2.5` / `composer-2.5-fast`, so
+        // Pricing aliases those ids to the OpenRouter model while keeping
+        // analytics rollups labeled with Cursor's native model name.
+        let tokens = TokenTotals(
+            inputTokens: 1_000_000,
+            outputTokens: 1_000_000,
+            cacheReadTokens: 1_000_000
+        )
+
+        XCTAssertTrue(pricing.isPriced("composer-2.5"))
+        XCTAssertTrue(pricing.isPriced("cursor/composer-2.5"))
+        XCTAssertTrue(pricing.isPriced("composer-2.5-fast"))
+
+        let cost = pricing.cost(for: "cursor/composer-2.5", tokens: tokens)
+        XCTAssertEqual((cost as NSDecimalNumber).doubleValue, 2.39, accuracy: 0.000001)
+        XCTAssertEqual(
+            pricing.cost(for: "composer-2.5-fast", tokens: tokens),
+            cost
+        )
+    }
+
     func test_claudeModelPrefixMatch() {
         // claude-sonnet-4-5-20250929 is in the snapshot directly, but a
         // hypothetical future-date variant should fall back via prefix match.

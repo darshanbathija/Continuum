@@ -87,7 +87,7 @@ extension AgentControlClient {
         case .gemini: return .gemini
         case .opencode: return .opencode
         case .cursor: return .cursor
-        case .grok: return .cursor // TODO: TahoeProvider.grok identity; placeholder
+        case .grok: return .grok
         case .unknown: return .claude
         }
     }
@@ -112,7 +112,7 @@ extension AgentControlClient {
             case .gemini: return .gemini
             case .opencode: return .opencode  // PR #31: 4th lane in TahoeProvider
             case .cursor: return .cursor
-            case .grok: return .cursor // TODO: TahoeProvider.grok identity; placeholder
+            case .grok: return .grok
             case .unknown:
                 // X3: visual fallback for raws this client doesn't
                 // recognize. Degrades to Claude styling.
@@ -167,6 +167,17 @@ extension UsageModel {
                 sessionResetIn: "-",
                 weeklyResetIn: "",
                 modelName: "Cursor Auto",
+                autoReviveOn: false,
+                supportsAutoRevive: false,
+                hasWeekly: false,
+                stale: true
+            ),
+            grok: TahoeLiveRow(
+                sessionPercent: 0,
+                weeklyPercent: -1,
+                sessionResetIn: "\u{2014}",
+                weeklyResetIn: "",
+                modelName: "grok-build",
                 autoReviveOn: false,
                 supportsAutoRevive: false,
                 hasWeekly: false,

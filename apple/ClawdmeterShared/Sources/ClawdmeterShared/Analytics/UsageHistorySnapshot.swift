@@ -113,6 +113,9 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
     public var claude: ProviderTotals { byProvider[.claude] ?? .empty }
     public var codex: ProviderTotals  { byProvider[.codex]  ?? .empty }
     public var gemini: ProviderTotals { byProvider[.gemini] ?? .empty }
+    public var opencode: ProviderTotals { byProvider[.opencode] ?? .empty }
+    public var cursor: ProviderTotals { byProvider[.cursor] ?? .empty }
+    public var grok: ProviderTotals { byProvider[.grok] ?? .empty }
 
     public static let empty = UsageHistorySnapshot(
         byProvider: [:],

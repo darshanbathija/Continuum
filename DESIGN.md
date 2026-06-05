@@ -25,7 +25,7 @@ up.
 
 - **What this is:** A native control surface for coding agents. Live
   rate-limit / quota gauges for Claude Code, Codex, Antigravity, and Cursor,
-  plus pay-as-you-go OpenCode spend, historical `$/token` analytics, a
+  pay-as-you-go OpenCode spend, Grok token history, historical `$/token` analytics, a
   multi-provider Chat (broadcast one prompt to 2-3 models
   side by side), and a Sessions/Code workbench (repo + session navigation, chat
   thread, plan review, git diff, PR status, terminal output), plus device
@@ -168,6 +168,7 @@ meter fill. Never a provider-colored button, header, or background fill.
 | Antigravity | `#5C9DFF` | Cool blue. |
 | OpenCode | `#9B87D4` | Muted violet. Distinct from Antigravity while staying quiet. |
 | Cursor | `#7FA8B5` | Cool steel. Mono identity, lighter/cooler than Codex graphite. |
+| Grok | `#6BD19E` | Cool green. First-class but quiet; no neon xAI treatment. |
 
 ### Meter Fills (the canonical rail coloring — treatment "T2")
 
@@ -181,6 +182,7 @@ edge, so it reads like a lit physical meter while staying restrained.
 | Antigravity | `linear-gradient(90deg, #79ADFF, #4A86E8)` |
 | OpenCode | `linear-gradient(90deg, #B2A4E2, #7C6CB6)` |
 | Cursor | `linear-gradient(90deg, #9BBFC9, #5E8893)` |
+| Grok | `linear-gradient(90deg, #8EDFB8, #4C9F77)` |
 | Warn (≥80% cap) | `linear-gradient(90deg, #E2B45C, #C98A2E)` |
 | Error (over) | `linear-gradient(90deg, #EC6A62, #D2433B)` |
 | Track | `#202126` with `inset 0 0 0 0.5px rgba(255,255,255,0.05)` |
@@ -230,9 +232,9 @@ window), never inline cards.
 ### Mac Usage Dashboard (signature surface)
 
 - Top row: live provider panels (Claude, Codex, Antigravity, Cursor), each
-  `surface-1` + hairline + 6px radius. OpenCode appears as a full-width
-  pay-as-you-go spend strip when usage data is available because it has no
-  rolling quota window.
+  `surface-1` + hairline + 6px radius. OpenCode and Grok appear as full-width
+  usage strips when usage data is available because they do not have the same
+  live rolling quota panel shape.
 - Each panel: header (provider dot + name + mono model + Menu-bar switch), a big
   SF Pro Rounded session `%` with an etched `SESSION` label + mono reset timer,
   the session **rail meter**, a dimmed weekly rail beneath it, and a sub-line
@@ -335,17 +337,18 @@ Recognizable, distinct, not copied from provider marks. Rendered monochrome
 - Antigravity: twin sparkle.
 - OpenCode: monochrome alpha-shaped silhouette.
 - Cursor: monochrome cursor/agent silhouette; color only in dot/edge/meter.
+- Grok: monochrome mark; color only in dot/edge/meter.
 
 ### Charts
 
 - Stacked bars, never area charts. Per-provider segments use the **same provider
   gradients as the meters** (color is consistent across meters, charts, and
   dots).
-- **Vertical stacks** (spend over time): order top-to-bottom Cursor → OpenCode
-  → Antigravity → Codex → Claude; rendered bottom-up so Claude is the
+- **Vertical stacks** (spend over time): order top-to-bottom Grok → Cursor →
+  OpenCode → Antigravity → Codex → Claude; rendered bottom-up so Claude is the
   foundation.
 - **Horizontal stacks** (by repo): order left-to-right Claude → Codex →
-  Antigravity → OpenCode → Cursor.
+  Antigravity → OpenCode → Cursor → Grok.
 - Dashed/hairline grid lines, mono axis + dollar values, range selector
   required. When a provider is `$0` in the window, render a zero-height slice —
   keep it in the legend, never drop it.

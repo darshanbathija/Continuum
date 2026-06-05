@@ -70,6 +70,7 @@ private final class UsageQueryServer: NSObject, UsageWriterProtocol {
             switch providerID {
             case "claude": model = runtime.claudeModel
             case "codex":  model = runtime.codexModel
+            case "cursor": model = runtime.cursorModel
             default:       model = nil
             }
             reply(model.flatMap { encode(model: $0) })
@@ -79,7 +80,7 @@ private final class UsageQueryServer: NSObject, UsageWriterProtocol {
     func readAllSnapshots(reply: @escaping ([Data]) -> Void) {
         Task { @MainActor [weak runtime] in
             guard let runtime else { reply([]); return }
-            let blobs = [runtime.claudeModel, runtime.codexModel]
+            let blobs = [runtime.claudeModel, runtime.codexModel, runtime.cursorModel]
                 .compactMap { encode(model: $0) }
             reply(blobs)
         }
