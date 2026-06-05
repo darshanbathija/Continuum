@@ -141,13 +141,19 @@ final class RelaySubscriptionBridgeTests: XCTestCase {
         XCTAssertEqual(bridge.liveCount, 0)
     }
 
-    func test_duplicateSubscribe_ignored() async throws {
+    // Review P0#2: a repeat subscribe for a LIVE opId is the reconnect
+    // resubscribe — it must RE-OPEN (close the stale loopback WS, open a fresh
+    // one) so the snapshot replays. (Previously it was ignored → the stream
+    // stayed dead after an iOS reconnect.)
+    func test_duplicateSubscribe_reopensStream() async throws {
         let (bridge, _, lastConn, _) = makeBridge()
         try await bridge.handle(subscribeFrame(opId: "t1", op: "terminal", sessionId: "s"))
         let first = try XCTUnwrap(lastConn())
         try await bridge.handle(subscribeFrame(opId: "t1", op: "terminal", sessionId: "s"))
-        XCTAssertTrue(first === lastConn(), "a duplicate subscribe must NOT open a 2nd loopback WS")
-        XCTAssertEqual(bridge.liveCount, 1)
+        let second = try XCTUnwrap(lastConn())
+        XCTAssertFalse(first === second, "resubscribe must open a FRESH loopback WS")
+        XCTAssertTrue(first.closed, "the stale loopback WS must be torn down on re-open")
+        XCTAssertEqual(bridge.liveCount, 1, "still exactly one live stream for the opId")
         bridge.shutdownAll()
     }
 

@@ -118,6 +118,12 @@ public final class iOSChatStore: ObservableObject {
     }
 
     deinit {
+        // Cancel the subscription/poll tasks so a dealloc without an explicit
+        // stop() doesn't orphan a parked relay subscription (review P2): the
+        // relay park-loop is `[weak self]`, so the store can dealloc while the
+        // Task.sleep loop runs forever, never reaching mux.unsubscribe.
+        subscribeTask?.cancel()
+        fallbackPollTask?.cancel()
         if let observer = foregroundObserver {
             NotificationCenter.default.removeObserver(observer)
         }

@@ -606,8 +606,13 @@ public final class IOSRelayClient: ObservableObject {
         // NOT land in `lastInbound` (legacy request/response observers would
         // mis-handle them). Early-return after dispatch.
         if parsed.op == RelayMux.op {
+            // Drop a single malformed mux frame — do NOT throw (review P1#4): a
+            // throw is a non-fatal error → full socket reconnect, tearing down +
+            // resubscribing ALL streams over one bad per-stream frame. The mux
+            // client already tolerates/ignores junk; match that blast radius.
             guard let frame = RelayMuxFrame.decode(parsed.data) else {
-                throw IOSRelayClientError.protocolViolation("malformed mux frame")
+                iosRelayLogger.warning("dropping malformed mux frame (seq=\(parsed.seq))")
+                return
             }
             muxClient?.handleInbound(frame)
             return

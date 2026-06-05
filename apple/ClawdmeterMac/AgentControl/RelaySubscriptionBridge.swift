@@ -100,11 +100,14 @@ public final class RelaySubscriptionBridge {
 
     private func openSubscription(_ frame: RelayMuxFrame) async {
         let opId = frame.opId
-        // Duplicate live subscribe for the same opId is a protocol error — ignore
-        // (CB-P1b: don't open a 2nd loopback WS for an in-flight stream id).
-        guard live[opId] == nil else {
-            bridgeLogger.warning("duplicate subscribe for live opId \(opId, privacy: .public); ignoring")
-            return
+        // A repeat subscribe for a LIVE opId is the reconnect resubscribe path
+        // (iOS reuses the opId; review P0#2): RE-OPEN it — tear the stale
+        // loopback stream down and open a fresh one so the snapshot replays.
+        // (Ignoring it, as before, left the stream permanently dead after an
+        // iOS reconnect.)
+        if live[opId] != nil {
+            bridgeLogger.info("re-open relay sub opId=\(opId, privacy: .public) (resubscribe)")
+            teardown(opId)
         }
         guard let payload = frame.payload, let spec = RelaySubscribeSpec.decode(payload) else {
             await emitError(opId: opId, message: "malformed subscribe spec")

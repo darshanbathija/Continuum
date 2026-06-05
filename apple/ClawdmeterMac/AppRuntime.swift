@@ -582,6 +582,9 @@ final class AppRuntime: ObservableObject {
                 return await dispatcher?.dispatch(inbound)
             }
         )
+        // Track B (review P0#2): on a fresh iOS (re)handshake, drop the bridge's
+        // stale loopback streams so the iOS resubscribe re-opens them.
+        client.onPeerReconnect = { [weak self] in self?.relaySubscriptionBridge?.shutdownAll() }
         relayClient = client
         client.start()
         runtimeLogger.info(
