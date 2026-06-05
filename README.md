@@ -257,9 +257,6 @@ The repo has substantial XCTest coverage under:
 |-- tools/
 |   |-- build-*.sh                          DMG, AppImage, and .deb packaging
 |   |-- download-bundled-*.sh               vendored runtime staging
-|   |-- build-bundled-open-design.sh        Open Design bundle builder
-|   |-- clawdmeter-bridge-host/             Open Design bridge sidecar
-|   |-- clawdmeter-open-design-plugin/      Open Design bridge plugin
 |   |-- clawdmeter-codex-sdk/               Node Codex SDK bridge
 |   |-- clawdmeter-agents/                  Python Antigravity sidecar skeleton
 |   `-- tmux-cc-probe/                      tmux control-mode test package
@@ -280,16 +277,28 @@ The repo has substantial XCTest coverage under:
 
 ## In-app updates
 
-Since v0.24.0 the Mac app checks `https://api.github.com/repos/darshanbathija/Clawdmeter/releases/latest` once 8 seconds after launch and every 24 hours while running. When a newer release ships, a small terra-cotta "Update X.Y.Z" chip appears in the titlebar; click it to read the release notes inline and open the release page in Safari, where you download the new DMG and drag it to `/Applications` the same way you did the first time. Click "Later" to hide the chip for 24 hours per version.
+The Mac app now uses Sparkle 2.9.2 as the primary updater. `Update App`
+is available from the titlebar, the Code action cluster, Settings, and
+the app menu. Sparkle reads the GitHub Pages appcast at
+`https://darshanbathija.github.io/Continuum/updates/appcast.xml` and
+installs signed, notarized DMGs in place.
 
-There is no silent in-place install — that would require Sparkle 2.x + paid Developer ID + notarization, and is parked as a phase-2 migration in `TODOS.md`.
-
-Privacy: each daily check sends your IP and a legacy `Clawdmeter/<version>` User-Agent to `api.github.com`. No unique identifier and no app body are transmitted. Equivalent to visiting the GitHub releases page in Safari once a day.
+GitHub Releases is still the recovery link and public artifact host. If
+Sparkle setup, signature validation, translocation, or installation
+fails, the UI opens the GitHub release page as the fallback.
 
 Maintainer notes:
 
-- The repo URL is centralized in `apple/ClawdmeterMac/Updates/GitHubReleaseConstants.swift`. If the GitHub owner/repo ever changes, update the `owner`/`repo` constants there — three URL helpers (browser, API, tag) derive from them automatically. The `tools/build-mac-dmg.sh` script doesn't reference the URL today, but if a future release script does, it has to be updated in lockstep.
-- QA can override the API URL via `defaults write com.clawdmeter.mac ClawdmeterDebugReleasesURL "https://…"` and revert with `defaults delete`.
+- Release configuration is shared between
+  `apple/ClawdmeterMac/Updates/GitHubReleaseConstants.swift`,
+  `tools/release-config.sh`, and `tools/release-mac.sh`.
+- Public Mac releases must go through `tools/release-mac.sh`; it gates
+  Developer ID signing, notarization, Sparkle signatures, minimum OS
+  alignment, appcast output, and GitHub asset ordering.
+- The first Sparkle-capable release is a manual bootstrap install. The
+  acceptance path must still prove installed-app update behavior from
+  version N to N+1 and migration from `/Applications/Clawdmeter.app` to
+  `/Applications/Continuum.app`.
 
 ## Credits
 

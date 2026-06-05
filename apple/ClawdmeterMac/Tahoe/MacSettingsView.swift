@@ -19,6 +19,7 @@ public struct MacSettingsView: View {
     @ObservedObject var codexModel: AppModel
     @ObservedObject var geminiModel: AppModel
     @ObservedObject var presentationStore: SessionPresentationStore
+    @Binding private var requestedSection: String?
     /// v0.22.9: runtime threaded in so the consolidated settings page
     /// can embed PairingSettingsView (needs AppRuntime for the daemon
     /// + pairing token shape). Optional so Previews don't have to
@@ -42,7 +43,8 @@ public struct MacSettingsView: View {
         codexModel: AppModel,
         geminiModel: AppModel,
         runtime: AppRuntime? = nil,
-        presentationStore: SessionPresentationStore
+        presentationStore: SessionPresentationStore,
+        requestedSection: Binding<String?> = .constant(nil)
     ) {
         self.theme = theme
         self.claudeModel = claudeModel
@@ -50,6 +52,7 @@ public struct MacSettingsView: View {
         self.geminiModel = geminiModel
         self.runtime = runtime
         self.presentationStore = presentationStore
+        _requestedSection = requestedSection
     }
 
     /// Composite auto-revive state. True when any provider that supports
@@ -108,6 +111,10 @@ public struct MacSettingsView: View {
         .onChange(of: settingsSearch) { _, _ in
             syncSelectedSectionToSearch()
         }
+        .onAppear(perform: applyRequestedSection)
+        .onChange(of: requestedSection) { _, _ in
+            applyRequestedSection()
+        }
     }
 
     private var selectedSection: SettingsSection {
@@ -128,6 +135,15 @@ public struct MacSettingsView: View {
         let matches = matchingSections
         guard !matches.isEmpty, !matches.contains(selectedSection) else { return }
         selectedSectionRaw = matches[0].rawValue
+    }
+
+    private func applyRequestedSection() {
+        guard let requestedSection,
+              let section = SettingsSection(rawValue: requestedSection)
+        else { return }
+        settingsSearch = ""
+        selectedSectionRaw = section.rawValue
+        self.requestedSection = nil
     }
 
     @ViewBuilder
@@ -153,8 +169,8 @@ public struct MacSettingsView: View {
             externalToolSettings
         case .shortcuts:
             shortcutSettings
-        case .whatsNew:
-            whatsNewSettings
+        case .updates:
+            updatesSettings
         }
     }
 
@@ -423,37 +439,10 @@ public struct MacSettingsView: View {
     }
 
     @ViewBuilder
-    private var whatsNewSettings: some View {
-        SettingsCard(title: "What's New",
-                     sub: "Recent local UI rollout notes and shortcuts.") {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("Command palette, transcript find, local session presentation state, prompt history, and PR/diff/terminal action menus are enabled in this build.", systemImage: "sparkles")
-                    .font(TahoeFont.body(12))
-                    .foregroundStyle(.primary)
-                Button("Open changelog") {
-                    // Root-cause: a launched app's CWD is `/`, so the old
-                    // file:///CHANGELOG.md target never existed and the button
-                    // was a silent no-op. Point at the repo-hosted changelog.
-                    if let url = URL(string: "https://github.com/darshanbathija/Clawdmeter/blob/main/CHANGELOG.md") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                if !presentationStore.snapshot.exportedSessionURLs.isEmpty {
-                    TahoeHair().padding(.vertical, 6)
-                    Text("Recent exports")
-                        .font(TahoeFont.body(11, weight: .semibold))
-                        .foregroundStyle(t.fg3)
-                    ForEach(presentationStore.snapshot.exportedSessionURLs.prefix(3), id: \.self) { path in
-                        Text(path)
-                            .font(TahoeFont.mono(10.5))
-                            .foregroundStyle(t.fg3)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-            }
+    private var updatesSettings: some View {
+        SettingsCard(title: "Updates",
+                     sub: "Sparkle appcast status, release notes, and manual recovery.") {
+            UpdateSettingsPanel(coordinator: runtime?.updateCoordinator)
         }
     }
 
@@ -564,7 +553,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case notifications
     case externalTools
     case shortcuts
-    case whatsNew
+    case updates
 
     var id: String { rawValue }
 
@@ -580,7 +569,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .notifications: return "Notifications"
         case .externalTools: return "External Tools"
         case .shortcuts: return "Shortcuts"
-        case .whatsNew: return "What's New"
+        case .updates: return "Updates"
         }
     }
 
@@ -606,8 +595,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             return "Editor, Finder, terminal, GitHub, and file action preferences."
         case .shortcuts:
             return "Searchable shortcut overrides and reset controls."
-        case .whatsNew:
-            return "Recent UI improvements and changelog links."
+        case .updates:
+            return "Appcast checks, automatic downloads, release notes, and fallback links."
         }
     }
 
@@ -623,7 +612,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .notifications: return "bell"
         case .externalTools: return "external"
         case .shortcuts: return "command"
-        case .whatsNew: return "sparkles"
+        case .updates: return "arrow.down.circle"
         }
     }
 

@@ -18,7 +18,7 @@ this doc is the contract with users.
 
 ## 1. Trust model
 
-Continuum has five trust tiers:
+Continuum has six trust tiers:
 
 | Tier | Component | Trust | Notes |
 | --- | --- | --- | --- |
@@ -27,9 +27,16 @@ Continuum has five trust tiers:
 | 3 | Cloudflare relay Worker (E2) | **Untrusted** | Sees opaque XChaCha20-Poly1305 envelopes only. Never holds the session key. Audit log records sender role + envelope type + byte length — never body content. |
 | 4 | Cloudflare APNS gateway Worker (E5) | **Untrusted for payload** / trusted for `.p8` | Holds the operator's APNS signing key. Forwards sealed payloads to Apple. Cannot decrypt the body; only the paired iPhone can. |
 | 5 | Third-party provider CLIs (claude, codex, opencode, cursor, antigravity/gemini) | **Sandboxed children** | Spawned by the Mac daemon as child processes. Each owns its own telemetry, its own auth state, and its own network egress. Continuum does not proxy or inspect their traffic. F3 [PR #142](https://github.com/darshanbathija/Clawdmeter/pull/142) carries the type-level seam for HOME isolation across instances (e.g. `claude_personal` vs. `claude_work`); the wire-up that actually enforces env scrub on spawn is F3-wire and not in main yet. |
+| 6 | Sparkle appcast + GitHub release assets | **Authenticated release channel** | The appcast is served from GitHub Pages, while DMGs are hosted on GitHub Releases. Sparkle verifies EdDSA update signatures; the release script gates Developer ID signing, notarization, stapling, asset byte length, and appcast output before publishing. |
 
 The trust root is the local Mac daemon. Compromising the daemon
 compromises everything; compromising any single other tier does not.
+
+Mac update compromise is bounded by Sparkle and Apple platform checks:
+the appcast item must carry a valid Sparkle signature for the configured
+public key, the DMG must be signed by the expected Developer ID
+Application identity, and the release path staples a successful Apple
+notarization ticket before the appcast is published.
 
 ## 2. Cryptographic primitives
 
