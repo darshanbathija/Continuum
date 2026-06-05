@@ -1637,6 +1637,22 @@ public final class AgentControlServer {
         return try? await claudePtyRegistry.resumeOrSpawn(id: sid, plan: { plan })
     }
 
+    /// Best-effort: extract the Claude CLI session id from the session's JSONL
+    /// and persist it for `--resume`. Re-run per turn because Claude ROTATES the
+    /// id after some operations (T7) — a spawn-time-only capture goes stale.
+    /// Off the hot path (short delay lets the turn's JSONL line land).
+    func captureClaudeSessionId(for session: AgentSession) {
+        let sid = session.id
+        let resolver = chatFileResolver
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard let url = resolver.resolve(session: session),
+                  let cli = JSONLSessionId.extract(from: url, provider: .claude),
+                  !cli.isEmpty else { return }
+            try? await self?.registry.setClaudeSessionId(id: sid, value: cli)
+        }
+    }
+
     private func handleSendPrompt(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
@@ -1676,6 +1692,7 @@ public final class AgentControlServer {
                 return
             }
             await host.submitPrompt(req.text, isChat: session.kind == .chat, isFollowUp: req.asFollowUp)
+            captureClaudeSessionId(for: session)   // re-capture the (possibly rotated) CLI id
             let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
             await sendCommandResponse(

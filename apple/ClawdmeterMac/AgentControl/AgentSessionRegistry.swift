@@ -808,6 +808,7 @@ public final class AgentSessionRegistry: ObservableObject {
         abPairSessionId: UUID?? = nil,
         abPairDecidedAt: Date?? = nil,
         customName: String?? = nil,
+        claudeSessionId: String?? = nil,
         codexChatThreadId: String?? = nil,
         runtimeCwd: String?? = nil,
         chatCwd: String?? = nil,
@@ -853,6 +854,7 @@ public final class AgentSessionRegistry: ObservableObject {
             abPairSessionId: Self.resolve(abPairSessionId, fallback: s.abPairSessionId),
             abPairDecidedAt: Self.resolve(abPairDecidedAt, fallback: s.abPairDecidedAt),
             customName: Self.resolve(customName, fallback: s.customName),
+            claudeSessionId: Self.resolve(claudeSessionId, fallback: s.claudeSessionId),
             // v0.8.0 schema v5 (chat-tab): preserve all chat fields
             // across mutations so an update to a chat session doesn't
             // silently convert it back to a code session.
@@ -955,6 +957,15 @@ public final class AgentSessionRegistry: ObservableObject {
         update(id: id) { _ in projected }
     }
 
+    /// v6 (Track A): persist the Claude CLI session id for `--resume`. No-op if
+    /// unchanged so the per-turn re-capture doesn't churn the registry / receipts.
+    public func setClaudeSessionId(id: UUID, value: String?) async throws {
+        guard let s = session(id: id), s.claudeSessionId != value else { return }
+        let projected = with(s, claudeSessionId: .some(value))
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
+    }
+
     private static func resolve<T>(_ override: T??, fallback: T?) -> T? {
         guard let override else { return fallback }
         return override
@@ -1013,7 +1024,9 @@ public final class AgentSessionRegistry: ObservableObject {
     /// just code sessions with a nil repoKey to v4, which crashes on the
     /// required-String decode. Mitigated by single-step v4→v5 bump (no
     /// intermediate "kind on v4" wire shape).
-    private static let currentSchemaVersion = 5
+    /// v6 (Track A): adds optional `claudeSessionId` (the Claude CLI session id
+    /// for `--resume`). v5 files decode cleanly (decodeIfPresent → nil).
+    private static let currentSchemaVersion = 6
 
     private func load() {
         guard FileManager.default.fileExists(atPath: storeURL.path) else { return }

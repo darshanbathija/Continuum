@@ -2763,6 +2763,12 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// at the daemon's rename handler.
     public let customName: String?
 
+    /// v6 (Track A): the Claude CLI session id parsed from the JSONL header
+    /// (NOT `AgentSession.id`). Used for `claude --resume` after idle-teardown
+    /// or daemon relaunch. nil until captured post-spawn; re-captured per turn
+    /// because Claude rotates the id after some operations.
+    public let claudeSessionId: String?
+
     // MARK: - Sessions v2 schema v5 additions (v0.8.0 Chat tab)
     //
     // All optional + decoder-tolerant so v3/v4 sessions.json files
@@ -2883,6 +2889,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         abPairSessionId: UUID? = nil,
         abPairDecidedAt: Date? = nil,
         customName: String? = nil,
+        claudeSessionId: String? = nil,
         kind: SessionKind = .code,
         frontierGroupId: UUID? = nil,
         frontierChildIndex: Int? = nil,
@@ -2926,6 +2933,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.abPairSessionId = abPairSessionId
         self.abPairDecidedAt = abPairDecidedAt
         self.customName = customName
+        self.claudeSessionId = claudeSessionId
         self.kind = kind
         self.frontierGroupId = frontierGroupId
         self.frontierChildIndex = frontierChildIndex
@@ -2985,6 +2993,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         // so v3 sessions.json files decode cleanly (the field just stays
         // nil).
         self.customName = (try? c.decodeIfPresent(String.self, forKey: .customName)) ?? nil
+        // v6 (Track A): claudeSessionId. decodeIfPresent → a v5 sessions.json
+        // (no key) decodes cleanly to nil.
+        self.claudeSessionId = (try? c.decodeIfPresent(String.self, forKey: .claudeSessionId)) ?? nil
         // v0.8.0 schema v5 additions: kind, frontierGroupId, frontierChildIndex,
         // codexChatBackend, codexChatThreadId. All optional + decoder-tolerant
         // so v3/v4 sessions.json files decode unchanged (defaults below).
@@ -3071,7 +3082,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              inheritedContextSourceIds,
              ownsWorktree,
              // Repo env sets.
-             envSetId, envSetName
+             envSetId, envSetName,
+             // v6 (Track A): Claude PTY CLI session id.
+             claudeSessionId
     }
 
     /// Resolve `providerInstanceId` (a `ProviderInstanceId.wireId` string)
