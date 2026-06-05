@@ -18,7 +18,22 @@ import Foundation
 public enum RelayTransportFlag {
     public static let key = "clawdmeter.transport.relayDefault"
 
+    /// B5 cutover (2026-06-05): the relay is now the DEFAULT transport. When
+    /// the key has never been written we return `true` so a fresh install
+    /// routes through the relay without any opt-in. The Settings toggle writes
+    /// an explicit Bool, which always wins — so a user who hits a bad relay
+    /// path can flip it OFF on-device and fall back to the direct path without
+    /// needing a new build. (`UserDefaults.bool` can't distinguish unset from
+    /// `false`, hence the explicit `object(forKey:)` probe.)
     public static var relayDefaultEnabled: Bool {
-        UserDefaults.standard.bool(forKey: key)
+        let d = UserDefaults.standard
+        if d.object(forKey: key) == nil { return true }
+        return d.bool(forKey: key)
+    }
+
+    /// Persist the user's explicit choice (the on-device toggle). Writing this
+    /// pins the value so the default-on probe above no longer applies.
+    public static func setRelayDefault(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: key)
     }
 }

@@ -24,6 +24,13 @@ struct SettingsView: View {
     /// the root TabView's `.preferredColorScheme` modifier — the whole
     /// app re-themes the moment the user lifts their finger off the
     /// segmented control.
+    /// B5 cutover: the relay-vs-direct transport switch. Default true mirrors
+    /// `RelayTransportFlag` (unset ⇒ relay). Writing it pins an explicit choice
+    /// so this is the user's on-device off-switch if the relay path misbehaves.
+    /// Takes effect on next app launch (the mux client is built at coordinator
+    /// spin-up).
+    @AppStorage("clawdmeter.transport.relayDefault") private var relayDefaultOn: Bool = true
+
     @AppStorage("clawdmeter.appearance") private var appearanceRaw: String = AppearanceMode.system.rawValue
     private var appearanceBinding: Binding<AppearanceMode> {
         Binding(
@@ -74,6 +81,18 @@ struct SettingsView: View {
                     Text(agentClient.isConfigured
                         ? "Scan a new QR or paste a new URL to re-pair with a different Mac. Forget pairing erases the stored host + token from this iPhone (Mac is untouched)."
                         : "Open Continuum on your Mac → Pair with iPhone. Both devices must be on the same Tailnet.")
+                }
+
+                Section {
+                    Toggle(isOn: $relayDefaultOn) {
+                        Label("Use relay transport", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                } header: {
+                    Text("Connection")
+                } footer: {
+                    Text(relayDefaultOn
+                        ? "On: this iPhone reaches your Mac through the Continuum relay (and direct over the LAN when both are on the same Wi-Fi). Works off your home network. Takes effect on next launch."
+                        : "Off: this iPhone uses the legacy direct connection to your Mac. Turn relay back on if direct stops working away from home. Takes effect on next launch.")
                 }
 
                 Section {

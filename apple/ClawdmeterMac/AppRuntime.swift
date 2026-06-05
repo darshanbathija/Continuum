@@ -422,7 +422,12 @@ final class AppRuntime: ObservableObject {
             // localhost AgentControlServer via `RelayRequestDispatcher`,
             // so paired Mac handlers fire over either Tailscale or the
             // relay transparently.
-            let relayEnabled = UserDefaults.standard.object(forKey: "clawdmeter.relay.enabled") as? Bool ?? false
+            // B5 cutover (2026-06-05): default ON to match iOS's relayDefault.
+            // The Mac relay client stays idle until a relay pairing bundle
+            // exists, so defaulting on costs nothing when unpaired but means a
+            // relay-paired iPhone always has its Mac peer present. An explicit
+            // `false` (set by a future Settings toggle / MDM) still wins.
+            let relayEnabled = UserDefaults.standard.object(forKey: "clawdmeter.relay.enabled") as? Bool ?? true
             if relayEnabled, let loopback = self.loopbackClient {
                 let dispatcher = RelayRequestDispatcher(loopbackClient: loopback)
                 self.relayDispatcher = dispatcher

@@ -200,12 +200,16 @@ public struct RelayPairingBundle: Codable, Sendable, Equatable {
     }
 
     /// TTL must be in seconds (so a 4-digit year, ~10 digits), in the
-    /// future, but not so far in the future that a clock-skew attack
-    /// could keep a session usable for years. We bound at +1 day.
+    /// future, but not so far in the future that a clock-skew attack could keep
+    /// a session usable indefinitely. CB-P0a (2026-06-05): the Mac now mints a
+    /// 30-day session (durable transport), so the upper bound is 31 days — the
+    /// 30-day mint plus a day of clock skew. A QR claiming a longer-than-31-day
+    /// session is still rejected, capping a malicious/buggy bundle's window.
+    static let maxTTLSeconds: UInt64 = 31 * 24 * 60 * 60  // 31 days (30d mint + skew)
     static func isValidTTL(_ ttl: UInt64) -> Bool {
         let now = UInt64(Date().timeIntervalSince1970)
         if ttl <= now { return false }
-        if ttl > now + 86_400 { return false }
+        if ttl > now + maxTTLSeconds { return false }
         return true
     }
 
