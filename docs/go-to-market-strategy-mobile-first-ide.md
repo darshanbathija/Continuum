@@ -1,15 +1,15 @@
-# Clawdmeter Go-To-Market Strategy
+# Continuum Go-To-Market Strategy
 
 Generated: 2026-05-25
 Scope: mobile-first IDE / native control plane for local coding agents
 
-This document is meant to be executed. It synthesizes the current Clawdmeter codebase, parallel read-only code reviews, current App Store / Google Play / SEO platform guidance, and established GTM, positioning, branding, social, SEO, ASO, product-led-growth, and demand-generation frameworks.
+This document is meant to be executed. It synthesizes the current Continuum codebase, parallel read-only code reviews, current App Store / Google Play / SEO platform guidance, and established GTM, positioning, branding, social, SEO, ASO, product-led-growth, and demand-generation frameworks.
 
-It does not assume Clawdmeter is more ready than the code proves. The strongest strategy is to be unusually honest: lead with the sharp native mobile control-plane wedge, ship Mac-first, prove iPhone/Watch reliability, then scale store and community distribution.
+It does not assume Continuum is more ready than the code proves. The strongest strategy is to be unusually honest: lead with the sharp native mobile control-plane wedge, ship Mac-first, prove iPhone/Watch reliability, then scale store and community distribution.
 
 ## Executive Decision
 
-Clawdmeter should launch as:
+Continuum should launch as:
 
 > The native control plane for coding agents: run Claude, Codex, Gemini/Antigravity, OpenCode, and Cursor from your Mac, then monitor, compare, approve, and steer sessions from iPhone and Watch.
 
@@ -25,7 +25,7 @@ Reasons:
 
 The GTM thesis:
 
-> Coding agents are becoming a swarm of separate CLIs, desktop apps, subscriptions, model choices, cost ledgers, and long-running sessions. Clawdmeter wins by becoming the local, native, mobile-aware cockpit for that swarm.
+> Coding agents are becoming a swarm of separate CLIs, desktop apps, subscriptions, model choices, cost ledgers, and long-running sessions. Continuum wins by becoming the local, native, mobile-aware cockpit for that swarm.
 
 ## Product Truth From Code
 
@@ -90,11 +90,11 @@ Use "mobile-first IDE" in narrative and App Store copy, but keep the technical h
 
 ### One-Liner
 
-Clawdmeter is a native Mac, iPhone, and Watch control plane for coding agents: launch sessions, compare models, track costs, approve plans, and steer long-running work from your phone.
+Continuum is a native Mac, iPhone, and Watch control plane for coding agents: launch sessions, compare models, track costs, approve plans, and steer long-running work from your phone.
 
 ### Short Positioning Statement
 
-For developers who already use Claude Code, Codex, Gemini/Antigravity, OpenCode, or Cursor, Clawdmeter is a native agent workbench that keeps sessions, cost, model choice, and mobile approvals in one local-first app. Unlike terminal-only tools or single-provider IDEs, Clawdmeter gives you a paired iPhone and Watch cockpit for the agent stack you already use.
+For developers who already use Claude Code, Codex, Gemini/Antigravity, OpenCode, or Cursor, Continuum is a native agent workbench that keeps sessions, cost, model choice, and mobile approvals in one local-first app. Unlike terminal-only tools or single-provider IDEs, Continuum gives you a paired iPhone and Watch cockpit for the agent stack you already use.
 
 ### Tagline Options
 
@@ -185,7 +185,7 @@ The third wedge:
 
 ### Brand Role
 
-Clawdmeter should feel like:
+Continuum should feel like:
 
 - A cockpit, not a dashboard.
 - A trusted local instrument, not a SaaS surveillance panel.
@@ -254,13 +254,13 @@ Run Claude, Codex, Gemini/Antigravity, OpenCode, and Cursor sessions from your M
 - Compare Claude, Codex, and Gemini side by side.
 - Track usage, spend, quota, and model choice by provider and repo.
 - Inspect plans, diffs, PRs, terminal output, artifacts, and sources.
-- Keep provider auth local; Clawdmeter reads the tools you already use.
+- Keep provider auth local; Continuum reads the tools you already use.
 
 ### Objection Handling
 
 "Is this a cloud IDE?"
 
-No. Clawdmeter is local-first. Your Mac runs the daemon and provider runtimes; iPhone and Watch are paired control surfaces.
+No. Continuum is local-first. Your Mac runs the daemon and provider runtimes; iPhone and Watch are paired control surfaces.
 
 "Does this replace Cursor or Claude Code?"
 
@@ -284,7 +284,7 @@ Must be completed before any public announcement:
 - Remove or fix stale Open Design references in README/docs.
 - Decide whether repo is proprietary or open-source; add LICENSE or avoid "open-source" copy.
 - Add `SECURITY.md` and privacy/trust page.
-- Add public "What Clawdmeter reads locally" doc.
+- Add public "What Continuum reads locally" doc.
 - Fix or document the updater tag naming contract (`vX.Y.Z-mac` vs `vX.Y.Z-buildN`).
 - Confirm GitHub Release artifact names match install docs.
 - Add a single "known limitations" page with Cursor chat, Linux, TestFlight, notifications, and Tailscale caveats.
@@ -483,13 +483,13 @@ Secondary activation:
 
 ## ASO Strategy
 
-ASO is not just keywords. For Clawdmeter, conversion will be driven by screenshots that prove the mobile workflow. Apple explicitly recommends screenshots and previews show the app in use, with the first 1-3 screenshots carrying the core value in search results.
+ASO is not just keywords. For Continuum, conversion will be driven by screenshots that prove the mobile workflow. Apple explicitly recommends screenshots and previews show the app in use, with the first 1-3 screenshots carrying the core value in search results.
 
 ### App Store Product Page
 
 Possible app name:
 
-- Clawdmeter
+- Continuum
 
 Subtitle options, 30 chars max:
 
@@ -510,7 +510,7 @@ Promotional text:
 
 Short description opening sentence:
 
-> Clawdmeter pairs with your Mac to control local coding agents from iPhone and Watch.
+> Continuum pairs with your Mac to control local coding agents from iPhone and Watch.
 
 Feature bullets:
 
@@ -549,7 +549,7 @@ Mac App Store or website screenshot set:
 
 30-second structure:
 
-- 0-3s: iPhone opens Clawdmeter, paired to Mac.
+- 0-3s: iPhone opens Continuum, paired to Mac.
 - 3-8s: start a session with model/effort.
 - 8-13s: Mac workbench shows agent running.
 - 13-18s: Watch/iPhone approval appears.
@@ -620,7 +620,7 @@ Recommended pages:
 - `/testflight`
   - iPhone/Watch waitlist.
 - `/security`
-  - What Clawdmeter reads, stores, and sends.
+  - What Continuum reads, stores, and sends.
 - `/docs/pairing`
   - Pair iPhone with Mac.
 - `/docs/providers/claude-code`
@@ -673,9 +673,9 @@ Top of funnel:
    - "The hidden cost of broadcasting prompts to multiple agents"
 3. Provider workflows:
    - "Claude Code, Codex, Gemini, OpenCode, Cursor: what each is good at"
-   - "Why Clawdmeter integrates OpenCode instead of forking it"
+   - "Why Continuum integrates OpenCode instead of forking it"
 4. Trust/local-first:
-   - "What Clawdmeter reads from your Mac"
+   - "What Continuum reads from your Mac"
    - "Local-first AI coding tools: what should stay on-device"
 5. Release/build logs:
    - "Building a mobile-first IDE on SwiftUI"
@@ -718,7 +718,7 @@ X/Twitter:
 Hacker News:
 
 - Only post when install and onboarding are strong.
-- Title idea: "Show HN: Clawdmeter - control local coding agents from iPhone and Watch"
+- Title idea: "Show HN: Continuum - control local coding agents from iPhone and Watch"
 - Avoid vague AI hype; lead with local-first, Mac daemon, iPhone/Watch control, provider support, and limitations.
 
 Reddit:
@@ -747,7 +747,7 @@ Discord/Slack:
 
 Post 1:
 
-> I built Clawdmeter because my coding agents kept running while I was away from the Mac.
+> I built Continuum because my coding agents kept running while I was away from the Mac.
 >
 > It pairs a native Mac workbench with iPhone and Watch so you can start sessions, approve plans, inspect diffs, and track model cost from your pocket.
 
@@ -775,7 +775,7 @@ The strategy applies these durable frameworks without copying or quoting them:
 
 - Positioning: define the competitive alternative, unique attributes, value, users who care, and market category.
 - Crossing the Chasm: start with a narrow beachhead of power users, not the whole developer market.
-- Category design: name the new problem - coding-agent sprawl - and make Clawdmeter the control plane.
+- Category design: name the new problem - coding-agent sprawl - and make Continuum the control plane.
 - Product-led growth: first value must happen quickly, before payment or heavy setup.
 - Jobs to be Done: focus on "keep my agent moving while I am away from my Mac."
 - Demand-side sales: understand switching moments, anxieties, and habits from existing CLI/IDE workflows.
@@ -788,7 +788,7 @@ The strategy applies these durable frameworks without copying or quoting them:
 
 ## Model Optimization GTM
 
-This is a major differentiator. Most AI coding tools sell "smarter model." Clawdmeter can sell "right model, right effort, right cost, right confidence."
+This is a major differentiator. Most AI coding tools sell "smarter model." Continuum can sell "right model, right effort, right cost, right confidence."
 
 ### Product Story
 
@@ -826,7 +826,7 @@ This is a major differentiator. Most AI coding tools sell "smarter model." Clawd
 
 ### Against Cursor
 
-Cursor is a primary IDE. Clawdmeter is a local-first control plane over multiple coding-agent runtimes, including Cursor code sessions where supported.
+Cursor is a primary IDE. Continuum is a local-first control plane over multiple coding-agent runtimes, including Cursor code sessions where supported.
 
 Use:
 
@@ -839,7 +839,7 @@ Avoid:
 
 ### Against OpenCode
 
-OpenCode is a powerful open-source coding agent with server/client architecture. Clawdmeter should integrate it as one provider/runtime, not fork or replace it.
+OpenCode is a powerful open-source coding agent with server/client architecture. Continuum should integrate it as one provider/runtime, not fork or replace it.
 
 Use:
 
@@ -851,7 +851,7 @@ Avoid:
 
 ### Against Claude Code / Codex CLI
 
-Claude Code and Codex are agent runtimes. Clawdmeter is the cockpit around them.
+Claude Code and Codex are agent runtimes. Continuum is the cockpit around them.
 
 Use:
 
@@ -859,7 +859,7 @@ Use:
 
 ### Against Conductor / cmux-style workbenches
 
-Those are workbench/session managers. Clawdmeter's wedge is native Apple-device control, usage economics, and multi-provider mobile approvals.
+Those are workbench/session managers. Continuum's wedge is native Apple-device control, usage economics, and multi-provider mobile approvals.
 
 Use:
 

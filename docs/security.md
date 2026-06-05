@@ -1,7 +1,7 @@
-# Clawdmeter — Security
+# Continuum — Security
 
 This doc is the public-facing version of the secure-relay + APNS design.
-It describes what Clawdmeter trusts, what it doesn't, and what the
+It describes what Continuum trusts, what it doesn't, and what the
 operator's Cloudflare account can and cannot see. The full normative
 design lives at [`docs/design/secure-relay-apns-2026-05-26.md`](design/secure-relay-apns-2026-05-26.md);
 this doc is the contract with users.
@@ -18,7 +18,7 @@ this doc is the contract with users.
 
 ## 1. Trust model
 
-Clawdmeter has five trust tiers:
+Continuum has five trust tiers:
 
 | Tier | Component | Trust | Notes |
 | --- | --- | --- | --- |
@@ -26,7 +26,7 @@ Clawdmeter has five trust tiers:
 | 2 | Paired iPhone / Apple Watch | **Trusted peer** | Pairing is QR + bearer-token + (for the secure-cloud path) per-pairing ECDH. iPhone derives the same symmetric key as the Mac and can decrypt every relay frame and every APNS body. |
 | 3 | Cloudflare relay Worker (E2) | **Untrusted** | Sees opaque XChaCha20-Poly1305 envelopes only. Never holds the session key. Audit log records sender role + envelope type + byte length — never body content. |
 | 4 | Cloudflare APNS gateway Worker (E5) | **Untrusted for payload** / trusted for `.p8` | Holds the operator's APNS signing key. Forwards sealed payloads to Apple. Cannot decrypt the body; only the paired iPhone can. |
-| 5 | Third-party provider CLIs (claude, codex, opencode, cursor, antigravity/gemini) | **Sandboxed children** | Spawned by the Mac daemon as child processes. Each owns its own telemetry, its own auth state, and its own network egress. Clawdmeter does not proxy or inspect their traffic. F3 [PR #142](https://github.com/darshanbathija/Clawdmeter/pull/142) carries the type-level seam for HOME isolation across instances (e.g. `claude_personal` vs. `claude_work`); the wire-up that actually enforces env scrub on spawn is F3-wire and not in main yet. |
+| 5 | Third-party provider CLIs (claude, codex, opencode, cursor, antigravity/gemini) | **Sandboxed children** | Spawned by the Mac daemon as child processes. Each owns its own telemetry, its own auth state, and its own network egress. Continuum does not proxy or inspect their traffic. F3 [PR #142](https://github.com/darshanbathija/Clawdmeter/pull/142) carries the type-level seam for HOME isolation across instances (e.g. `claude_personal` vs. `claude_work`); the wire-up that actually enforces env scrub on spawn is F3-wire and not in main yet. |
 
 The trust root is the local Mac daemon. Compromising the daemon
 compromises everything; compromising any single other tier does not.
@@ -372,7 +372,7 @@ the current state and the verifier finding that surfaced this.
 
 ## 11. Agent fs/terminal trust boundary (RepoTrustGate)
 
-When Clawdmeter drives an agent over ACP as a full harness (Grok, Cursor),
+When Continuum drives an agent over ACP as a full harness (Grok, Cursor),
 the agent can ask the client (us) to **read or write files** on its behalf
 (`fs/read_text_file` / `fs/write_text_file`). We do not obey blindly.
 

@@ -1,8 +1,8 @@
-# Design System — Clawdmeter
+# Design System — Continuum
 
 **Direction: "Quiet Black Workbench."**
 
-This is the design source of truth for all Clawdmeter UI work (macOS, iPhone,
+This is the design source of truth for all Continuum UI work (macOS, iPhone,
 watchOS, and the Linux port). It replaces the previous Tahoe liquid-glass
 system, which is preserved at
 `docs/designs/DESIGN-tahoe-glass-archived-2026-05-27.md` for reference.
@@ -33,7 +33,7 @@ up.
   projects, providers, branches, and devices.
 - **Product type:** Native agentic-coding instrument with usage analytics and
   mobile + watch companion surfaces.
-- **Heritage:** The original Clawdmeter was a physical ESP32 gauge — a
+- **Heritage:** The original was a physical ESP32 gauge — a
   terra-cotta needle on black. The instrument metaphor survives; the
   terra-cotta is demoted to a single signal (the Claude provider color).
 

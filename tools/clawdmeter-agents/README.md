@@ -1,6 +1,6 @@
 # clawdmeter-agents
 
-Python sidecar for Clawdmeter SDK mode (Antigravity 2 native, v0.6.0+).
+Python sidecar for Continuum SDK mode (Antigravity 2 native, v0.6.0+).
 
 **Status: skeleton.** Real implementation lands in v0.6.1.
 

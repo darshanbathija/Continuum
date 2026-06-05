@@ -14,7 +14,7 @@ In QA mode, flag any code that doesn't match DESIGN.md.
 
 This codebase has TWO upstream sources you must credit and respect:
 
-1. **The original Clawdmeter ESP32 firmware** (separate repo). The Apple
+1. **The original ESP32 firmware** (separate repo). The Apple
    port replays its design language — same gauges, same color tokens
    (`#d97757` terra-cotta on `#000`), the same `UsageData` JSON shape, the
    same auto-revive idea, the same rate-limit-header polling math.
@@ -150,7 +150,7 @@ xcodebuild -scheme "Clawdmeter (iOS)"   -destination 'generic/platform=iOS Simul
 xcodebuild -scheme "Clawdmeter (Watch)" -destination 'generic/platform=watchOS Simulator' build
 ```
 
-To produce a DMG for distribution: `./tools/build-mac-dmg.sh` → `dist/Clawdmeter-<version>-arm64.dmg`.
+To produce a DMG for distribution: `./tools/build-mac-dmg.sh` → `dist/Continuum-<version>-arm64.dmg`.
 
 ## Analytics layer one-pager
 
@@ -608,7 +608,7 @@ Cross-Apple compose-draft handoff (X1):
   and pre-fills `EmptyStateCenteredComposer`. Wire version bumped 3 → 4
   with `composeDraftMinimum=4`; iOS gates `postComposeDraft` on
   `serverWireVersion >= composeDraftMinimum` and surfaces "Update
-  Clawdmeter on the Mac" for older Macs. Inbound text capped at 64KB;
+  Continuum on the Mac" for older Macs. Inbound text capped at 64KB;
   `AuditLog` records every draft.
 
 Pairing host resolution rewritten:
@@ -732,7 +732,7 @@ back-button bug on macOS NavSplitView). `HSplitView` with sidebar | thread
 ### Sidebar behavior
 - Repos sort by most-recent activity (newest first); alphabetical
   fallback; "Other" always last.
-- Each repo expands to show Clawdmeter-spawned sessions (registry-
+- Each repo expands to show Continuum-spawned sessions (registry-
   owned), sub-chats nested under their parents (G17), then a "Recent
   (last 30 days)" section listing every JSONL touched in the window —
   one row per JSONL with relative timestamp and a green dot when still
@@ -829,7 +829,7 @@ broadcast group to a Solo chat that keeps the winning transcript.
 - Mac (`MacChatV2View`): left history sidebar, mode toggle (Solo vs
   Broadcast), provider summary chips above the chat, and a
   horizontally-scrollable column-per-provider transcript. Tahoe
-  glass aesthetic from the standalone Clawdmeter redesign.
+  glass aesthetic from the standalone Continuum redesign.
 - iOS (`IOSChatV2View`): compact version. Provider pills above the
   selected-reply card, swipe between providers.
 

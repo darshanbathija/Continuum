@@ -27,7 +27,7 @@ catches what XCTest can't.
   - Expected: Clone button enables. Tap. Progress spinner shows "Cloning anthropics/claude-code-sdk…".
   - On success: sheet dismisses, sidebar grows `claude-code-sdk` entry.
   - Verify `~/code/claude-code-sdk/.git/` exists on disk.
-- [ ] Temporarily move `gh` aside: `mv $(which gh) /tmp/gh.bak`. Restart Clawdmeter.
+- [ ] Temporarily move `gh` aside: `mv $(which gh) /tmp/gh.bak`. Restart Continuum.
   - Status row shows "GitHub CLI not found — Copy install command".
   - Clone a public repo. Expected: succeeds via `git clone https://github.com/...`.
   - Try cloning a **private** repo. Expected: auth banner with "Copy `gh auth login`" button.
@@ -89,5 +89,5 @@ catches what XCTest can't.
 ### 6. iOS wire-version banner
 
 - [ ] Pair to an older Mac (wire v22). Open workspace switcher footer.
-  - Expected: "Update Clawdmeter on the Mac to add projects from iOS."
+  - Expected: "Update Continuum on the Mac to add projects from iOS."
   - The Add project button is NOT shown.

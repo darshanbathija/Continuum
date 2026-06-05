@@ -1,6 +1,6 @@
-# Pairing your iPhone with Clawdmeter for Linux
+# Pairing your iPhone with Continuum for Linux
 
-Clawdmeter for Linux pairs to the iPhone app over **Tailscale**. Same
+Continuum for Linux pairs to the iPhone app over **Tailscale**. Same
 mechanism as the Mac: scan a QR, share a per-device bearer token, the
 iPhone speaks to the Linux daemon at `http://100.x.x.x:21731`.
 
@@ -15,15 +15,15 @@ iPhone speaks to the Linux daemon at `http://100.x.x.x:21731`.
    On iPhone: install [Tailscale from the App Store](https://apps.apple.com/app/tailscale/id1470499037),
    sign in to the same account.
 
-2. **Clawdmeter daemon running**. Either:
+2. **Continuum daemon running**. Either:
    - Foreground via the desktop launcher (`clawdmeter --with-tray` — default).
    - Headless via the systemd-user service: `systemctl --user enable --now clawdmeter.service`.
 
-3. **iPhone Clawdmeter** installed (TestFlight or App Store).
+3. **iPhone Continuum** installed (TestFlight or App Store).
 
 ## Pairing flow
 
-1. **On Linux**: open Clawdmeter → **Settings → Sessions → "Sync with iPhone"**.
+1. **On Linux**: open Continuum → **Settings → Sessions → "Sync with iPhone"**.
    A QR code popover appears. Below the QR is the URL:
    ```
    http://100.64.x.x:21731/pair?token=<43-char-base64url>
@@ -32,7 +32,7 @@ iPhone speaks to the Linux daemon at `http://100.x.x.x:21731`.
    Keyring (or in `~/.config/clawdmeter/.token` chmod 0600 on headless
    server installs).
 
-2. **On iPhone**: open Clawdmeter → **Sessions tab → "Pair with Mac/Linux"**
+2. **On iPhone**: open Continuum → **Sessions tab → "Pair with Mac/Linux"**
    → **Scan QR**. Point the camera at the Linux screen.
 
 3. Within ~1s the iPhone shows **"Paired with <hostname>"**. The Sessions
@@ -70,7 +70,7 @@ iPhone side:
 ### QR scans but pairs to wrong host
 
 The QR contains a bearer token plus the host URL. If you have multiple
-Clawdmeter installs (Mac + Linux), the iPhone may have a stale token from
+Continuum installs (Mac + Linux), the iPhone may have a stale token from
 the other. Tap the paired-host row → "Forget" → re-scan.
 
 ### "Tailscale installed but not running" warning in the QR popover
@@ -96,7 +96,7 @@ clawdmeterd --regenerate-pairing-token
 ## Wire compatibility
 
 The daemon implements protocol v4 (`wireVersion: 4` in `/health`). iPhone
-clients below v4 see "Update Clawdmeter on the Mac" in the new-session
+clients below v4 see "Update Continuum on the Mac" in the new-session
 sheet. Update the iOS app via TestFlight / App Store.
 
 ## Security model

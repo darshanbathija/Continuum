@@ -1,10 +1,10 @@
-# Clawdmeter Cloud — Secret Provisioning + Rotation Playbook
+# Continuum Cloud — Secret Provisioning + Rotation Playbook
 
 E0 (Phase 0) — infra prep that gates E2 (relay) and E5 (APNS gateway). The Worker source code lands in those PRs; this doc defines what secrets each Worker needs, how to rotate them, and who holds the keys.
 
 ## Cloudflare account setup
 
-**Account holder:** operator (one Cloudflare account per Clawdmeter deployment; the official Clawdmeter cloud + any self-hosted operator each own their own).
+**Account holder:** operator (one Cloudflare account per Continuum deployment; the official Continuum cloud + any self-hosted operator each own their own).
 
 **Required Cloudflare features:**
 - Workers (Paid plan recommended — Free covers dev but D1 + Durable Object + KV combined will hit Free-tier caps at ~10k users)
@@ -93,7 +93,7 @@ Per D21 mitigation suite — target: rotation within 1h of detection.
    ```bash
    printf 'off' | wrangler secret put APNS_KILL_SWITCH --env production
    ```
-6. Notify affected users via in-app banner (Clawdmeter daemon polls a Worker `/notice` endpoint to surface operator-side advisories)
+6. Notify affected users via in-app banner (Continuum daemon polls a Worker `/notice` endpoint to surface operator-side advisories)
 
 ## CI deploy gates
 
@@ -118,4 +118,4 @@ When transferring operator ownership (e.g. company sale, project transfer):
 - [ ] Rotate `.p8` (issue new from new operator's Apple Developer team)
 - [ ] Update Mac + iOS client builds with new relay/gateway URLs if they're hosted under a different domain
 - [ ] Update DNS for `relay.clawdmeter.dev` + `apns-gateway.clawdmeter.dev` (or operator equivalents)
-- [ ] Notify users in-app of the operator change (Clawdmeter daemon poll endpoint described above)
+- [ ] Notify users in-app of the operator change (Continuum daemon poll endpoint described above)

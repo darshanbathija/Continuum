@@ -1,6 +1,6 @@
 # macOS app — step-by-step test plan
 
-Goal: test the Continuum/Clawdmeter **macOS** app thoroughly via XCTest, focused
+Goal: test the Continuum **macOS** app thoroughly via XCTest, focused
 on the daemon + the new ACP harness (the least-tested, most bug-prone surface),
 then run everything and fix the bugs found.
 

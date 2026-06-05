@@ -2,7 +2,7 @@
 
 ## Summary
 
-V1 gives Clawdmeter a secure repo-first environment-variable system: metadata in Application Support JSON, values in Keychain, per-repo sets, per-variable set assignment, managed `.env.local` materialization, and runtime injection where supported.
+V1 gives Continuum a secure repo-first environment-variable system: metadata in Application Support JSON, values in Keychain, per-repo sets, per-variable set assignment, managed `.env.local` materialization, and runtime injection where supported.
 
 V2 should turn that foundation into a full environment manager comparable to Vercel's environment-variable UI while staying native to `DESIGN.md`: Tahoe glass preference cards, dense operational tables, real controls, masked secrets, and no fake web chrome.
 
@@ -18,7 +18,7 @@ V2 should turn that foundation into a full environment manager comparable to Ver
 
 ## V2 Product Goal
 
-Developers should be able to manage env vars in Clawdmeter with the same confidence they get from Vercel:
+Developers should be able to manage env vars in Continuum with the same confidence they get from Vercel:
 
 - Scan all variables in a real table.
 - Search, filter, and sort large env lists.
@@ -26,7 +26,7 @@ Developers should be able to manage env vars in Clawdmeter with the same confide
 - Assign variables to multiple repos and multiple sets at creation time.
 - Safely inspect, edit, rotate, duplicate, delete, and audit variables.
 - Understand exactly which sessions and run profiles will receive a variable.
-- Resolve local `.env.local` conflicts without Clawdmeter overwriting manual work.
+- Resolve local `.env.local` conflicts without Continuum overwriting manual work.
 
 ## Design Contract
 
@@ -92,7 +92,7 @@ Import:
 - Show manual keys outside the managed block in a conflict table.
 - Actions: adopt, import copy, ignore, open file, remove manual line after confirmation.
 - Runtime launch blocks on typed conflicts and links back to the exact conflict row.
-- The materializer still updates only the Clawdmeter-managed block.
+- The materializer still updates only the Continuum-managed block.
 
 ### Variable Detail
 
