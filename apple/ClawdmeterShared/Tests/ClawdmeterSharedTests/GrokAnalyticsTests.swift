@@ -14,6 +14,44 @@ final class GrokAnalyticsTests: XCTestCase {
         XCTAssertTrue(ProviderEnablement.allProviderIds.contains("grok"))
     }
 
+#if !os(watchOS) && canImport(SwiftUI)
+    @available(macOS 13, iOS 16, *)
+    func test_totalsGridShowsUnpricedGrokTokensBeforeRequestCount() {
+        let unpricedGrok = TokenTotals(inputTokens: 120, outputTokens: 45, requestCount: 1)
+        XCTAssertEqual(
+            AnalyticsTotalsGrid.cellDisplay(for: unpricedGrok),
+            .tokens("165 tok")
+        )
+
+        let requestOnly = TokenTotals(requestCount: 3)
+        XCTAssertEqual(
+            AnalyticsTotalsGrid.cellDisplay(for: requestOnly),
+            .requests("3 reqs")
+        )
+    }
+#endif
+
+    func test_grokLedgerPreservesExplicitTotalTokenRemainder() throws {
+        let entry = GrokUsageLedger.Entry(
+            timestamp: Date(timeIntervalSince1970: 1_779_000_000),
+            sessionId: "grok-session-total",
+            repo: nil,
+            model: "grok-build",
+            inputTokens: 10,
+            outputTokens: 5,
+            totalTokens: 25,
+            dedupKey: "grok:test:total"
+        )
+
+        let record = try XCTUnwrap(entry.usageRecord())
+        XCTAssertEqual(record.provider, .grok)
+        XCTAssertEqual(record.tokens.inputTokens, 10)
+        XCTAssertEqual(record.tokens.outputTokens, 5)
+        XCTAssertEqual(record.tokens.reasoningTokens, 10)
+        XCTAssertEqual(record.tokens.totalTokens, 25)
+        XCTAssertEqual(record.tokens.requestCount, 1)
+    }
+
     func test_grokLedgerLoadsIntoProviderModelDayAndRepoTotals() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("grok-analytics-\(UUID().uuidString)", isDirectory: true)

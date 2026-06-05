@@ -76,30 +76,60 @@ public struct AnalyticsTotalsGrid: View {
         }
     }
 
-    /// Per-cell renderer. Picks cost vs request-count display by which
-    /// metric is non-zero. Providers with both ($ and reqs) prefer cost.
+    enum CellDisplay: Equatable {
+        case cost(primary: String, secondary: String)
+        case tokens(String)
+        case requests(String)
+        case empty
+    }
+
+    static func cellDisplay(for totals: TokenTotals) -> CellDisplay {
+        if totals.costUSD > 0 {
+            return .cost(
+                primary: AnalyticsCurrencyFormatter.format(totals.costUSD),
+                secondary: AnalyticsTokenFormatter.format(totals.totalTokens) + " tok"
+            )
+        }
+        if totals.totalTokens > 0 {
+            return .tokens(AnalyticsTokenFormatter.format(totals.totalTokens) + " tok")
+        }
+        if totals.requestCount > 0 {
+            return .requests("\(totals.requestCount) reqs")
+        }
+        return .empty
+    }
+
+    /// Per-cell renderer. Picks cost, token, then request-count display by
+    /// which metric is non-zero. Unpriced token providers (Grok today) must
+    /// show token volume rather than collapsing to "1 reqs".
     @ViewBuilder
     private func cell(provider: UsageRecord.Provider, window: WindowTotals) -> some View {
         VStack(alignment: .trailing, spacing: 2) {
-            if window.totals.costUSD > 0 {
-                Text(AnalyticsCurrencyFormatter.format(window.totals.costUSD))
+            switch Self.cellDisplay(for: window.totals) {
+            case .cost(let primary, let secondary):
+                Text(primary)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.primary)
                     .monospacedDigit()
                     .redacted(reason: isLoading ? .placeholder : [])
-                Text(AnalyticsTokenFormatter.format(window.totals.totalTokens) + " tok")
+                Text(secondary)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .redacted(reason: isLoading ? .placeholder : [])
-            } else if window.totals.requestCount > 0 {
-                // Gemini: per-request count, no token subscript.
-                Text("\(window.totals.requestCount) reqs")
+            case .tokens(let value):
+                Text(value)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.primary)
                     .monospacedDigit()
                     .redacted(reason: isLoading ? .placeholder : [])
-            } else {
+            case .requests(let value):
+                Text(value)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .monospacedDigit()
+                    .redacted(reason: isLoading ? .placeholder : [])
+            case .empty:
                 Text("—")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.tertiary)

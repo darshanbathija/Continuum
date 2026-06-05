@@ -87,12 +87,18 @@ public enum GrokUsageLedger {
             let input = max(0, inputTokens)
             let output = max(0, outputTokens)
             let explicitTotal = max(0, totalTokens)
-            let tokenTotal = max(explicitTotal, input + output)
+            let splitTotal = input + output
+            let tokenTotal = max(explicitTotal, splitTotal)
             guard tokenTotal > 0 else { return nil }
 
             let tokens: TokenTotals
-            if input + output > 0 {
-                tokens = TokenTotals(inputTokens: input, outputTokens: output, requestCount: 1)
+            if splitTotal > 0 {
+                tokens = TokenTotals(
+                    inputTokens: input,
+                    outputTokens: output,
+                    reasoningTokens: max(0, tokenTotal - splitTotal),
+                    requestCount: 1
+                )
             } else {
                 tokens = TokenTotals(inputTokens: tokenTotal, requestCount: 1)
             }
