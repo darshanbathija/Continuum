@@ -61,16 +61,16 @@ public enum AgentKindUI {
     /// - Claude: terra-cotta (#D97757) — the heritage warmth, only here.
     /// - Codex: graphite (#8A9099)
     /// - Antigravity (gemini key): cool blue (#5C9DFF)
-    /// - OpenCode: muted slate-violet (#9B8CC4)
-    /// - Cursor: light graphite (#B8BDC4)
+    /// - OpenCode: muted violet (#9B87D4)
+    /// - Cursor: cool steel (#7FA8B5)
     /// - Grok / unknown: neutral slate / grey
     public static func accentRGB(for agent: AgentKind) -> (r: Int, g: Int, b: Int) {
         switch agent {
         case .claude: return (0xD9, 0x77, 0x57)
         case .codex:  return (0x8A, 0x90, 0x99)
         case .gemini: return (0x5C, 0x9D, 0xFF)
-        case .opencode: return (0x9B, 0x8C, 0xC4)
-        case .cursor: return (0xB8, 0xBD, 0xC4)
+        case .opencode: return (0x9B, 0x87, 0xD4) // muted violet
+        case .cursor: return (0x7F, 0xA8, 0xB5) // cool steel
         case .grok: return (0x70, 0x74, 0x7C) // neutral slate, distinct from codex graphite
         case .unknown: return (0x88, 0x88, 0x88)
         }

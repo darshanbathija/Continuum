@@ -171,8 +171,8 @@ public extension TahoeProvider {
         case .claude:   return ContinuumTokens.hex(0xD97757) // terra-cotta (heritage warmth)
         case .codex:    return ContinuumTokens.hex(0x8A9099) // graphite
         case .gemini:   return ContinuumTokens.hex(0x5C9DFF) // Antigravity cool blue
-        case .opencode: return ContinuumTokens.hex(0x9B8CC4) // proposed muted slate-violet
-        case .cursor:   return ContinuumTokens.hex(0xB8BDC4) // proposed light graphite
+        case .opencode: return ContinuumTokens.hex(0x9B87D4) // muted violet (OpenCode's brand hue)
+        case .cursor:   return ContinuumTokens.hex(0x7FA8B5) // cool steel (Cursor's mono identity)
         }
     }
 
@@ -184,8 +184,8 @@ public extension TahoeProvider {
         case .claude:   return [ContinuumTokens.hex(0xE68A66), ContinuumTokens.hex(0xC9603F)]
         case .codex:    return [ContinuumTokens.hex(0x9AA3AD), ContinuumTokens.hex(0x6E7681)]
         case .gemini:   return [ContinuumTokens.hex(0x79ADFF), ContinuumTokens.hex(0x4A86E8)]
-        case .opencode: return [ContinuumTokens.hex(0xAFA2D6), ContinuumTokens.hex(0x7E6FB0)]
-        case .cursor:   return [ContinuumTokens.hex(0xC6CBD2), ContinuumTokens.hex(0x9AA0A8)]
+        case .opencode: return [ContinuumTokens.hex(0xB2A4E2), ContinuumTokens.hex(0x7C6CB6)] // muted violet
+        case .cursor:   return [ContinuumTokens.hex(0x9BBFC9), ContinuumTokens.hex(0x5E8893)] // cool steel
         }
     }
 }
