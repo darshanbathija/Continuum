@@ -241,17 +241,20 @@ login). Requires the App ID to already exist (created by the archive's
 -allowProvisioningUpdates). Idempotent."
 lane :continuum_produce do
   continuum_asc_key  # sets the lane-context ASC API token produce reuses
-  produce(
-    app_identifier: "ai.continuum.ios",
-    app_name: ENV["CONTINUUM_APP_NAME"] || "Continuum",
-    language: "English",
-    sku: "continuum-ios-001",
-    team_id: ENV["CLAWDMETER_TEAM_ID"],
-    company_name: "Montauk Analytics Inc",
-    skip_itc: false,
-    skip_devcenter: true,
-    platform: "ios"
-  )
+  existing_app = Spaceship::ConnectAPI::App.all.find { |app| app.bundle_id == "ai.continuum.ios" }
+  unless existing_app
+    produce(
+      app_identifier: "ai.continuum.ios",
+      app_name: ENV["CONTINUUM_APP_NAME"] || "Continuum",
+      language: "English",
+      sku: "continuum-ios-001",
+      team_id: ENV["CLAWDMETER_TEAM_ID"],
+      company_name: "Montauk Analytics Inc",
+      skip_itc: false,
+      skip_devcenter: true,
+      platform: "ios"
+    )
+  end
   UI.success "iOS App Store Connect record ready."
 end
 
@@ -272,8 +275,7 @@ lane :continuum_archive do
     output_directory: "./build",
     output_name: "Continuum-iOS.ipa",
     include_symbols: true,
-    xcargs: "-allowProvisioningUpdates #{auth}",
-    export_xcargs: "-allowProvisioningUpdates #{auth}"
+    xcargs: "-allowProvisioningUpdates #{auth}"
   )
   UI.success "iOS + Watch archived → ./build/Continuum-iOS.ipa"
 end
@@ -285,7 +287,20 @@ lane :continuum_ios_testflight do
   continuum_asc_key  # re-assert the lane-context token for pilot
   upload_to_testflight(
     skip_waiting_for_build_processing: true,
+    app_identifier: "ai.continuum.ios",
     ipa: "./build/Continuum-iOS.ipa"
   )
   UI.success "iOS + Watch uploaded to TestFlight."
+end
+
+desc "Upload the already-exported iOS + Watch IPA to TestFlight."
+lane :continuum_upload_existing_ipa do
+  continuum_produce
+  continuum_asc_key
+  upload_to_testflight(
+    skip_waiting_for_build_processing: true,
+    app_identifier: "ai.continuum.ios",
+    ipa: ENV["CONTINUUM_IPA"] || "./build/Continuum-iOS.ipa"
+  )
+  UI.success "Existing iOS + Watch IPA uploaded to TestFlight."
 end

@@ -19,9 +19,15 @@ For _fastlane_ installation instructions, see [Installing _fastlane_](https://do
 [bundle exec] fastlane build_mac_dmg
 ```
 
-Package the Mac app into a DMG. Uses tools/build-mac-dmg.sh which
-already drives xcodegen + xcodebuild archive + hdiutil. Output:
-`dist/Continuum-<version>-arm64.dmg`.
+Package the Mac app into a local DMG. Sparkle publishing uses release_mac_sparkle.
+
+### release_mac_sparkle
+
+```sh
+[bundle exec] fastlane release_mac_sparkle
+```
+
+Credential-gated Mac release: Developer ID, notarization, GitHub asset, Pages appcast.
 
 ### release
 
@@ -29,8 +35,7 @@ already drives xcodegen + xcodebuild archive + hdiutil. Output:
 [bundle exec] fastlane release
 ```
 
-Full release: bump build number, archive Mac + iOS, ship TestFlight,
-draft a GitHub release with the DMG attached.
+Full release: bump build number, run Sparkle Mac release, ship iOS TestFlight.
 
 ### asc_verify
 
@@ -100,6 +105,14 @@ Archive iOS + Watch only (Xcode-managed automatic signing + API key).
 ```
 
 Full iOS TestFlight: archive (auto-provision) → app record → upload.
+
+### continuum_upload_existing_ipa
+
+```sh
+[bundle exec] fastlane continuum_upload_existing_ipa
+```
+
+Upload the already-exported iOS + Watch IPA to TestFlight.
 
 ----
 
