@@ -71,22 +71,26 @@ struct UpdateAppControl: View {
                 icon
                 if !compact || labelAlwaysVisible {
                     Text(label)
-                        .font(TahoeFont.body(compact ? 11 : 11.5, weight: .semibold))
+                        .font(ContinuumFont.body(compact ? 11 : 11.5, weight: .semibold))
                         .lineLimit(1)
                 }
             }
-            .foregroundStyle(tint)
+            .foregroundStyle(statusColor)
             .padding(.horizontal, compact ? 8 : 10)
             .padding(.vertical, 4)
             .frame(height: 24)
-            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .background {
+                RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                    .fill(chipFill)
+            }
             .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(tint.opacity(0.28), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                    .strokeBorder(chipStroke, lineWidth: 0.5)
             }
         }
         .buttonStyle(.plain)
         .disabled(disabled)
+        .opacity(disabled ? 0.55 : 1)
         .help(helpText)
         .popover(isPresented: $popoverPresented, arrowEdge: .bottom) {
             UpdatePopoverContent(coordinator: coordinator.wrapped)
@@ -169,16 +173,42 @@ struct UpdateAppControl: View {
         }
     }
 
-    private var tint: Color {
+    private var statusColor: Color {
         switch snapshot {
-        case .available:
-            return Theme.accent
+        case .available, .relaunchPending:
+            return ContinuumTokens.fg
         case .upToDate:
-            return ClawdmeterTheme.Colors.statusOK
-        case .translocated, .nonApplicationsInstall, .setupBlocked, .failed, .invalidAppcast, .corruptedDownload:
-            return Theme.statusWarning
+            return ContinuumTokens.live
+        case .failed, .invalidAppcast, .corruptedDownload:
+            return ContinuumTokens.error
+        case .translocated, .nonApplicationsInstall, .setupBlocked:
+            return ContinuumTokens.warn
         default:
-            return Theme.secondary
+            return ContinuumTokens.fg2
+        }
+    }
+
+    private var chipFill: Color {
+        switch snapshot {
+        case .available, .relaunchPending:
+            return ContinuumTokens.surface3
+        case .failed, .invalidAppcast, .corruptedDownload:
+            return ContinuumTokens.error.opacity(0.10)
+        case .translocated, .nonApplicationsInstall, .setupBlocked:
+            return ContinuumTokens.warn.opacity(0.10)
+        default:
+            return ContinuumTokens.surface2
+        }
+    }
+
+    private var chipStroke: Color {
+        switch snapshot {
+        case .available, .relaunchPending:
+            return ContinuumTokens.focus
+        case .failed, .invalidAppcast, .corruptedDownload, .translocated, .nonApplicationsInstall, .setupBlocked:
+            return statusColor.opacity(0.35)
+        default:
+            return ContinuumTokens.hairline
         }
     }
 
@@ -234,6 +264,7 @@ struct UpdatePopoverContent: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ContinuumTokens.surface1)
         .onAppear { coordinator.wrapped?.refreshReleaseMetadata() }
     }
 
@@ -245,10 +276,11 @@ struct UpdatePopoverContent: View {
                 .foregroundStyle(headerTint)
             VStack(alignment: .leading, spacing: 2) {
                 Text(headerTitle)
-                    .font(TahoeFont.body(14, weight: .semibold))
+                    .font(ContinuumFont.body(14, weight: .semibold))
+                    .foregroundStyle(ContinuumTokens.fg)
                 Text("Current \(coordinator.wrapped?.currentVersion ?? "unknown") (\(coordinator.wrapped?.currentBuild ?? "unknown"))")
-                    .font(TahoeFont.body(11))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.mono(11))
+                    .foregroundStyle(ContinuumTokens.fg3)
             }
             Spacer()
         }
@@ -261,34 +293,35 @@ struct UpdatePopoverContent: View {
             VStack(alignment: .leading, spacing: 8) {
                 if let title = update.title, !title.isEmpty {
                     Text(title)
-                        .font(TahoeFont.body(12, weight: .semibold))
+                        .font(ContinuumFont.body(12, weight: .semibold))
+                        .foregroundStyle(ContinuumTokens.fg)
                 }
                 releaseNotesView
             }
         case .failed(let reason, _), .setupBlocked(let reason, _),
              .invalidAppcastSignature(let reason, _), .corruptedDownload(let reason, _):
             Text(reason)
-                .font(TahoeFont.body(12))
-                .foregroundStyle(.secondary)
+                .font(ContinuumFont.body(12))
+                .foregroundStyle(ContinuumTokens.fg2)
                 .fixedSize(horizontal: false, vertical: true)
         case .translocated(let url):
             Text("Continuum is running from a temporary Gatekeeper path. Reveal the app in Finder, move it to /Applications, then relaunch.")
-                .font(TahoeFont.body(12))
-                .foregroundStyle(.secondary)
+                .font(ContinuumFont.body(12))
+                .foregroundStyle(ContinuumTokens.fg2)
                 .fixedSize(horizontal: false, vertical: true)
             Text(url.path)
-                .font(TahoeFont.mono(10))
-                .foregroundStyle(.secondary)
+                .font(ContinuumFont.mono(10))
+                .foregroundStyle(ContinuumTokens.fg3)
                 .lineLimit(2)
                 .truncationMode(.middle)
         case .nonApplicationsInstall(let url):
             Text("Sparkle can only replace installed apps reliably from /Applications. Move Continuum there before using in-app updates.")
-                .font(TahoeFont.body(12))
-                .foregroundStyle(.secondary)
+                .font(ContinuumFont.body(12))
+                .foregroundStyle(ContinuumTokens.fg2)
                 .fixedSize(horizontal: false, vertical: true)
             Text(url.path)
-                .font(TahoeFont.mono(10))
-                .foregroundStyle(.secondary)
+                .font(ContinuumFont.mono(10))
+                .foregroundStyle(ContinuumTokens.fg3)
                 .lineLimit(2)
                 .truncationMode(.middle)
         default:
@@ -302,41 +335,46 @@ struct UpdatePopoverContent: View {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text("Loading release notes")
-                    .font(TahoeFont.body(12))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.body(12))
+                    .foregroundStyle(ContinuumTokens.fg2)
             }
         } else if let notes = coordinator.wrapped?.releaseNotes, !notes.isEmpty {
             ScrollView {
                 Text(renderMarkdown(notes))
-                    .font(TahoeFont.body(12))
+                    .font(ContinuumFont.body(12))
+                    .foregroundStyle(ContinuumTokens.fg2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
+            .padding(10)
             .frame(maxHeight: 240)
+            .background(ContinuumTokens.surface2, in: RoundedRectangle(cornerRadius: ContinuumTokens.Radius.card, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: ContinuumTokens.Radius.card, style: .continuous)
+                    .strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5)
+            }
         } else if let error = coordinator.wrapped?.releaseMetadataError {
             Text("Release notes unavailable: \(error)")
-                .font(TahoeFont.body(12))
-                .foregroundStyle(.secondary)
+                .font(ContinuumFont.body(12))
+                .foregroundStyle(ContinuumTokens.fg2)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             Text("Release notes will appear here after the appcast is available.")
-                .font(TahoeFont.body(12))
-                .foregroundStyle(.secondary)
+                .font(ContinuumFont.body(12))
+                .foregroundStyle(ContinuumTokens.fg2)
         }
     }
 
     @ViewBuilder
     private var actions: some View {
         HStack(spacing: 8) {
-            Button(primaryActionTitle, action: primaryAction)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .tint(headerTint)
-                .disabled(primaryActionDisabled)
+            TahoeAccentButton(size: .m, disabled: primaryActionDisabled, action: primaryAction) {
+                Text(primaryActionTitle)
+            }
 
-            Button(secondaryActionTitle, action: secondaryAction)
-                .buttonStyle(.bordered)
-                .controlSize(.large)
+            TahoeGhostButton(size: .m, action: secondaryAction) {
+                Text(secondaryActionTitle)
+            }
         }
     }
 
@@ -390,14 +428,16 @@ struct UpdatePopoverContent: View {
 
     private var headerTint: Color {
         switch updateControlSnapshot(coordinator.wrapped) {
-        case .available:
-            return Theme.accent
+        case .available, .relaunchPending:
+            return ContinuumTokens.fg
         case .upToDate:
-            return ClawdmeterTheme.Colors.statusOK
-        case .translocated, .nonApplicationsInstall, .setupBlocked, .failed, .invalidAppcast, .corruptedDownload:
-            return Theme.statusWarning
+            return ContinuumTokens.live
+        case .failed, .invalidAppcast, .corruptedDownload:
+            return ContinuumTokens.error
+        case .translocated, .nonApplicationsInstall, .setupBlocked:
+            return ContinuumTokens.warn
         default:
-            return Theme.secondary
+            return ContinuumTokens.fg2
         }
     }
 
@@ -476,36 +516,32 @@ struct UpdateSettingsPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             UpdateSettingsRow(label: "Installed version", hint: "Bundle version used by Sparkle and appcast matching.") {
                 Text("\(coordinator.wrapped?.currentVersion ?? "unknown") (\(coordinator.wrapped?.currentBuild ?? "unknown"))")
-                    .font(TahoeFont.mono(11))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.mono(11, weight: .medium))
+                    .foregroundStyle(ContinuumTokens.fg2)
             }
 
             UpdateSettingsRow(label: "Last checked", hint: "Updated by Sparkle, not by a GitHub API poll.") {
                 Text(lastCheckedText)
-                    .font(TahoeFont.body(12))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.body(12))
+                    .foregroundStyle(ContinuumTokens.fg2)
             }
 
             UpdateSettingsRow(label: "Check automatically", hint: "Sparkle schedules future appcast checks.") {
-                Toggle("", isOn: automaticChecksBinding)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
+                TahoeToggleView(on: automaticChecksBinding)
             }
 
             UpdateSettingsRow(label: "Download automatically", hint: "Sparkle can prepare updates in the background.") {
-                Toggle("", isOn: automaticDownloadsBinding)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
+                TahoeToggleView(on: automaticDownloadsBinding)
             }
 
             HStack(spacing: 8) {
                 UpdateAppControl(coordinator: coordinator.wrapped)
-                Button("Open Appcast") { coordinator.wrapped?.openAppcast() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                Button("Fallback") { coordinator.wrapped?.openReleasePageFallback() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                TahoeGhostButton(size: .s, action: { coordinator.wrapped?.openAppcast() }) {
+                    Text("Open Appcast")
+                }
+                TahoeGhostButton(size: .s, action: { coordinator.wrapped?.openReleasePageFallback() }) {
+                    Text("Fallback")
+                }
             }
 
             releaseHistory
@@ -537,16 +573,18 @@ struct UpdateSettingsPanel: View {
         if let history = coordinator.wrapped?.releaseHistory, !history.isEmpty {
             TahoeHair().padding(.vertical, 4)
             Text("Release history")
-                .font(TahoeFont.body(11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(ContinuumFont.etched(10.5))
+                .tracking(0.6)
+                .foregroundStyle(ContinuumTokens.fg3)
             ForEach(history.prefix(6)) { entry in
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(entry.version) \(entry.title)")
-                        .font(TahoeFont.body(12, weight: .semibold))
+                        .font(ContinuumFont.body(12, weight: .semibold))
+                        .foregroundStyle(ContinuumTokens.fg)
                     if let publishedAt = entry.publishedAt {
                         Text(publishedAt.formatted(date: .abbreviated, time: .omitted))
-                            .font(TahoeFont.body(11))
-                            .foregroundStyle(.secondary)
+                            .font(ContinuumFont.body(11))
+                            .foregroundStyle(ContinuumTokens.fg3)
                     }
                 }
             }
@@ -554,14 +592,7 @@ struct UpdateSettingsPanel: View {
     }
 }
 
-private enum Theme {
-    static let accent = SessionsV2Theme.accent
-    static let statusWarning = ClawdmeterTheme.Colors.statusWarning
-    static let secondary = Color.secondary
-}
-
 private struct UpdateSettingsRow<Control: View>: View {
-    @Environment(\.tahoe) private var t
     var label: String
     var hint: String?
     @ViewBuilder var control: Control
@@ -570,12 +601,12 @@ private struct UpdateSettingsRow<Control: View>: View {
         HStack(alignment: .center, spacing: 24) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(label)
-                    .font(TahoeFont.body(14, weight: .semibold))
-                    .foregroundStyle(t.fg)
+                    .font(ContinuumFont.body(14, weight: .semibold))
+                    .foregroundStyle(ContinuumTokens.fg)
                 if let hint {
                     Text(hint)
-                        .font(TahoeFont.body(12))
-                        .foregroundStyle(t.fg3)
+                        .font(ContinuumFont.body(12))
+                        .foregroundStyle(ContinuumTokens.fg3)
                         .frame(maxWidth: 460, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
                 }
