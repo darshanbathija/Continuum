@@ -323,22 +323,32 @@ final class GrokStatusController: NSObject {
     private var cancellables: Set<AnyCancellable> = []
     private var observer: NSObjectProtocol?
     private lazy var selection = MenuBarPopoverSelection(initial: .grok)
+    private var todayTokens: Int = 0
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
         super.init()
+        todayTokens = runtime.usageHistoryStore.snapshot?.grok.today.totals.totalTokens ?? 0
         runtime.usageHistoryStore.snapshotPublisher
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.refreshImage()
+            .sink { [weak self] snapshot in
+                guard let self else { return }
+                self.todayTokens = snapshot?.grok.today.totals.totalTokens ?? 0
+                self.refreshImage()
             }
             .store(in: &cancellables)
         observer = NotificationCenter.default.addObserver(
             forName: .grokUsageRecorded,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.refreshImage() }
+        ) { [weak self] note in
+            Task { @MainActor in
+                if let record = note.userInfo?["record"] as? UsageRecord,
+                   record.timestamp >= Calendar.current.startOfDay(for: Date()) {
+                    self?.todayTokens += record.tokens.totalTokens
+                }
+                self?.refreshImage()
+            }
         }
     }
 
@@ -427,7 +437,6 @@ final class GrokStatusController: NSObject {
     }
 
     private func currentImage() -> NSImage {
-        let todayTokens = Self.todayTokensFromLedger()
         let text = todayTokens > 0 ? Self.formatTokens(todayTokens) : "\u{2014}"
         return MenuBarGaugeView.renderHistoryLabel(
             assetName: "GrokLogo",
@@ -447,16 +456,6 @@ final class GrokStatusController: NSObject {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.becomeKey()
         }
-    }
-
-    private static func todayTokensFromLedger() -> Int {
-        guard let url = GrokUsageLedger.defaultURL() else { return 0 }
-        let start = Calendar.current.startOfDay(for: Date())
-        return GrokUsageLedger.records(from: url)
-            .lazy
-            .filter { $0.timestamp >= start }
-            .map { $0.tokens.totalTokens }
-            .reduce(0, +)
     }
 
     private static func formatTokens(_ n: Int) -> String {

@@ -331,15 +331,15 @@ public final class UsageHistoryStore {
         })
 
         // Grok harness usage is written into Continuum's own JSONL ledger.
-        // Refresh analytics after each append so `.grok` appears in provider,
-        // model, day, and repo rollups without waiting for the periodic timer.
+        // Coalesce refreshes so streaming usage updates do not force a full
+        // analytics rebuild and iCloud mirror write for every token event.
         observers.append(center.addObserver(
             forName: .grokUsageRecorded,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.forceRefresh()
+                self?.scheduleGrokMirrorRefresh()
             }
         })
     }
@@ -377,6 +377,27 @@ public final class UsageHistoryStore {
     /// Timestamp of the last opencode-event-triggered refresh. Drives the
     /// 10s debounce in `scheduleOpencodeMirrorRefresh`.
     private var lastOpencodeMirrorRefreshAt: Date?
+
+    /// Debounced trigger for Grok's Continuum-owned JSONL ledger. The ledger can
+    /// receive several streaming `usage_update` events per turn, so this mirrors
+    /// opencode's bounded refresh cadence rather than force-refreshing per event.
+    @MainActor
+    private func scheduleGrokMirrorRefresh() {
+        let now = Date()
+        let cooldown: TimeInterval = 10
+        if let last = lastGrokMirrorRefreshAt,
+           now.timeIntervalSince(last) < cooldown {
+            return
+        }
+        lastGrokMirrorRefreshAt = now
+        Task { @MainActor in
+            await refresh()
+        }
+    }
+
+    /// Timestamp of the last Grok-ledger-triggered refresh. Drives the 10s
+    /// debounce in `scheduleGrokMirrorRefresh`.
+    private var lastGrokMirrorRefreshAt: Date?
 
     /// Append a live opencode UsageRecord. Trims to the 5000-item
     /// retention cap so memory stays bounded over a long-running day.

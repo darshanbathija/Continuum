@@ -67,6 +67,29 @@ final class AcpHarnessBridgeTests: XCTestCase {
         return predicate()
     }
 
+    func testLedgerDeltaTreatsMonotonicUsageUpdatesAsCumulative() {
+        let first = HarnessUsage(inputTokens: 10, outputTokens: 5, totalTokens: 15)
+        XCTAssertEqual(AcpHarnessBridge.ledgerDelta(for: first, after: nil), first)
+
+        let second = HarnessUsage(inputTokens: 21, outputTokens: 8, totalTokens: 29)
+        let delta = AcpHarnessBridge.ledgerDelta(for: second, after: first)
+        XCTAssertEqual(delta?.inputTokens, 11)
+        XCTAssertEqual(delta?.outputTokens, 3)
+        XCTAssertEqual(delta?.totalTokens, 14)
+
+        XCTAssertNil(
+            AcpHarnessBridge.ledgerDelta(for: second, after: second),
+            "replayed final usage totals should not create another ledger row"
+        )
+
+        let nextTurn = HarnessUsage(inputTokens: 3, outputTokens: 2, totalTokens: 5)
+        XCTAssertEqual(
+            AcpHarnessBridge.ledgerDelta(for: nextTurn, after: second),
+            nextTurn,
+            "lower totals are independent usage events, not negative deltas"
+        )
+    }
+
     func testAssistantTextBuffersAndFlushesOnceOnTurnEnd() async throws {
         let driver = FakeHarnessDriver()
         let (bridge, store) = makeBridge(driver)

@@ -34,6 +34,7 @@ final class AcpHarnessBridge {
     private var consumeTask: Task<Void, Never>?
     private(set) var externalSessionId: String?
     private var usageSequence: UInt64 = 0
+    private var lastUsageUpdate: HarnessUsage?
 
     /// Designated init — an already-constructed driver + its optional stdio
     /// transport. Use the static factories below rather than calling this
@@ -207,6 +208,9 @@ final class AcpHarnessBridge {
         if case .usage(let usage) = event {
             recordHarnessUsage(usage)
         }
+        if case .turnEnded = event {
+            lastUsageUpdate = nil
+        }
         // Capture the ACP request id before projecting so respond can map it.
         if case .permissionRequest(let req) = event {
             pendingPermissionRpcIds[AcpHarnessProjection.permissionPromptId(for: req.requestId)] = req.requestId
@@ -216,9 +220,14 @@ final class AcpHarnessBridge {
 
     private func recordHarnessUsage(_ usage: HarnessUsage) {
         guard usageProvider == .grok else { return }
+        guard let delta = Self.ledgerDelta(for: usage, after: lastUsageUpdate) else {
+            lastUsageUpdate = usage
+            return
+        }
+        lastUsageUpdate = usage
         usageSequence &+= 1
         guard let entry = GrokUsageLedger.Entry(
-            usage: usage,
+            usage: delta,
             sessionId: sessionId.uuidString,
             repo: usageRepo,
             model: model,
@@ -235,6 +244,63 @@ final class AcpHarnessBridge {
             // Analytics must never break chat streaming. The next harness event
             // still projects even if Application Support is temporarily unwritable.
         }
+    }
+
+    nonisolated static func ledgerDelta(for current: HarnessUsage, after previous: HarnessUsage?) -> HarnessUsage? {
+        let currentEffectiveTotal = effectiveTotal(current)
+        guard currentEffectiveTotal > 0 else { return nil }
+
+        guard let previous else {
+            return current
+        }
+
+        let previousEffectiveTotal = effectiveTotal(previous)
+        let comparablePairs = [
+            (current.inputTokens, previous.inputTokens),
+            (current.outputTokens, previous.outputTokens),
+            (current.totalTokens, previous.totalTokens)
+        ].compactMap { current, previous -> (Int, Int)? in
+            guard let current, let previous else { return nil }
+            return (max(0, current), max(0, previous))
+        }
+
+        let fieldsAreMonotonic = comparablePairs.allSatisfy { current, previous in
+            current >= previous
+        }
+        guard currentEffectiveTotal >= previousEffectiveTotal, fieldsAreMonotonic else {
+            return current
+        }
+
+        let totalDelta = currentEffectiveTotal - previousEffectiveTotal
+        guard totalDelta > 0 else { return nil }
+
+        let currentInput = max(0, current.inputTokens ?? 0)
+        let currentOutput = max(0, current.outputTokens ?? 0)
+        let previousInput = max(0, previous.inputTokens ?? 0)
+        let previousOutput = max(0, previous.outputTokens ?? 0)
+        let currentSplitTotal = currentInput + currentOutput
+        let previousSplitTotal = previousInput + previousOutput
+        let splitMatchesEffectiveTotals =
+            currentSplitTotal > 0
+            && currentSplitTotal == currentEffectiveTotal
+            && previousSplitTotal == previousEffectiveTotal
+
+        if splitMatchesEffectiveTotals {
+            return HarnessUsage(
+                inputTokens: current.inputTokens.map { max(0, $0 - previousInput) },
+                outputTokens: current.outputTokens.map { max(0, $0 - previousOutput) },
+                totalTokens: totalDelta
+            )
+        }
+
+        return HarnessUsage(inputTokens: totalDelta, totalTokens: totalDelta)
+    }
+
+    nonisolated private static func effectiveTotal(_ usage: HarnessUsage) -> Int {
+        let input = max(0, usage.inputTokens ?? 0)
+        let output = max(0, usage.outputTokens ?? 0)
+        let total = max(0, usage.totalTokens ?? 0)
+        return max(total, input + output)
     }
 
     private func apply(_ op: AcpStoreOp) {

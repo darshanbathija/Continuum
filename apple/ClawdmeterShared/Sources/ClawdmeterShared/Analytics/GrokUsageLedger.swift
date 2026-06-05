@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Continuum-owned Grok usage ledger.
 ///
@@ -121,13 +126,7 @@ public enum GrokUsageLedger {
         var data = try encoder.encode(entry)
         data.append(0x0A)
 
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-        }
-        let handle = try FileHandle(forWritingTo: url)
-        defer { try? handle.close() }
-        try handle.seekToEnd()
-        try handle.write(contentsOf: data)
+        try appendLocked(data, to: url)
     }
 
     public static func records(from url: URL) -> [UsageRecord] {
@@ -141,4 +140,57 @@ public enum GrokUsageLedger {
                 return entry.usageRecord()
             }
     }
+
+    private static func appendLocked(_ data: Data, to url: URL) throws {
+#if canImport(Darwin) || canImport(Glibc)
+        let flags = O_WRONLY | O_CREAT | O_APPEND
+        let mode = mode_t(S_IRUSR | S_IWUSR)
+        let fd = url.path.withCString { path in
+            open(path, flags, mode)
+        }
+        guard fd >= 0 else { throw POSIXError(currentPOSIXErrorCode()) }
+        defer { _ = close(fd) }
+
+        guard flock(fd, LOCK_EX) == 0 else {
+            throw POSIXError(currentPOSIXErrorCode())
+        }
+        defer { _ = flock(fd, LOCK_UN) }
+
+        try data.withUnsafeBytes { buffer in
+            guard let base = buffer.baseAddress else { return }
+            var offset = 0
+            while offset < buffer.count {
+                let written = write(fd, base.advanced(by: offset), buffer.count - offset)
+                if written < 0 {
+                    if currentErrno() == EINTR { continue }
+                    throw POSIXError(currentPOSIXErrorCode())
+                }
+                guard written > 0 else { throw POSIXError(.EIO) }
+                offset += written
+            }
+        }
+#else
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: data)
+#endif
+    }
+
+#if canImport(Darwin) || canImport(Glibc)
+    private static func currentPOSIXErrorCode() -> POSIXErrorCode {
+        POSIXErrorCode(rawValue: currentErrno()) ?? .EIO
+    }
+
+    private static func currentErrno() -> Int32 {
+#if canImport(Darwin)
+        Darwin.errno
+#elseif canImport(Glibc)
+        Glibc.errno
+#endif
+    }
+#endif
 }
