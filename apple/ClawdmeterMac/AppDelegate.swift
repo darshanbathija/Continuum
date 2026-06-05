@@ -640,24 +640,23 @@ final class ProviderStatusController: NSObject {
     }
 
     private func currentImage() -> NSImage {
-        let template = MenuBarGaugeView.isTemplateAsset(model.config.logoAssetName)
         if model.needsReauth {
             let img = NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: "reconnect")
                 ?? NSImage()
-            img.isTemplate = template
+            img.isTemplate = true
             return img
         }
         if let usage = model.usage {
             return MenuBarGaugeView.renderLabel(
                 for: usage,
                 assetName: model.config.logoAssetName,
-                template: template,
+                template: MenuBarGaugeView.isTemplateAsset(model.config.logoAssetName),
                 hasWeekly: model.config.hasWeeklyWindow
             )
         }
         return MenuBarGaugeView.renderEmptyLabel(
             assetName: model.config.logoAssetName,
-            template: template
+            template: MenuBarGaugeView.isTemplateAsset(model.config.logoAssetName)
         )
     }
 
