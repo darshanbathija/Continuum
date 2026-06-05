@@ -86,6 +86,10 @@ public final class AgentControlServer {
     /// tmux, byte-identical). tmux stays for terminals + non-Claude providers.
     let claudePtyRegistry = ClaudePtyRegistry.shared
     private var claudePtyExitWired = false
+    /// Track A: tears down dormant Claude PTY hosts (flag-gated OFF by default).
+    private lazy var idleSessionSweeper = IdleSessionSweeper(
+        registry: registry, chatStoreRegistry: chatStoreRegistry
+    )
     /// T18 Wire Inspector: per-connection request context so the
     /// outgoing-response recorder can tag entries with the original
     /// method+path. Each NWConnection serves one request before
@@ -331,6 +335,9 @@ public final class AgentControlServer {
         if writesServerMetadata {
             HarnessProcessReaper.shared.reapOrphans()
         }
+        // Track A: start the idle PTY sweeper (a no-op until the
+        // clawdmeter.claude.idleSuspend.enabled flag is on).
+        idleSessionSweeper.start()
         let queue = DispatchQueue(label: "AgentControlServer.accept", qos: .userInitiated)
         self.listenerQueue = queue
 

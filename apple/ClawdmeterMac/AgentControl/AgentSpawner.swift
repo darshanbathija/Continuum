@@ -146,6 +146,12 @@ public enum AgentSpawner {
                 planMode: planMode,
                 effort: session.effort,
                 autopilot: chatAutopilot,
+                // Track A: a session that already captured a CLI session id is a
+                // RESUME (idle-teardown / relaunch / crash-degraded) — pass it so
+                // `claude --resume` continues the conversation. nil for a fresh
+                // session ⇒ clean start. tmux sessions never capture an id, so
+                // this is a no-op for them.
+                resumeSessionId: session.claudeSessionId,
                 deepResearch: session.deepResearch
             ) ?? []
         case (.codex, _), (.gemini, _), (.cursor, _), (.opencode, _), (.grok, _):
