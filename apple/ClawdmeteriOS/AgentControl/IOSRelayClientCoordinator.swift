@@ -59,6 +59,19 @@ public final class IOSRelayClientCoordinator: ObservableObject {
     private let store: RelayPairingStore
     private var cancellables: Set<AnyCancellable> = []
 
+    /// Track B (B1): the app's shared AgentControlClient. The coordinator pushes
+    /// `muxClient` into `client.relayMux` whenever it changes, so the Shared-side
+    /// streams (events + frontier-via-client) route over the relay without
+    /// reaching across the module boundary into iOS-only relay types.
+    private weak var boundAgentClient: AgentControlClient?
+
+    /// Register the shared AgentControlClient so its `relayMux` tracks the
+    /// coordinator's mux client. Call once at app startup.
+    public func bindAgentClient(_ client: AgentControlClient) {
+        boundAgentClient = client
+        client.relayMux = muxClient
+    }
+
     public init(
         pairingService: IOSRelayPairingService = .shared,
         store: RelayPairingStore = .shared
@@ -96,6 +109,7 @@ public final class IOSRelayClientCoordinator: ObservableObject {
         client = nil
         muxClient?.reset()
         muxClient = nil
+        boundAgentClient?.relayMux = nil
     }
 
     // MARK: - Internal
@@ -107,6 +121,9 @@ public final class IOSRelayClientCoordinator: ObservableObject {
         case .unpaired:
             client?.stop()
             client = nil
+            muxClient?.reset()
+            muxClient = nil
+            boundAgentClient?.relayMux = nil
         case .scanning, .generatingBundle:
             // Mid-flight; don't act yet.
             break
@@ -150,6 +167,7 @@ public final class IOSRelayClientCoordinator: ObservableObject {
             })
             newClient.muxClient = mux
             self.muxClient = mux
+            boundAgentClient?.relayMux = mux
         }
         self.client = newClient
         newClient.start()

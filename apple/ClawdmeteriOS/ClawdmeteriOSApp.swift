@@ -70,6 +70,10 @@ struct ClawdmeteriOSApp: App {
         // exists this is a no-op; callers can still use Tailscale
         // unchanged.
         IOSRelayClientCoordinator.shared.start()
+        // Track B (B1): bind the shared client so its `relayMux` tracks the
+        // coordinator's mux client → the events + frontier streams route over
+        // the relay when relayDefault is on (nil ⇒ direct, byte-identical).
+        IOSRelayClientCoordinator.shared.bindAgentClient(client)
         // Register the BGAppRefreshTask handler at launch (D15 fallback for
         // APNS). The actual scheduling + ack/send happens inside
         // iOSNotificationManager; this just plants the dispatch handler.

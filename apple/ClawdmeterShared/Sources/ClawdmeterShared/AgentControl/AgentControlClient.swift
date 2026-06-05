@@ -62,6 +62,14 @@ public final class AgentControlClient: ObservableObject {
     @Published public private(set) var serverVersion: String?
     @Published public private(set) var serverWireVersion: Int?
 
+    /// Track B (B1): when set (relay is the default transport), the desktop
+    /// `events` stream — and any store that holds this client, e.g.
+    /// `FrontierSnapshotStore` — routes over the relay multiplex instead of a
+    /// direct WS. The iOS app sets this reactively from
+    /// `IOSRelayClientCoordinator.muxClient`; nil ⇒ every path stays direct
+    /// (byte-identical). One carrier so events + frontier share a single wire.
+    @MainActor public var relayMux: RelayMuxClient?
+
     /// Instance-level overrides for pairing config. Set by the
     /// explicit-arg init; nil for the UserDefaults-backed path. The
     /// computed properties below check these first.
@@ -763,6 +771,13 @@ public final class AgentControlClient: ObservableObject {
 
     @MainActor
     private func runDesktopEventSyncLoop() async {
+        // Track B (B1): drive the events stream over the relay multiplex when
+        // it's the default transport. The mux + IOSRelayClient own reconnect
+        // (resubscribeAll), so we subscribe once and park; nil ⇒ legacy WS loop.
+        if let mux = relayMux {
+            await runEventsViaRelay(mux)
+            return
+        }
         var attempt = 0
         while !Task.isCancelled {
             guard let host, let token else {
@@ -791,6 +806,32 @@ public final class AgentControlClient: ObservableObject {
                 await sleepDesktopEventSync(seconds: backoffDelay(forDesktopEventAttempt: attempt))
             }
         }
+        isDesktopEventSyncConnected = false
+    }
+
+    /// Track B (B1): drive the `events` stream over the relay multiplex.
+    /// Subscribe with a `since` cursor, decode each AgentEvent off the SAME
+    /// applyDesktopSyncEvent path, park until cancelled, then unsubscribe. The
+    /// mux + IOSRelayClient own reconnect; events stay ordered because the relay
+    /// + mux preserve frame order and the apply path dedups by sequence.
+    @MainActor
+    private func runEventsViaRelay(_ mux: RelayMuxClient) async {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        isDesktopEventSyncConnected = true
+        desktopEventSyncLastError = nil
+        let spec = RelaySubscribeSpec(op: "events", since: desktopEventSyncLastSeq)
+        let opId = await mux.subscribe(spec, handlers: .init(
+            onFrame: { [weak self] data in
+                guard let self, let event = try? decoder.decode(AgentEvent.self, from: data) else { return }
+                Task { @MainActor in await self.applyDesktopSyncEvent(event, scheduleAuthoritativeRefresh: true) }
+            }
+        ))
+        while !Task.isCancelled {
+            do { try await Task.sleep(nanoseconds: 5_000_000_000) }
+            catch { break }
+        }
+        await mux.unsubscribe(opId)
         isDesktopEventSyncConnected = false
     }
 
