@@ -70,6 +70,29 @@ public enum RelaySubAllowlist {
 
     public static func isAllowed(_ op: String) -> Bool { ops.contains(op) }
 
+    /// B2 coverage gate: the COMPLETE set of WS subscription ops the daemon's
+    /// `AgentControlServer.routeWSSubscription` accepts. Adding a new WS op there
+    /// MUST also add it here and classify it as relay-reachable (`ops`) or
+    /// `exemptWSOps`, or `RelaySubscribeCoverageTests` fails — which prevents a
+    /// stream from silently having no relay path after the Tailscale cutover.
+    /// (HTTP request endpoints need no enumeration: the request correlator
+    /// relays ANY method+path generically — see RelayMuxRequestClient.)
+    public static let allKnownWSOps: Set<String> = [
+        "chat-subscribe",
+        "terminal",
+        "events",
+        "frontier-subscribe",
+        "lifecycle-subscribe",
+        "compose-draft",
+    ]
+
+    /// WS ops intentionally NOT relayed as long-lived streams. `compose-draft`
+    /// is a single-shot post (one envelope + a 1-byte ack), so it rides the
+    /// request path, not a subscription.
+    public static let exemptWSOps: Set<String> = [
+        "compose-draft",
+    ]
+
     /// Coalescing policy per op. Snapshot streams (chat / frontier) are
     /// replaceable → LWW; terminal bytes, the event log, and the lifecycle
     /// spine are ordered → never coalesced.
