@@ -65,13 +65,15 @@ public struct AnalyticsRepoList: View {
     /// providers dominate sort order, but the row badge surfaces Gemini's
     /// per-repo request count when present. Repos with ONLY Gemini activity
     /// still appear (with $0 cost) when `.gemini` is in the filter.
-    fileprivate static func computeRows(_ input: RowsInput) -> [Row] {
+    nonisolated fileprivate static func computeRows(_ input: RowsInput) -> [Row] {
         let snapshot = input.snapshot
         let window = input.window
         let providerFilter = input.providerFilter
         var claudeByRepo: [RepoKey: TokenTotals] = [:]
         var codexByRepo: [RepoKey: TokenTotals] = [:]
         var geminiByRepo: [RepoKey: TokenTotals] = [:]
+        var opencodeByRepo: [RepoKey: TokenTotals] = [:]
+        var cursorByRepo: [RepoKey: TokenTotals] = [:]
         if providerFilter.includes(.claude) {
             for row in snapshot.claude.window(window).byRepo where row.repo != "__rest__" {
                 claudeByRepo[row.repo, default: .zero] += row.totals
@@ -87,22 +89,38 @@ public struct AnalyticsRepoList: View {
                 geminiByRepo[row.repo, default: .zero] += row.totals
             }
         }
+        if providerFilter.includes(.opencode) {
+            for row in snapshot.totals(for: .opencode).window(window).byRepo where row.repo != "__rest__" {
+                opencodeByRepo[row.repo, default: .zero] += row.totals
+            }
+        }
+        if providerFilter.includes(.cursor) {
+            for row in snapshot.totals(for: .cursor).window(window).byRepo where row.repo != "__rest__" {
+                cursorByRepo[row.repo, default: .zero] += row.totals
+            }
+        }
 
         // Build a combined keyset so a repo that's Codex-only OR Gemini-
         // only still shows.
         let allRepoKeys = Set(claudeByRepo.keys)
             .union(codexByRepo.keys)
             .union(geminiByRepo.keys)
-        var combinedByRepo: [RepoKey: (claude: Decimal, codex: Decimal, total: Decimal, tokens: Int, geminiReqs: Int)] = [:]
+            .union(opencodeByRepo.keys)
+            .union(cursorByRepo.keys)
+        var combinedByRepo: [RepoKey: (claude: Decimal, codex: Decimal, opencode: Decimal, cursor: Decimal, total: Decimal, tokens: Int, geminiReqs: Int)] = [:]
         for key in allRepoKeys {
             let cl = claudeByRepo[key, default: .zero]
             let cx = codexByRepo[key, default: .zero]
             let gm = geminiByRepo[key, default: .zero]
+            let op = opencodeByRepo[key, default: .zero]
+            let cu = cursorByRepo[key, default: .zero]
             combinedByRepo[key] = (
                 claude: cl.costUSD,
                 codex: cx.costUSD,
-                total: cl.costUSD + cx.costUSD,
-                tokens: cl.totalTokens + cx.totalTokens,
+                opencode: op.costUSD,
+                cursor: cu.costUSD,
+                total: cl.costUSD + cx.costUSD + op.costUSD + cu.costUSD,
+                tokens: cl.totalTokens + cx.totalTokens + op.totalTokens + cu.totalTokens,
                 geminiReqs: gm.requestCount
             )
         }
@@ -141,6 +159,8 @@ public struct AnalyticsRepoList: View {
                 cost: value.total,
                 claudeCost: value.claude,
                 codexCost: value.codex,
+                opencodeCost: value.opencode,
+                cursorCost: value.cursor,
                 tokens: value.tokens,
                 geminiRequests: value.geminiReqs,
                 share: max(costShare, geminiShare),
@@ -151,8 +171,10 @@ public struct AnalyticsRepoList: View {
         if !rest.isEmpty {
             let restClaude = rest.map(\.value.claude).reduce(Decimal.zero, +)
             let restCodex = rest.map(\.value.codex).reduce(Decimal.zero, +)
+            let restOpencode = rest.map(\.value.opencode).reduce(Decimal.zero, +)
+            let restCursor = rest.map(\.value.cursor).reduce(Decimal.zero, +)
             let restGemini = rest.map(\.value.geminiReqs).reduce(0, +)
-            let restCost = restClaude + restCodex
+            let restCost = restClaude + restCodex + restOpencode + restCursor
             let restTokens = rest.map(\.value.tokens).reduce(0, +)
             let restShareDec: Decimal = totalCost > 0 ? (restCost / totalCost) : 0
             let restShare: Double = totalCost > 0
@@ -165,6 +187,8 @@ public struct AnalyticsRepoList: View {
                 cost: restCost,
                 claudeCost: restClaude,
                 codexCost: restCodex,
+                opencodeCost: restOpencode,
+                cursorCost: restCursor,
                 tokens: restTokens,
                 geminiRequests: restGemini,
                 share: restShare,
@@ -241,6 +265,8 @@ public struct AnalyticsRepoList: View {
         /// this, a Codex-heavy repo would render as solid orange and
         /// the user couldn't see Codex's share.
         let codexCost: Decimal
+        let opencodeCost: Decimal
+        let cursorCost: Decimal
         let tokens: Int
         /// Gemini's contribution to this repo, expressed as request count.
         /// cloudcode-pa doesn't surface tokens or cost, so this is a
@@ -267,6 +293,14 @@ private struct RepoRow: View {
     private var codexShare: Double {
         guard row.cost > 0 else { return 0 }
         return NSDecimalNumber(decimal: row.codexCost / row.cost).doubleValue
+    }
+    private var opencodeShare: Double {
+        guard row.cost > 0 else { return 0 }
+        return NSDecimalNumber(decimal: row.opencodeCost / row.cost).doubleValue
+    }
+    private var cursorShare: Double {
+        guard row.cost > 0 else { return 0 }
+        return NSDecimalNumber(decimal: row.cursorCost / row.cost).doubleValue
     }
 
     var body: some View {
@@ -310,10 +344,9 @@ private struct RepoRow: View {
                     .monospacedDigit()
                     .frame(width: 44, alignment: .trailing)
             }
-            // Stacked progress bar — Claude (terra-cotta) below, Codex
-            // (accent blue) on top. The widths sum to `row.share` of
-            // the total window cost. Without this split, a Codex-heavy
-            // repo looked identical to a Claude-heavy one in the UI.
+            // Stacked progress bar. The widths sum to `row.share` of
+            // the total window cost, and each cost-bearing provider keeps
+            // its canonical T2 fill.
             providerSegmentedBar
                 .frame(height: 7)
                 .clipShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.rail, style: .continuous))
@@ -344,18 +377,27 @@ private struct RepoRow: View {
             let totalWidth = geo.size.width
             let claudeWidth = totalWidth * claudeShare * row.share
             let codexWidth = totalWidth * codexShare * row.share
+            let opencodeWidth = totalWidth * opencodeShare * row.share
+            let cursorWidth = totalWidth * cursorShare * row.share
             ZStack(alignment: .leading) {
                 // Track
                 Rectangle()
                     .fill(ContinuumTokens.railTrack)
                 HStack(spacing: 0) {
-                    // Horizontal by-repo order: Claude → Codex (T2 gradients).
+                    // Horizontal by-repo order: Claude -> Codex -> Antigravity
+                    // request pill -> OpenCode -> Cursor.
                     Rectangle()
                         .fill(ProviderFill.gradient(for: .claude))
                         .frame(width: claudeWidth)
                     Rectangle()
                         .fill(ProviderFill.gradient(for: .codex))
                         .frame(width: codexWidth)
+                    Rectangle()
+                        .fill(ProviderFill.gradient(for: .opencode))
+                        .frame(width: opencodeWidth)
+                    Rectangle()
+                        .fill(ProviderFill.gradient(for: .cursor))
+                        .frame(width: cursorWidth)
                     Spacer(minLength: 0)
                 }
             }
@@ -371,8 +413,14 @@ private struct RepoRow: View {
         if row.codexCost > 0 {
             parts.append("Codex " + AnalyticsCurrencyFormatter.format(row.codexCost))
         }
+        if row.opencodeCost > 0 {
+            parts.append("OpenCode " + AnalyticsCurrencyFormatter.format(row.opencodeCost))
+        }
+        if row.cursorCost > 0 {
+            parts.append("Cursor " + AnalyticsCurrencyFormatter.format(row.cursorCost))
+        }
         if row.geminiRequests > 0 {
-            parts.append("Gemini \(row.geminiRequests) reqs")
+            parts.append("Antigravity \(row.geminiRequests) reqs")
         }
         return parts.joined(separator: " · ")
     }

@@ -1,7 +1,7 @@
 import SwiftUI
 import ClawdmeterShared
 
-/// Mac Usage dashboard — three provider columns + analytics row.
+/// Mac Usage dashboard — live provider columns + analytics row.
 /// Ports `mac-dashboard.jsx`. Accepts a `TahoeLiveBindings` value (defaults
 /// to the demo fixture); the Mac app injects real AppRuntime-derived data
 /// via `MacRootView.body`.
@@ -92,7 +92,7 @@ public struct MacUsageView: View {
                 Text("Get access from your Mac")
                     .font(TahoeFont.body(15, weight: .bold))
                     .foregroundStyle(t.fg)
-                Text("Spend + token analytics read usage data written by Claude Code, Codex, Antigravity, and OpenCode on this Mac. Grant access to see your usage here — macOS will ask once.")
+                Text("Spend + token analytics read usage data written by Claude Code, Codex, Antigravity, OpenCode, and Cursor on this Mac. Grant access to see your usage here — macOS will ask once.")
                     .font(TahoeFont.body(11.5))
                     .foregroundStyle(t.fg3)
                     .multilineTextAlignment(.center)
@@ -165,9 +165,9 @@ private struct TokensByModelSection: View {
     /// key the same colors as the dollar charts/legend above.
     private func familyColor(_ family: String) -> Color {
         switch family {
-        case "Claude": return TahoeProvider.claude.glow.color
-        case "OpenAI": return TahoeProvider.codex.glow.color
-        case "Gemini": return TahoeProvider.gemini.glow.color
+        case "Claude": return TahoeProvider.claude.dot
+        case "OpenAI": return TahoeProvider.codex.dot
+        case "Gemini": return TahoeProvider.gemini.dot
         case "Grok":   return Color(red: 0.42, green: 0.82, blue: 0.62) // Grok has no Tahoe lane
         default:        return t.fg3                                      // "Other"
         }
@@ -508,25 +508,11 @@ private struct Legend: View {
     @Environment(\.tahoe) private var t
     var body: some View {
         HStack(spacing: 14) {
-            // Only the four providers the SpendChart actually stacks
-            // (c/x/g/o → claude/codex/gemini/opencode). `.cursor` has no
-            // SpendPoint lane, so a Cursor chip here would key a bar
-            // segment that never renders.
-            ForEach(TahoeProvider.allCases.filter { $0 != .cursor }) { p in
+            ForEach(TahoeProvider.allCases) { p in
                 HStack(spacing: 6) {
-                    // v0.29.4: match the SpendChart's bar gradient
-                    // (`halo → glow`) instead of the previous
-                    // `glow → base`. The old recipe rendered Codex as
-                    // a dark gray chip even though the chart bars use
-                    // OpenAI's bright blue — users couldn't tell which
-                    // legend entry mapped to which bar color. Halo is
-                    // the same hue family per provider so the chip now
-                    // visually keys the bar above it.
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(LinearGradient(colors: [p.halo.color, p.glow.color],
-                                             startPoint: .top, endPoint: .bottom))
+                        .fill(ProviderFill.gradient(for: p))
                         .frame(width: 9, height: 9)
-                        .shadow(color: p.halo.color(opacity: 0.6), radius: 3, x: 0, y: 0)
                     Text(p.displayName)
                         .font(TahoeFont.body(11))
                         .foregroundStyle(t.fg2)
@@ -631,7 +617,7 @@ private struct SpendChart: View {
         // (which produced labels like $876 / $584 / $292). Tick stride
         // is in {1, 2, 2.5, 5} × 10^n so each gridline lands on a clean
         // dollar number (e.g. $0 / $250 / $500 / $750 with stride 250).
-        let rawMax = series.map { $0.c + $0.x + $0.g + $0.o }.max() ?? 1
+        let rawMax = series.map { $0.c + $0.x + $0.g + $0.o + $0.r }.max() ?? 1
         let (maxTotal, stride) = Self.niceAxisMax(rawMax: rawMax, ticks: lines)
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
@@ -722,12 +708,13 @@ private struct SpendChart: View {
     }
 
     private func stackedBar(d: TahoeDemo.SpendPoint, max: Double, w: CGFloat, isHover: Bool) -> some View {
-        let total = d.c + d.x + d.g + d.o
+        let total = d.c + d.x + d.g + d.o + d.r
         let h = total > 0 ? total / max * chartHeight : 0
         return VStack(spacing: 0) {
             Spacer()
             VStack(spacing: 0) {
                 if total > 0 {
+                    Rectangle().fill(grad(.cursor)).frame(height: d.r / total * h)
                     Rectangle().fill(grad(.opencode)).frame(height: d.o / total * h)
                     Rectangle().fill(grad(.gemini)).frame(height: d.g / total * h)
                     Rectangle().fill(grad(.codex)).frame(height: d.x / total * h)
@@ -736,10 +723,6 @@ private struct SpendChart: View {
             }
             .frame(width: w)
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-            // v0.22.24: brighten the bar slightly when hovered so user
-            // gets a visual confirmation of which bar the tooltip
-            // describes.
-            .shadow(color: TahoeProvider.claude.base.color(opacity: isHover ? 0.42 : 0.18), radius: isHover ? 11 : 7, x: 0, y: 0)
             .overlay {
                 if isHover {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -790,14 +773,8 @@ private struct SpendChart: View {
         return String(format: "$%d", Int(v))
     }
 
-    /// v0.22.17: switched from `[glow, base]` to `[halo, glow]` to
-    /// match the popover pill bar's brightening fix (v0.22.16) —
-    /// Codex's intentionally-desaturated brand palette was rendering
-    /// the stacked-bar Codex slice as a near-black sliver against
-    /// the dark chart bg. Halo is each provider's bright accent
-    /// (Codex's OpenAI cool blue, etc.) so all four show now.
     private func grad(_ p: TahoeProvider) -> LinearGradient {
-        LinearGradient(colors: [p.halo.color, p.glow.color], startPoint: .top, endPoint: .bottom)
+        ProviderFill.gradient(for: p)
     }
 }
 
@@ -805,12 +782,10 @@ private struct RepoList: View {
     @Environment(\.tahoe) private var t
     var repos: [TahoeDemo.SpendRepo]
     var body: some View {
-        // v0.22.8: include opencode in the maxTotal so the relative
-        // bar widths normalize across all four providers.
-        let maxTotal = repos.map { $0.c + $0.x + $0.g + $0.o }.max() ?? 1
+        let maxTotal = repos.map { $0.c + $0.x + $0.g + $0.o + $0.r }.max() ?? 1
         VStack(spacing: 12) {
             ForEach(Array(repos.enumerated()), id: \.offset) { _, r in
-                let total = r.c + r.x + r.g + r.o
+                let total = r.c + r.x + r.g + r.o + r.r
                 let width = maxTotal > 0 ? total / maxTotal : 0
                 VStack(alignment: .leading, spacing: 5) {
                     HStack {
@@ -831,34 +806,28 @@ private struct RepoList: View {
                                 Rectangle().fill(grad(.codex)).frame(width: geo.size.width * width * (r.x / total))
                                 Rectangle().fill(grad(.gemini)).frame(width: geo.size.width * width * (r.g / total))
                                 Rectangle().fill(grad(.opencode)).frame(width: geo.size.width * width * (r.o / total))
+                                Rectangle().fill(grad(.cursor)).frame(width: geo.size.width * width * (r.r / total))
                             }
                             Spacer()
                         }
                     }
                     .frame(height: 8)
                     .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-                    .shadow(color: TahoeProvider.claude.base.color(opacity: 0.15), radius: 5, x: 0, y: 0)
                 }
             }
         }
         .padding(.top, 14)
     }
 
-    /// v0.22.17: switched from `[glow, base]` to `[halo, glow]` to
-    /// match the popover pill bar's brightening fix (v0.22.16) —
-    /// Codex's intentionally-desaturated brand palette was rendering
-    /// the stacked-bar Codex slice as a near-black sliver against
-    /// the dark chart bg. Halo is each provider's bright accent
-    /// (Codex's OpenAI cool blue, etc.) so all four show now.
     private func grad(_ p: TahoeProvider) -> LinearGradient {
-        LinearGradient(colors: [p.halo.color, p.glow.color], startPoint: .top, endPoint: .bottom)
+        ProviderFill.gradient(for: p)
     }
 }
 
 // MARK: - OpencodeDollarRow (PR #31 chunk 3, A2)
 
 /// OpenCode usage row — dollar-cost gauge variant per A2.
-/// Renders as a single full-width strip beneath the 3 provider columns.
+/// Renders as a single full-width strip beneath the live provider columns.
 /// Shows `$X today` + `$Y this week` (no rolling 5h quota — OpenCode
 /// is pay-as-you-go through whichever underlying provider the user
 /// signed in with).
@@ -931,7 +900,7 @@ private struct OpencodeDollarRow: View {
 /// Compact provider breakdown shown above the hovered bar in
 /// `SpendChart`. User reported "there's no way for me to see the codex
 /// token spend — when I hover over this, show me the specific break
-/// up." Renders four rows (one per provider) with dollar amounts +
+/// up." Renders one row per provider with dollar amounts +
 /// total, color-coded by the provider glyph that matches the bar
 /// segments below.
 private struct HoverBreakdown: View {
@@ -950,13 +919,14 @@ private struct HoverBreakdown: View {
             row(.codex, "Codex", point.x)
             row(.gemini, "Antigravity", point.g)
             row(.opencode, "OpenCode", point.o)
+            row(.cursor, "Cursor", point.r)
             TahoeHair().padding(.vertical, 2)
             HStack {
                 Text("Total")
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer(minLength: 10)
-                Text(Self.format(point.c + point.x + point.g + point.o))
+                Text(Self.format(point.c + point.x + point.g + point.o + point.r))
                     .font(TahoeFont.mono(11, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(t.fg)
