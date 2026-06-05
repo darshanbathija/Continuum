@@ -344,17 +344,17 @@ final class GrokStatusController: NSObject {
     private var cancellables: Set<AnyCancellable> = []
     private var observer: NSObjectProtocol?
     private lazy var selection = MenuBarPopoverSelection(initial: .grok)
-    private var todayTokens: Int = 0
+    private var contextLimit: GrokCLIUsageParser.ContextLimit?
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
         super.init()
-        todayTokens = runtime.usageHistoryStore.snapshot?.grok.today.totals.totalTokens ?? 0
+        contextLimit = runtime.usageHistoryStore.snapshot?.grokContextLimit
         runtime.usageHistoryStore.snapshotPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] snapshot in
                 guard let self else { return }
-                self.todayTokens = snapshot?.grok.today.totals.totalTokens ?? 0
+                self.contextLimit = snapshot?.grokContextLimit
                 self.refreshImage()
             }
             .store(in: &cancellables)
@@ -362,12 +362,8 @@ final class GrokStatusController: NSObject {
             forName: .grokUsageRecorded,
             object: nil,
             queue: .main
-        ) { [weak self] note in
+        ) { [weak self] _ in
             Task { @MainActor in
-                if let record = note.userInfo?["record"] as? UsageRecord,
-                   record.timestamp >= Calendar.current.startOfDay(for: Date()) {
-                    self?.todayTokens += record.tokens.totalTokens
-                }
                 self?.refreshImage()
             }
         }
@@ -458,7 +454,7 @@ final class GrokStatusController: NSObject {
     }
 
     private func currentImage() -> NSImage {
-        let text = todayTokens > 0 ? Self.formatTokens(todayTokens) : "\u{2014}"
+        let text = contextLimit.map { "\($0.roundedPercent)%" } ?? "\u{2014}"
         return MenuBarGaugeView.renderHistoryLabel(
             assetName: "GrokLogo",
             text: text,
@@ -479,11 +475,6 @@ final class GrokStatusController: NSObject {
         }
     }
 
-    private static func formatTokens(_ n: Int) -> String {
-        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
-        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
-        return "\(n)"
-    }
 }
 
 // MARK: - Per-provider controller
