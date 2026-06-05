@@ -30,8 +30,7 @@ public struct AnalyticsTotalsGrid: View {
     /// view when the snapshot is empty so first-launch users see a
     /// familiar shape.
     private var visibleProviders: [UsageRecord.Provider] {
-        let order: [UsageRecord.Provider] = [.claude, .codex, .gemini, .opencode, .cursor, .grok]
-        let active = order.filter { snapshot.byProvider[$0] != nil }
+        let active = UsageRecord.Provider.analyticsDisplayOrder.filter { snapshot.byProvider[$0] != nil }
         return active.isEmpty ? [.claude, .codex] : active
     }
 
@@ -64,10 +63,11 @@ public struct AnalyticsTotalsGrid: View {
     /// Header label: small logo + provider name. Matches existing pattern.
     @ViewBuilder
     private func providerHeader(_ provider: UsageRecord.Provider) -> some View {
+        let tahoeProvider = TahoeProvider(analyticsProvider: provider)
         HStack(spacing: 5) {
-            TahoeProviderGlyph(provider: Self.tahoeProvider(for: provider), size: 16)
-            ProviderDot(Self.tahoeProvider(for: provider), size: 6)
-            Text(Self.displayName(for: provider))
+            TahoeProviderGlyph(provider: tahoeProvider, size: 16)
+            ProviderDot(tahoeProvider, size: 6)
+            Text(tahoeProvider.displayName)
                 .font(ContinuumFont.body(12, weight: .semibold))
                 .foregroundStyle(ContinuumTokens.fg2)
         }
@@ -134,28 +134,5 @@ public struct AnalyticsTotalsGrid: View {
         }
     }
 
-    // MARK: - Provider metadata helpers
-
-    private static func displayName(for provider: UsageRecord.Provider) -> String {
-        switch provider {
-        case .claude: return "Claude"
-        case .codex:  return "Codex"
-        case .gemini: return "Antigravity"
-        case .opencode: return "OpenCode"
-        case .cursor: return "Cursor"
-        case .grok: return "Grok"
-        }
-    }
-
-    private static func tahoeProvider(for provider: UsageRecord.Provider) -> TahoeProvider {
-        switch provider {
-        case .claude: return .claude
-        case .codex: return .codex
-        case .gemini: return .gemini
-        case .opencode: return .opencode
-        case .cursor: return .cursor
-        case .grok: return .grok
-        }
-    }
 }
 #endif

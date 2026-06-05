@@ -92,8 +92,7 @@ public struct AnalyticsDailyChart: View {
     fileprivate static func costProviders(in snapshot: UsageHistorySnapshot, filter: UsageHistoryStore.ProviderFilter) -> [UsageRecord.Provider] {
         // Cost-bearing providers only. Gemini's $0 doesn't go in the
         // stacked dollar chart — it gets a separate request-count panel.
-        let order: [UsageRecord.Provider] = [.claude, .codex, .opencode, .cursor, .grok]
-        return order.filter { snapshot.byProvider[$0] != nil && filter.includes($0) }
+        UsageRecord.Provider.analyticsCostStackOrder.filter { snapshot.byProvider[$0] != nil && filter.includes($0) }
     }
 
     fileprivate static func computeCostPoints(_ input: ChartInput) -> [CostPoint] {
@@ -302,25 +301,14 @@ public struct AnalyticsDailyChart: View {
 
     private var costLegendRow: some View {
         HStack(spacing: 14) {
-            if providerFilter.includes(.claude) {
-                legendItem(asset: "ClaudeLogo", isTemplate: false,
-                           provider: .claude, label: "Claude")
-            }
-            if providerFilter.includes(.codex) {
-                legendItem(asset: "CodexLogo", isTemplate: true,
-                           provider: .codex, label: "Codex")
-            }
-            if providerFilter.includes(.opencode) {
-                legendItem(asset: "OpencodeLogo", isTemplate: true,
-                           provider: .opencode, label: "OpenCode")
-            }
-            if providerFilter.includes(.cursor) {
-                legendItem(asset: "CodexLogo", isTemplate: true,
-                           provider: .cursor, label: "Cursor")
-            }
-            if providerFilter.includes(.grok) {
-                legendItem(asset: "GrokLogo", isTemplate: true,
-                           provider: .grok, label: "Grok")
+            ForEach(UsageRecord.Provider.analyticsCostStackOrder.filter { providerFilter.includes($0) }, id: \.self) { provider in
+                let tahoeProvider = TahoeProvider(analyticsProvider: provider)
+                legendItem(
+                    asset: AgentKindUI.assetName(for: provider),
+                    isTemplate: AgentKindUI.isTemplate(for: provider),
+                    provider: tahoeProvider,
+                    label: tahoeProvider.displayName
+                )
             }
             Spacer()
         }
@@ -348,14 +336,7 @@ public struct AnalyticsDailyChart: View {
     }
 
     private static func displayName(_ p: UsageRecord.Provider) -> String {
-        switch p {
-        case .claude: return "Claude"
-        case .codex:  return "Codex"
-        case .gemini: return "Antigravity"
-        case .opencode: return "OpenCode"
-        case .cursor: return "Cursor"
-        case .grok: return "Grok"
-        }
+        TahoeProvider(analyticsProvider: p).displayName
     }
 }
 #endif

@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var claudeController: ProviderStatusController?
     private var codexController: ProviderStatusController?
     private var geminiController: ProviderStatusController?
-    private var grokController: GrokStatusController?
+    private var grokController: ProviderStatusController?
     private var cursorController: ProviderStatusController?
 
     private var prefsObserver: NSObjectProtocol?
@@ -84,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             geminiController = ProviderStatusController(model: runtime.geminiModel, runtime: runtime)
         }
         if grokController == nil {
-            grokController = GrokStatusController(runtime: runtime)
+            grokController = ProviderStatusController(model: runtime.grokModel, runtime: runtime)
         }
         if cursorController == nil {
             cursorController = ProviderStatusController(model: runtime.cursorModel, runtime: runtime)
@@ -333,150 +333,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// MARK: - Grok history-backed menu-bar controller
-
-@MainActor
-final class GrokStatusController: NSObject {
-    private weak var runtime: AppRuntime?
-    private var statusItem: NSStatusItem?
-    private var popover: NSPopover?
-    private var pairingPopover: NSPopover?
-    private var cancellables: Set<AnyCancellable> = []
-    private var observer: NSObjectProtocol?
-    private lazy var selection = MenuBarPopoverSelection(initial: .grok)
-    private var contextLimit: GrokCLIUsageParser.ContextLimit?
-
-    init(runtime: AppRuntime) {
-        self.runtime = runtime
-        super.init()
-        contextLimit = runtime.usageHistoryStore.snapshot?.grokContextLimit
-        runtime.usageHistoryStore.snapshotPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] snapshot in
-                guard let self else { return }
-                self.contextLimit = snapshot?.grokContextLimit
-                self.refreshImage()
-            }
-            .store(in: &cancellables)
-        observer = NotificationCenter.default.addObserver(
-            forName: .grokUsageRecorded,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshImage()
-            }
-        }
-    }
-
-    deinit {
-        if let observer { NotificationCenter.default.removeObserver(observer) }
-    }
-
-    func setVisible(_ visible: Bool) {
-        if visible {
-            ensureStatusItem()
-            statusItem?.isVisible = true
-            refreshImage()
-        } else {
-            statusItem?.isVisible = false
-        }
-    }
-
-    private func ensureStatusItem() {
-        guard statusItem == nil else { return }
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.target = self
-        item.button?.action = #selector(togglePopover(_:))
-        item.button?.image = currentImage()
-        statusItem = item
-
-        let pop = NSPopover()
-        pop.behavior = .transient
-        pop.contentSize = NSSize(width: 380, height: 600)
-        let popoverView: MacMenubarPopover
-        if let runtime {
-            popoverView = MacMenubarPopover(
-                initialProvider: .grok,
-                onOpenDashboard: { [weak self] in
-                    guard let self else { return }
-                    self.popover?.performClose(nil)
-                    NotificationCenter.default.post(name: AppDelegate.openDashboardRequest, object: nil)
-                    NSApp.setActivationPolicy(.regular)
-                    NSApp.activate(ignoringOtherApps: true)
-                },
-                onSyncIPhone: { [weak self] in
-                    self?.showPairingPopover()
-                },
-                claudeModel: runtime.claudeModel,
-                codexModel: runtime.codexModel,
-                geminiModel: runtime.geminiModel,
-                cursorModel: runtime.cursorModel,
-                selectionDriver: selection,
-                usageHistoryStore: runtime.usageHistoryStore
-            )
-        } else {
-            popoverView = MacMenubarPopover(initialProvider: .grok)
-        }
-        let themedPopover = popoverView
-            .tahoeTheme(TahoeThemeStore.loaded())
-            .frame(width: 388)
-        let host = NSHostingController(rootView: themedPopover)
-        host.sizingOptions = NSHostingSizingOptions.preferredContentSize
-        pop.contentViewController = host
-        popover = pop
-    }
-
-    private func showPairingPopover() {
-        popover?.performClose(nil)
-        guard let runtime, let button = statusItem?.button else { return }
-        let pop = pairingPopover ?? {
-            let p = NSPopover()
-            p.behavior = .transient
-            p.contentSize = NSSize(width: 340, height: 460)
-            let view = PairingQRPopoverContent(runtime: runtime)
-                .tahoeTheme(TahoeThemeStore.loaded())
-                .padding(16)
-                .frame(width: 340)
-            let host = NSHostingController(rootView: view)
-            host.sizingOptions = NSHostingSizingOptions.preferredContentSize
-            p.contentViewController = host
-            pairingPopover = p
-            return p
-        }()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            pop.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        }
-    }
-
-    private func refreshImage() {
-        statusItem?.button?.image = currentImage()
-    }
-
-    private func currentImage() -> NSImage {
-        let text = contextLimit.map { "\($0.roundedPercent)%" } ?? "\u{2014}"
-        return MenuBarGaugeView.renderHistoryLabel(
-            assetName: "GrokLogo",
-            text: text,
-            template: MenuBarGaugeView.isTemplateAsset("GrokLogo")
-        )
-    }
-
-    @objc private func togglePopover(_ sender: Any?) {
-        guard let popover, let button = statusItem?.button else { return }
-        if popover.isShown {
-            popover.performClose(sender)
-        } else {
-            runtime?.usageHistoryStore.forceRefresh()
-            selection.request(.grok)
-            refreshImage()
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.becomeKey()
-        }
-    }
-
-}
-
 // MARK: - Per-provider controller
 
 @MainActor
@@ -494,6 +350,7 @@ final class ProviderStatusController: NSObject {
         case "codex":  return .codex
         case "gemini": return .gemini
         case "cursor": return .cursor
+        case "grok": return .grok
         default:       return .claude
         }
     }
@@ -548,7 +405,7 @@ final class ProviderStatusController: NSObject {
         pop.contentSize = NSSize(width: 380, height: 600)
         // Tahoe 26 redesign: swap the legacy `PopoverView` for the new
         // `MacMenubarPopover` glass card. Each menu-bar item opens the
-        // same popover (all three providers via segmented control); the
+        // same popover (all enabled providers via segmented control); the
         // segmented control defaults to whichever provider's status
         // item was clicked.
         //
@@ -580,6 +437,7 @@ final class ProviderStatusController: NSObject {
                 // Thread the live Cursor poller so the Cursor popover tab shows
                 // real usage instead of the hardcoded stale 0% row.
                 cursorModel: runtime.cursorModel,
+                grokModel: runtime.grokModel,
                 // #38: controller-owned driver re-targets the tab on each open.
                 selectionDriver: selection,
                 // v0.22.30: thread the usage history store so the
@@ -677,6 +535,7 @@ final class ProviderStatusController: NSObject {
                 runtime.codexModel.forcePoll()
                 runtime.geminiModel.forcePoll()
                 runtime.cursorModel.forcePoll()
+                runtime.grokModel.forcePoll()
             }
             // #38: re-target the cached popover to this provider's tab so
             // re-opening always lands on the clicked provider, not the last

@@ -156,6 +156,19 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
     }
 }
 
+public extension TahoeProvider {
+    init(analyticsProvider provider: UsageRecord.Provider) {
+        switch provider {
+        case .claude:   self = .claude
+        case .codex:    self = .codex
+        case .gemini:   self = .gemini
+        case .opencode: self = .opencode
+        case .cursor:   self = .cursor
+        case .grok:     self = .grok
+        }
+    }
+}
+
 public enum TahoeWallpaper: String, CaseIterable, Sendable, Codable, Identifiable {
     case aurora, dawn, graphite, code, studio
     public var id: String { rawValue }

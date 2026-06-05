@@ -29,6 +29,10 @@ final class AppRuntime: ObservableObject {
     /// v0.28.0: Cursor as a first-class provider. Reads cursor-agent's
     /// keychain JWT and polls api2.cursor.sh's GetCurrentPeriodUsage.
     let cursorModel: AppModel
+    /// Grok as a first-class provider. Reads the Grok CLI's `/usage show`
+    /// credits meter for live usage limits; token analytics remain history-ledger
+    /// based.
+    let grokModel: AppModel
     let usageHistoryStore: UsageHistoryStore
 
     /// F3-wire (Codex eng-review #10): one `AppModel` per registered
@@ -202,6 +206,13 @@ final class AppRuntime: ObservableObject {
             tokenProvider: cursorTokenProvider
         )
 
+        let grokTokenProvider = GrokTokenProvider()
+        self.grokModel = AppModel(
+            config: .grok,
+            source: GrokUsageSource(),
+            tokenProvider: grokTokenProvider
+        )
+
         // F3-wire (Codex eng-review #10): seed the provider-instance
         // registry with the primary for every kind and map each kind's
         // primary wireId to the AppModel we just constructed. Custom
@@ -215,6 +226,7 @@ final class AppRuntime: ObservableObject {
             ProviderInstanceId.primary(kind: .codex).wireId:  self.codexModel,
             ProviderInstanceId.primary(kind: .gemini).wireId: self.geminiModel,
             ProviderInstanceId.primary(kind: .cursor).wireId: self.cursorModel,
+            ProviderInstanceId.primary(kind: .grok).wireId: self.grokModel,
             // `.opencode` and `.unknown` don't have a per-kind AppModel
             // (OpenCode runs as a long-lived `opencode serve` daemon,
             // unknown is forward-compat sentinel only); they resolve
@@ -241,6 +253,13 @@ final class AppRuntime: ObservableObject {
             cursorModel.start()
         } else {
             runtimeLogger.info("Cursor poller deferred (provider disabled); keychain untouched until enabled")
+        }
+        if ProviderEnablement.isEnabled("grok"), !Self.isRunningUnderXCTest {
+            grokModel.start()
+        } else if ProviderEnablement.isEnabled("grok") {
+            runtimeLogger.info("Grok poller deferred under XCTest; CLI untouched during unit-test app bootstrap")
+        } else {
+            runtimeLogger.info("Grok poller deferred (provider disabled); CLI untouched until enabled")
         }
 
         // Analytics history: walks the on-disk JSONL caches, computes
@@ -324,6 +343,7 @@ final class AppRuntime: ObservableObject {
             codex: self.codexModel,
             gemini: self.geminiModel,
             cursor: self.cursorModel,
+            grok: self.grokModel,
             history: self.usageHistoryStore
         )
         self.sessionsModel = SessionsModel(
@@ -708,6 +728,10 @@ final class AppRuntime: ObservableObject {
         return UserDefaults.standard.object(forKey: "clawdmeter.cursor.startupPolling.enabled") as? Bool ?? false
     }
 
+    private static var isRunningUnderXCTest: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
     // MARK: - F3-wire instance-aware accessors (Codex eng-review #10)
 
     /// Resolve the `AppModel` for the given configured `ProviderInstanceId`.
@@ -842,8 +866,10 @@ final class AppRuntime: ObservableObject {
             )
         case .opencode, .grok, .unknown:
             // Caller should not reach this — guarded by `providerConfig`
-            // returning nil for these kinds (grok is a Code/Sessions ACP
-            // agent, not a metered AppModel provider).
+            // returning nil for these kinds. Grok's primary AppModel is
+            // supported above, but custom per-instance Grok usage is not wired
+            // yet because the CLI credits source has no instance-scoped home
+            // override here.
             preconditionFailure(
                 "AppRuntime.makeInstanceAwareModel called for unsupported kind \(instance.kind)"
             )

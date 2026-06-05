@@ -106,6 +106,7 @@ public final class AgentControlServer {
     private weak var codexModel: AppModel?
     private weak var geminiModel: AppModel?
     private weak var cursorModel: AppModel?
+    private weak var grokModel: AppModel?
     private weak var usageHistory: UsageHistoryStore?
 
     private var listener: NWListener?
@@ -304,12 +305,14 @@ public final class AgentControlServer {
         codex: AppModel?,
         gemini: AppModel? = nil,
         cursor: AppModel? = nil,
+        grok: AppModel? = nil,
         history: UsageHistoryStore?
     ) {
         self.claudeModel = claude
         self.codexModel = codex
         self.geminiModel = gemini
         self.cursorModel = cursor
+        self.grokModel = grok
         self.usageHistory = history
     }
 
@@ -4292,6 +4295,7 @@ public final class AgentControlServer {
         if let x = codexModel?.usage  { dict["codex"]  = x }
         if let g = geminiModel?.usage { dict["gemini"] = g }
         if let cursor = cursorModel?.usage { dict["cursor"] = cursor }
+        if let grok = grokModel?.usage { dict["grok"] = grok }
         let payload = UsageEnvelope(
             claude: claudeModel?.usage,
             codex: codexModel?.usage,

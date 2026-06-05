@@ -19,6 +19,7 @@ public struct MacUsageView: View {
     var codexModel: AppModel?
     var geminiModel: AppModel?
     var cursorModel: AppModel?
+    var grokModel: AppModel?
     /// PR #31 chunk 3 (A2): the live usage store the OpenCode dollar
     /// row reads from. Optional so Previews work without a runtime.
     var usageHistoryStore: UsageHistoryStore?
@@ -33,6 +34,7 @@ public struct MacUsageView: View {
         codexModel: AppModel? = nil,
         geminiModel: AppModel? = nil,
         cursorModel: AppModel? = nil,
+        grokModel: AppModel? = nil,
         usageHistoryStore: UsageHistoryStore? = nil
     ) {
         self.data = data
@@ -40,6 +42,7 @@ public struct MacUsageView: View {
         self.codexModel = codexModel
         self.geminiModel = geminiModel
         self.cursorModel = cursorModel
+        self.grokModel = grokModel
         self.usageHistoryStore = usageHistoryStore
     }
 
@@ -51,6 +54,7 @@ public struct MacUsageView: View {
                     ProviderColumn(provider: .codex,  row: data.codex,  model: codexModel)
                     ProviderColumn(provider: .gemini, row: data.gemini, model: geminiModel)
                     ProviderColumn(provider: .cursor, row: data.cursor, model: cursorModel)
+                    ProviderColumn(provider: .grok, row: data.grok, model: grokModel)
                 }
                 .padding(.horizontal, 6).padding(.bottom, 14)
 
@@ -338,6 +342,18 @@ private struct ProviderColumn: View {
         return "clawdmeter.\(id).menuBarShown"
     }
 
+    private var quotaLabel: String {
+        switch provider {
+        case .grok: return "credits used"
+        case .cursor: return "billing period"
+        default: return "session"
+        }
+    }
+
+    private var quotaSublabel: String {
+        row.sessionResetIn == "\u{2014}" ? "usage limit" : "resets in \(row.sessionResetIn)"
+    }
+
     var body: some View {
         TahoeGlass(radius: 8, tone: .panel) {
             VStack(alignment: .leading, spacing: 0) {
@@ -356,8 +372,8 @@ private struct ProviderColumn: View {
                 }
 
                 // QuotaBar
-                TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 260,
-                              label: "session", sublabel: "resets in \(row.sessionResetIn)")
+                TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 220,
+                              label: quotaLabel, sublabel: quotaSublabel)
                 .padding(.vertical, 28)
 
                 // Weekly row — hidden when provider has no weekly window.
@@ -516,8 +532,184 @@ private struct AnalyticsRow: View {
                 .frame(idealHeight: 280)
             }
             .padding(.horizontal, 14)
+
+            if let snapshot = usageHistoryStore?.snapshot,
+               let grokActivity = GrokAnalyticsActivity(snapshot: snapshot, range: range) {
+                GrokAnalyticsActivityStrip(activity: grokActivity)
+                    .padding(.horizontal, 14)
+            }
         }
         .padding(.bottom, 14)
+    }
+}
+
+private enum UsageAnalyticsProvider {
+    static let order = UsageRecord.Provider.analyticsDisplayOrder
+
+    static var stackOrder: [UsageRecord.Provider] {
+        Array(order.reversed())
+    }
+
+    static func tahoeProvider(_ provider: UsageRecord.Provider) -> TahoeProvider {
+        TahoeProvider(analyticsProvider: provider)
+    }
+
+    static func label(_ provider: UsageRecord.Provider) -> String {
+        tahoeProvider(provider).displayName
+    }
+
+    static func value(_ provider: UsageRecord.Provider, in point: TahoeDemo.SpendPoint) -> Double {
+        switch provider {
+        case .claude:   return point.c
+        case .codex:    return point.x
+        case .gemini:   return point.g
+        case .opencode: return point.o
+        case .cursor:   return point.r
+        case .grok:     return point.k
+        }
+    }
+
+    static func value(_ provider: UsageRecord.Provider, in repo: TahoeDemo.SpendRepo) -> Double {
+        switch provider {
+        case .claude:   return repo.c
+        case .codex:    return repo.x
+        case .gemini:   return repo.g
+        case .opencode: return repo.o
+        case .cursor:   return repo.r
+        case .grok:     return repo.k
+        }
+    }
+
+    static func total(_ point: TahoeDemo.SpendPoint) -> Double {
+        order.reduce(0) { $0 + value($1, in: point) }
+    }
+
+    static func total(_ repo: TahoeDemo.SpendRepo) -> Double {
+        order.reduce(0) { $0 + value($1, in: repo) }
+    }
+}
+
+private struct GrokAnalyticsActivity: Equatable {
+    var build: TokenTotals
+    var composer: TokenTotals
+    var other: TokenTotals
+
+    var totalTokens: Int {
+        build.totalTokens + composer.totalTokens + other.totalTokens
+    }
+
+    var requestCount: Int {
+        build.requestCount + composer.requestCount + other.requestCount
+    }
+
+    init?(snapshot: UsageHistorySnapshot, range: String) {
+        var build = TokenTotals.zero
+        var composer = TokenTotals.zero
+        var other = TokenTotals.zero
+        for (model, totals) in AnalyticsRangeAdapter.tokensByModel(snapshot: snapshot, range: range) where Self.isGrokModel(model) {
+            switch Self.bucket(model) {
+            case .build: build += totals
+            case .composer: composer += totals
+            case .other: other += totals
+            }
+        }
+        guard build.totalTokens + composer.totalTokens + other.totalTokens > 0
+            || build.requestCount + composer.requestCount + other.requestCount > 0
+        else { return nil }
+        self.build = build
+        self.composer = composer
+        self.other = other
+    }
+
+    private enum Bucket {
+        case build
+        case composer
+        case other
+    }
+
+    private static func isGrokModel(_ model: String) -> Bool {
+        let m = model.lowercased()
+        return m.hasPrefix("grok") || m.hasPrefix("xai/") || m.contains("/grok")
+    }
+
+    private static func bucket(_ model: String) -> Bucket {
+        let m = model.lowercased()
+        if m.contains("composer-2.5") || m.contains("grok-composer") { return .composer }
+        if m.contains("grok-build") { return .build }
+        return .other
+    }
+}
+
+private struct GrokAnalyticsActivityStrip: View {
+    @Environment(\.tahoe) private var t
+    let activity: GrokAnalyticsActivity
+
+    var body: some View {
+        TahoeGlass(radius: 8, tone: .panel) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    ProviderDot(.grok, size: 7)
+                    Text("Grok activity")
+                        .font(TahoeFont.body(12.5, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Spacer()
+                    metric(label: "Tokens", value: Self.formatTokens(activity.totalTokens), subvalue: Self.formatRequests(activity.requestCount))
+                }
+                HStack(spacing: 8) {
+                    modelPill("Grok Build", totals: activity.build)
+                    modelPill("Composer 2.5", totals: activity.composer)
+                    if activity.other.totalTokens > 0 || activity.other.requestCount > 0 {
+                        modelPill("Other Grok", totals: activity.other)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+        }
+    }
+
+    @ViewBuilder
+    private func modelPill(_ name: String, totals: TokenTotals) -> some View {
+        if totals.totalTokens > 0 || totals.requestCount > 0 {
+            HStack(spacing: 6) {
+                Text(name)
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                Text(Self.formatTokens(totals.totalTokens))
+                    .font(TahoeFont.mono(10.5))
+                    .foregroundStyle(t.fg3)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(t.glassTintHi, in: Capsule(style: .continuous))
+            .overlay(Capsule(style: .continuous).stroke(t.hairline, lineWidth: 0.5))
+        }
+    }
+
+    @ViewBuilder
+    private func metric(label: String, value: String, subvalue: String) -> some View {
+        VStack(alignment: .trailing, spacing: 1) {
+            Text(label.uppercased())
+                .font(TahoeFont.body(9.5, weight: .bold))
+                .tracking(0.4)
+                .foregroundStyle(t.fg4)
+            Text(value)
+                .font(TahoeFont.rounded(16, weight: .heavy))
+                .monospacedDigit()
+                .foregroundStyle(t.fg)
+            Text(subvalue)
+                .font(TahoeFont.mono(9.5))
+                .foregroundStyle(t.fg3)
+        }
+    }
+
+    private static func formatTokens(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM tok", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fK tok", Double(n) / 1_000) }
+        return "\(n) tok"
+    }
+
+    private static func formatRequests(_ n: Int) -> String {
+        "\(n) request\(n == 1 ? "" : "s")"
     }
 }
 
@@ -525,7 +717,8 @@ private struct Legend: View {
     @Environment(\.tahoe) private var t
     var body: some View {
         HStack(spacing: 14) {
-            ForEach(TahoeProvider.allCases) { p in
+            ForEach(UsageAnalyticsProvider.order, id: \.self) { provider in
+                let p = UsageAnalyticsProvider.tahoeProvider(provider)
                 HStack(spacing: 6) {
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
                         .fill(ProviderFill.gradient(for: p))
@@ -634,7 +827,7 @@ private struct SpendChart: View {
         // (which produced labels like $876 / $584 / $292). Tick stride
         // is in {1, 2, 2.5, 5} × 10^n so each gridline lands on a clean
         // dollar number (e.g. $0 / $250 / $500 / $750 with stride 250).
-        let rawMax = series.map { $0.c + $0.x + $0.g + $0.o + $0.k + $0.r }.max() ?? 1
+        let rawMax = series.map { UsageAnalyticsProvider.total($0) }.max() ?? 1
         let (maxTotal, stride) = Self.niceAxisMax(rawMax: rawMax, ticks: lines)
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
@@ -725,18 +918,20 @@ private struct SpendChart: View {
     }
 
     private func stackedBar(d: TahoeDemo.SpendPoint, max: Double, w: CGFloat, isHover: Bool) -> some View {
-        let total = d.c + d.x + d.g + d.o + d.k + d.r
+        let total = UsageAnalyticsProvider.total(d)
         let h = total > 0 ? total / max * chartHeight : 0
         return VStack(spacing: 0) {
             Spacer()
             VStack(spacing: 0) {
                 if total > 0 {
-                    Rectangle().fill(grad(.cursor)).frame(height: d.r / total * h)
-                    Rectangle().fill(grad(.grok)).frame(height: d.k / total * h)
-                    Rectangle().fill(grad(.opencode)).frame(height: d.o / total * h)
-                    Rectangle().fill(grad(.gemini)).frame(height: d.g / total * h)
-                    Rectangle().fill(grad(.codex)).frame(height: d.x / total * h)
-                    Rectangle().fill(grad(.claude)).frame(height: d.c / total * h)
+                    ForEach(UsageAnalyticsProvider.stackOrder, id: \.self) { provider in
+                        let value = UsageAnalyticsProvider.value(provider, in: d)
+                        if value > 0 {
+                            Rectangle()
+                                .fill(grad(UsageAnalyticsProvider.tahoeProvider(provider)))
+                                .frame(height: value / total * h)
+                        }
+                    }
                 }
             }
             .frame(width: w)
@@ -800,10 +995,10 @@ private struct RepoList: View {
     @Environment(\.tahoe) private var t
     var repos: [TahoeDemo.SpendRepo]
     var body: some View {
-        let maxTotal = repos.map { $0.c + $0.x + $0.g + $0.o + $0.k + $0.r }.max() ?? 1
+        let maxTotal = repos.map { UsageAnalyticsProvider.total($0) }.max() ?? 1
         VStack(spacing: 12) {
             ForEach(Array(repos.enumerated()), id: \.offset) { _, r in
-                let total = r.c + r.x + r.g + r.o + r.k + r.r
+                let total = UsageAnalyticsProvider.total(r)
                 let width = maxTotal > 0 ? total / maxTotal : 0
                 VStack(alignment: .leading, spacing: 5) {
                     HStack {
@@ -820,12 +1015,14 @@ private struct RepoList: View {
                     GeometryReader { geo in
                         HStack(spacing: 0) {
                             if total > 0 {
-                                Rectangle().fill(grad(.claude)).frame(width: geo.size.width * width * (r.c / total))
-                                Rectangle().fill(grad(.codex)).frame(width: geo.size.width * width * (r.x / total))
-                                Rectangle().fill(grad(.gemini)).frame(width: geo.size.width * width * (r.g / total))
-                                Rectangle().fill(grad(.opencode)).frame(width: geo.size.width * width * (r.o / total))
-                                Rectangle().fill(grad(.cursor)).frame(width: geo.size.width * width * (r.r / total))
-                                Rectangle().fill(grad(.grok)).frame(width: geo.size.width * width * (r.k / total))
+                                ForEach(UsageAnalyticsProvider.order, id: \.self) { provider in
+                                    let value = UsageAnalyticsProvider.value(provider, in: r)
+                                    if value > 0 {
+                                        Rectangle()
+                                            .fill(grad(UsageAnalyticsProvider.tahoeProvider(provider)))
+                                            .frame(width: geo.size.width * width * (value / total))
+                                    }
+                                }
                             }
                             Spacer()
                         }
@@ -926,10 +1123,6 @@ private struct GrokUsageRow: View {
         usageHistory.snapshot?.grok ?? .empty
     }
 
-    private var contextLimit: GrokCLIUsageParser.ContextLimit? {
-        usageHistory.snapshot?.grokContextLimit
-    }
-
     var body: some View {
         let today = providerTotals.today.totals
         let week = providerTotals.past7d.totals
@@ -941,19 +1134,13 @@ private struct GrokUsageRow: View {
                         Text("Grok")
                             .font(TahoeFont.body(15, weight: .bold))
                             .foregroundStyle(t.fg)
-                        Text("Grok Build + Composer 2.5 context limit")
+                        Text("Grok Build + Composer 2.5 analytics")
                             .font(TahoeFont.body(11.5))
                             .foregroundStyle(t.fg3)
                     }
                     Spacer()
-                    if let contextLimit {
-                        metric(
-                            label: "Context",
-                            value: "\(contextLimit.roundedPercent)%",
-                            subvalue: "\(Self.formatTokens(contextLimit.usedTokens)) / \(Self.formatTokens(contextLimit.limitTokens))"
-                        )
-                    } else if today.totalTokens == 0 && week.totalTokens == 0 && today.requestCount == 0 && week.requestCount == 0 {
-                        Text("No captured limit")
+                    if today.totalTokens == 0 && week.totalTokens == 0 && today.requestCount == 0 && week.requestCount == 0 {
+                        Text("No captured activity")
                             .font(TahoeFont.body(12.5, weight: .semibold))
                             .foregroundStyle(t.fg3)
                     }
@@ -962,20 +1149,6 @@ private struct GrokUsageRow: View {
                     }
                     if week.totalTokens > 0 || week.requestCount > 0 {
                         metric(label: "Past 7d", value: Self.formatTokens(week.totalTokens), subvalue: Self.formatRequests(week.requestCount))
-                    }
-                }
-                if let contextLimit {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text(Self.shortModel(contextLimit.model))
-                                .font(TahoeFont.mono(11.5))
-                                .foregroundStyle(t.fg3)
-                            Spacer()
-                            Text("context window")
-                                .font(TahoeFont.body(10.5, weight: .semibold))
-                                .foregroundStyle(t.fg4)
-                        }
-                        TahoePillBar(percent: contextLimit.percent, provider: .grok, height: 6)
                     }
                 }
             }
@@ -1012,13 +1185,6 @@ private struct GrokUsageRow: View {
         "\(n) request\(n == 1 ? "" : "s")"
     }
 
-    private static func shortModel(_ model: String) -> String {
-        switch model {
-        case "grok-composer-2.5-fast": return "Composer 2.5"
-        case "grok-build": return "Grok Build"
-        default: return model
-        }
-    }
 }
 
 // MARK: - Hover tooltip for SpendChart bars (v0.22.24)
@@ -1041,19 +1207,16 @@ private struct HoverBreakdown: View {
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .foregroundStyle(t.fg2)
             }
-            row(.claude, "Claude", point.c)
-            row(.codex, "Codex", point.x)
-            row(.gemini, "Antigravity", point.g)
-            row(.opencode, "OpenCode", point.o)
-            row(.cursor, "Cursor", point.r)
-            row(.grok, "Grok", point.k)
+            ForEach(UsageAnalyticsProvider.order, id: \.self) { provider in
+                row(provider)
+            }
             TahoeHair().padding(.vertical, 2)
             HStack {
                 Text("Total")
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer(minLength: 10)
-                Text(Self.format(point.c + point.x + point.g + point.o + point.k + point.r))
+                Text(Self.format(UsageAnalyticsProvider.total(point)))
                     .font(TahoeFont.mono(11, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(t.fg)
@@ -1073,10 +1236,13 @@ private struct HoverBreakdown: View {
     }
 
     @ViewBuilder
-    private func row(_ provider: TahoeProvider, _ label: String, _ value: Double) -> some View {
+    private func row(_ provider: UsageRecord.Provider) -> some View {
+        let tahoeProvider = UsageAnalyticsProvider.tahoeProvider(provider)
+        let label = UsageAnalyticsProvider.label(provider)
+        let value = UsageAnalyticsProvider.value(provider, in: point)
         HStack(spacing: 6) {
             Circle()
-                .fill(provider.dot)
+                .fill(tahoeProvider.dot)
                 .frame(width: 7, height: 7)
             Text(label)
                 .font(TahoeFont.body(10.5))
