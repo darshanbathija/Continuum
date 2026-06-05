@@ -48,13 +48,13 @@ public enum SessionsV2Theme {
 
     public enum Radius {
         /// Chips + segmented control segments (ModePicker, ModelPicker, EffortDial).
-        public static let chip: CGFloat = ContinuumTokens.Radius.card   // 6
+        public static let chip: CGFloat = 6
         /// Buttons (Start, Approve, Merge).
-        public static let button: CGFloat = ContinuumTokens.Radius.button // 5
+        public static let button: CGFloat = 5
         /// Cards + lift surfaces (cost banner, plan card, A/B compare).
-        public static let card: CGFloat = ContinuumTokens.Radius.card   // 6
+        public static let card: CGFloat = 6
         /// Sheet / modal corners.
-        public static let sheet: CGFloat = ContinuumTokens.Radius.modal // 8
+        public static let sheet: CGFloat = 8
     }
 
     // MARK: - Animation tokens
