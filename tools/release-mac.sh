@@ -208,6 +208,14 @@ verify_tools() {
   ok "release tooling is available"
 }
 
+verify_pages_configuration() {
+  local source
+  source="$(gh api "repos/${CLAWDMETER_RELEASE_OWNER}/${CLAWDMETER_RELEASE_REPO}/pages" \
+    --jq '(.source.branch // "") + ":" + (.source.path // "")' 2>/dev/null || true)"
+  [[ "$source" == "${CLAWDMETER_PAGES_BRANCH}:/" ]] || die "GitHub Pages source is '$source', expected '${CLAWDMETER_PAGES_BRANCH}:/' so the appcast mirror reaches the live Sparkle URL"
+  ok "GitHub Pages source is ${CLAWDMETER_PAGES_BRANCH}:/"
+}
+
 verify_feed_preconditions() {
   local notes="docs/${CLAWDMETER_RELEASE_NOTES_PATH}/${VERSION}.md"
   [[ -f "$notes" ]] || die "release notes missing at $notes"
@@ -327,6 +335,30 @@ publish_pages_feed() {
   ok "GitHub Pages feed pushed to origin/main"
 }
 
+verify_live_appcast() {
+  local tag="$1" expected_version="$2" expected_build="$3" expected_asset_url="$4"
+  local public_url="${CLAWDMETER_PAGES_BASE_URL}/${CLAWDMETER_APPCAST_PATH}"
+  local attempts="${CLAWDMETER_LIVE_APPCAST_RETRIES:-60}"
+  local sleep_seconds="${CLAWDMETER_LIVE_APPCAST_SLEEP_SECONDS:-10}"
+  local attempt feed
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    feed="$(curl -fsSL "${public_url}?tag=${tag}&attempt=${attempt}&ts=$(date +%s)" 2>/dev/null || true)"
+    if printf '%s\n' "$feed" | grep -q "<sparkle:shortVersionString>${expected_version}</sparkle:shortVersionString>" \
+      && printf '%s\n' "$feed" | grep -q "<sparkle:version>${expected_build}</sparkle:version>" \
+      && printf '%s\n' "$feed" | grep -Fq "$expected_asset_url" \
+      && printf '%s\n' "$feed" | grep -q "sparkle:edSignature"; then
+      ok "live Sparkle appcast advertises ${expected_version} build ${expected_build}"
+      return 0
+    fi
+    if [[ "$attempt" -lt "$attempts" ]]; then
+      sleep "$sleep_seconds"
+    fi
+  done
+
+  die "live appcast did not advertise ${expected_version} build ${expected_build} after $((attempts * sleep_seconds)) seconds: $public_url"
+}
+
 notarize_and_verify_dmg() {
   local dmg="$1"
   local timeout="${CLAWDMETER_NOTARY_TIMEOUT:-30m}"
@@ -370,6 +402,7 @@ export_release_env() {
   export CLAWDMETER_RELEASE_TAG_SUFFIX
   export CLAWDMETER_RELEASE_ASSET_PREFIX
   export CLAWDMETER_PAGES_BASE_URL
+  export CLAWDMETER_PAGES_BRANCH
   export CLAWDMETER_APPCAST_PATH
   export CLAWDMETER_RELEASE_NOTES_PATH
   export CLAWDMETER_RELEASE_HISTORY_PATH
@@ -388,6 +421,7 @@ export_release_env() {
 
 verify_static_config
 verify_tools
+verify_pages_configuration
 verify_credentials
 verify_provisioning_auth
 verify_developer_id_profiles
@@ -425,6 +459,7 @@ generate_pages_appcast "$TAG" "$DMG_PATH"
 
 if [[ "$MODE" == "publish" ]]; then
   publish_pages_feed "$TAG"
+  verify_live_appcast "$TAG" "$VERSION" "$CURRENT_BUILD" "$ASSET_URL"
 else
   ok "skipping GitHub Pages publish (--no-publish)"
 fi

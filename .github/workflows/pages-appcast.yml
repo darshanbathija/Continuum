@@ -9,32 +9,103 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages-appcast
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  mirror:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: source
+
       - name: Validate appcast payload
         run: |
-          test -s docs/updates/appcast.xml
-          grep -q '<item' docs/updates/appcast.xml
-          grep -q 'sparkle:edSignature' docs/updates/appcast.xml
-          grep -q '26.0' docs/updates/appcast.xml
-          python3 -m json.tool docs/updates/history.json >/dev/null
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+          cd source
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json
+          import pathlib
+          import sys
+          import xml.etree.ElementTree as ET
+
+          appcast = pathlib.Path("docs/updates/appcast.xml")
+          history_path = pathlib.Path("docs/updates/history.json")
+          base_url = "https://darshanbathija.github.io/Continuum"
+          ns = {"sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle"}
+
+          root = ET.parse(appcast).getroot()
+          item = root.find("./channel/item")
+          if item is None:
+              sys.exit("appcast has no update item")
+
+          version = item.findtext("sparkle:shortVersionString", namespaces=ns)
+          build = item.findtext("sparkle:version", namespaces=ns)
+          min_os = item.findtext("sparkle:minimumSystemVersion", namespaces=ns)
+          notes_url = item.findtext("sparkle:releaseNotesLink", namespaces=ns)
+          enclosure = item.find("enclosure")
+
+          if not version or not build:
+              sys.exit("appcast is missing version metadata")
+          if min_os != "26.0":
+              sys.exit(f"appcast minimum OS is {min_os}, expected 26.0")
+          if enclosure is None or not enclosure.attrib.get("{http://www.andymatuschak.org/xml-namespaces/sparkle}edSignature"):
+              sys.exit("appcast enclosure is missing Sparkle edSignature")
+          if not notes_url or not notes_url.startswith(base_url + "/"):
+              sys.exit("release notes link does not point at GitHub Pages")
+
+          notes_path = pathlib.Path("docs", notes_url.removeprefix(base_url + "/"))
+          if not notes_path.is_file():
+              sys.exit(f"release notes target is missing: {notes_path}")
+
+          history = json.loads(history_path.read_text())
+          if not isinstance(history, list) or not history:
+              sys.exit("history.json must contain at least one release")
+          if history[0].get("version") != version or history[0].get("build") != build:
+              sys.exit("history.json newest release does not match appcast")
+
+          print(f"EXPECTED_VERSION={version}")
+          print(f"EXPECTED_BUILD={build}")
+          print(f"EXPECTED_ASSET_URL={enclosure.attrib.get('url', '')}")
+          PY
+
+      - uses: actions/checkout@v4
         with:
-          path: docs
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          ref: gh-pages
+          path: pages
+
+      - name: Mirror updates to gh-pages
+        run: |
+          rm -rf pages/updates
+          mkdir -p pages/updates
+          cp -R source/docs/updates/. pages/updates/
+          cd pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add updates
+          if git diff --cached --quiet; then
+            echo "gh-pages updates are already current"
+          else
+            git commit -m "release: mirror Sparkle appcast ${GITHUB_SHA::7}"
+            git push origin HEAD:gh-pages
+          fi
+
+      - name: Verify live appcast
+        run: |
+          url="https://darshanbathija.github.io/Continuum/updates/appcast.xml"
+          for attempt in $(seq 1 60); do
+            body="$(curl -fsSL "${url}?sha=${GITHUB_SHA}&attempt=${attempt}&ts=$(date +%s)" || true)"
+            if printf '%s\n' "$body" | grep -q "<sparkle:shortVersionString>${EXPECTED_VERSION}</sparkle:shortVersionString>" \
+              && printf '%s\n' "$body" | grep -q "<sparkle:version>${EXPECTED_BUILD}</sparkle:version>" \
+              && printf '%s\n' "$body" | grep -Fq "$EXPECTED_ASSET_URL" \
+              && printf '%s\n' "$body" | grep -q "sparkle:edSignature"; then
+              echo "Live appcast advertises ${EXPECTED_VERSION} build ${EXPECTED_BUILD}"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Live appcast did not advertise ${EXPECTED_VERSION} build ${EXPECTED_BUILD}" >&2
+          exit 1
