@@ -1660,6 +1660,32 @@ public final class AgentControlServer {
         }
     }
 
+    /// T6: port the tmux trust-folder warmup to the PTY. Claude's first run in
+    /// an untrusted directory shows a "trust this folder?" dialog that swallows
+    /// the first keystroke — the tmux path scrapes capture-pane + sends
+    /// Down/Up/Enter. The PTY equivalent polls `recentOutput()` (ANSI-stripped)
+    /// and writes the same keys as bytes (Down=ESC[B, Up=ESC[A, Enter=CR). chat
+    /// sessions are pre-trusted (markTrustedForClaude) so this is only needed for
+    /// code sessions in new worktrees. Best-effort, bounded, runs in background.
+    func warmupClaudePtyHost(_ host: ClaudePtyHost) {
+        Task {
+            func isTrustPrompt(_ s: String) -> Bool {
+                s.contains("Quick safety check")
+                    || s.range(of: "trust this folder", options: .caseInsensitive) != nil
+                    || s.range(of: "Is this a project you created", options: .caseInsensitive) != nil
+                    || s.contains("Do you trust")
+            }
+            for _ in 0..<40 {   // ~12s
+                if isTrustPrompt(await host.recentOutput()) {
+                    // Down, Up, Enter — mirrors the tmux send-keys sequence.
+                    await host.writeBytes(Data([0x1b, 0x5b, 0x42, 0x1b, 0x5b, 0x41, 0x0d]))
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+        }
+    }
+
     private func handleSendPrompt(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
@@ -5114,7 +5140,10 @@ public final class AgentControlServer {
                 )
                 await ensureClaudePtyWiring()
                 let plan = claudeSpawnPlan(for: session)
-                _ = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { plan })
+                let host = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { plan })
+                // Code sessions can hit the first-run trust dialog in a fresh
+                // worktree; dismiss it on the PTY (chat is pre-trusted).
+                warmupClaudePtyHost(host)
             } else {
                 try await tmux.start()  // idempotent
                 let window = try await tmux.newWindow(
