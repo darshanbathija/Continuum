@@ -613,7 +613,6 @@ struct SidebarPane: View {
     @ViewBuilder
     private func prioritySidebarContent(_ projection: SidebarProjection) -> some View {
         if !projection.workspaceSections.isEmpty {
-            priorityLabel("Managed")
             ForEach(projection.workspaceSections) { section in
                 workspaceSection(section)
             }
@@ -858,14 +857,15 @@ struct SidebarPane: View {
                         .help("\(wt.sessions.count) models on this branch — open to switch via tabs")
                 }
             }
-            .contentShape(Rectangle())
+            .padding(.leading, 34)
+            .padding(.trailing, 8)
             .padding(.vertical, 6)
-            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(isOpen ? t.accent.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
-        .padding(.leading, 26)
-        .padding(.trailing, 8)
+        .padding(.horizontal, 10)
     }
 
     /// The models running on a worktree, oldest→newest (the handoff chain) with
