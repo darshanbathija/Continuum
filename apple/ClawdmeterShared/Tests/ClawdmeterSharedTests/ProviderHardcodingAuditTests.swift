@@ -176,19 +176,32 @@ final class ProviderHardcodingAuditTests: XCTestCase {
 
         let content = try String(contentsOf: usageViewURL, encoding: .utf8)
         XCTAssertEqual(
-            occurrenceCount(of: "row(.grok, \"Grok\", point.k)", in: content),
-            1,
-            "HoverBreakdown must render Grok once."
+            occurrenceCount(of: "ForEach(UsageAnalyticsProvider.order, id: \\.self)", in: content),
+            3,
+            "Legend, repo bars, and hover breakdown must iterate the canonical provider order."
         )
         XCTAssertEqual(
-            occurrenceCount(of: "Rectangle().fill(grad(.grok)).frame(height: d.k / total * h)", in: content),
+            occurrenceCount(of: "ForEach(UsageAnalyticsProvider.stackOrder, id: \\.self)", in: content),
             1,
-            "SpendChart must stack Grok once."
+            "SpendChart must stack providers from the canonical provider order."
         )
         XCTAssertEqual(
-            occurrenceCount(of: "Rectangle().fill(grad(.grok)).frame(width: geo.size.width * width * (r.k / total))", in: content),
-            1,
-            "RepoList must stack Grok once."
+            occurrenceCount(of: "row(.grok", in: content),
+            0,
+            "HoverBreakdown must not manually render a Grok row."
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "Rectangle().fill(grad(.grok))", in: content),
+            0,
+            "SpendChart and RepoList must not manually render Grok segments."
+        )
+        XCTAssertTrue(
+            content.contains("static let order = UsageRecord.Provider.analyticsDisplayOrder"),
+            "Tahoe usage analytics must source provider order from UsageRecord.Provider.analyticsDisplayOrder."
+        )
+        XCTAssertTrue(
+            content.contains("GrokAnalyticsActivityStrip"),
+            "Usage analytics must keep unpriced Grok Build / Composer 2.5 token activity visible in the analytics section."
         )
     }
 

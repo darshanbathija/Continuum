@@ -17,6 +17,13 @@ final class GrokAnalyticsTests: XCTestCase {
         #endif
     }
 
+    func test_grokAppearsOnceInCanonicalAnalyticsProviderOrders() {
+        XCTAssertEqual(UsageRecord.Provider.analyticsDisplayOrder.filter { $0 == .grok }.count, 1)
+        XCTAssertEqual(UsageRecord.Provider.analyticsDisplayOrder.last, .grok)
+        XCTAssertEqual(UsageRecord.Provider.analyticsCostStackOrder.filter { $0 == .grok }.count, 1)
+        XCTAssertEqual(UsageRecord.Provider.analyticsCostStackOrder.last, .grok)
+    }
+
 #if !os(watchOS) && canImport(SwiftUI)
     @available(macOS 13, iOS 16, *)
     func test_totalsGridShowsUnpricedGrokTokensBeforeRequestCount() {
