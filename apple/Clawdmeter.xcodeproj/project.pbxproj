@@ -47,6 +47,7 @@
 		180979EE1D21A4EC76344D81 /* IOSChatV2View.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFCA10DE26C860C326DE2FDB /* IOSChatV2View.swift */; };
 		180F0F522D2CF2CBD7EEE500 /* MacMenubarPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 015F6FD7463F3710A54A36EB /* MacMenubarPopover.swift */; };
 		183FABC95728764FF9DEFCD6 /* TahoeDiffPreviewPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6964337810D3098CE9F66CBE /* TahoeDiffPreviewPane.swift */; };
+		19AC672180B4FBF70EB9FE37 /* RelayTransportFlag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175F5A857A4FA1D0F0C3C6D2 /* RelayTransportFlag.swift */; };
 		19CFD32B283E9A931390BD4B /* KeyboardCheatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2D094B6FFC14AA31CD6E63E /* KeyboardCheatSheet.swift */; };
 		1A33BCE35CFE5B8AFC5BD284 /* ClawdmeterMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44830246BE8DE33251B9CE1B /* ClawdmeterMacApp.swift */; };
 		1B54103BF6D1D6FED456229B /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = 7B11A2D9FF78A7B7AA8B0A88 /* ClawdmeterShared */; };
@@ -151,6 +152,7 @@
 		5B7846A11606DFD0DFA9656E /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = 8B73D594070D689DF9E8C5DF /* ClawdmeterShared */; };
 		5BD4C871A12018450CC2C539 /* CenterThread.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0367AB059235F9C6B10014 /* CenterThread.swift */; };
 		5CD1263CADBCF5568C1657C5 /* IOSRelayPairingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65A73329D82E28D0DC7B1D49 /* IOSRelayPairingService.swift */; };
+		5D223011538808D5CD2AEDFB /* IOSChatStoreRelayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 524DEBA1AEB5A7432549A85B /* IOSChatStoreRelayTests.swift */; };
 		5D4D53D748BC9DB41B3C88A7 /* PathAllowListTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C08666E82AED1F1E9AD1E9C9 /* PathAllowListTests.swift */; };
 		5DE92C384076350BC6A8F25F /* SessionWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB6CC1AA9EB4821E16119827 /* SessionWorkspaceView.swift */; };
 		5FB161B730DF9EAE1712B31B /* MacRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CDBC01D36234EF483722038 /* MacRootView.swift */; };
@@ -164,6 +166,7 @@
 		634D9A7C944F029435551A5E /* TahoeEmptyReviewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 826D0434B2955A2580082742 /* TahoeEmptyReviewState.swift */; };
 		63B6862C7101C88DCC150054 /* WireInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94EDF3CEF7F199E2380D7927 /* WireInspector.swift */; };
 		64DA80D92F0080CAA8CD6338 /* RepoSetupScriptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B48819BE9916556D3DC59B4 /* RepoSetupScriptStore.swift */; };
+		64E086F91AA0ACFC3C4EB8F1 /* RelaySubscriptionBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6C27ACCEB5AD84FECF5AEA3 /* RelaySubscriptionBridgeTests.swift */; };
 		6501702B48607D3BC64EDBF1 /* MacLoopbackClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DBC6F360778F38504200A2 /* MacLoopbackClient.swift */; };
 		6515A6FA3F4FBFE797F2E54A /* AgentControlServerVendorProvisioningRouteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDDCD753507E1F92989E0CB5 /* AgentControlServerVendorProvisioningRouteTests.swift */; };
 		65A91CCE80103A225C1D7817 /* NewSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D80CB8C8FC5763D6DD411982 /* NewSessionSheet.swift */; };
@@ -237,6 +240,7 @@
 		961138F14762FD98647ADA23 /* DiagnosticsSupportBundleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21210F0340F6B45C7BF28AB0 /* DiagnosticsSupportBundleTests.swift */; };
 		96389D247535DF202C123C35 /* GeminiQuotaLiveActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57ABA1D6213482514E812CB9 /* GeminiQuotaLiveActivityCoordinator.swift */; };
 		9665400BFEE0980F8C9A835D /* APNSGatewayClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D63B462056E72D42D6D54728 /* APNSGatewayClientTests.swift */; };
+		968F1A809DD00135F492B0FE /* RelaySubscriptionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F51A41CE73D5F9E79AE1DE9 /* RelaySubscriptionBridge.swift */; };
 		96A37EE3F9DD16B68B705113 /* VendorProvisioningService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8524794C9A655A7937BDCB51 /* VendorProvisioningService.swift */; };
 		97AFB2408A239828ECA833EC /* SessionStatusBadges.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD46C6D38786A4F6BE0A898A /* SessionStatusBadges.swift */; };
 		992369A8A9BB035112912C5D /* WorkspaceTabStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 594E8E5EB863340343E9FD96 /* WorkspaceTabStrip.swift */; };
@@ -317,6 +321,7 @@
 		D2FF1EA36DA1BF4CD9450D2C /* SessionChatStore+ChatSnapshotSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31DB05FB7CD0E566FC1EA2BF /* SessionChatStore+ChatSnapshotSource.swift */; };
 		D609B22B0D306509093B09D2 /* AutopilotState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5239318D643E1B51443A7C3 /* AutopilotState.swift */; };
 		D64E0EA5E4866E7E56001DE4 /* MenuBarGaugeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA1C225091C6434AB97D2E8 /* MenuBarGaugeView.swift */; };
+		D7A28926EB707252DBBE4B28 /* IOSRelayMuxDispatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 369B7DB04E482DB32EE6A6C9 /* IOSRelayMuxDispatchTests.swift */; };
 		D89B4592E0A3C71E668ED91F /* UsageQueryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24E844E6256A865A0DFEEF18 /* UsageQueryService.swift */; };
 		D969CDB0157529CA21FDC769 /* iOSCodexPlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DBB8377CD04D941834499FA /* iOSCodexPlanView.swift */; };
 		D9D0C23F96A52B7F41CBD04F /* TranscriptLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 112147989D4BC1A47AD29F81 /* TranscriptLoader.swift */; };
@@ -510,6 +515,7 @@
 		162AFC48DB7B96F3BD402C58 /* HarnessProcessReaper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessProcessReaper.swift; sourceTree = "<group>"; };
 		162F800D3CC14A1C33E3A4F8 /* ClawdmeterWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClawdmeterWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		174532B759A129A612A27E8F /* MarkdownDocumentTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocumentTabView.swift; sourceTree = "<group>"; };
+		175F5A857A4FA1D0F0C3C6D2 /* RelayTransportFlag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayTransportFlag.swift; sourceTree = "<group>"; };
 		1781BB5120E0848A69C5C93F /* LifecycleWebSocketChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LifecycleWebSocketChannel.swift; sourceTree = "<group>"; };
 		17DA27537713FA84A9F94D39 /* iOSOutboxPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSOutboxPane.swift; sourceTree = "<group>"; };
 		18DCEE84E585CFA9E05B9805 /* OpencodeSetupSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeSetupSheet.swift; sourceTree = "<group>"; };
@@ -552,6 +558,7 @@
 		337AF680AD19B43DD3270247 /* RepoEnvStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoEnvStoreTests.swift; sourceTree = "<group>"; };
 		33825BAE58452A8D88F93860 /* WorkspaceAllowListCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceAllowListCache.swift; sourceTree = "<group>"; };
 		34C5DB1E465D5AE0EA5AB19D /* IOSLiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSLiveView.swift; sourceTree = "<group>"; };
+		369B7DB04E482DB32EE6A6C9 /* IOSRelayMuxDispatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSRelayMuxDispatchTests.swift; sourceTree = "<group>"; };
 		37C85C9FEA7F476035BFF577 /* SpawnPathResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpawnPathResolver.swift; sourceTree = "<group>"; };
 		38DC91CBDEFE54A4A03CA31D /* PlanQueueSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanQueueSheet.swift; sourceTree = "<group>"; };
 		3A4E9C143026DEB7E82C1EDC /* LanguageServerClientRewriteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageServerClientRewriteTests.swift; sourceTree = "<group>"; };
@@ -586,6 +593,7 @@
 		4FCD917577DAE8F4BE5BCA99 /* SessionConfigChanger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionConfigChanger.swift; sourceTree = "<group>"; };
 		4FE36F4B9D0C20CEBC060E31 /* VendorProvisioningSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VendorProvisioningSettingsView.swift; sourceTree = "<group>"; };
 		5134B64885E8E074A31029AE /* APNSGatewaySettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APNSGatewaySettingsTests.swift; sourceTree = "<group>"; };
+		524DEBA1AEB5A7432549A85B /* IOSChatStoreRelayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSChatStoreRelayTests.swift; sourceTree = "<group>"; };
 		52CF286759B2554561F8379A /* ArtifactsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactsPane.swift; sourceTree = "<group>"; };
 		5386A54412C7E7039ECF84C0 /* IOSPairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSPairingView.swift; sourceTree = "<group>"; };
 		552C22F8E32AB6F8370B23A7 /* AgentSessionRegistryPlanProgressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionRegistryPlanProgressTests.swift; sourceTree = "<group>"; };
@@ -675,6 +683,7 @@
 		8E414059E5EEBAE58913412B /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
 		8E59F36ABD57B696758AE96E /* PairingScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScanView.swift; sourceTree = "<group>"; };
 		8E69E8EE279B34195CA9D241 /* ClaudePtyRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudePtyRegistry.swift; sourceTree = "<group>"; };
+		8F51A41CE73D5F9E79AE1DE9 /* RelaySubscriptionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelaySubscriptionBridge.swift; sourceTree = "<group>"; };
 		925041B8C85D144E1647A0E6 /* RateLimiter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RateLimiter.swift; sourceTree = "<group>"; };
 		92BB57903BBD3AECA55B20BF /* OpencodeAuthFileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeAuthFileTests.swift; sourceTree = "<group>"; };
 		932A85B4655F88C993AF0E2B /* CGSessionLiveness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CGSessionLiveness.swift; sourceTree = "<group>"; };
@@ -765,6 +774,7 @@
 		C523F489FF4A0361B5DAF2CD /* OpencodeSSEAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeSSEAdapter.swift; sourceTree = "<group>"; };
 		C586E824901718671FCD8CD4 /* CheckpointRestoreSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointRestoreSheet.swift; sourceTree = "<group>"; };
 		C658DA77D0AAC2C5A8C152E6 /* APNSGatewayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APNSGatewayClient.swift; sourceTree = "<group>"; };
+		C6C27ACCEB5AD84FECF5AEA3 /* RelaySubscriptionBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelaySubscriptionBridgeTests.swift; sourceTree = "<group>"; };
 		C70C1FF5F7DCCAE40D4D3220 /* iOSAPNSRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSAPNSRegistration.swift; sourceTree = "<group>"; };
 		C776020CFC8A0FD2449464F1 /* SessionChatStoreTurnTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChatStoreTurnTimerTests.swift; sourceTree = "<group>"; };
 		C77ADCCCF27A10F5786160F6 /* WorkspaceFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceFeedback.swift; sourceTree = "<group>"; };
@@ -973,6 +983,7 @@
 				79E1F5321E3651A75B2E2369 /* RelayClient.swift */,
 				AD0F7E72EBBEC05B986430D9 /* RelayPairingService.swift */,
 				F974A5DC7DD41CA6A46E47B4 /* RelayRequestDispatcher.swift */,
+				8F51A41CE73D5F9E79AE1DE9 /* RelaySubscriptionBridge.swift */,
 				955429AF85A325CB969F7CDC /* RepoEnvStore.swift */,
 				FA356EF8A22C268A0070F750 /* RepoIndex.swift */,
 				454E4BC425E215AB3732061B /* RepoOnboarding.swift */,
@@ -1258,6 +1269,7 @@
 				B5A629825BB527592CC870F4 /* PRCoordinatorTests.swift */,
 				49FF764D16075FBD5CFDC73E /* QuickSpawnContractTests.swift */,
 				13951B634E1A812CE5D605E3 /* RelayPairingServiceTests.swift */,
+				C6C27ACCEB5AD84FECF5AEA3 /* RelaySubscriptionBridgeTests.swift */,
 				337AF680AD19B43DD3270247 /* RepoEnvStoreTests.swift */,
 				B9A32B81B3ECE2D51B5D057C /* RunProfileManagerTests.swift */,
 				C1867BAAA1EF87EA6A793D14 /* SessionChatStoreMarkdownArtifactTests.swift */,
@@ -1321,6 +1333,7 @@
 				95301F92EF7532BC38B5BE4E /* IOSRelayClient.swift */,
 				5DC85826013E1F3EE2672116 /* IOSRelayClientCoordinator.swift */,
 				625F0C2211326A148B15228D /* MobileCommandOutbox.swift */,
+				175F5A857A4FA1D0F0C3C6D2 /* RelayTransportFlag.swift */,
 				33825BAE58452A8D88F93860 /* WorkspaceAllowListCache.swift */,
 			);
 			path = AgentControl;
@@ -1441,8 +1454,10 @@
 		C78CB42390923B2CF2E3751E /* ClawdmeteriOSTests */ = {
 			isa = PBXGroup;
 			children = (
+				524DEBA1AEB5A7432549A85B /* IOSChatStoreRelayTests.swift */,
 				1E7CB1E545BC527D3558A8C2 /* IOSRelayClientHandshakeTests.swift */,
 				847CE810DE526A21A84A2AA3 /* IOSRelayClientLifecycleTests.swift */,
+				369B7DB04E482DB32EE6A6C9 /* IOSRelayMuxDispatchTests.swift */,
 				26C5754995E30EFF8A7FCC93 /* IOSWorkspaceDocumentTabsTests.swift */,
 			);
 			path = ClawdmeteriOSTests;
@@ -1648,8 +1663,6 @@
 				607B294A61BE70FE7A3F494D /* PBXTargetDependency */,
 			);
 			name = ClawdmeterMacUITests;
-			packageProductDependencies = (
-			);
 			productName = ClawdmeterMacUITests;
 			productReference = FCEA6256CB6D114C219DA5E1 /* ClawdmeterMacUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -1956,6 +1969,7 @@
 				912202BEEA9A6B028E79D53D /* PlanQueueLoaderTests.swift in Sources */,
 				F33648618E69E2686F1031E7 /* QuickSpawnContractTests.swift in Sources */,
 				8E978F11CA98449998C89F7B /* RelayPairingServiceTests.swift in Sources */,
+				64E086F91AA0ACFC3C4EB8F1 /* RelaySubscriptionBridgeTests.swift in Sources */,
 				41EAAB68BF58DAB12A369538 /* RepoEnvStoreTests.swift in Sources */,
 				4E1DF0B9137F68A4E16D74DF /* RunProfileManagerTests.swift in Sources */,
 				4CCF5AB9922BBDE861116071 /* SessionChatStoreMarkdownArtifactTests.swift in Sources */,
@@ -2110,6 +2124,7 @@
 				2A6FA0289E540BFABE9CC438 /* RelayClient.swift in Sources */,
 				BEBEDF3EC84554BEEE967A5E /* RelayPairingService.swift in Sources */,
 				89ADE4E63EEB722FF704EB23 /* RelayRequestDispatcher.swift in Sources */,
+				968F1A809DD00135F492B0FE /* RelaySubscriptionBridge.swift in Sources */,
 				830A31BD5C4524440CF758E0 /* RepoEnvStore.swift in Sources */,
 				E51A8970F780861A0C202217 /* RepoEnvVariablesSettingsView.swift in Sources */,
 				EC15D5F8B7BC3F151C890C8C /* RepoIndex.swift in Sources */,
@@ -2216,6 +2231,7 @@
 				1F57B15A40CE4503F7909A98 /* PairingCTAButtons.swift in Sources */,
 				E42C70E146F11D56309CCED8 /* PairingScanView.swift in Sources */,
 				21394E54DBC8130457573563 /* PairingScannerView.swift in Sources */,
+				19AC672180B4FBF70EB9FE37 /* RelayTransportFlag.swift in Sources */,
 				C33D35AB2C0B598EE86BC7BD /* RepoOnboardingErrorMessages.swift in Sources */,
 				7E7B0AB3B9AC675FB2018FAE /* RepoOnboardingIdempotencyStore.swift in Sources */,
 				3D153FBD1EF5FB96D68B6AA4 /* SettingsView.swift in Sources */,
@@ -2252,8 +2268,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5D223011538808D5CD2AEDFB /* IOSChatStoreRelayTests.swift in Sources */,
 				209B3793DD23F96C19EC9D9D /* IOSRelayClientHandshakeTests.swift in Sources */,
 				31FEEAF814C3648A43502749 /* IOSRelayClientLifecycleTests.swift in Sources */,
+				D7A28926EB707252DBBE4B28 /* IOSRelayMuxDispatchTests.swift in Sources */,
 				086265D32AA72CD0970CA018 /* IOSWorkspaceDocumentTabsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2381,7 +2399,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 197;
+				CURRENT_PROJECT_VERSION = 198;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -2400,7 +2418,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.29.50;
+				MARKETING_VERSION = 0.30.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -2416,7 +2434,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "ClawdmeterMac/ClawdmeterMac-Release.entitlements";
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2429,6 +2448,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac;
 				PRODUCT_MODULE_NAME = Clawdmeter;
 				PRODUCT_NAME = Continuum;
+				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -2544,7 +2564,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2557,6 +2578,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.widgets;
 				PRODUCT_NAME = ClawdmeterMacWidgets;
+				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac.widgets";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 			};
@@ -2567,7 +2589,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMac/ClawdmeterMac.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2580,6 +2603,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac;
 				PRODUCT_MODULE_NAME = Clawdmeter;
 				PRODUCT_NAME = Continuum;
+				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac";
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -2626,7 +2650,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2639,6 +2664,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.widgets;
 				PRODUCT_NAME = ClawdmeterMacWidgets;
+				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac.widgets";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 			};
@@ -2700,7 +2726,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 197;
+				CURRENT_PROJECT_VERSION = 198;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -2713,7 +2739,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.29.50;
+				MARKETING_VERSION = 0.30.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

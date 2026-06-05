@@ -156,6 +156,33 @@ final class RelayPairingHandshakeTests: XCTestCase {
         XCTAssertNil(RelayPairingBundle.decode(fromURL: url))
     }
 
+    /// CB-P0a: the durable 30-day session TTL the Mac now mints must decode,
+    /// and a bundle past the 31-day cap must be rejected (caps a buggy/hostile
+    /// far-future session).
+    func testDurableTTLAcceptedAndCapEnforced() throws {
+        // The live, allowlisted relay host (what the Mac actually mints), so
+        // this test isolates the TTL behavior from the host allowlist.
+        let goodRelay = RelayEnvironment.staging.baseURL
+        func bundleURL(ttlOffset: UInt64) throws -> String {
+            let now = UInt64(Date().timeIntervalSince1970)
+            return try RelayPairingBundle(
+                sid: makeValidToken(),
+                macTok: makeValidToken(),
+                iosTok: makeValidToken(),
+                ecdhPub: RelayPairingKeyPair().publicKeyBase64URL,
+                ttl: now + ttlOffset,
+                relayUrl: goodRelay
+            ).encodeToURL()
+        }
+        // The TTL gate itself: 30d valid, 40d past the 31-day cap.
+        let now = UInt64(Date().timeIntervalSince1970)
+        XCTAssertTrue(RelayPairingBundle.isValidTTL(now + 30 * 24 * 60 * 60), "30d must be valid")
+        XCTAssertFalse(RelayPairingBundle.isValidTTL(now + 40 * 24 * 60 * 60), "40d must exceed the cap")
+        // End-to-end: 30-day session (what the Mac now mints) decodes; 40-day rejected.
+        XCTAssertNotNil(RelayPairingBundle.decode(fromURL: try bundleURL(ttlOffset: 30 * 24 * 60 * 60)))
+        XCTAssertNil(RelayPairingBundle.decode(fromURL: try bundleURL(ttlOffset: 40 * 24 * 60 * 60)))
+    }
+
     func testRejectsRelayURLOutsideAllowlist() throws {
         let body: [String: Any] = [
             "v": 1,
@@ -179,7 +206,7 @@ final class RelayPairingHandshakeTests: XCTestCase {
             iosTok: makeValidToken(),
             ecdhPub: RelayPairingKeyPair().publicKeyBase64URL,
             ttl: UInt64(Date().timeIntervalSince1970) + 900,
-            relayUrl: "wss://clawdmeter-relay-staging.darshan-1ba.workers.dev"
+            relayUrl: "wss://clawdmeter-relay-staging.continuumai.workers.dev"
         )
         let url = try bundle.encodeToURL()
         XCTAssertEqual(RelayPairingBundle.decode(fromURL: url), bundle)

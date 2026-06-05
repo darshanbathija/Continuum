@@ -62,6 +62,20 @@ public final class AgentControlClient: ObservableObject {
     @Published public private(set) var serverVersion: String?
     @Published public private(set) var serverWireVersion: Int?
 
+    /// Track B (B1): when set (relay is the default transport), the desktop
+    /// `events` stream — and any store that holds this client, e.g.
+    /// `FrontierSnapshotStore` — routes over the relay multiplex instead of a
+    /// direct WS. The iOS app sets this reactively from
+    /// `IOSRelayClientCoordinator.muxClient`; nil ⇒ every path stays direct
+    /// (byte-identical). One carrier so events + frontier share a single wire.
+    @MainActor public var relayMux: RelayMuxClient?
+
+    /// Track B (B1.7): request/response over the relay. When set, every HTTP
+    /// request routes through the mux correlator instead of a direct URLSession
+    /// call. Set by the iOS app via bindAgentClient alongside relayMux; nil ⇒
+    /// the direct URLSession path runs byte-identically.
+    @MainActor public var relayRequestClient: RelayMuxRequestClient?
+
     /// Instance-level overrides for pairing config. Set by the
     /// explicit-arg init; nil for the UserDefaults-backed path. The
     /// computed properties below check these first.
@@ -602,6 +616,14 @@ public final class AgentControlClient: ObservableObject {
     }
 
     private func runRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        // Track B (B1.7): route over the relay multiplex when it's the default
+        // transport. URLRequest carries method/url/body, so we intercept here
+        // with zero changes to makeRequest or any caller, and synthesize an
+        // HTTPURLResponse from the relay reply — sendChecked's 2xx gate is
+        // unchanged. nil relayRequestClient ⇒ the direct URLSession path below.
+        if let relay = await relayRequestClient, let url = request.url {
+            return try await runRequestViaRelay(request, url: url, relay: relay)
+        }
         struct NetResult: Sendable {
             let data: Data
             let response: URLResponse
@@ -620,6 +642,23 @@ public final class AgentControlClient: ObservableObject {
             task.resume()
         }
         return (result.data, result.response)
+    }
+
+    /// Track B (B1.7): perform one request over the relay correlator and
+    /// synthesize the (Data, HTTPURLResponse) tuple callers expect. Path carries
+    /// the query string so daemon endpoints that read query params still work.
+    private func runRequestViaRelay(
+        _ request: URLRequest, url: URL, relay: RelayMuxRequestClient
+    ) async throws -> (Data, URLResponse) {
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        var path = comps?.path ?? url.path
+        if let q = comps?.query, !q.isEmpty { path += "?\(q)" }
+        let method = request.httpMethod ?? "GET"
+        let resp = try await relay.request(method: method, path: path, body: request.httpBody)
+        let http = HTTPURLResponse(
+            url: url, statusCode: resp.status, httpVersion: "HTTP/1.1", headerFields: nil
+        ) ?? HTTPURLResponse()
+        return (resp.body ?? Data(), http)
     }
 
     @MainActor
@@ -763,6 +802,13 @@ public final class AgentControlClient: ObservableObject {
 
     @MainActor
     private func runDesktopEventSyncLoop() async {
+        // Track B (B1): drive the events stream over the relay multiplex when
+        // it's the default transport. The mux + IOSRelayClient own reconnect
+        // (resubscribeAll), so we subscribe once and park; nil ⇒ legacy WS loop.
+        if let mux = relayMux {
+            await runEventsViaRelay(mux)
+            return
+        }
         var attempt = 0
         while !Task.isCancelled {
             guard let host, let token else {
@@ -791,6 +837,32 @@ public final class AgentControlClient: ObservableObject {
                 await sleepDesktopEventSync(seconds: backoffDelay(forDesktopEventAttempt: attempt))
             }
         }
+        isDesktopEventSyncConnected = false
+    }
+
+    /// Track B (B1): drive the `events` stream over the relay multiplex.
+    /// Subscribe with a `since` cursor, decode each AgentEvent off the SAME
+    /// applyDesktopSyncEvent path, park until cancelled, then unsubscribe. The
+    /// mux + IOSRelayClient own reconnect; events stay ordered because the relay
+    /// + mux preserve frame order and the apply path dedups by sequence.
+    @MainActor
+    private func runEventsViaRelay(_ mux: RelayMuxClient) async {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        isDesktopEventSyncConnected = true
+        desktopEventSyncLastError = nil
+        let spec = RelaySubscribeSpec(op: "events", since: desktopEventSyncLastSeq)
+        let opId = await mux.subscribe(spec, handlers: .init(
+            onFrame: { [weak self] data in
+                guard let self, let event = try? decoder.decode(AgentEvent.self, from: data) else { return }
+                Task { @MainActor in await self.applyDesktopSyncEvent(event, scheduleAuthoritativeRefresh: true) }
+            }
+        ))
+        while !Task.isCancelled {
+            do { try await Task.sleep(nanoseconds: 5_000_000_000) }
+            catch { break }
+        }
+        await mux.unsubscribe(opId)
         isDesktopEventSyncConnected = false
     }
 

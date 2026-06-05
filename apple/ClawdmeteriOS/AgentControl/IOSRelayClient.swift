@@ -279,6 +279,17 @@ public final class IOSRelayClient: ObservableObject {
     private let transportFactory: @MainActor (_ url: URL, _ tok: String) async throws -> IOSRelayWebSocketTransport
     private var transport: IOSRelayWebSocketTransport?
 
+    /// Track B (B1): the shared multiplex client. Inbound `op == "mux"` frames
+    /// route to it (NOT `lastInbound`), and it's re-driven on reconnect. The
+    /// coordinator sets this when `clawdmeter.transport.relayDefault` is on; nil
+    /// means the legacy request/response-only behavior is byte-identical.
+    var muxClient: RelayMuxClient?
+
+    /// Track B (B1.7): the request/response correlator. Inbound mux frames are
+    /// passed to BOTH it and `muxClient`; each ignores opIds/kinds it doesn't
+    /// own (subscriptions vs requests), so the dual-dispatch is safe.
+    var requestClient: RelayMuxRequestClient?
+
     private var runTask: Task<Void, Never>?
     private var consecutiveFailures: Int = 0
     /// Highest `seq` we've seen from the Mac peer. Inbound frames
@@ -432,6 +443,10 @@ public final class IOSRelayClient: ObservableObject {
                 await transitionAsync(to: .connected)
                 consecutiveFailures = 0
                 lastConnectedAt = Date()
+                // Track B (B1): re-open every live stream on (re)connect — the
+                // Mac re-opens each loopback WS + replays its current snapshot
+                // (D4). No-op on the first connect (no streams yet).
+                await muxClient?.resubscribeAll()
                 try await receiveLoop()
                 // Normal close — bail out unless lifecycle resumes us.
                 await transitionAsync(to: .idle)
@@ -461,6 +476,14 @@ public final class IOSRelayClient: ObservableObject {
     }
 
     private func openAndHandshake() async throws {
+        // Track B (CB-P0b): each connection is a fresh seq epoch. The Mac resets
+        // its counters per connection (RelayClient.resetPerConnectState); iOS
+        // MUST too — otherwise after a reconnect the Mac's outbound seq restarts
+        // at 1 while our `inboundHighSeq` is still high, so every resubscribe
+        // response is dropped as a replay and the streams never resume. Reset
+        // BEFORE any frame is sent/received on the new socket.
+        inboundHighSeq = 0
+        nextOutboundSeq = 1
         guard let url = Self.buildConnectURL(config: config) else {
             throw IOSRelayClientError.malformedURL
         }
@@ -583,6 +606,23 @@ public final class IOSRelayClient: ObservableObject {
             return
         }
         inboundHighSeq = parsed.seq
+
+        // Track B (B1): multiplex frames are demuxed by the mux client and must
+        // NOT land in `lastInbound` (legacy request/response observers would
+        // mis-handle them). Early-return after dispatch.
+        if parsed.op == RelayMux.op {
+            // Drop a single malformed mux frame — do NOT throw (review P1#4): a
+            // throw is a non-fatal error → full socket reconnect, tearing down +
+            // resubscribing ALL streams over one bad per-stream frame. The mux
+            // client already tolerates/ignores junk; match that blast radius.
+            guard let frame = RelayMuxFrame.decode(parsed.data) else {
+                iosRelayLogger.warning("dropping malformed mux frame (seq=\(parsed.seq))")
+                return
+            }
+            muxClient?.handleInbound(frame)        // subscriptions (subFrame/subEnd)
+            requestClient?.handleInbound(frame)    // request/response correlator
+            return
+        }
 
         lastInbound = IOSRelayInboundMessage(
             seq: parsed.seq,

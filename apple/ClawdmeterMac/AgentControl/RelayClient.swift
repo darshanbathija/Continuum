@@ -293,6 +293,12 @@ public final class MacRelayClient: ObservableObject {
     public typealias FrameHandler = @MainActor (MacRelayInboundMessage) async -> Data?
     public var frameHandler: FrameHandler
 
+    /// Track B (review P0#2): invoked when a fresh iPhone handshake is validated
+    /// (a new/reconnected iOS peer on this persisted Mac socket). AppRuntime
+    /// wires this to tear down the loopback-WS bridge's live streams so the
+    /// iOS resubscribe (which reuses the same opIds) re-opens them fresh.
+    public var onPeerReconnect: (@MainActor () -> Void)?
+
     private let transportFactory: @MainActor (_ url: URL, _ token: String) async throws -> MacRelayWebSocketTransport
     private var transport: MacRelayWebSocketTransport?
     private var runTask: Task<Void, Never>?
@@ -546,8 +552,20 @@ public final class MacRelayClient: ObservableObject {
             throw MacRelayClientError.protocolViolation("derived K wrong size (\(kBytes.count))")
         }
         symmetricKey = SymmetricKey(data: kBytes)
-        macRelayLogger.info("iPhone handshake validated → K derived; ciphertext channel live")
+        // Track B (review P0#1 / CB-P0b): a fresh iPhone handshake means a NEW
+        // iOS connection. The relay evicts only the same-role iOS socket on its
+        // reconnect — THIS Mac socket persists, so runConnectionLoop's
+        // resetPerConnectState() never runs. Reset our seq epoch here to match
+        // iOS's fresh counters; otherwise every resubscribe frame (iOS restarts
+        // outbound at seq 1) is `seq <= inboundHighSeq` → dropped as a replay,
+        // and all relayed streams go silently dead after the first reconnect.
+        inboundHighSeq = 0
+        nextOutboundSeq = 1
+        macRelayLogger.info("iPhone handshake validated → K derived; ciphertext channel live; seq epoch reset")
         transition(to: .connected)
+        // Tear down any loopback streams bound to the PREVIOUS iOS connection so
+        // the iOS resubscribe (same opIds) re-opens them fresh (review P0#2).
+        onPeerReconnect?()
     }
 
     private func handleCiphertextBody(_ body: Data) async throws {

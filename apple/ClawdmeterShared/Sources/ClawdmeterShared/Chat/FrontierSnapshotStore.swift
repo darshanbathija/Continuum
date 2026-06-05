@@ -48,6 +48,14 @@ public final class FrontierSnapshotStore: ObservableObject {
     }
 
     private func run() async {
+        // Track B (B1): drive the aggregate frontier stream over the relay
+        // multiplex when it's the default transport (reads the shared
+        // `client.relayMux`). No URLSession needed; mux owns reconnect. nil ⇒
+        // the legacy direct-WS loop below runs byte-identically.
+        if let mux = client?.relayMux {
+            await runViaRelay(mux)
+            return
+        }
         #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
         while !Task.isCancelled {
             do {
@@ -60,6 +68,28 @@ public final class FrontierSnapshotStore: ObservableObject {
         #else
         lastError = "Frontier live subscription is unavailable on this platform."
         #endif
+    }
+
+    /// Track B (B1): subscribe to `frontier-subscribe` over the relay; each
+    /// inbound snapshot replaces `snapshot` wholesale (same contract as the
+    /// direct WS). Park until cancelled, then unsubscribe.
+    private func runViaRelay(_ mux: RelayMuxClient) async {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let spec = RelaySubscribeSpec(op: "frontier-subscribe", groupId: groupId.uuidString)
+        let opId = await mux.subscribe(spec, handlers: .init(
+            onFrame: { [weak self] data in
+                guard let self,
+                      let fetched = try? decoder.decode(FrontierGroupSnapshot.self, from: data) else { return }
+                self.snapshot = fetched
+                self.lastError = nil
+            }
+        ))
+        while !Task.isCancelled {
+            do { try await Task.sleep(nanoseconds: 5_000_000_000) }
+            catch { break }
+        }
+        await mux.unsubscribe(opId)
     }
 
     #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)

@@ -92,9 +92,16 @@ public final class RelayPairingService: ObservableObject {
         let sid = RelayPairingMint.randomBase64URLToken()
         let macTok = RelayPairingMint.randomBase64URLToken()
         let iosTok = RelayPairingMint.randomBase64URLToken()
-        // 15-min TTL per §5b. Persist as absolute Unix seconds so the
-        // relay's server-side wall clock compare in §4.1 lines up.
-        let ttl = UInt64(Date().timeIntervalSince1970) + 900
+        // CB-P0a (2026-06-05): durable session TTL. The original §5b 15-min
+        // window forced a re-pair every 15 minutes, which makes the relay
+        // unusable as a daily transport. The relay Worker accepts any
+        // ttlSeconds > 0 (isValidAuthBundle), so durability is a client-side
+        // bump: 30 days. Re-pairing rotates the X25519 keypair + tokens, so a
+        // bounded window (vs forever) keeps a leaked Keychain bundle's blast
+        // radius finite. Continuous in-band credential rotation is the deferred
+        // hardening (CB-P0a-rotation); this is the pragmatic durable default.
+        let relaySessionTTLSeconds: UInt64 = 30 * 24 * 60 * 60  // 30 days
+        let ttl = UInt64(Date().timeIntervalSince1970) + relaySessionTTLSeconds
         let relayUrl = RelayEnvironment.resolvedRelayURL(env: environment, processEnv: processEnv)
 
         let bundle = RelayPairingBundle(
