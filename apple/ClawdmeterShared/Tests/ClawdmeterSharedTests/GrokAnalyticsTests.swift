@@ -3,15 +3,18 @@ import XCTest
 
 final class GrokAnalyticsTests: XCTestCase {
     func test_grokProviderIdentityIsFirstClass() {
-        XCTAssertTrue(TahoeProvider.allCases.contains(.grok))
-        XCTAssertEqual(TahoeProvider.grok.displayName, "Grok")
-        XCTAssertEqual(TahoeProvider.grok.logoAssetName, "tahoe-grok-mark")
         XCTAssertTrue(UsageRecord.Provider.allCases.contains(.grok))
-        XCTAssertEqual(AgentKind.grok.tahoeProvider, .grok)
         XCTAssertEqual(AgentKindUI.displayName(for: UsageRecord.Provider.grok), "Grok")
         XCTAssertEqual(AgentKindUI.assetName(for: UsageRecord.Provider.grok), "GrokLogo")
         XCTAssertTrue(UsageHistoryStore.ProviderFilter.grok.includes(.grok))
         XCTAssertTrue(ProviderEnablement.allProviderIds.contains("grok"))
+
+        #if canImport(SwiftUI)
+        XCTAssertTrue(TahoeProvider.allCases.contains(.grok))
+        XCTAssertEqual(TahoeProvider.grok.displayName, "Grok")
+        XCTAssertEqual(TahoeProvider.grok.logoAssetName, "tahoe-grok-mark")
+        XCTAssertEqual(AgentKind.grok.tahoeProvider, .grok)
+        #endif
     }
 
 #if !os(watchOS) && canImport(SwiftUI)
