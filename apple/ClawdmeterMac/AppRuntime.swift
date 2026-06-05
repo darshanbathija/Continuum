@@ -323,6 +323,7 @@ final class AppRuntime: ObservableObject {
             claude: self.claudeModel,
             codex: self.codexModel,
             gemini: self.geminiModel,
+            cursor: self.cursorModel,
             history: self.usageHistoryStore
         )
         self.sessionsModel = SessionsModel(

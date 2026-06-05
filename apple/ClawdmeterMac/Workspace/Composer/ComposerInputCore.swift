@@ -433,7 +433,8 @@ struct ComposerInputCore: View {
             sessionPct: nil,
             sessionResetMins: nil,
             weeklyPct: nil,
-            weeklyResetMins: nil
+            weeklyResetMins: nil,
+            cursorQuota: nil
         )
     }
 

@@ -44,15 +44,25 @@ final class AcpHarnessBridgeTests: XCTestCase {
         try await super.tearDown()
     }
 
-    private func makeBridge(_ driver: FakeHarnessDriver, name: String = "Grok") -> (AcpHarnessBridge, SessionChatStore) {
+    private func makeBridge(
+        _ driver: FakeHarnessDriver,
+        name: String = "Grok",
+        model: String? = "test-model",
+        cursorUsageSurface: CursorACPUsageLedgerRecord.Surface? = nil,
+        cursorUsageRepo: String? = nil,
+        cursorUsageLedgerURL: URL? = nil
+    ) -> (AcpHarnessBridge, SessionChatStore) {
         let store = SessionChatStore(sessionId: UUID(), sdkOnly: true)
         // start() launches the commit loop that publishes the snapshot; without
         // it, appendSDKMessages/setCurrentTurnState never surface in `snapshot`.
         store.start()
         startedStores.append(store)
         let bridge = AcpHarnessBridge(
-            sessionId: UUID(), store: store, model: "test-model",
-            agentDisplayName: name, driver: driver, child: nil, connection: nil
+            sessionId: UUID(), store: store, model: model,
+            agentDisplayName: name, driver: driver, child: nil, connection: nil,
+            cursorUsageSurface: cursorUsageSurface,
+            cursorUsageRepo: cursorUsageRepo,
+            cursorUsageLedgerURL: cursorUsageLedgerURL
         )
         return (bridge, store)
     }
@@ -183,6 +193,64 @@ final class AcpHarnessBridgeTests: XCTestCase {
         await bridge.teardown()
     }
 
+    func testCursorUsageEventsCreateAnalyticsRecordsForChatAndCode() async throws {
+        let ledgerURL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cursor-acp-usage-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: ledgerURL) }
+
+        let chatDriver = FakeHarnessDriver()
+        let (chatBridge, _) = makeBridge(
+            chatDriver,
+            name: "Cursor",
+            model: "fallback-chat-model",
+            cursorUsageSurface: .chat,
+            cursorUsageLedgerURL: ledgerURL
+        )
+        try await chatBridge.start(binary: nil, arguments: [], cwd: "/chat", env: [:], effort: nil, alwaysApprove: false)
+        chatDriver.emit(.usage(HarnessUsage(inputTokens: 12, outputTokens: 8, totalTokens: 20, model: "cursor-auto", costUSD: Decimal(string: "0.031"))))
+
+        let chatRecorded = await waitUntil {
+            Self.decodeCursorUsageRecords(at: ledgerURL).contains { $0.surface == .chat }
+        }
+        XCTAssertTrue(chatRecorded)
+        await chatBridge.teardown()
+
+        let codeDriver = FakeHarnessDriver()
+        let (codeBridge, _) = makeBridge(
+            codeDriver,
+            name: "Cursor",
+            model: "fallback-code-model",
+            cursorUsageSurface: .code,
+            cursorUsageRepo: "/repo/worktree",
+            cursorUsageLedgerURL: ledgerURL
+        )
+        try await codeBridge.start(binary: nil, arguments: [], cwd: "/repo/worktree", env: [:], effort: nil, alwaysApprove: false)
+        codeDriver.emit(.usage(HarnessUsage(inputTokens: nil, outputTokens: nil, totalTokens: 31)))
+
+        let codeRecorded = await waitUntil {
+            Self.decodeCursorUsageRecords(at: ledgerURL).contains { $0.surface == .code }
+        }
+        XCTAssertTrue(codeRecorded)
+        await codeBridge.teardown()
+
+        let records = Self.decodeCursorUsageRecords(at: ledgerURL)
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(records[0].surface, .chat)
+        XCTAssertEqual(records[0].model, "cursor-auto")
+        XCTAssertEqual(records[0].inputTokens, 12)
+        XCTAssertEqual(records[0].outputTokens, 8)
+        XCTAssertEqual(records[0].totalTokens, 20)
+        XCTAssertEqual(records[0].costUSD, Decimal(string: "0.031"))
+        XCTAssertEqual(records[1].surface, .code)
+        XCTAssertEqual(records[1].repo, "/repo/worktree")
+        XCTAssertEqual(records[1].model, "fallback-code-model")
+        XCTAssertEqual(records[1].totalTokens, 31)
+
+        let usageRecords = CursorACPUsageLedger.parseFile(at: ledgerURL)
+        XCTAssertEqual(usageRecords.count, 2)
+        XCTAssertTrue(usageRecords.allSatisfy { $0.provider == .cursor })
+    }
+
     func testTeardownDrainsUnflushedTextAndClosesDriver() async throws {
         let driver = FakeHarnessDriver()
         let (bridge, store) = makeBridge(driver)
@@ -217,5 +285,17 @@ final class AcpHarnessBridgeTests: XCTestCase {
         XCTAssertFalse(registry.contains(id))
         let closed = await driver.closed
         XCTAssertTrue(closed, "remove tears the bridge (+ driver) down")
+    }
+
+    private static func decodeCursorUsageRecords(at url: URL) -> [CursorACPUsageLedgerRecord] {
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8) else {
+            return []
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return text
+            .split(separator: "\n")
+            .compactMap { try? decoder.decode(CursorACPUsageLedgerRecord.self, from: Data($0.utf8)) }
     }
 }

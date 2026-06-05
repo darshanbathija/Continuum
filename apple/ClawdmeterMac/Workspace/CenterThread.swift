@@ -1183,6 +1183,7 @@ struct CenterThread: View {
         )
         let dollar = Pricing.shared.cost(for: modelId, tokens: totals)
         let claudePlan = (session.agent == .claude) ? AppDelegate.runtime?.claudeModel.usage : nil
+        let cursorPlan = (session.agent == .cursor) ? AppDelegate.runtime?.cursorModel.usage?.cursorQuota : nil
         return UsageStatusInfo(
             modelDisplay: entry?.displayName ?? modelId,
             effortDisplay: effort.map(effortLabel) ?? "Default",
@@ -1192,7 +1193,8 @@ struct CenterThread: View {
             sessionPct: claudePlan?.sessionPct,
             sessionResetMins: claudePlan?.sessionResetMins,
             weeklyPct: claudePlan?.weeklyPct,
-            weeklyResetMins: claudePlan?.weeklyResetMins
+            weeklyResetMins: claudePlan?.weeklyResetMins,
+            cursorQuota: cursorPlan
         )
     }
 

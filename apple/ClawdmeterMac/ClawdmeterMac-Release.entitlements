@@ -127,6 +127,11 @@
 		<string>/.local/share/opencode/</string>
 		<!-- Antigravity 2 desktop app: native conversation DB + brain/ dir. -->
 		<string>/Library/Application Support/Antigravity/</string>
+		<!-- Cursor desktop app: hook logs include per-generation model,
+		     token, and workspace metadata used for Cursor analytics /
+		     tokens-by-model history. Read-only is enough; Continuum
+		     never writes to Cursor's state tree. -->
+		<string>/Library/Application Support/Cursor/</string>
 		<!-- v0.26.3: Clawdmeter's own pre-sandbox state — sessions.json,
 		     workspaces.json. Users who ran an older non-sandboxed build
 		     have 90+ sessions in the real path; without this exception

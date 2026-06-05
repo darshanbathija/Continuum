@@ -6,6 +6,34 @@ import Foundation
 /// Newer epoch always beats older epoch, regardless of `updatedAt` — this prevents
 /// stale-pre-reset payloads from overriding fresh-post-reset payloads under clock drift.
 public struct UsageData: Codable, Equatable, Sendable {
+    public struct CursorQuota: Codable, Equatable, Sendable {
+        public let totalPct: Int
+        public let autoPct: Int?
+        public let apiPct: Int?
+        public let resetMins: Int
+        public let resetEpoch: Int
+        public let includedUsageLabel: String?
+        public let extraUsageLabel: String?
+
+        public init(
+            totalPct: Int,
+            autoPct: Int?,
+            apiPct: Int?,
+            resetMins: Int,
+            resetEpoch: Int,
+            includedUsageLabel: String? = nil,
+            extraUsageLabel: String? = nil
+        ) {
+            self.totalPct = totalPct
+            self.autoPct = autoPct
+            self.apiPct = apiPct
+            self.resetMins = resetMins
+            self.resetEpoch = resetEpoch
+            self.includedUsageLabel = includedUsageLabel
+            self.extraUsageLabel = extraUsageLabel
+        }
+    }
+
     public enum Status: String, Codable, Sendable {
         case allowed
         case limited
@@ -52,6 +80,9 @@ public struct UsageData: Codable, Equatable, Sendable {
     /// older wire versions; treat nil as `false` (Codex Disk mode).
     /// decodeIfPresent — back-compat with v7 readers.
     public let codexSDKModeActive: Bool?
+    /// Cursor's billing period is monthly and exposes Total / Auto / API
+    /// buckets. Optional so older provider payloads decode unchanged.
+    public let cursorQuota: CursorQuota?
 
     public init(
         sessionPct: Int,
@@ -66,7 +97,8 @@ public struct UsageData: Codable, Equatable, Sendable {
         organizationID: String? = nil,
         antigravityModel: String? = nil,
         sdkModeActive: Bool? = nil,
-        codexSDKModeActive: Bool? = nil
+        codexSDKModeActive: Bool? = nil,
+        cursorQuota: CursorQuota? = nil
     ) {
         self.sessionPct = sessionPct
         self.sessionResetMins = sessionResetMins
@@ -81,6 +113,7 @@ public struct UsageData: Codable, Equatable, Sendable {
         self.antigravityModel = antigravityModel
         self.sdkModeActive = sdkModeActive
         self.codexSDKModeActive = codexSDKModeActive
+        self.cursorQuota = cursorQuota
     }
 
     // MARK: - Custom Codable (back-compat with v6/v7)
@@ -92,6 +125,7 @@ public struct UsageData: Codable, Equatable, Sendable {
         case organizationID
         case antigravityModel, sdkModeActive
         case codexSDKModeActive
+        case cursorQuota
     }
 
     public init(from decoder: Decoder) throws {
@@ -113,6 +147,7 @@ public struct UsageData: Codable, Equatable, Sendable {
         self.sdkModeActive = try c.decodeIfPresent(Bool.self, forKey: .sdkModeActive)
         // v8 field — decodeIfPresent so v6/v7 payloads still parse.
         self.codexSDKModeActive = try c.decodeIfPresent(Bool.self, forKey: .codexSDKModeActive)
+        self.cursorQuota = try c.decodeIfPresent(CursorQuota.self, forKey: .cursorQuota)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -130,6 +165,7 @@ public struct UsageData: Codable, Equatable, Sendable {
         try c.encodeIfPresent(antigravityModel, forKey: .antigravityModel)
         try c.encodeIfPresent(sdkModeActive, forKey: .sdkModeActive)
         try c.encodeIfPresent(codexSDKModeActive, forKey: .codexSDKModeActive)
+        try c.encodeIfPresent(cursorQuota, forKey: .cursorQuota)
     }
 
     /// Mood derived from session usage. Drives gauge color and animation cadence.

@@ -114,6 +114,14 @@ final class ACPClientTests: XCTestCase {
         let tool = map(.object(["sessionUpdate": .string("tool_call"),
                                 "toolCall": .object(["toolCallId": .string("t"), "title": .string("T"), "status": .string("in_progress")])]))
         XCTAssertEqual(tool, [.toolCall(HarnessToolCall(toolCallId: "t", title: "T", kind: nil, status: .inProgress))])
+        XCTAssertEqual(map(.object(["sessionUpdate": .string("usage_update"),
+                                    "usage": .object([
+                                        "input_tokens": .int(10),
+                                        "completionTokens": .int(5),
+                                        "totalCostCents": .int(12),
+                                        "model_id": .string("composer")
+                                    ])])),
+                       [.usage(HarnessUsage(inputTokens: 10, outputTokens: 5, totalTokens: nil, model: "composer", costUSD: Decimal(string: "0.12")))])
         // unknown variant degrades, never throws/drops
         XCTAssertEqual(map(.object(["sessionUpdate": .string("brand_new_variant")])),
                        [.unknownUpdate(kind: "brand_new_variant")])

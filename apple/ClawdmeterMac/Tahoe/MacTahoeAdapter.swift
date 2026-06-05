@@ -53,7 +53,8 @@ extension AppRuntime {
                 autoReviveOn: false,
                 autoReviveAgo: "",
                 supportsAutoRevive: model.config.supportsAutoRevive,
-                hasWeekly: model.config.hasWeeklyWindow
+                hasWeekly: model.config.hasWeeklyWindow,
+                cursorQuota: nil
             )
         }
         let modelName: String = {
@@ -74,7 +75,8 @@ extension AppRuntime {
                                           // when added, plumb here.
                 : "",
             supportsAutoRevive: model.config.supportsAutoRevive,
-            hasWeekly: model.config.hasWeeklyWindow
+            hasWeekly: model.config.hasWeeklyWindow,
+            cursorQuota: usage.cursorQuota
         )
     }
 
