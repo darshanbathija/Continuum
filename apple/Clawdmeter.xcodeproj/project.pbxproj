@@ -35,6 +35,7 @@
 		10652EDE40F510A21A2E7FA1 /* WatchUsageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E81AA8A300E81E7510331C1B /* WatchUsageModel.swift */; };
 		11BA8BA021A2FF248DDE4965 /* ModePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1DE3BECFAB2F957716D01F /* ModePicker.swift */; };
 		133EAA63329854FAF7217D9C /* SpawnPathResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37C85C9FEA7F476035BFF577 /* SpawnPathResolver.swift */; };
+		1345BEA0A9F15CEFB6EC6E30 /* ClaudePtyHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BE5C92037E08DDC467BB10A /* ClaudePtyHost.swift */; };
 		14D2C6E7BD39C0F38458C15E /* NewSessionShortcutsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEBBA775D9076DD4042D4137 /* NewSessionShortcutsTests.swift */; };
 		15CDA92C00AD9A3D495E2FE2 /* LifecycleWebSocketChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1781BB5120E0848A69C5C93F /* LifecycleWebSocketChannel.swift */; };
 		16AAD267657983FF56851AD3 /* NotificationDispatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A4AA299B141BD4D1652F66B /* NotificationDispatcher.swift */; };
@@ -230,6 +231,7 @@
 		912202BEEA9A6B028E79D53D /* PlanQueueLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEE226FC69071781E21A03F9 /* PlanQueueLoaderTests.swift */; };
 		91F59FC843FCFADA8995B62C /* AppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC65FE99FD75CA3B6A74A83 /* AppRuntime.swift */; };
 		92C8108776C037601F987B45 /* InheritedContextChips.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2507332067583B37F56219E /* InheritedContextChips.swift */; };
+		92E9BBBFF787A280B0B85A7B /* ClaudePtyRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E69E8EE279B34195CA9D241 /* ClaudePtyRegistry.swift */; };
 		93173DAD7B51EA94F1BF36F6 /* AgentControlClientSessionObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = D52995D35F19F75ADA64E73A /* AgentControlClientSessionObserver.swift */; };
 		961138F14762FD98647ADA23 /* DiagnosticsSupportBundleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21210F0340F6B45C7BF28AB0 /* DiagnosticsSupportBundleTests.swift */; };
 		96389D247535DF202C123C35 /* GeminiQuotaLiveActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57ABA1D6213482514E812CB9 /* GeminiQuotaLiveActivityCoordinator.swift */; };
@@ -338,6 +340,7 @@
 		EB76FBD9A97AD9FC87600DEB /* MarkdownDocumentTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 174532B759A129A612A27E8F /* MarkdownDocumentTabView.swift */; };
 		EC15D5F8B7BC3F151C890C8C /* RepoIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA356EF8A22C268A0070F750 /* RepoIndex.swift */; };
 		EC1D47102E0CD3D6DFC00353 /* RepoOnboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 454E4BC425E215AB3732061B /* RepoOnboarding.swift */; };
+		EC62ACDEAF3D8503A279AAAF /* ClaudePtyHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13323AB70617753B08B0D66D /* ClaudePtyHostTests.swift */; };
 		ECB0775FEF1BF8D1B9D4B339 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE036C3B197F45A234547AD /* MarkdownRenderer.swift */; };
 		ED74E95DB9CD21EDB7AD21F6 /* MacCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 467BAF6E9E5D52A492CEF344 /* MacCodeView.swift */; };
 		EDF8A47DEA8AA968DC543046 /* ChatStreamWebSocketChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC56D7440BE0E567075D87F5 /* ChatStreamWebSocketChannel.swift */; };
@@ -493,6 +496,7 @@
 		11D7F61D372EFFC19F2C80E8 /* JSONLAliasStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONLAliasStore.swift; sourceTree = "<group>"; };
 		12661A9455392080A33FC23C /* PRMirror.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRMirror.swift; sourceTree = "<group>"; };
 		131AD66B762768C8E5DD2D57 /* TerminalWebSocketChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalWebSocketChannel.swift; sourceTree = "<group>"; };
+		13323AB70617753B08B0D66D /* ClaudePtyHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudePtyHostTests.swift; sourceTree = "<group>"; };
 		13951B634E1A812CE5D605E3 /* RelayPairingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayPairingServiceTests.swift; sourceTree = "<group>"; };
 		147082FC165068DD00F8A062 /* WorkspaceReviewPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceReviewPane.swift; sourceTree = "<group>"; };
 		154FAAB82985A5CA50923DC2 /* SessionChatStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChatStore.swift; sourceTree = "<group>"; };
@@ -592,6 +596,7 @@
 		5B1DE3BECFAB2F957716D01F /* ModePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModePicker.swift; sourceTree = "<group>"; };
 		5B2F92F537B1AC9C7C24DFCF /* F1aWireChatParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = F1aWireChatParityTests.swift; sourceTree = "<group>"; };
 		5B48819BE9916556D3DC59B4 /* RepoSetupScriptStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSetupScriptStore.swift; sourceTree = "<group>"; };
+		5BE5C92037E08DDC467BB10A /* ClaudePtyHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudePtyHost.swift; sourceTree = "<group>"; };
 		5CC65FE99FD75CA3B6A74A83 /* AppRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuntime.swift; sourceTree = "<group>"; };
 		5DC85826013E1F3EE2672116 /* IOSRelayClientCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSRelayClientCoordinator.swift; sourceTree = "<group>"; };
 		5E503A54446667EB3A1CEE00 /* MacCodeShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCodeShell.swift; sourceTree = "<group>"; };
@@ -662,6 +667,7 @@
 		8D2932E5B049F7DE99D05C44 /* ClawdmeteriOSWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ClawdmeteriOSWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		8E414059E5EEBAE58913412B /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
 		8E59F36ABD57B696758AE96E /* PairingScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScanView.swift; sourceTree = "<group>"; };
+		8E69E8EE279B34195CA9D241 /* ClaudePtyRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudePtyRegistry.swift; sourceTree = "<group>"; };
 		925041B8C85D144E1647A0E6 /* RateLimiter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RateLimiter.swift; sourceTree = "<group>"; };
 		92BB57903BBD3AECA55B20BF /* OpencodeAuthFileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeAuthFileTests.swift; sourceTree = "<group>"; };
 		932A85B4655F88C993AF0E2B /* CGSessionLiveness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CGSessionLiveness.swift; sourceTree = "<group>"; };
@@ -918,6 +924,8 @@
 				E8B01DA7617C0DFEA3F78CF4 /* ChatProviderAuthObserver.swift */,
 				8426305B5811735F89E23CAD /* ChatProviderProbe.swift */,
 				DC56D7440BE0E567075D87F5 /* ChatStreamWebSocketChannel.swift */,
+				5BE5C92037E08DDC467BB10A /* ClaudePtyHost.swift */,
+				8E69E8EE279B34195CA9D241 /* ClaudePtyRegistry.swift */,
 				753EB761E1DF82346FD995FC /* CodexAppServerDriver.swift */,
 				631512CE8E98566FEFE5E41B /* CommandRunners.swift */,
 				23BA2D80741F5E8B24ACEA51 /* ControlModeFrame.swift */,
@@ -1210,6 +1218,7 @@
 				A1E4A21BAAD10FDDAA381ED9 /* ChatItemRowInvalidationTests.swift */,
 				C4B75F5B0C83A9A8DD22B8D0 /* ChatItemRowSubtitleTests.swift */,
 				89238D6504115C6F85FDA4E7 /* ChatSendPerProviderTests.swift */,
+				13323AB70617753B08B0D66D /* ClaudePtyHostTests.swift */,
 				2BC6D46113D2E229933540E3 /* CodeTabVisualSnapshotTests.swift */,
 				A5D45DC56F208EECABE85A42 /* DaemonChatStoreRegistryRoutingTests.swift */,
 				21210F0340F6B45C7BF28AB0 /* DiagnosticsSupportBundleTests.swift */,
@@ -1903,6 +1912,7 @@
 				F31B5898F1F17A1D74B79A59 /* ChatItemRowSubtitleTests.swift in Sources */,
 				08BE5FDB4A47495B6B5C587B /* ChatSendPerProviderTests.swift in Sources */,
 				9A791C53B086D17E99DAA910 /* ChatV2StoreTests.swift in Sources */,
+				EC62ACDEAF3D8503A279AAAF /* ClaudePtyHostTests.swift in Sources */,
 				257EFEEA37AAC333B7482C9F /* CodeTabVisualSnapshotTests.swift in Sources */,
 				86B9A292813B9712CED436F7 /* DaemonChatStoreRegistryRoutingTests.swift in Sources */,
 				024E7E6118D32B5F735F6477 /* DeepResearchArgvTests.swift in Sources */,
@@ -1994,6 +2004,8 @@
 				EDF8A47DEA8AA968DC543046 /* ChatStreamWebSocketChannel.swift in Sources */,
 				994EF8EE0DE9D535DD99503D /* ChatThreadScroll.swift in Sources */,
 				85B9C317D95FF14C7F37237F /* CheckpointRestoreSheet.swift in Sources */,
+				1345BEA0A9F15CEFB6EC6E30 /* ClaudePtyHost.swift in Sources */,
+				92E9BBBFF787A280B0B85A7B /* ClaudePtyRegistry.swift in Sources */,
 				1A33BCE35CFE5B8AFC5BD284 /* ClawdmeterMacApp.swift in Sources */,
 				4C543601780662CF227769D6 /* CloneRepoSheet.swift in Sources */,
 				B165EF5AFBBB3BAE43A86815 /* CodeRunProfileService.swift in Sources */,
@@ -2353,7 +2365,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 191;
+				CURRENT_PROJECT_VERSION = 197;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -2672,7 +2684,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 191;
+				CURRENT_PROJECT_VERSION = 197;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
