@@ -65,6 +65,22 @@ public final class PseudoTerminal {
         close(fd)
     }
 
+    /// Relinquish ownership of the master fd WITHOUT closing it; returns the fd
+    /// (or -1 if already closed/detached). The caller becomes responsible for
+    /// `close()`.
+    ///
+    /// `ClaudePtyHost` uses this so its `DispatchSourceRead` cancel handler is
+    /// the SOLE closer of the master fd: closing only after the source is fully
+    /// cancelled guarantees an in-flight read handler can never `read()` a
+    /// closed (or worse, recycled) fd. Detaching here stops `deinit`/`closeMaster`
+    /// from double-closing the same fd number.
+    @discardableResult
+    public func detachMaster() -> Int32 {
+        let fd = masterFD
+        masterFD = -1
+        return fd
+    }
+
     public func closeSlave() {
         guard slaveFD >= 0 else { return }
         let fd = slaveFD

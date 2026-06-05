@@ -37,6 +37,10 @@ actor ClaudePtyHost {
     let sessionId: UUID
     private let argv: [String]
     private let cwd: String?
+    /// Explicit child env (PATH-enriched + repo env). Re-sanitized at spawn so
+    /// the billing rail (no ANTHROPIC_API_KEY/AUTH_TOKEN) holds even if a caller
+    /// passes an un-scrubbed base.
+    private let env: [String: String]
     private let cols: UInt16
     private let rows: UInt16
     private let ringCapacity: Int
@@ -44,6 +48,12 @@ actor ClaudePtyHost {
 
     private var pty: PseudoTerminal?
     private var childPid: pid_t = 0
+    /// Host-owned copy of the PTY master fd. Mirrors `pty.masterFD` while live
+    /// and is set to -1 the instant teardown begins, so an in-flight
+    /// `submitPrompt` (suspended at its settle `await`) re-checks and refuses to
+    /// write a closed/recycled fd. The fd itself is closed by the read source's
+    /// cancel handler (see `startReadLoop`).
+    private var masterFD: Int32 = -1
     private var ring = Data()
     private var readSource: DispatchSourceRead?
     private var exitSource: DispatchSourceProcess?
@@ -62,6 +72,7 @@ actor ClaudePtyHost {
         sessionId: UUID,
         argv: [String],
         cwd: String?,
+        env: [String: String] = ClaudeSpawnEnv.sanitized(),
         cols: UInt16 = 120,
         rows: UInt16 = 40,
         ringCapacity: Int = 64 * 1024,
@@ -70,6 +81,7 @@ actor ClaudePtyHost {
         self.sessionId = sessionId
         self.argv = argv
         self.cwd = cwd
+        self.env = env
         self.cols = cols
         self.rows = rows
         self.ringCapacity = ringCapacity
@@ -94,10 +106,13 @@ actor ClaudePtyHost {
         let pid = try pty.spawn(
             executable: executable,
             arguments: Array(argv.dropFirst()),
-            environment: ClaudeSpawnEnv.sanitized(),   // NEVER nil — billing rail
+            // Re-sanitize the (already PATH-enriched + repo) env so the billing
+            // rail holds regardless of what the caller passed. NEVER nil.
+            environment: ClaudeSpawnEnv.sanitized(base: env),
             cwd: cwd
         )
         self.childPid = pid
+        self.masterFD = pty.masterFD
         self.isRunning = true
         self.lastUsedAt = Date()
         // HarnessProcessReaper is @MainActor; record fire-and-forget so we
@@ -115,17 +130,36 @@ actor ClaudePtyHost {
     func kill() {
         guard isRunning || pty != nil else { return }
         isRunning = false
+        masterFD = -1               // stop any in-flight submit from writing it
         exitSource?.cancel()
         exitSource = nil
-        readSource?.cancel()
-        readSource = nil
-        if childPid > 0 {
+        // Hand the fd to the read source's cancel handler (it owns the close),
+        // so a read handler already dispatched can't touch a recycled fd. Detach
+        // from PseudoTerminal so deinit won't double-close. If there's no read
+        // source yet (start() failed early), close directly.
+        if let rs = readSource {
+            readSource = nil
+            _ = pty?.detachMaster()
+            rs.cancel()
+        } else {
+            pty?.closeMaster()
+        }
+        pty = nil
+        let pidToReap = childPid
+        childPid = 0
+        if pidToReap > 0 {
             #if canImport(Darwin)
-            Darwin.kill(childPid, SIGTERM)
+            Darwin.kill(pidToReap, SIGTERM)
+            // Reap the SIGTERM'd child so it doesn't linger as a zombie. The exit
+            // watcher (the only other waitpid) was just cancelled, so this is the
+            // sole reaper for an intentional kill. Off-actor on a throwaway queue
+            // thread so we don't block the host actor on the child's shutdown.
+            DispatchQueue.global().async {
+                var status: Int32 = 0
+                while waitpid(pidToReap, &status, 0) < 0 && errno == EINTR {}
+            }
             #endif
         }
-        pty?.closeMaster()
-        pty = nil
         let sid = sessionId
         Task { @MainActor in HarnessProcessReaper.shared.remove(sessionId: sid) }
     }
@@ -134,22 +168,25 @@ actor ClaudePtyHost {
 
     /// Write the user's prompt to the PTY: clear (chat) → payload → settle → CR.
     func submitPrompt(_ text: String, isChat: Bool, isFollowUp: Bool = false) async {
-        guard isRunning, let pty, pty.masterFD >= 0 else { return }
+        guard isRunning, masterFD >= 0 else { return }
         lastUsedAt = Date()
         let w = SubmitToTmux.ptyWrites(forText: text, isFollowUp: isFollowUp, isChat: isChat)
-        let fd = pty.masterFD
-        if let clear = w.clear { Self.writeAll(fd: fd, data: clear) }
-        Self.writeAll(fd: fd, data: w.payload)
+        if let clear = w.clear { Self.writeAll(fd: masterFD, data: clear) }
+        Self.writeAll(fd: masterFD, data: w.payload)
         // Let Ink's render loop commit the paste before the submit Enter
         // (mirrors the tmux path's 300ms gap + the Ink \r quirk #15553).
         try? await Task.sleep(nanoseconds: submitSettle)
-        Self.writeAll(fd: fd, data: w.submit)
+        // kill() runs actor-isolated, so it can only land while we're suspended
+        // at the sleep above; it sets isRunning=false + masterFD=-1. Re-check so
+        // the submit CR can't write a closed/recycled fd.
+        guard isRunning, masterFD >= 0 else { return }
+        Self.writeAll(fd: masterFD, data: w.submit)
     }
 
     /// Raw write (used by the trust-folder warmup port in T6 too).
     func writeBytes(_ data: Data) {
-        guard isRunning, let pty, pty.masterFD >= 0 else { return }
-        Self.writeAll(fd: pty.masterFD, data: data)
+        guard isRunning, masterFD >= 0 else { return }
+        Self.writeAll(fd: masterFD, data: data)
     }
 
     // MARK: - Output
@@ -189,6 +226,12 @@ actor ClaudePtyHost {
             let chunk = Array(buf[0..<n])
             Task { await self?.appendOutput(chunk) }
         }
+        // The read source OWNS closing the master fd. Closing only from the
+        // cancel handler (which runs after the source is fully torn down)
+        // guarantees the event handler above can never read() a closed — or
+        // worse, recycled — fd. Teardown detaches the fd from PseudoTerminal so
+        // this is the single close. (CL4)
+        src.setCancelHandler { close(masterFD) }
         src.resume()
         readSource = src
     }
@@ -209,11 +252,19 @@ actor ClaudePtyHost {
     private func handleChildExit(status: Int32) {
         guard isRunning else { return }   // explicit kill() already tore down
         isRunning = false
+        masterFD = -1
+        childPid = 0   // already reaped via WNOHANG in the exit watcher
         exitSource?.cancel()
         exitSource = nil
-        readSource?.cancel()
-        readSource = nil
-        pty?.closeMaster()
+        // Same fd-ownership handoff as kill(): the read source's cancel handler
+        // is the sole closer; detach so PseudoTerminal won't double-close.
+        if let rs = readSource {
+            readSource = nil
+            _ = pty?.detachMaster()
+            rs.cancel()
+        } else {
+            pty?.closeMaster()
+        }
         pty = nil
         let sid = sessionId
         Task { @MainActor in HarnessProcessReaper.shared.remove(sessionId: sid) }
@@ -227,10 +278,27 @@ actor ClaudePtyHost {
             guard let base = raw.baseAddress else { return }
             var off = 0
             let total = raw.count
+            // The master fd is O_NONBLOCK (the read source requires it), so a
+            // full tty input buffer returns EAGAIN. The old `if n <= 0 { break }`
+            // SILENTLY TRUNCATED prompts on the first partial write. Retry EINTR
+            // immediately and EAGAIN after poll(POLLOUT) so the whole payload
+            // lands. Bounded so a wedged child can't pin the actor forever.
+            var eagainWaits = 0
             while off < total {
                 let n = write(fd, base + off, total - off)
-                if n <= 0 { break }
-                off += n
+                if n > 0 { off += n; continue }
+                if n < 0 {
+                    let e = errno
+                    if e == EINTR { continue }
+                    if e == EAGAIN || e == EWOULDBLOCK {
+                        if eagainWaits >= 20 { break }   // ~5s ceiling (20 × 250ms)
+                        eagainWaits += 1
+                        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                        _ = poll(&pfd, 1, 250)
+                        continue
+                    }
+                }
+                break   // n == 0 or an unrecoverable error
             }
         }
     }

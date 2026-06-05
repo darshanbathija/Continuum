@@ -289,7 +289,8 @@ public final class SessionConfigChanger {
         case .cloud:    cwd = session.repoKey ?? session.effectiveCwd
         }
         // Env preflight before touching the running host (parity with tmux path).
-        do { _ = try repoEnvResolver?.resolveForLaunch(session: session, cwd: cwd) }
+        let resolvedRepoEnv: [String: String]?
+        do { resolvedRepoEnv = try repoEnvResolver?.resolveForLaunch(session: session, cwd: cwd)?.environment }
         catch { return .spawnError(message: error.localizedDescription) }
         do { try await registry.updateStatus(id: sessionId, status: .paused) }
         catch { return .spawnError(message: "Failed to record paused state: \(error.localizedDescription)") }
@@ -309,7 +310,8 @@ public final class SessionConfigChanger {
             return .spawnError(message: "Could not locate agent binary on PATH")
         }
         do {
-            _ = try await ClaudePtyRegistry.shared.resumeOrSpawn(id: sessionId, plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd) })
+            let env = AgentSpawner.claudePtyEnv(extra: resolvedRepoEnv)
+            _ = try await ClaudePtyRegistry.shared.resumeOrSpawn(id: sessionId, plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env) })
             try await registry.updateRuntime(id: sessionId, worktreePath: session.worktreePath,
                                              runtimeCwd: .some(cwd), tmuxWindowId: nil, tmuxPaneId: nil,
                                              mode: newMode ?? session.mode)
@@ -334,13 +336,15 @@ public final class SessionConfigChanger {
         case .worktree: cwd = session.effectiveCwd
         case .cloud:    cwd = session.repoKey ?? session.effectiveCwd
         }
-        do { _ = try repoEnvResolver?.resolveForLaunch(session: session, cwd: cwd) }
+        let resolvedRepoEnv: [String: String]?
+        do { resolvedRepoEnv = try repoEnvResolver?.resolveForLaunch(session: session, cwd: cwd)?.environment }
         catch { return .spawnError(message: error.localizedDescription) }
         await ClaudePtyRegistry.shared.suspend(sessionId)
         let argv = AgentSpawner.argv(for: session, autopilot: AutopilotState.shared.isEnabled(sessionId: sessionId))
         guard !argv.isEmpty else { return .spawnError(message: "Could not locate agent binary on PATH") }
         do {
-            _ = try await ClaudePtyRegistry.shared.resumeOrSpawn(id: sessionId, plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd) })
+            let env = AgentSpawner.claudePtyEnv(extra: resolvedRepoEnv)
+            _ = try await ClaudePtyRegistry.shared.resumeOrSpawn(id: sessionId, plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env) })
             try await registry.updateRuntime(id: sessionId, worktreePath: session.worktreePath,
                                              runtimeCwd: .some(cwd), tmuxWindowId: nil, tmuxPaneId: nil,
                                              mode: session.mode)

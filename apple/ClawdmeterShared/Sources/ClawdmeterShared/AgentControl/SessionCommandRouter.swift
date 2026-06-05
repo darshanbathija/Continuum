@@ -93,6 +93,14 @@ public struct SessionCommandRouter: Sendable {
         /// Claude chat/code session resolves to `.claudePty` instead of `.tmux`.
         /// Defaults false so the legacy tmux path is byte-identical until cutover.
         public let claudePtyEnabled: Bool
+        /// `session.tmuxPaneId != nil || session.tmuxWindowId != nil`. A session
+        /// that ALREADY owns a tmux pane (it was born under the flag-off path)
+        /// must keep using that pane even after the flag flips on mid-session —
+        /// otherwise it would resolve `.claudePty` and `resumeOrSpawn` a SECOND
+        /// live `claude` while the tmux one keeps running (double subscription
+        /// drive + a JSONL two processes corrupt). Only paneless Claude sessions
+        /// (PTY-native, or created while the flag was on) take the PTY route.
+        public let hasTmuxPane: Bool
 
         public init(
             agent: AgentKind,
@@ -100,7 +108,8 @@ public struct SessionCommandRouter: Sendable {
             codexChatBackend: CodexChatBackend? = nil,
             runtimeIsACPDriven: Bool = false,
             hasLiveBridge: Bool = false,
-            claudePtyEnabled: Bool = false
+            claudePtyEnabled: Bool = false,
+            hasTmuxPane: Bool = false
         ) {
             self.agent = agent
             self.kind = kind
@@ -108,6 +117,7 @@ public struct SessionCommandRouter: Sendable {
             self.runtimeIsACPDriven = runtimeIsACPDriven
             self.hasLiveBridge = hasLiveBridge
             self.claudePtyEnabled = claudePtyEnabled
+            self.hasTmuxPane = hasTmuxPane
         }
     }
 
@@ -143,9 +153,13 @@ public struct SessionCommandRouter: Sendable {
         //     the flag. Sits just above the tmux fall-through so Claude leaves
         //     tmux ONLY when enabled; everything else (Codex-CLI, dead-bridge
         //     ACP back-compat) still falls through to tmux unchanged.
+        //     `!hasTmuxPane` is load-bearing: a session that already owns a tmux
+        //     pane (born flag-off) stays on tmux even after a mid-session flag
+        //     flip, so we never spawn a 2nd `claude` alongside the running one.
         if ctx.claudePtyEnabled
             && ctx.agent == .claude
-            && (ctx.kind == .chat || ctx.kind == .code) {
+            && (ctx.kind == .chat || ctx.kind == .code)
+            && !ctx.hasTmuxPane {
             return .claudePty
         }
         // 5. Fall-through: the kept Claude / Codex-CLI tmux path. Back-compat —

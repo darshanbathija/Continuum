@@ -129,6 +129,52 @@ final class ClaudePtyHostTests: XCTestCase {
         await reg.suspend(id)
     }
 
+    // Review fix (C2): a suspend()/delete() that races an in-flight spawn must
+    // not leave an orphan live host. Before the fix, suspend nil'd `inflight`
+    // but didn't cancel the Task, and store() unconditionally re-inserted the
+    // host AFTER the delete → a live `claude` for a deleted session. The
+    // invariant (no live host for a suspended id) must hold in every ordering.
+    func testRegistrySuspendDuringInflightSpawnLeavesNoOrphan() async throws {
+        let stub = try makeStub()
+        let reg = ClaudePtyRegistry()
+        let id = UUID()
+        // Gate the plan so the spawn is provably IN FLIGHT (inflight[id] set,
+        // host not yet started) when suspend lands. The plan closure blocks on a
+        // semaphore the test releases only AFTER calling suspend — that's exactly
+        // the window where the old code stored a host for a deleted session.
+        let gate = DispatchSemaphore(value: 0)
+        let plan: @Sendable () -> ClaudePtyRegistry.SpawnPlan? = {
+            gate.wait()
+            return ClaudePtyRegistry.SpawnPlan(argv: [stub], cwd: nil)
+        }
+        let spawnTask = Task { try? await reg.resumeOrSpawn(id: id, plan: plan) }
+        // Let resumeOrSpawn register inflight[id] and the inner task reach gate.wait().
+        try await Task.sleep(nanoseconds: 250_000_000)
+        await reg.suspend(id)   // cancels + clears the inflight slot
+        gate.signal()           // plan proceeds → start() → store() must now bail
+        _ = await spawnTask.value
+        let host = await reg.host(for: id)
+        XCTAssertNil(host, "a suspend during the in-flight spawn must not leave an orphan host")
+        let count = await reg.liveCount()
+        XCTAssertEqual(count, 0, "no live host should remain after suspend-during-spawn")
+    }
+
+    // Review fix (C5): submitPrompt after kill() must be a safe no-op — it must
+    // not write a closed/recycled fd. (kill() sets masterFD=-1 + isRunning=false
+    // synchronously; submit re-checks both.)
+    func testSubmitAfterKillIsNoOp() async throws {
+        let stub = try makeStub()
+        let host = ClaudePtyHost(sessionId: UUID(), argv: [stub], cwd: nil)
+        _ = try await host.start()
+        _ = await waitUntil { await host.recentOutput().contains("READY_MARKER") }
+        await host.kill()
+        // Should not crash, hang, or write anything.
+        await host.submitPrompt("after-kill", isChat: true)
+        await host.writeBytes(Data([0x0d]))
+        let running = await host.isRunning
+        XCTAssertFalse(running)
+    }
+
     func testRegistryHardCapEvictsLRU() async throws {
         let stub = try makeStub()
         let reg = ClaudePtyRegistry(maxLiveHosts: 2)

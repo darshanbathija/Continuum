@@ -69,6 +69,24 @@ final class SessionCommandRouterTests: XCTestCase {
         XCTAssertTrue(SessionCommandRoute.claudePty.isPaneless)
     }
 
+    // Review fix (CL2): a Claude session that ALREADY owns a tmux pane must stay
+    // on .tmux even when the flag is flipped on mid-session — otherwise the send
+    // path would resumeOrSpawn a SECOND `claude` alongside the running tmux one
+    // (double subscription drive + JSONL corruption). Only paneless Claude
+    // sessions take the PTY route.
+    func testFlagOnButHasTmuxPaneStaysTmux() {
+        XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
+            agent: .claude, kind: .code, claudePtyEnabled: true, hasTmuxPane: true)), .tmux)
+        XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
+            agent: .claude, kind: .chat, claudePtyEnabled: true, hasTmuxPane: true)), .tmux)
+    }
+
+    func testFlagOnPanelessClaudeStillResolvesClaudePty() {
+        // The default (paneless) case is unchanged — a PTY-native session routes.
+        XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
+            agent: .claude, kind: .chat, claudePtyEnabled: true, hasTmuxPane: false)), .claudePty)
+    }
+
     func testCodexCLIChatResolvesTmux() {
         // Codex CLI (not SDK) chat has a real tmux pane → tmux, not codexSDK.
         XCTAssertEqual(

@@ -16,6 +16,22 @@ import ClawdmeterShared
 ///   `codex --help` 2026-05). Codex does NOT have a `--reasoning-effort` flag.
 public enum AgentSpawner {
 
+    /// The child environment for a Claude PTY spawn, at PARITY with a tmux pane.
+    ///
+    /// A tmux pane inherits the tmux server's env, which `TmuxControlClient`
+    /// starts with `SpawnPathResolver.merged(...)` — the enriched login PATH.
+    /// Without that, a PTY `claude` runs under launchd's thin GUI PATH
+    /// (`/usr/bin:/bin:…`) and can't find node/rg/hooks. `extra` carries managed
+    /// repo env (only the daemon's repo-env resolver can compute it; callers
+    /// without one pass nil). Sanitized LAST so the subscription-billing rail
+    /// (no `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`) always holds.
+    public static func claudePtyEnv(extra: [String: String]? = nil) -> [String: String] {
+        var base = ProcessInfo.processInfo.environment
+        if let extra { for (k, v) in extra { base[k] = v } }
+        base = SpawnPathResolver.merged(into: base)
+        return ClaudeSpawnEnv.sanitized(base: base)
+    }
+
     /// Build argv for spawning Claude with the given options.
     /// Returns nil if the `claude` binary cannot be located — caller surfaces
     /// the preflight error.

@@ -41,7 +41,16 @@ actor ClaudePtyRegistry {
     struct SpawnPlan: Sendable {
         let argv: [String]
         let cwd: String?
-        init(argv: [String], cwd: String?) { self.argv = argv; self.cwd = cwd }
+        /// Explicit child environment (already sanitized of the billing-breaking
+        /// keys by the caller). Carries the enriched login PATH + repo env so a
+        /// PTY `claude` finds node/rg/hooks exactly like a tmux pane does. The
+        /// host re-sanitizes defensively, so the billing rail holds regardless.
+        let env: [String: String]
+        init(argv: [String], cwd: String?, env: [String: String] = ClaudeSpawnEnv.sanitized()) {
+            self.argv = argv
+            self.cwd = cwd
+            self.env = env
+        }
     }
 
     private var hosts: [UUID: ClaudePtyHost] = [:]
@@ -89,11 +98,18 @@ actor ClaudePtyRegistry {
                               userInfo: [NSLocalizedDescriptionKey: "no spawn plan (claude not found?)"])
             }
             await self.enforceCapBeforeSpawn()
-            let host = ClaudePtyHost(sessionId: id, argv: p.argv, cwd: p.cwd)
+            let host = ClaudePtyHost(sessionId: id, argv: p.argv, cwd: p.cwd, env: p.env)
             let forward = await self.exitForwarder()
             await host.setOnUnexpectedExit(forward)
             try await host.start()
-            await self.store(id: id, host: host)
+            // A suspend()/delete() may have raced in while host.start() awaited.
+            // store() refuses (returns false) if this id was suspended mid-spawn;
+            // we then tear the just-started host down instead of leaking a live
+            // `claude` for a session the daemon already deleted.
+            guard await self.store(id: id, host: host) else {
+                await host.kill()
+                throw CancellationError()
+            }
             return host
         }
         inflight[id] = task
@@ -105,20 +121,34 @@ actor ClaudePtyRegistry {
     /// the session + claudeSessionId stay on disk (caller's concern) so it's
     /// resumable. Keeps `lastUsed` cleared so it isn't LRU-considered.
     func suspend(_ id: UUID) async {
+        // Cancel an in-flight spawn FIRST and clear its inflight slot. The spawn
+        // Task's `store(id:)` checks `inflight[id] != nil` and bails when it's
+        // gone, so a spawn that's mid-`host.start()` won't resurrect this id
+        // after we've suspended it. (Without this, a delete during spawn left an
+        // orphan live `claude` for a deleted session.)
+        if let pending = inflight.removeValue(forKey: id) {
+            pending.cancel()
+        }
         if let host = hosts.removeValue(forKey: id) {
             await host.kill()
         }
         lastUsed[id] = nil
-        inflight[id] = nil
     }
 
     func liveCount() -> Int { hosts.count }
 
     // MARK: - Internals
 
-    private func store(id: UUID, host: ClaudePtyHost) {
+    /// Insert a freshly-started host UNLESS a suspend/delete cancelled this
+    /// spawn while it was in flight (which clears `inflight[id]`). Returns false
+    /// in that case so the caller tears the orphan host down. Runs on the actor,
+    /// so the check + insert are atomic against suspend().
+    @discardableResult
+    private func store(id: UUID, host: ClaudePtyHost) -> Bool {
+        guard inflight[id] != nil else { return false }
         hosts[id] = host
         lastUsed[id] = Date()
+        return true
     }
 
     private func exitForwarder() -> (@Sendable (UUID, Int32) -> Void) {
