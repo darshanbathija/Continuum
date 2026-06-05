@@ -295,3 +295,29 @@ byte-identical to the Tailscale path. ~70 new tests; Mac + iOS + shared green
 - **B5 cutover** — flip `relayDefault` default → ON via a **staged % rollout** (5→25→100), after the **staging-DO live E2E** (pair → all 4 streams + requests → kill/resume socket → assert resync) + a **manual device drill** (background / lock / WiFi-switch). Remove the dead Tailscale paths only after 100% green. **Gate:** an irreversible, outward-facing production migration the plan (D6) explicitly gates on device verification.
 
 **Net:** every part of Track B that can be built + unit-tested headlessly is DONE, committed, and pushed behind the OFF flag. What remains is inherently device/deploy/production-gated, and is precisely specified above for when a paired device pair + Cloudflare deploy access are available.
+
+### 2026-06-05 CUTOVER TURN (user-authorized "turn it on now")
+
+User cleared all gates (sole user, accepts the transition hump). Shipped the
+proven path as the daily driver, sequencing only the irreversible Tailscale
+deletion behind a first on-device proof.
+
+- **B5a — relay is now the DEFAULT** (`76962d7c`): `RelayTransportFlag` returns
+  true when unset; `AppRuntime` `relay.enabled` defaults true; iOS Settings →
+  Connection toggle is the on-device off-switch.
+- **CB-P0a — durable creds, no worker deploy needed** (`76962d7c`): the Worker
+  already accepts any `ttlSeconds`, so durability was a client bump — Mac mints a
+  30-day session (was 15 min), iOS `isValidTTL` cap → 31 days. Re-pair rotates
+  keys (bounded blast radius). Continuous in-band rotation still deferred.
+- **CRITICAL FIX — pairing-host allowlist** (`58c04b19`): the Mac minted
+  `…continuumai.workers.dev` (the LIVE worker, verified 404-to-`/`) but the iOS
+  scanner allowlisted the dead `…darshan-1ba.workers.dev`, so **every QR was
+  rejected** — relay could never pair on device. Allowlist now matches the live
+  host. Also fixed the 2 long-standing `RelayPairingHandshakeTests` failures.
+- **3-platform build green**; shared suite 1373 tests, **0 failures**. Builds
+  0.30.0 (198).
+- **STILL DEFERRED (unchanged):** B3 Bonjour networking + LAN per-request-MAC
+  wiring, B4 daemon LAN gate + **Tailscale deletion**, CB-P0a continuous
+  rotation. Tailscale stays as the dormant fallback for THIS build; deletion
+  lands once relay is confirmed working on the paired iPhone (the one check the
+  headless build can't perform).
