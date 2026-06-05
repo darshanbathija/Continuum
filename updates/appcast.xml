@@ -1,0 +1,8 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Continuum Updates</title>
+    <link>https://darshanbathija.github.io/Continuum/updates/appcast.xml</link>
+    <description>Continuum Mac app updates.</description>
+  </channel>
+</rss>
