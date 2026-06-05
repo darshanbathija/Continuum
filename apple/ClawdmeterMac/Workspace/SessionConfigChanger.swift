@@ -52,8 +52,16 @@ public final class SessionConfigChanger {
         newPlanMode: Bool? = nil,
         newMode: SessionMode? = nil
     ) async -> SwapResult {
-        guard let session = registry.session(id: sessionId),
-              let oldPaneId = session.tmuxPaneId ?? session.tmuxWindowId else {
+        guard let session = registry.session(id: sessionId) else {
+            return .spawnError(message: "Session not found")
+        }
+        // Track A: a Claude PTY session has no tmux pane — swap via the PTY
+        // registry (suspend + respawn with the persisted claudeSessionId), not
+        // kill-pane + tmux.newWindow.
+        if Self.isClaudePty(session) {
+            return await swapPty(session: session, newModel: newModel, newEffort: newEffort, newPlanMode: newPlanMode, newMode: newMode)
+        }
+        guard let oldPaneId = session.tmuxPaneId ?? session.tmuxWindowId else {
             return .spawnError(message: "Session not found or has no pane")
         }
         // Cursor swaps go through the ACP bridge, not this tmux respawn path —
@@ -183,6 +191,10 @@ public final class SessionConfigChanger {
         guard let session = registry.session(id: sessionId) else {
             return .spawnError(message: "Session not found")
         }
+        // Track A: revive a Claude PTY session via the registry.
+        if Self.isClaudePty(session) {
+            return await revivePty(session: session)
+        }
         // Cursor revive goes through the ACP bridge, not this tmux respawn path.
         let providerResumeId = sessionId.uuidString
         let argv = AgentSpawner.respawnArgv(
@@ -247,6 +259,99 @@ public final class SessionConfigChanger {
     private static func paneExists(_ paneId: String, tmux: TmuxControlClient) async -> Bool {
         do { _ = try await tmux.command(["list-panes", "-t", paneId]); return true }
         catch { return false }
+    }
+
+    // MARK: - Track A: Claude PTY swap / revive
+
+    /// True when this session is a Claude PTY session (flag on, no tmux pane).
+    /// Reads the flag at call time so a mid-session flip is honored.
+    static func isClaudePty(_ s: AgentSession) -> Bool {
+        UserDefaults.standard.bool(forKey: "clawdmeter.claude.ptyHost.enabled")
+            && s.agent == .claude && s.tmuxPaneId == nil && s.tmuxWindowId == nil
+    }
+
+    /// Mode/model/effort swap for a Claude PTY session: apply the new config to
+    /// the registry, suspend the old host, then respawn. `AgentSpawner.argv(for:)`
+    /// reads the updated config AND appends `--resume <claudeSessionId>` (T7/T8),
+    /// so the conversation continues — no tmux pane involved.
+    private func swapPty(
+        session: AgentSession,
+        newModel: String?,
+        newEffort: ReasoningEffort??,
+        newPlanMode: Bool?,
+        newMode: SessionMode?
+    ) async -> SwapResult {
+        let sessionId = session.id
+        let cwd: String
+        switch newMode ?? session.mode {
+        case .local:    cwd = session.repoKey ?? session.effectiveCwd
+        case .worktree: cwd = session.effectiveCwd
+        case .cloud:    cwd = session.repoKey ?? session.effectiveCwd
+        }
+        // Env preflight before touching the running host (parity with tmux path).
+        do { _ = try repoEnvResolver?.resolveForLaunch(session: session, cwd: cwd) }
+        catch { return .spawnError(message: error.localizedDescription) }
+        do { try await registry.updateStatus(id: sessionId, status: .paused) }
+        catch { return .spawnError(message: "Failed to record paused state: \(error.localizedDescription)") }
+        AgentEventStream.recordEvent(sessionId: sessionId, kind: .statusChanged,
+                                     payload: ["status": "paused", "reason": "config-swap-pty"])
+        // Apply new config FIRST so argv(for:) reads it on respawn.
+        if let newModel { try? await registry.setModel(id: sessionId, model: newModel, effort: newEffort ?? session.effort) }
+        if let actualEffort = newEffort.flatMap({ $0 }) { try? await registry.setEffort(id: sessionId, effort: actualEffort) }
+        if let newPlanMode { try? await registry.setPlanMode(id: sessionId, planMode: newPlanMode) }
+        await ClaudePtyRegistry.shared.suspend(sessionId)
+        guard let updated = registry.session(id: sessionId) else {
+            return .spawnError(message: "Session vanished mid-swap")
+        }
+        let argv = AgentSpawner.argv(for: updated, autopilot: AutopilotState.shared.isEnabled(sessionId: sessionId))
+        guard !argv.isEmpty else {
+            try? await registry.updateStatus(id: sessionId, status: .degraded)
+            return .spawnError(message: "Could not locate agent binary on PATH")
+        }
+        do {
+            _ = try await ClaudePtyRegistry.shared.resumeOrSpawn(id: sessionId, plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd) })
+            try await registry.updateRuntime(id: sessionId, worktreePath: session.worktreePath,
+                                             runtimeCwd: .some(cwd), tmuxWindowId: nil, tmuxPaneId: nil,
+                                             mode: newMode ?? session.mode)
+            try await registry.updateStatus(id: sessionId, status: .running)
+            AgentEventStream.recordEvent(sessionId: sessionId, kind: .statusChanged,
+                                         payload: ["status": "running", "reason": "config-swap-pty-complete"])
+            return .swapped(newPaneId: "")   // PTY sessions have no tmux pane
+        } catch {
+            swapLogger.error("PTY swap failed for \(sessionId.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            try? await registry.updateStatus(id: sessionId, status: .degraded)
+            return .resumeFailed(restoredOriginal: false)
+        }
+    }
+
+    /// Revive a degraded Claude PTY session: drop any stale host + respawn with
+    /// the same config (+ `--resume`).
+    private func revivePty(session: AgentSession) async -> SwapResult {
+        let sessionId = session.id
+        let cwd: String
+        switch session.mode {
+        case .local:    cwd = session.repoKey ?? session.effectiveCwd
+        case .worktree: cwd = session.effectiveCwd
+        case .cloud:    cwd = session.repoKey ?? session.effectiveCwd
+        }
+        do { _ = try repoEnvResolver?.resolveForLaunch(session: session, cwd: cwd) }
+        catch { return .spawnError(message: error.localizedDescription) }
+        await ClaudePtyRegistry.shared.suspend(sessionId)
+        let argv = AgentSpawner.argv(for: session, autopilot: AutopilotState.shared.isEnabled(sessionId: sessionId))
+        guard !argv.isEmpty else { return .spawnError(message: "Could not locate agent binary on PATH") }
+        do {
+            _ = try await ClaudePtyRegistry.shared.resumeOrSpawn(id: sessionId, plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd) })
+            try await registry.updateRuntime(id: sessionId, worktreePath: session.worktreePath,
+                                             runtimeCwd: .some(cwd), tmuxWindowId: nil, tmuxPaneId: nil,
+                                             mode: session.mode)
+            try await registry.updateStatus(id: sessionId, status: .running)
+            AgentEventStream.recordEvent(sessionId: sessionId, kind: .statusChanged,
+                                         payload: ["status": "running", "reason": "revive-pty"])
+            return .swapped(newPaneId: "")
+        } catch {
+            try? await registry.updateStatus(id: sessionId, status: .degraded)
+            return .spawnError(message: error.localizedDescription)
+        }
     }
 
 }
