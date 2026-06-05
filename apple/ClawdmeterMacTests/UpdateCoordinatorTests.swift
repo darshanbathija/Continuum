@@ -290,6 +290,20 @@ final class UpdateCoordinatorTests: XCTestCase {
         XCTAssertEqual(updateControlSnapshot(coordinator), .translocated)
     }
 
+    func testUpdateControlOnlyPersistsWhenUpdateNeedsAttention() {
+        XCTAssertTrue(updateControlShouldRender(.available("0.31.0"), showsInactiveStates: false))
+        XCTAssertTrue(updateControlShouldRender(.installing, showsInactiveStates: false))
+        XCTAssertTrue(updateControlShouldRender(.relaunchPending("0.31.0"), showsInactiveStates: false))
+
+        XCTAssertFalse(updateControlShouldRender(.idle, showsInactiveStates: false))
+        XCTAssertFalse(updateControlShouldRender(.checking, showsInactiveStates: false))
+        XCTAssertFalse(updateControlShouldRender(.upToDate, showsInactiveStates: false))
+        XCTAssertFalse(updateControlShouldRender(.automaticChecksDisabled, showsInactiveStates: false))
+        XCTAssertFalse(updateControlShouldRender(.failed("Network unavailable"), showsInactiveStates: false))
+
+        XCTAssertTrue(updateControlShouldRender(.upToDate, showsInactiveStates: true))
+    }
+
     private static func waitForMetadata(_ coordinator: UpdateCoordinator) async {
         for _ in 0..<100 {
             if !coordinator.isLoadingReleaseMetadata,

@@ -20,6 +20,16 @@ enum UpdateControlSnapshot: Equatable {
     case automaticChecksDisabled
 }
 
+func updateControlShouldRender(_ snapshot: UpdateControlSnapshot, showsInactiveStates: Bool) -> Bool {
+    if showsInactiveStates { return true }
+    switch snapshot {
+    case .available, .installing, .relaunchPending:
+        return true
+    default:
+        return false
+    }
+}
+
 @MainActor
 func updateControlSnapshot(_ coordinator: UpdateCoordinator?) -> UpdateControlSnapshot {
     guard let coordinator else { return .unavailable }
@@ -58,43 +68,48 @@ func updateControlSnapshot(_ coordinator: UpdateCoordinator?) -> UpdateControlSn
 struct UpdateAppControl: View {
     @ObservedObject private var coordinator: UpdateCoordinatorObservable
     private let compact: Bool
+    private let showsInactiveStates: Bool
     @State private var popoverPresented = false
 
-    init(coordinator: UpdateCoordinator?, compact: Bool = false) {
+    init(coordinator: UpdateCoordinator?, compact: Bool = false, showsInactiveStates: Bool = false) {
         self.coordinator = UpdateCoordinatorObservable(wrapped: coordinator)
         self.compact = compact
+        self.showsInactiveStates = showsInactiveStates
     }
 
+    @ViewBuilder
     var body: some View {
-        Button(action: primaryAction) {
-            HStack(spacing: compact ? 5 : 6) {
-                icon
-                if !compact || labelAlwaysVisible {
-                    Text(label)
-                        .font(ContinuumFont.body(compact ? 11 : 11.5, weight: .semibold))
-                        .lineLimit(1)
+        if updateControlShouldRender(snapshot, showsInactiveStates: showsInactiveStates) {
+            Button(action: primaryAction) {
+                HStack(spacing: compact ? 5 : 6) {
+                    icon
+                    if !compact || labelAlwaysVisible {
+                        Text(label)
+                            .font(ContinuumFont.body(compact ? 11 : 11.5, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                }
+                .foregroundStyle(statusColor)
+                .padding(.horizontal, compact ? 8 : 10)
+                .padding(.vertical, 4)
+                .frame(height: 24)
+                .background {
+                    RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                        .fill(chipFill)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                        .strokeBorder(chipStroke, lineWidth: 0.5)
                 }
             }
-            .foregroundStyle(statusColor)
-            .padding(.horizontal, compact ? 8 : 10)
-            .padding(.vertical, 4)
-            .frame(height: 24)
-            .background {
-                RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
-                    .fill(chipFill)
+            .buttonStyle(.plain)
+            .disabled(disabled)
+            .opacity(disabled ? 0.55 : 1)
+            .help(helpText)
+            .popover(isPresented: $popoverPresented, arrowEdge: .bottom) {
+                UpdatePopoverContent(coordinator: coordinator.wrapped)
+                    .frame(width: 400)
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
-                    .strokeBorder(chipStroke, lineWidth: 0.5)
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .opacity(disabled ? 0.55 : 1)
-        .help(helpText)
-        .popover(isPresented: $popoverPresented, arrowEdge: .bottom) {
-            UpdatePopoverContent(coordinator: coordinator.wrapped)
-                .frame(width: 400)
         }
     }
 
@@ -148,8 +163,8 @@ struct UpdateAppControl: View {
 
     private var label: String {
         switch snapshot {
-        case .available(let version):
-            return compact ? "Update \(version)" : "Update App \(version)"
+        case .available:
+            return "Update"
         case .checking:
             return "Checking"
         case .installing:
@@ -444,7 +459,7 @@ struct UpdatePopoverContent: View {
     private var primaryActionTitle: String {
         switch coordinator.wrapped?.state {
         case .updateAvailable:
-            return "Update App"
+            return "Update"
         case .translocated, .nonApplicationsInstall:
             return "Show in Finder"
         case .failed, .setupBlocked, .invalidAppcastSignature, .corruptedDownload:
@@ -535,7 +550,7 @@ struct UpdateSettingsPanel: View {
             }
 
             HStack(spacing: 8) {
-                UpdateAppControl(coordinator: coordinator.wrapped)
+                UpdateAppControl(coordinator: coordinator.wrapped, showsInactiveStates: true)
                 TahoeGhostButton(size: .s, action: { coordinator.wrapped?.openAppcast() }) {
                     Text("Open Appcast")
                 }
