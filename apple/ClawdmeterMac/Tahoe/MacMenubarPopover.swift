@@ -95,6 +95,7 @@ public struct MacMenubarPopover: View {
         // when non-nil the cursor tab renders live usage instead of a stale
         // hardcoded literal.
         cursorModel: AppModel? = nil,
+        grokModel: AppModel? = nil,
         // Optional controller-owned driver to re-target the active tab on
         // each open (see MenuBarPopoverSelection). Nil → self-owned driver,
         // preserving the original seed-once selection behavior.
@@ -106,7 +107,7 @@ public struct MacMenubarPopover: View {
         self.onOpenDashboard = onOpenDashboard
         self.onSyncIPhone = onSyncIPhone
         self.liveSource = MenuBarLiveSource(
-            claude: claudeModel, codex: codexModel, gemini: geminiModel, cursor: cursorModel
+            claude: claudeModel, codex: codexModel, gemini: geminiModel, cursor: cursorModel, grok: grokModel
         )
         self.selectionDriver = selectionDriver ?? MenuBarPopoverSelection(initial: initialProvider)
         self.usageHistoryStore = usageHistoryStore
@@ -139,17 +140,18 @@ public struct MacMenubarPopover: View {
                     cursorQuota: nil,
                     stale: true
                 ),
-            grok: TahoeLiveRow(
-                sessionPercent: 0,
-                weeklyPercent: 0,
-                sessionResetIn: "—",
-                weeklyResetIn: "",
-                modelName: "grok-build",
-                autoReviveOn: false,
-                supportsAutoRevive: false,
-                hasWeekly: false,
-                stale: true
-            )
+            grok: models.grok.map { liveRow(model: $0, provider: .grok) }
+                ?? TahoeLiveRow(
+                    sessionPercent: 0,
+                    weeklyPercent: -1,
+                    sessionResetIn: "—",
+                    weeklyResetIn: "",
+                    modelName: "Grok",
+                    autoReviveOn: false,
+                    supportsAutoRevive: false,
+                    hasWeekly: false,
+                    stale: true
+                )
         )
     }
 
@@ -175,7 +177,7 @@ public struct MacMenubarPopover: View {
             case .gemini: return "antigravity-pro"
             case .opencode: return "via opencode"
             case .cursor: return "Cursor Auto"
-            case .grok: return "grok-build"
+            case .grok: return "Grok"
             }
         }()
         guard let usage = model.usage else {
@@ -183,15 +185,16 @@ public struct MacMenubarPopover: View {
             // `hasWeekly` from the real config (false for gemini).
             return TahoeLiveRow(
                 sessionPercent: 0,
-                weeklyPercent: 0,
+                weeklyPercent: model.config.hasWeeklyWindow ? 0 : -1,
                 sessionResetIn: "—",
-                weeklyResetIn: "—",
+                weeklyResetIn: model.config.hasWeeklyWindow ? "—" : "",
                 modelName: modelName,
                 autoReviveOn: model.config.supportsAutoRevive ? model.autoReviver.isEnabled : false,
                 autoReviveAgo: "—",
                 supportsAutoRevive: model.config.supportsAutoRevive,
                 hasWeekly: model.config.hasWeeklyWindow,
-                cursorQuota: nil
+                cursorQuota: nil,
+                stale: true
             )
         }
         let sessionResetIn = TahoeFmt.resetIn(minutes: usage.sessionResetMins)
@@ -257,7 +260,11 @@ public struct MacMenubarPopover: View {
                 }
                 .padding(.horizontal, 4)
             } else if selected == .grok {
-                GrokHistorySummary(snapshot: usageHistoryStore.snapshot)
+                GrokHistorySummary(
+                    row: row,
+                    hasLimit: liveSource.models?.grok?.usage != nil,
+                    snapshot: usageHistoryStore.snapshot
+                )
             } else if selected == .cursor {
                 CursorMonthlyMenuBarMeters(row: row)
                     .padding(.horizontal, 4)
@@ -413,61 +420,64 @@ private struct OpencodeDollarTile: View {
 
 private struct GrokHistorySummary: View {
     @Environment(\.tahoe) private var t
+    var row: TahoeLiveRow
+    var hasLimit: Bool
     var snapshot: UsageHistorySnapshot?
 
     private var providerTotals: ProviderTotals {
         snapshot?.grok ?? .empty
     }
 
-    private var contextLimit: GrokCLIUsageParser.ContextLimit? {
-        snapshot?.grokContextLimit
-    }
-
-    private var hasUsage: Bool {
-        contextLimit != nil
-            || providerTotals.today.totals.totalTokens > 0
+    private var hasTokenActivity: Bool {
+        providerTotals.today.totals.totalTokens > 0
             || providerTotals.past7d.totals.totalTokens > 0
             || providerTotals.today.totals.requestCount > 0
             || providerTotals.past7d.totals.requestCount > 0
     }
 
     var body: some View {
-        if hasUsage {
-            VStack(spacing: 12) {
-                if let contextLimit {
-                    TahoeMenuBarMeter(
-                        label: "Context window",
-                        percent: contextLimit.percent,
-                        hint: "\(Self.formatTokens(contextLimit.usedTokens)) / \(Self.formatTokens(contextLimit.limitTokens)) · \(Self.shortModel(contextLimit.model))",
-                        provider: .grok
-                    )
-                }
+        VStack(spacing: 12) {
+            if hasLimit {
+                TahoeMenuBarMeter(
+                    label: "Credits used",
+                    percent: row.sessionPercent,
+                    hint: row.sessionResetIn == "—" ? "Grok usage limit" : "resets in \(row.sessionResetIn)",
+                    provider: .grok,
+                    stale: row.stale
+                )
+            } else {
+                emptyLimitTile
+            }
+
+            if hasTokenActivity {
                 tokenTile(label: "Today", totals: providerTotals.today.totals)
             }
-            .padding(.horizontal, 4)
-        } else {
-            HStack(spacing: 12) {
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var emptyLimitTile: some View {
+        HStack(spacing: 12) {
                 TahoeProviderGlyph(provider: .grok, size: 28)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("No Grok limit captured")
+                    Text("No Grok usage limit captured")
                         .font(TahoeFont.body(13, weight: .bold))
                         .foregroundStyle(t.fg)
-                    Text("grok-build · grok-composer-2.5-fast")
+                    Text("Grok credits unavailable")
                         .font(TahoeFont.mono(11))
                         .foregroundStyle(t.fg3)
                 }
                 Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 14)
-            .background {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(t.glassTintHi.opacity(0.6))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(t.hairline, lineWidth: 0.5)
-            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 14)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(t.glassTintHi.opacity(0.6))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(t.hairline, lineWidth: 0.5)
         }
     }
 
@@ -506,13 +516,6 @@ private struct GrokHistorySummary: View {
         return "\(n) tok"
     }
 
-    private static func shortModel(_ model: String) -> String {
-        switch model {
-        case "grok-composer-2.5-fast": return "Composer 2.5"
-        case "grok-build": return "Grok Build"
-        default: return model
-        }
-    }
 }
 
 private struct CursorMonthlyMenuBarMeters: View {
@@ -587,6 +590,7 @@ final class MenuBarLiveSource: ObservableObject {
         // available; nil keeps the demo/legacy path compiling and falls back
         // to the honest "Connecting…" row.
         let cursor: AppModel?
+        let grok: AppModel?
     }
 
     let models: Models?
@@ -600,14 +604,14 @@ final class MenuBarLiveSource: ObservableObject {
     /// Production init: subscribes to each model's `objectWillChange`
     /// and re-emits via our own publisher so the popover's
     /// `@ObservedObject` dependency tracker fires on every poll.
-    init(claude: AppModel, codex: AppModel, gemini: AppModel, cursor: AppModel? = nil) {
-        self.models = Models(claude: claude, codex: codex, gemini: gemini, cursor: cursor)
+    init(claude: AppModel, codex: AppModel, gemini: AppModel, cursor: AppModel? = nil, grok: AppModel? = nil) {
+        self.models = Models(claude: claude, codex: codex, gemini: gemini, cursor: cursor, grok: grok)
         // Forward each provider's objectWillChange to our own. The
         // popover view subscribes to MenuBarLiveSource (this) rather
         // than the three AppModels directly, because @ObservedObject
         // needs a single observable to track. The forwarders fan-in
         // updates to a single edge.
-        for model in [claude, codex, gemini, cursor].compactMap({ $0 }) {
+        for model in [claude, codex, gemini, cursor, grok].compactMap({ $0 }) {
             model.objectWillChange
                 .sink { [weak self] _ in
                     // Hop one runloop tick: AppModel's @Published

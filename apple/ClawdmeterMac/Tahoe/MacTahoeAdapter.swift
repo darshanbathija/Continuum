@@ -26,18 +26,7 @@ extension AppRuntime {
             // "cursor-agent not logged in" case (sessionPercent: 0,
             // resetIn: "—", modelName: "Cursor").
             cursor: tahoeRow(model: cursorModel, provider: .cursor),
-            grok: TahoeLiveRow(
-                sessionPercent: 0,
-                weeklyPercent: -1,
-                sessionResetIn: "\u{2014}",
-                weeklyResetIn: "",
-                modelName: "grok-build",
-                autoReviveOn: false,
-                autoReviveAgo: "",
-                supportsAutoRevive: false,
-                hasWeekly: false,
-                stale: true
-            )
+            grok: tahoeRow(model: grokModel, provider: .grok)
         )
     }
 

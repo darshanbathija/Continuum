@@ -110,10 +110,10 @@ public struct ProviderConfig: Identifiable, Sendable {
         hasWeeklyWindow: false
     )
 
-    /// Grok is a first-class chat/analytics provider, but not a live quota
-    /// provider. This metadata is for logos/display names only; AppRuntime does
-    /// not create an AppModel poller from it until a verified Grok quota API is
-    /// available.
+    /// Grok is a first-class chat/analytics provider. Its live Usage tab /
+    /// menu-bar percentage comes from the Grok CLI's `/usage show` credits
+    /// readout, while token analytics still come from Continuum-captured
+    /// harness history.
     public static let grok = ProviderConfig(
         id: "grok",
         displayName: "Grok",

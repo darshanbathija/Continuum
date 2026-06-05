@@ -19,6 +19,7 @@ public struct MacUsageView: View {
     var codexModel: AppModel?
     var geminiModel: AppModel?
     var cursorModel: AppModel?
+    var grokModel: AppModel?
     /// PR #31 chunk 3 (A2): the live usage store the OpenCode dollar
     /// row reads from. Optional so Previews work without a runtime.
     var usageHistoryStore: UsageHistoryStore?
@@ -33,6 +34,7 @@ public struct MacUsageView: View {
         codexModel: AppModel? = nil,
         geminiModel: AppModel? = nil,
         cursorModel: AppModel? = nil,
+        grokModel: AppModel? = nil,
         usageHistoryStore: UsageHistoryStore? = nil
     ) {
         self.data = data
@@ -40,6 +42,7 @@ public struct MacUsageView: View {
         self.codexModel = codexModel
         self.geminiModel = geminiModel
         self.cursorModel = cursorModel
+        self.grokModel = grokModel
         self.usageHistoryStore = usageHistoryStore
     }
 
@@ -51,6 +54,7 @@ public struct MacUsageView: View {
                     ProviderColumn(provider: .codex,  row: data.codex,  model: codexModel)
                     ProviderColumn(provider: .gemini, row: data.gemini, model: geminiModel)
                     ProviderColumn(provider: .cursor, row: data.cursor, model: cursorModel)
+                    ProviderColumn(provider: .grok, row: data.grok, model: grokModel)
                 }
                 .padding(.horizontal, 6).padding(.bottom, 14)
 
@@ -338,6 +342,18 @@ private struct ProviderColumn: View {
         return "clawdmeter.\(id).menuBarShown"
     }
 
+    private var quotaLabel: String {
+        switch provider {
+        case .grok: return "credits used"
+        case .cursor: return "billing period"
+        default: return "session"
+        }
+    }
+
+    private var quotaSublabel: String {
+        row.sessionResetIn == "\u{2014}" ? "usage limit" : "resets in \(row.sessionResetIn)"
+    }
+
     var body: some View {
         TahoeGlass(radius: 8, tone: .panel) {
             VStack(alignment: .leading, spacing: 0) {
@@ -356,8 +372,8 @@ private struct ProviderColumn: View {
                 }
 
                 // QuotaBar
-                TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 260,
-                              label: "session", sublabel: "resets in \(row.sessionResetIn)")
+                TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 220,
+                              label: quotaLabel, sublabel: quotaSublabel)
                 .padding(.vertical, 28)
 
                 // Weekly row — hidden when provider has no weekly window.
@@ -577,7 +593,6 @@ private struct GrokAnalyticsActivity: Equatable {
     var build: TokenTotals
     var composer: TokenTotals
     var other: TokenTotals
-    var contextLimit: GrokCLIUsageParser.ContextLimit?
 
     var totalTokens: Int {
         build.totalTokens + composer.totalTokens + other.totalTokens
@@ -598,15 +613,12 @@ private struct GrokAnalyticsActivity: Equatable {
             case .other: other += totals
             }
         }
-        let limit = snapshot.grokContextLimit
         guard build.totalTokens + composer.totalTokens + other.totalTokens > 0
             || build.requestCount + composer.requestCount + other.requestCount > 0
-            || limit != nil
         else { return nil }
         self.build = build
         self.composer = composer
         self.other = other
-        self.contextLimit = limit
     }
 
     private enum Bucket {
@@ -642,16 +654,6 @@ private struct GrokAnalyticsActivityStrip: View {
                         .foregroundStyle(t.fg)
                     Spacer()
                     metric(label: "Tokens", value: Self.formatTokens(activity.totalTokens), subvalue: Self.formatRequests(activity.requestCount))
-                    if let limit = activity.contextLimit {
-                        metric(
-                            label: "Context",
-                            value: "\(limit.roundedPercent)%",
-                            subvalue: "\(Self.formatTokens(limit.usedTokens)) / \(Self.formatTokens(limit.limitTokens))"
-                        )
-                    }
-                }
-                if let limit = activity.contextLimit {
-                    TahoePillBar(percent: limit.percent, provider: .grok, height: 5)
                 }
                 HStack(spacing: 8) {
                     modelPill("Grok Build", totals: activity.build)
@@ -1121,10 +1123,6 @@ private struct GrokUsageRow: View {
         usageHistory.snapshot?.grok ?? .empty
     }
 
-    private var contextLimit: GrokCLIUsageParser.ContextLimit? {
-        usageHistory.snapshot?.grokContextLimit
-    }
-
     var body: some View {
         let today = providerTotals.today.totals
         let week = providerTotals.past7d.totals
@@ -1136,19 +1134,13 @@ private struct GrokUsageRow: View {
                         Text("Grok")
                             .font(TahoeFont.body(15, weight: .bold))
                             .foregroundStyle(t.fg)
-                        Text("Grok Build + Composer 2.5 context limit")
+                        Text("Grok Build + Composer 2.5 analytics")
                             .font(TahoeFont.body(11.5))
                             .foregroundStyle(t.fg3)
                     }
                     Spacer()
-                    if let contextLimit {
-                        metric(
-                            label: "Context",
-                            value: "\(contextLimit.roundedPercent)%",
-                            subvalue: "\(Self.formatTokens(contextLimit.usedTokens)) / \(Self.formatTokens(contextLimit.limitTokens))"
-                        )
-                    } else if today.totalTokens == 0 && week.totalTokens == 0 && today.requestCount == 0 && week.requestCount == 0 {
-                        Text("No captured limit")
+                    if today.totalTokens == 0 && week.totalTokens == 0 && today.requestCount == 0 && week.requestCount == 0 {
+                        Text("No captured activity")
                             .font(TahoeFont.body(12.5, weight: .semibold))
                             .foregroundStyle(t.fg3)
                     }
@@ -1157,20 +1149,6 @@ private struct GrokUsageRow: View {
                     }
                     if week.totalTokens > 0 || week.requestCount > 0 {
                         metric(label: "Past 7d", value: Self.formatTokens(week.totalTokens), subvalue: Self.formatRequests(week.requestCount))
-                    }
-                }
-                if let contextLimit {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text(Self.shortModel(contextLimit.model))
-                                .font(TahoeFont.mono(11.5))
-                                .foregroundStyle(t.fg3)
-                            Spacer()
-                            Text("context window")
-                                .font(TahoeFont.body(10.5, weight: .semibold))
-                                .foregroundStyle(t.fg4)
-                        }
-                        TahoePillBar(percent: contextLimit.percent, provider: .grok, height: 6)
                     }
                 }
             }
@@ -1207,13 +1185,6 @@ private struct GrokUsageRow: View {
         "\(n) request\(n == 1 ? "" : "s")"
     }
 
-    private static func shortModel(_ model: String) -> String {
-        switch model {
-        case "grok-composer-2.5-fast": return "Composer 2.5"
-        case "grok-build": return "Grok Build"
-        default: return model
-        }
-    }
 }
 
 // MARK: - Hover tooltip for SpendChart bars (v0.22.24)

@@ -64,6 +64,7 @@ struct MacRootView: View {
     @ObservedObject private var codexModel: AppModel
     @ObservedObject private var geminiModel: AppModel
     @ObservedObject private var cursorModel: AppModel
+    @ObservedObject private var grokModel: AppModel
     @ObservedObject private var skillCatalog = SkillCatalog.shared
 
     // v0.23: legacy chatMode + chatSoloProvider bindings retired with
@@ -115,6 +116,7 @@ struct MacRootView: View {
         self.codexModel = runtime.codexModel
         self.geminiModel = runtime.geminiModel
         self.cursorModel = runtime.cursorModel
+        self.grokModel = runtime.grokModel
         _theme = State(initialValue: TahoeThemeStore.loaded())
         _tab = State(initialValue: initialTab)
         // Seed the visited-tabs cache with the initial tab so the very
@@ -214,12 +216,14 @@ struct MacRootView: View {
                         let _ = codexModel.usage
                         let _ = geminiModel.usage
                         let _ = cursorModel.usage
+                        let _ = grokModel.usage
                         MacUsageView(
                             data: runtime.tahoeLive,
                             claudeModel: claudeModel,
                             codexModel: codexModel,
                             geminiModel: geminiModel,
                             cursorModel: cursorModel,
+                            grokModel: grokModel,
                             usageHistoryStore: runtime.usageHistoryStore
                         )
                         .modifier(TabSlotVisibility(active: tab == .usage))
