@@ -64,6 +64,12 @@ public final class iOSChatStore: ObservableObject {
     /// sequenceNumbers).
     private var pendingShell: ChatShellEvent?
 
+    /// Track B (B1): when set (relay is the default transport), the chat stream
+    /// is driven over the relay multiplex instead of a direct WS. Tests inject
+    /// it; production falls back to `IOSRelayClientCoordinator.shared.muxClient`.
+    /// nil ⇒ the legacy direct-WS path runs byte-identically.
+    var relayMux: RelayMuxClient?
+
     /// Time of the last successful frame (WS or HTTP). Used to decide
     /// whether to force a resync on foreground.
     private var lastFrameAt: Date = .distantPast
@@ -160,6 +166,16 @@ public final class iOSChatStore: ObservableObject {
     // MARK: - Subscription loop
 
     private func runSubscriptionLoop() async {
+        // Track B (B1): if the relay is the default transport, drive the chat
+        // stream over the relay multiplex. The mux client + IOSRelayClient own
+        // reconnect (resubscribeAll replays the snapshot), so we subscribe once
+        // and park — no direct WS, no per-store backoff ladder. When the mux is
+        // nil (flag off / unpaired) this is skipped and the legacy loop below
+        // runs byte-identically.
+        if let mux = relayMux ?? IOSRelayClientCoordinator.shared.muxClient {
+            await runRelaySubscription(mux)
+            return
+        }
         while !Task.isCancelled {
             // P2-iOS-4: bail out completely when the client has been
             // deallocated (user unpaired, re-paired, or scene torn down).
@@ -199,6 +215,35 @@ public final class iOSChatStore: ObservableObject {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
         }
+    }
+
+    /// Track B (B1): drive the chat stream over the relay multiplex. Subscribe
+    /// once with a `chat-subscribe` spec; the mux pushes each snapshot to the
+    /// SAME `applyIncomingFrame` boundary the direct WS uses (so shell/detail
+    /// dispatch is byte-identical). Park until cancelled, then unsubscribe; the
+    /// mux + IOSRelayClient handle reconnect via `resubscribeAll`.
+    private func runRelaySubscription(_ mux: RelayMuxClient) async {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        self.pendingShell = nil
+        let spec = RelaySubscribeSpec(
+            op: "chat-subscribe",
+            sessionId: sessionId.uuidString,
+            clientWireVersion: AgentControlWireVersion.current
+        )
+        let opId = await mux.subscribe(spec, handlers: .init(
+            onFrame: { [weak self] data in
+                self?.applyIncomingFrame(data, decoder: decoder)
+                self?.lastFrameAt = Date()
+            }
+        ))
+        chatStoreLogger.info("chat-subscribe over relay opId=\(opId, privacy: .public) session=\(self.sessionId.uuidString, privacy: .public)")
+        // Frames arrive via onFrame; hold the stream open until cancelled.
+        while !Task.isCancelled {
+            do { try await Task.sleep(nanoseconds: 5_000_000_000) }
+            catch { break }
+        }
+        await mux.unsubscribe(opId)
     }
 
     private func openAndStreamWS() async throws {
