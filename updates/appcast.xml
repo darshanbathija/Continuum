@@ -1,8 +1,16 @@
 <?xml version="1.0" standalone="yes"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
-  <channel>
-    <title>Continuum Updates</title>
-    <link>https://darshanbathija.github.io/Continuum/updates/appcast.xml</link>
-    <description>Continuum Mac app updates.</description>
-  </channel>
+    <channel>
+        <title>Continuum</title>
+        <item>
+            <title>0.31.1</title>
+            <pubDate>Sat, 06 Jun 2026 05:54:32 +0700</pubDate>
+            <sparkle:version>201</sparkle:version>
+            <sparkle:shortVersionString>0.31.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <sparkle:releaseNotesLink>https://darshanbathija.github.io/Continuum/updates/release-notes/Continuum-0.31.1-arm64.md</sparkle:releaseNotesLink>
+            <enclosure url="https://github.com/darshanbathija/Continuum/releases/download/v0.31.1-mac/Continuum-0.31.1-arm64.dmg" length="79442123" type="application/octet-stream" sparkle:edSignature="FlwoyjTkgkssN/zXLm0D2JfN+hU8ktoPIe8y94b/0JcFZoCK2+7PE3ddYtrqLCAG1ze/JZsmEsswH4HoOtZWBg=="/>
+        </item>
+    </channel>
 </rss>
