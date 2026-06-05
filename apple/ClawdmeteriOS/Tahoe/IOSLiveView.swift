@@ -101,7 +101,7 @@ public struct IOSLiveView: View {
 
                 // Weekly card — hidden when provider has no weekly window.
                 if row.hasWeekly {
-                    TahoeGlass(radius: 20, tone: .raised) {
+                    TahoeGlass(radius: 8, tone: .raised) {
                         VStack(alignment: .leading, spacing: 0) {
                             HStack(alignment: .top) {
                                 VStack(alignment: .leading, spacing: 4) {
@@ -140,12 +140,12 @@ public struct IOSLiveView: View {
                 }
 
                 // Auto-revive card
-                TahoeGlass(radius: 20, tone: .raised) {
+                TahoeGlass(radius: 8, tone: .raised) {
                     HStack(spacing: 12) {
                         ZStack {
                             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .fill(provider.base.color(opacity: 0.18))
-                            TahoeIcon("refresh", size: 15).foregroundStyle(provider.base.color)
+                                .fill(provider.dot.opacity(0.18))
+                            TahoeIcon("refresh", size: 15).foregroundStyle(provider.dot)
                         }
                         .frame(width: 30, height: 30)
                         VStack(alignment: .leading, spacing: 1) {
@@ -269,16 +269,16 @@ private struct ProviderPill: View {
             .background {
                 if active {
                     Capsule(style: .continuous)
-                        .fill(provider.base.color(opacity: (t.dark ? 0.42 : 0.28) * tintMul))
+                        .fill(provider.dot.opacity((t.dark ? 0.42 : 0.28) * tintMul))
                 }
             }
             .overlay {
                 if active {
                     Capsule(style: .continuous)
-                        .stroke(provider.base.color(opacity: 0.55), lineWidth: 1)
+                        .stroke(provider.dot.opacity(0.55), lineWidth: 1)
                 }
             }
-            .shadow(color: active ? provider.base.color(opacity: 0.28) : .clear, radius: 7, x: 0, y: 6)
+            .shadow(color: active ? provider.dot.opacity(0.28) : .clear, radius: 7, x: 0, y: 6)
         }
         .buttonStyle(.plain)
     }

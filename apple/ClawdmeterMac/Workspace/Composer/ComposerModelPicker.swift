@@ -129,9 +129,9 @@ public struct ComposerModelPicker: View {
         }
         .frame(width: 520, height: 440)
         .background(t.surfaceSolid)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(t.hairline, lineWidth: 0.5)
         )
         // Elevated-panel shadow so the picker reads as floating above the

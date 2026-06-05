@@ -206,7 +206,7 @@ public struct MacMenubarPopover: View {
     public var body: some View {
         let activeData = liveData
         let row = activeData.row(for: selected)
-        // v0.22.8: drop the outer `TahoeGlass(radius: 18, tone: .panel)`
+        // v0.22.8: drop the outer `TahoeGlass(radius: 8, tone: .panel)`
         // wrapper. NSPopover already draws its own translucent bubble
         // around the contentViewController, so stacking a second glass
         // panel inside produced the doubled-border look the user
@@ -365,11 +365,11 @@ private struct OpencodeDollarTile: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(t.glassTintHi.opacity(0.6))
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(t.hairline, lineWidth: 0.5)
         }
     }

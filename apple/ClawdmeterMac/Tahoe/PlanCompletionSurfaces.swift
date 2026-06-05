@@ -123,7 +123,7 @@ struct RepoFilePickerView: View {
         }
         .frame(width: 620)
         .background(ContinuumTokens.surface3, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(t.hairline, lineWidth: 0.75))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(t.hairline, lineWidth: 0.75))
         .shadow(color: .black.opacity(0.24), radius: 34, x: 0, y: 20)
         .task(id: repoRoot) { await loadFiles() }
         .onAppear { focused = true }
@@ -581,6 +581,6 @@ struct StatusHUDView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(t.hair2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 }

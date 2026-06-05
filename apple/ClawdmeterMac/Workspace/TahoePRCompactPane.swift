@@ -25,7 +25,7 @@ struct TahoePRCompactPane: View {
                             Button("Copy PR Number") { copy("#\(state.number)") }
                         }
 
-                    TahoeGlass(radius: 12, tone: .chip) {
+                    TahoeGlass(radius: 6, tone: .chip) {
                         VStack(alignment: .leading, spacing: 0) {
                             Text("Checks")
                                 .font(TahoeFont.body(11, weight: .semibold))

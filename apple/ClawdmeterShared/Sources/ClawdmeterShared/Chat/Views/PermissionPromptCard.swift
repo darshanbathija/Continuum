@@ -66,11 +66,11 @@ public struct PermissionPromptCard: View {
         }
         .frame(maxWidth: 720)
         .background(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 6)
                 .fill(cardFill)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(strokeColor, lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.35), radius: 20, x: 0, y: 8)

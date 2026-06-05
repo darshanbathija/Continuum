@@ -91,9 +91,9 @@ struct iOSComposerBar: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(fieldBackground, in: RoundedRectangle(cornerRadius: 18))
+            .background(fieldBackground, in: RoundedRectangle(cornerRadius: 8))
             .overlay(
-                RoundedRectangle(cornerRadius: 18)
+                RoundedRectangle(cornerRadius: 8)
                     .strokeBorder(borderColor, lineWidth: 1)
             )
             .padding(.top, 6)

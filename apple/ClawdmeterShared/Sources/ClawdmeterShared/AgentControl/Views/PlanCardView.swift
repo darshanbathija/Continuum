@@ -90,12 +90,12 @@ public struct PlanCardView: View {
         }
         .padding(16)
         #if os(iOS)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 6))
         #else
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 6))
         #endif
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 6)
                 .stroke(terraCotta.opacity(0.4), lineWidth: 1)
         )
     }

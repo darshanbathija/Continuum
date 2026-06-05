@@ -21,7 +21,7 @@ struct OnboardingSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            TahoeGlass(radius: 16, tone: .panel) {
+            TahoeGlass(radius: 6, tone: .panel) {
                 ProviderPreferenceRows(client: runtime?.loopbackClient, runtime: runtime)
                 .padding(16)
             }

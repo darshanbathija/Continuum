@@ -169,45 +169,22 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var visualSettings: some View {
+        // Dark-only v1 (Quiet Black Workbench). The appearance / surface /
+        // wallpaper / accent knobs are gone — the palette is a single fixed
+        // dark instrument. A calibrated light variant is a deliberate later
+        // addition (DESIGN.md §Aesthetic Direction).
         SettingsCard(title: "Appearance",
-                     sub: "How the app looks. Independent of your system setting.") {
-            SettingsRow(label: "Theme", hint: "Light for daytime, Dark for late-night sessions.") {
-                SwatchToggle(
-                    value: theme.appearance == .dark ? "dark" : "light",
-                    options: [
-                        .init(key: "light", label: "Light", swatch: AnyView(ThemeSwatch(dark: false))),
-                        .init(key: "dark",  label: "Dark",  swatch: AnyView(ThemeSwatch(dark: true))),
-                    ]
-                ) { theme.appearance = $0 == "dark" ? .dark : .light }
-            }
-            TahoeHair().padding(.vertical, 14)
-            SettingsRow(label: "Surface",
-                        hint: "Translucent layers refract the wallpaper through every panel. Solid is calmer and faster on older Macs.") {
-                SwatchToggle(
-                    value: theme.surface == .translucent ? "translucent" : "solid",
-                    options: [
-                        .init(key: "solid",        label: "Solid",       swatch: AnyView(SurfaceSwatch(glass: false))),
-                        .init(key: "translucent",  label: "Translucent", swatch: AnyView(SurfaceSwatch(glass: true))),
-                    ]
-                ) { theme.surface = $0 == "translucent" ? .translucent : .solid }
-            }
-        }
-
-        SettingsCard(title: "Background",
-                     sub: "Tints the wallpaper that sits behind every glass panel.") {
-            SettingsRow(label: "Vibrance",
-                        hint: "Colorful gives you the aurora-tinted hero look. Muted strips out the hue for a focus-mode feel.") {
-                SwatchToggle(
-                    value: theme.wallpaper.isMuted ? "muted" : "colorful",
-                    options: [
-                        .init(key: "colorful", label: "Colorful", swatch: AnyView(WallSwatch(name: .aurora))),
-                        .init(key: "muted",    label: "Muted",    swatch: AnyView(WallSwatch(name: .graphite))),
-                    ]
-                ) { theme.wallpaper = $0 == "muted" ? .graphite : .aurora }
-            }
-            TahoeHair().padding(.vertical, 14)
-            SettingsRow(label: "Accent", hint: "Used on the primary button, active tab, and the iPhone Live ring.") {
-                AccentPicker(value: $theme.accent)
+                     sub: "Continuum is dark-only in v1 — the Quiet Black Workbench palette.") {
+            SettingsRow(label: "Theme", hint: "A calibrated light variant is a deliberate later addition.") {
+                HStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(ContinuumTokens.surface1)
+                        .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5))
+                        .frame(width: 22, height: 16)
+                    Text("Quiet Black · Dark")
+                        .font(ContinuumFont.mono(12, weight: .medium))
+                        .foregroundStyle(ContinuumTokens.fg2)
+                }
             }
         }
 
@@ -649,7 +626,7 @@ private struct SettingsSidebar: View {
     }
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("GROUPS")
                     .font(TahoeFont.body(10, weight: .bold))
@@ -703,14 +680,14 @@ private struct SettingsSidebarRow: View {
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
             .background {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(isSelected ? t.accentAlpha(t.dark ? 0.16 : 0.09) : .clear)
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(isSelected ? t.accentAlpha(0.55) : Color.clear, lineWidth: 1)
             }
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("settings.section.\(section.rawValue)")
@@ -797,7 +774,7 @@ private struct SettingsCard<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title.uppercased())
@@ -956,11 +933,11 @@ private struct SwatchToggle: View {
                     }
                     .padding(6)
                     .background {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .fill(on ? t.accentAlpha(t.dark ? 0.16 : 0.08) : .clear)
                     }
                     .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(on ? t.accentAlpha(0.7) : t.hairline, lineWidth: 1)
                     }
                 }

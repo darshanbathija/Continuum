@@ -108,7 +108,7 @@ public struct LiveSessionActivityIndicator: View {
         case .gemini:
             // Google blue — Antigravity / Gemini CLI's brand accent.
             // Used by the Gemini gauge, chat bubble + Live Activity indicator.
-            return Color(red: 0x42 / 255.0, green: 0x85 / 255.0, blue: 0xF4 / 255.0)
+            return TahoeProvider.gemini.dot
         case .opencode:
             // OpenCode violet (#6B5DD3) — the brand accent for the
             // CLI's built-in TUI. Distinct from the blues so the live

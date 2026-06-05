@@ -52,7 +52,7 @@ struct SessionComparisonSheet: View {
         let store = model.chatStore(for: session)
         let todos = store?.snapshot.codexTodos ?? []
         let openTodos = todos.filter { $0.status != "completed" }.count
-        return TahoeGlass(radius: 16, tone: .panel) {
+        return TahoeGlass(radius: 6, tone: .panel) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 24)

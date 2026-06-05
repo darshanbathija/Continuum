@@ -108,7 +108,7 @@ public struct IOSCodeView: View {
 
                 // Search — PR #26 D5. Real TextField that filters
                 // sessions by title + goal across visible repos.
-                TahoeGlass(radius: 14, tone: .chip) {
+                TahoeGlass(radius: 6, tone: .chip) {
                     HStack(spacing: 10) {
                         TahoeIcon("search", size: 15).foregroundStyle(t.fg3)
                         TextField("Search sessions…", text: $searchQuery)
@@ -495,7 +495,7 @@ private struct IOSRepoCard: View {
     }
 
     var body: some View {
-        TahoeGlass(radius: 22, tone: .raised) {
+        TahoeGlass(radius: 8, tone: .raised) {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     RepoIdentityBadgeView(badge: repoBadge, size: 28)

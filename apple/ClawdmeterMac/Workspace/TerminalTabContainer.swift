@@ -149,7 +149,7 @@ struct TerminalTabContainer: View {
     }
 
     private var terminalPendingOverlay: some View {
-        TahoeGlass(radius: 14, tone: .raised, shadow: .subtle) {
+        TahoeGlass(radius: 6, tone: .raised, shadow: .subtle) {
             VStack(spacing: 10) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)

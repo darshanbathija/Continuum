@@ -104,7 +104,7 @@ struct ComposerInputCore: View {
         // the composer — attached as an overlay OUTSIDE TahoeGlass (see below),
         // because the glass `.clipShape` was clipping them when they lived
         // inside it.
-        TahoeGlass(radius: 18, tone: .raised) {
+        TahoeGlass(radius: 8, tone: .raised) {
             VStack(spacing: 6) {
                 // A13 — optimistic pending bubble strip. Renders as a row
                 // above the input box so the user sees an immediate echo of
@@ -146,7 +146,7 @@ struct ComposerInputCore: View {
             // DESIGN.md §Motion: while a turn runs the accent rim *breathes*
             // (1.8s ease-in-out). `rimPulse` oscillates the opacity; under
             // Reduce Motion `composerRimPulse` is nil so we hold a static rim.
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(t.accentAlpha(sessionIsRunning ? (reduceMotion ? 0.45 : (rimPulse ? 0.55 : 0.22)) : 0),
                         lineWidth: 1)
                 .shadow(color: t.accentAlpha(sessionIsRunning ? (reduceMotion ? 0.28 : (rimPulse ? 0.34 : 0.12)) : 0),
@@ -591,9 +591,9 @@ struct ComposerInputCore: View {
                     .frame(maxWidth: .infinity, minHeight: 52, alignment: .topLeading)
                     .lineLimit(2...18)
             }
-            .background(Color.clear, in: RoundedRectangle(cornerRadius: 12))
+            .background(Color.clear, in: RoundedRectangle(cornerRadius: 6))
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(
                         dropTargetActive ? t.accent : Color.clear,
                         style: StrokeStyle(lineWidth: dropTargetActive ? 2 : 0)
@@ -1136,10 +1136,10 @@ private struct PendingMessageStrip: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .background(
                     bubbleFill(pending),
-                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .strokeBorder(
                             bubbleStroke(pending),
                             style: StrokeStyle(

@@ -41,7 +41,7 @@ struct iOSPlanTrackerView: View {
                             .textCase(.uppercase)
                             .foregroundStyle(t.fg3)
                         if let goal = session.goal, !goal.isEmpty {
-                            TahoeGlass(radius: 14, tone: .chip) {
+                            TahoeGlass(radius: 6, tone: .chip) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("Goal")
                                         .font(TahoeFont.body(10.5, weight: .bold))
@@ -56,7 +56,7 @@ struct iOSPlanTrackerView: View {
                             }
                         }
 
-                        TahoeGlass(radius: 16, tone: .raised) {
+                        TahoeGlass(radius: 6, tone: .raised) {
                             VStack(alignment: .leading, spacing: 0) {
                                 ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
                                     stepRow(index: index, text: step)
@@ -84,7 +84,7 @@ struct iOSPlanTrackerView: View {
                                 .padding(.vertical, 12)
                                 .background(
                                     LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom),
-                                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
                                 )
                                 .foregroundStyle(.white)
                             }

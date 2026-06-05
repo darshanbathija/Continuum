@@ -57,7 +57,7 @@ struct iOSSourcesPane: View {
         Button {
             open(entry)
         } label: {
-            TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+            TahoeGlass(radius: 6, tone: .chip, solid: t.dark ? true : nil) {
                 HStack(alignment: .top, spacing: 11) {
                     TahoeIcon(entry.kind == .url ? "link" : "doc", size: 14)
                         .foregroundStyle(entry.kind == .url ? t.accent : t.fg3)

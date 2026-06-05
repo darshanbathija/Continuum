@@ -56,7 +56,7 @@ public struct IOSAnalyticsView: View {
                     .padding(.bottom, 14)
 
                 // Period segmented
-                TahoeGlass(radius: 12, tone: .chip) {
+                TahoeGlass(radius: 6, tone: .chip) {
                     HStack(spacing: 0) {
                         ForEach(UsageHistorySnapshot.Window.allCases, id: \.self) { w in
                             let active = w == window
@@ -87,7 +87,7 @@ public struct IOSAnalyticsView: View {
                     let geminiUSD = providerCost(snapshot, .gemini, window)
 
                     // Total card
-                    TahoeGlass(radius: 22, tone: .raised) {
+                    TahoeGlass(radius: 8, tone: .raised) {
                         VStack(alignment: .leading, spacing: 0) {
                             Text("TOTAL · \(window.label.uppercased())")
                                 .font(TahoeFont.body(11, weight: .bold))
@@ -133,7 +133,7 @@ public struct IOSAnalyticsView: View {
                             }
                             .padding(.horizontal, 6).padding(.top, 14).padding(.bottom, 8)
 
-                            TahoeGlass(radius: 22, tone: .raised) {
+                            TahoeGlass(radius: 8, tone: .raised) {
                                 VStack(spacing: 0) {
                                     let maxTotal = merged.map { $0.total }.max() ?? 1
                                     ForEach(Array(merged.enumerated()), id: \.offset) { _, r in
@@ -327,10 +327,10 @@ public struct IOSAnalyticsView: View {
         .padding(.horizontal, 12).padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(t.hair2)
+            RoundedRectangle(cornerRadius: 6, style: .continuous).fill(t.hair2)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(t.hairline, lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(t.hairline, lineWidth: 0.5)
         }
     }
 }
@@ -487,7 +487,7 @@ private struct IOSTokensByModelSection: View {
                 }
                 .padding(.horizontal, 6).padding(.top, 14).padding(.bottom, 8)
 
-                TahoeGlass(radius: 22, tone: .raised) {
+                TahoeGlass(radius: 8, tone: .raised) {
                     VStack(alignment: .leading, spacing: 14) {
                         ForEach(fams) { fam in
                             familyBlock(fam, grandTotal: grand)

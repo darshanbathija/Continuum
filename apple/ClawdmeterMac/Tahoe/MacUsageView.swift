@@ -84,7 +84,7 @@ public struct MacUsageView: View {
     /// access. Tapping sets the flag and kicks the first analytics load (which
     /// is the moment the cross-app-data prompt appears, with user intent).
     private var usageAccessCTA: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(spacing: 12) {
                 Image(systemName: "lock.shield")
                     .font(.system(size: 30, weight: .regular))
@@ -180,7 +180,7 @@ private struct TokensByModelSection: View {
         }()
         let fams = families(from: byModel)
         let grand = fams.reduce(0) { $0 + $1.total.totalTokens }
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -322,7 +322,7 @@ private struct ProviderColumn: View {
     }
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
                     TahoeProviderGlyph(provider: provider, size: 28)
@@ -363,7 +363,7 @@ private struct ProviderColumn: View {
 
                 if row.supportsAutoRevive {
                     // Auto-revive card
-                    TahoeGlass(radius: 12, tone: .chip) {
+                    TahoeGlass(radius: 6, tone: .chip) {
                         HStack(spacing: 8) {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("Keep 5h timer ticking")
@@ -478,7 +478,7 @@ private struct AnalyticsRow: View {
             .padding(.horizontal, 14)
 
             HStack(alignment: .top, spacing: 14) {
-                TahoeGlass(radius: 20, tone: .panel) {
+                TahoeGlass(radius: 8, tone: .panel) {
                     VStack(alignment: .leading, spacing: 0) {
                         ChartHeader(title: "Spend over time", range: data.label, total: data.total)
                         SpendChart(series: data.series, ticks: data.ticks)
@@ -488,7 +488,7 @@ private struct AnalyticsRow: View {
                 .frame(maxWidth: .infinity)
                 .frame(idealHeight: 280)
 
-                TahoeGlass(radius: 20, tone: .panel) {
+                TahoeGlass(radius: 8, tone: .panel) {
                     VStack(alignment: .leading, spacing: 0) {
                         ChartHeader(title: "Spend by repo", range: data.label, total: nil)
                         RepoList(repos: data.repos)
@@ -879,7 +879,7 @@ private struct OpencodeDollarRow: View {
     }
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             HStack(spacing: 18) {
                 TahoeProviderGlyph(provider: .opencode, size: 36)
                 VStack(alignment: .leading, spacing: 2) {
@@ -979,7 +979,7 @@ private struct HoverBreakdown: View {
     private func row(_ provider: TahoeProvider, _ label: String, _ value: Double) -> some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(provider.halo.color)
+                .fill(provider.dot)
                 .frame(width: 7, height: 7)
             Text(label)
                 .font(TahoeFont.body(10.5))

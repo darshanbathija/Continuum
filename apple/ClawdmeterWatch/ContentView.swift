@@ -66,7 +66,7 @@ struct ContentView: View {
                             if bridge.sessionsSummary.contains(where: { $0.needsAttention }) {
                                 Spacer()
                                 Image(systemName: "exclamationmark.circle.fill")
-                                    .foregroundStyle(TahoeAccent.halo.base.color)
+                                    .foregroundStyle(ContinuumTokens.live)
                             }
                         }
                     }

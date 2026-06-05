@@ -1093,14 +1093,14 @@ struct MacTitlebar: View {
             Color.clear.frame(width: 60, height: 1)
 
             if active == .code {
-                TahoeGlass(radius: 11, tone: .chip) {
+                TahoeGlass(radius: 6, tone: .chip) {
                     tabStrip
                         .padding(.horizontal, 14)
                         .frame(height: 30)
                 }
                 .fixedSize()
 
-                TahoeGlass(radius: 11, tone: .chip) {
+                TahoeGlass(radius: 6, tone: .chip) {
                     HStack(spacing: 8) {
                         codeBreadcrumb
                         TahoeHair(vertical: true).frame(height: 14)
@@ -1115,7 +1115,7 @@ struct MacTitlebar: View {
 
                 codeActions
             } else {
-                TahoeGlass(radius: 11, tone: .chip) {
+                TahoeGlass(radius: 6, tone: .chip) {
                     HStack(spacing: 10) {
                         tabStrip
                         Spacer(minLength: 0)
@@ -1147,7 +1147,7 @@ struct MacTitlebar: View {
     }
 
     private var codeActions: some View {
-        TahoeGlass(radius: 11, tone: .chip) {
+        TahoeGlass(radius: 6, tone: .chip) {
             HStack(spacing: 2) {
                 codeActionButton(icon: "sliders", help: "Focus Code filters") {
                     NotificationCenter.default.post(name: .focusSidebarSearch, object: nil)

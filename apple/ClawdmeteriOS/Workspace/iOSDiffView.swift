@@ -63,7 +63,7 @@ struct iOSDiffView: View {
                     NavigationLink {
                         iOSDiffFileView(session: session, client: client, initialFile: file)
                     } label: {
-                        TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+                        TahoeGlass(radius: 6, tone: .chip, solid: t.dark ? true : nil) {
                             HStack(alignment: .top, spacing: 11) {
                                 statusGlyph(file.status)
                                     .frame(width: 24, height: 24)
@@ -362,7 +362,7 @@ struct iOSDiffFileView: View {
 
     @ViewBuilder
     private func hunkView(_ hunk: GitDiffHunk) -> some View {
-        TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+        TahoeGlass(radius: 6, tone: .chip, solid: t.dark ? true : nil) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(hunk.header)
                     .font(TahoeFont.mono(11, weight: .semibold))

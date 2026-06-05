@@ -82,9 +82,9 @@ struct EmptyStateCenteredComposer: View {
                 )
             }
             .frame(maxWidth: 760)
-            .background(panelBg, in: RoundedRectangle(cornerRadius: 14))
+            .background(panelBg, in: RoundedRectangle(cornerRadius: 6))
             .overlay(
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 6)
                     .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
             )
             Spacer()

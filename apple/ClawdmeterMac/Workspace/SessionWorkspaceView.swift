@@ -76,7 +76,7 @@ struct SessionWorkspaceView: View {
         return ZStack {
             t.pageBg.opacity(t.dark ? 0.35 : 0.18)
             HSplitView {
-                TahoeGlass(radius: 20, tone: .panel) {
+                TahoeGlass(radius: 8, tone: .panel) {
                     SidebarPane(
                         model: model,
                         workbenchState: workbenchState,
@@ -91,7 +91,7 @@ struct SessionWorkspaceView: View {
                 // expand CTA. Keeping the gutter inside the center column
                 // (instead of as its own HSplitView child) means the user
                 // can't accidentally drag-resize it.
-                TahoeGlass(radius: 20, tone: .panel) {
+                TahoeGlass(radius: 8, tone: .panel) {
                     HStack(spacing: 0) {
                         ZStack(alignment: .bottom) {
                             if let documentTab = model.selectedWorkspaceDocumentTab,
@@ -173,7 +173,7 @@ struct SessionWorkspaceView: View {
                 .padding(.horizontal, 5)
 
                 if effectiveShowReviewPane, let session = model.openSession {
-                    TahoeGlass(radius: 20, tone: .panel) {
+                    TahoeGlass(radius: 8, tone: .panel) {
                         WorkspaceReviewPane(
                             session: session,
                             chatStore: model.chatStore(for: session),
@@ -244,7 +244,7 @@ struct SessionWorkspaceView: View {
                     .frame(width: 620, height: 520)
                     .background(ContinuumTokens.surface2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(Color.black.opacity(0.10), lineWidth: 0.5)
                     )
                     .shadow(color: .black.opacity(0.22), radius: 28, x: 0, y: 18)
@@ -566,7 +566,7 @@ struct SessionWorkspaceView: View {
                     .foregroundStyle(.white)
             }
             .padding(28)
-            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
+            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
         }
         .transition(.opacity)
     }

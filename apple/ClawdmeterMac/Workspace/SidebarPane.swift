@@ -1611,7 +1611,7 @@ struct SidebarPane: View {
                         // bar's two-color vocabulary and reads correctly in
                         // dark mode (provider.deep collapses to near-black for
                         // Codex/Cursor, which is invisible against dark popovers).
-                        let completeTint = provider.halo.color
+                        let completeTint = provider.dot
                         HStack(spacing: 6) {
                             TahoePillBar(
                                 percent: Double(safeCompleted) /

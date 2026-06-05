@@ -499,11 +499,11 @@ struct RepoEnvVariablesSettingsView: View {
             }
         }
         .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(t.accentAlpha(0.025))
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(t.hairline, lineWidth: 1)
         }
         .accessibilityIdentifier("settings.env.variable-table")
@@ -805,7 +805,7 @@ struct RepoEnvVariablesSettingsView: View {
         accessibilityIdentifier: String? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 3) {
                     if let accessibilityIdentifier {
@@ -2131,11 +2131,11 @@ private struct RepoEnvImportSheet: View {
                 }
             }
             .background {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(t.accentAlpha(0.025))
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(t.hairline, lineWidth: 1)
             }
             .accessibilityIdentifier("settings.env.import.preview")
@@ -2274,10 +2274,10 @@ private struct RepoEnvVariableDetailSheet: View {
         }
         .padding(14)
         .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(t.accentAlpha(0.035))
+            RoundedRectangle(cornerRadius: 6, style: .continuous).fill(t.accentAlpha(0.035))
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(t.hairline, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(t.hairline, lineWidth: 1)
         }
     }
 
@@ -2320,10 +2320,10 @@ private struct RepoEnvVariableDetailSheet: View {
                 }
                 .padding(12)
                 .background {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(t.accentAlpha(0.025))
+                    RoundedRectangle(cornerRadius: 6, style: .continuous).fill(t.accentAlpha(0.025))
                 }
                 .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(t.hairline, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(t.hairline, lineWidth: 1)
                 }
             }
         }

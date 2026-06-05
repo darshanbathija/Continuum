@@ -44,7 +44,7 @@ public struct iOSCodexPlanView: View {
     }
 
     @ViewBuilder private var header: some View {
-        TahoeGlass(radius: 14, tone: .chip) {
+        TahoeGlass(radius: 6, tone: .chip) {
             HStack(spacing: 8) {
                 TahoeIcon("check", size: 13, weight: .bold)
                     .foregroundStyle(t.accent)
@@ -99,7 +99,7 @@ public struct iOSCodexPlanView: View {
             .padding(.vertical, 11)
             .background(
                 LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom),
-                in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
             )
             .foregroundStyle(.white)
             .opacity(canApprove ? 1 : 0.45)
@@ -131,7 +131,7 @@ public struct iOSCodexPlanView: View {
                 .font(TahoeFont.body(10.5, weight: .bold))
                 .foregroundStyle(t.fg3)
                 .tracking(0.5)
-            TahoeGlass(radius: 14, tone: .raised) {
+            TahoeGlass(radius: 6, tone: .raised) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         row(item: item)

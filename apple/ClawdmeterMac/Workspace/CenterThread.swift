@@ -361,7 +361,7 @@ struct CenterThread: View {
 
     @ViewBuilder
     private var terminalOverlay: some View {
-        TahoeGlass(radius: 18, tone: .raised, shadow: .prominent) {
+        TahoeGlass(radius: 8, tone: .raised, shadow: .prominent) {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     Image(systemName: "terminal.fill")

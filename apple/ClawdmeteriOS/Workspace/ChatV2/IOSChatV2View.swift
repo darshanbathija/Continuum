@@ -120,7 +120,7 @@ private struct ChatBody: View {
     }
 
     private var broadcastStrip: some View {
-        TahoeGlass(radius: 18, tone: .chip) {
+        TahoeGlass(radius: 8, tone: .chip) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(openTarget?.isReadOnlyTranscript == true ? "Archived transcript" : (openTarget?.isFrontier == true || chatStore.selectedVendorCount > 1 ? "Broadcast to selected" : "One selected vendor"))
@@ -238,7 +238,7 @@ private struct FrontierTranscript: View {
                             .padding(.horizontal, 11)
                             .padding(.vertical, 7)
                             .background(selectedChild?.id == child.id ? Color.white.opacity(0.12) : Color.white.opacity(0.05), in: Capsule())
-                            .overlay(Capsule().stroke(selectedChild?.id == child.id ? child.agent.tahoeProvider.halo.color.opacity(0.45) : t.hairline, lineWidth: 0.5))
+                            .overlay(Capsule().stroke(selectedChild?.id == child.id ? child.agent.tahoeProvider.dot.opacity(0.45) : t.hairline, lineWidth: 0.5))
                         }
                         .buttonStyle(.plain)
                     }
@@ -627,8 +627,8 @@ private struct ThinkingDotsRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(t.hairline, lineWidth: 0.5))
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.hairline, lineWidth: 0.5))
         .onAppear { animating = true }
         .accessibilityLabel("Waiting for a response")
     }
@@ -651,10 +651,10 @@ private struct MessageRow: View {
                         .foregroundStyle(t.fg)
                         .padding(.horizontal, 13)
                         .padding(.vertical, 10)
-                        .background(t.accent.opacity(0.18), in: RoundedRectangle(cornerRadius: 16))
+                        .background(t.accent.opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
                 }
             case .assistantText:
-                TahoeGlass(radius: 18, tone: .raised) {
+                TahoeGlass(radius: 8, tone: .raised) {
                     VStack(alignment: .leading, spacing: 8) {
                         if !message.title.isEmpty {
                             Text(message.title.uppercased())
@@ -678,7 +678,7 @@ private struct MessageRow: View {
                         .lineLimit(5)
                 }
                 .padding(10)
-                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
             case .meta:
                 Text(message.body)
                     .font(TahoeFont.body(11))
@@ -709,7 +709,7 @@ private struct MessageRow: View {
                         }
                     }
                     .padding(9)
-                    .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+                    .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
                     .id("pair:\(pair.id)")
                 }
             }
@@ -731,7 +731,7 @@ private struct Composer: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        TahoeGlass(radius: 22, tone: .raised) {
+        TahoeGlass(radius: 8, tone: .raised) {
             VStack(alignment: .leading, spacing: 8) {
                 if !store.attachments.isEmpty {
                     attachmentStrip
@@ -812,7 +812,7 @@ private struct Composer: View {
                             .padding(.vertical, 7)
                             .frame(maxWidth: 138, alignment: .leading)
                             .background(Color.white.opacity(0.08), in: Capsule())
-                            .overlay(Capsule().stroke(vendor.backingProvider.tahoeProvider.halo.color.opacity(0.35), lineWidth: 0.5))
+                            .overlay(Capsule().stroke(vendor.backingProvider.tahoeProvider.dot.opacity(0.35), lineWidth: 0.5))
                         }
                         .buttonStyle(.plain)
                     }

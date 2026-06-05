@@ -156,7 +156,7 @@ struct PairingQRPopoverContent: View {
             }
             .padding(28)
             .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 28))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
             .frame(width: 280, height: 280)
             .accessibilityLabel("Pairing QR code")
             .accessibilityHint("Scan with your iPhone's camera to pair this Mac.")
@@ -174,7 +174,7 @@ struct PairingQRPopoverContent: View {
             RoundedRectangle(cornerRadius: 50, style: .continuous)
                 .fill(
                     RadialGradient(
-                        colors: [t.accent.opacity(0.30), .clear],
+                        colors: [.clear, .clear],
                         center: .center, startRadius: 0, endRadius: 200
                     )
                 )

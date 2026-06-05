@@ -33,7 +33,7 @@ struct PlanApprovalView: View {
             }
             .buttonStyle(.borderedProminent)
             // Tahoe 26 redesign: Halo cyan accent (was terra-cotta).
-            .tint(TahoeAccent.halo.base.color)
+            .tint(ContinuumTokens.live)
         }
         .padding(8)
     }

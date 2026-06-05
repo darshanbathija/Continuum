@@ -91,7 +91,7 @@ struct iOSPRPane: View {
                 .padding(.vertical, 10)
                 .background(
                     LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
                 )
                 .foregroundStyle(.white)
             }
@@ -119,7 +119,7 @@ struct iOSPRPane: View {
                     .foregroundStyle(t.fg)
                     .fixedSize(horizontal: false, vertical: true)
 
-                TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+                TahoeGlass(radius: 6, tone: .chip, solid: t.dark ? true : nil) {
                     VStack(alignment: .leading, spacing: 8) {
                         prMetric("+\(pr.additions)", icon: "plus", color: .green)
                         prMetric("-\(pr.deletions)", icon: "minus", color: .red)
@@ -144,7 +144,7 @@ struct iOSPRPane: View {
                 }
 
                 if let checks = pr.checks, !checks.isEmpty {
-                    TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+                    TahoeGlass(radius: 6, tone: .chip, solid: t.dark ? true : nil) {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Checks")
                                 .font(TahoeFont.body(11.5, weight: .bold))
@@ -170,9 +170,9 @@ struct iOSPRPane: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background(t.glassTintHi, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(t.glassTintHi, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(t.hairline, lineWidth: 0.5)
                     }
                     .foregroundStyle(t.fg)
@@ -199,7 +199,7 @@ struct iOSPRPane: View {
                                 startPoint: .top,
                                 endPoint: .bottom
                             ),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
                         )
                         .foregroundStyle(mergeAllowed ? .white : t.fg3)
                     }
@@ -297,7 +297,7 @@ struct iOSPRPane: View {
     @ViewBuilder
     private func reviewActions(_ pr: PRStatus) -> some View {
         if pr.state == .open || pr.state == .draft {
-            TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+            TahoeGlass(radius: 6, tone: .chip, solid: t.dark ? true : nil) {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         Text("Review")
