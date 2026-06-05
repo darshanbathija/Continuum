@@ -136,7 +136,6 @@
 		5086B43B094BD0BA2060D47B /* WorkspaceTabSpawnObservers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 285867E8785606458A9D3562 /* WorkspaceTabSpawnObservers.swift */; };
 		51F807AB2E5043005973D0AD /* CodexAppServerDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 753EB761E1DF82346FD995FC /* CodexAppServerDriver.swift */; };
 		5222E839CB29135AD4571C1D /* iOSDiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93D530AD60605887515476C0 /* iOSDiffView.swift */; };
-		5281DED2AAE3EF81A11A7207 /* clawdmeter-agents in Resources */ = {isa = PBXBuildFile; fileRef = E90EC02F84561040F698EE87 /* clawdmeter-agents */; };
 		52C4CF8A1F4419F555A4219B /* WorkspaceTerminalPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 412A35101FFC2DBB6623AD83 /* WorkspaceTerminalPane.swift */; };
 		536D0374AE837765530A760E /* CommandPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCDF9317290F56870BC0564 /* CommandPalette.swift */; };
 		5384D9EEF60C3B3DC9796E4D /* TmuxControlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 840350A245B7AFF9FC1014B3 /* TmuxControlClient.swift */; };
@@ -327,6 +326,7 @@
 		D9D0C23F96A52B7F41CBD04F /* TranscriptLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 112147989D4BC1A47AD29F81 /* TranscriptLoader.swift */; };
 		D9FB7E3A2C1CD0EF75B83BAE /* iOSSourcesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2A6E12E7475B6319B2F93C /* iOSSourcesPane.swift */; };
 		DABFFEDA21FC590B20240593 /* IdleSessionSweeperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30A02397E6ED803BAB94A505 /* IdleSessionSweeperTests.swift */; };
+		DAF07065152232FEEFC70B6C /* clawdmeter-agents in Resources */ = {isa = PBXBuildFile; fileRef = 2B49FE8C551770587DDC91B3 /* clawdmeter-agents */; };
 		DBEF8189EAE4708372F1009E /* iOSComposerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 258860E4C81547276D4E7F3C /* iOSComposerBar.swift */; };
 		DCA8543E3CD0D2378D6C6BC3 /* PseudoTerminal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 985A7892D8BD9DC9E3227E5F /* PseudoTerminal.swift */; };
 		DD4A5C6456455C79978A09ED /* AnalyticsRangeAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58B2791865D23423A7F4CC0F /* AnalyticsRangeAdapter.swift */; };
@@ -546,6 +546,7 @@
 		296166EDD678E1FACDD438AB /* OpencodeProcessManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeProcessManager.swift; sourceTree = "<group>"; };
 		2AC969CC9D948F1B05508523 /* AgentSpawnerResumeArgvTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSpawnerResumeArgvTests.swift; sourceTree = "<group>"; };
 		2AD73B2E17CC64DB49162431 /* TahoeReviewPlanRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TahoeReviewPlanRows.swift; sourceTree = "<group>"; };
+		2B49FE8C551770587DDC91B3 /* clawdmeter-agents */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "clawdmeter-agents"; path = "../tools/clawdmeter-agents"; sourceTree = SOURCE_ROOT; };
 		2BC6D46113D2E229933540E3 /* CodeTabVisualSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTabVisualSnapshotTests.swift; sourceTree = "<group>"; };
 		2C26322AF31DD69281D1B0B3 /* ProvisioningTrailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvisioningTrailView.swift; sourceTree = "<group>"; };
 		2C335B8CD4CB81A48217F617 /* ClaudeLogo.svg */ = {isa = PBXFileReference; path = ClaudeLogo.svg; sourceTree = "<group>"; };
@@ -815,12 +816,10 @@
 		E7B4A49792F41E40BE5183AF /* WorkbenchStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchStateTests.swift; sourceTree = "<group>"; };
 		E81AA8A300E81E7510331C1B /* WatchUsageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchUsageModel.swift; sourceTree = "<group>"; };
 		E8B01DA7617C0DFEA3F78CF4 /* ChatProviderAuthObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatProviderAuthObserver.swift; sourceTree = "<group>"; };
-		E90EC02F84561040F698EE87 /* clawdmeter-agents */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "clawdmeter-agents"; path = "../tools/clawdmeter-agents"; sourceTree = SOURCE_ROOT; };
 		EAB65AC597AEAFE555E05819 /* PairingCTAButtons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingCTAButtons.swift; sourceTree = "<group>"; };
 		EB6CC1AA9EB4821E16119827 /* SessionWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionWorkspaceView.swift; sourceTree = "<group>"; };
 		EB8FAB3F3BA70A5A17C2DD97 /* ClawdmeterShared */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ClawdmeterShared; path = ClawdmeterShared; sourceTree = SOURCE_ROOT; };
 		ED32A7A26407941E5159C449 /* ModelPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPicker.swift; sourceTree = "<group>"; };
-		ED80F76ABA72930CE57AF87A /* opencode */ = {isa = PBXFileReference; path = opencode; sourceTree = "<group>"; };
 		EDDCD753507E1F92989E0CB5 /* AgentControlServerVendorProvisioningRouteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentControlServerVendorProvisioningRouteTests.swift; sourceTree = "<group>"; };
 		EE0734214A6921D1EEF1015A /* .bundled-version */ = {isa = PBXFileReference; path = ".bundled-version"; sourceTree = "<group>"; };
 		EEBADA22B9FE7DEDE1B29545 /* SpawnPathResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpawnPathResolverTests.swift; sourceTree = "<group>"; };
@@ -1148,14 +1147,6 @@
 			path = ClawdmeterMacWidgets;
 			sourceTree = "<group>";
 		};
-		60E0F76D19BCC7D3DB006F73 /* tools */ = {
-			isa = PBXGroup;
-			children = (
-				E90EC02F84561040F698EE87 /* clawdmeter-agents */,
-			);
-			path = tools;
-			sourceTree = "<group>";
-		};
 		6B3807FF286F36DAAF6706D4 /* Workspace */ = {
 			isa = PBXGroup;
 			children = (
@@ -1297,19 +1288,9 @@
 			path = ClawdmeterMacTests;
 			sourceTree = "<group>";
 		};
-		748EB3AE0A0D4FECD545CF52 /* Clawdmeter */ = {
-			isa = PBXGroup;
-			children = (
-				60E0F76D19BCC7D3DB006F73 /* tools */,
-			);
-			name = Clawdmeter;
-			path = ..;
-			sourceTree = "<group>";
-		};
 		8355AE2A6C5D497C97998BEB = {
 			isa = PBXGroup;
 			children = (
-				748EB3AE0A0D4FECD545CF52 /* Clawdmeter */,
 				C290AE49FDFD964D084DB555 /* ClawdmeteriOS */,
 				C78CB42390923B2CF2E3751E /* ClawdmeteriOSTests */,
 				422FDAA9460ED016123451B3 /* ClawdmeteriOSWidgets */,
@@ -1320,6 +1301,7 @@
 				087E5480D1AE4EC8A3167F82 /* ClawdmeterWatch */,
 				BAA9C9EA4FB8CA6CB7C28E34 /* ClawdmeterWatchWidgets */,
 				ED156242FB8C5A01DE4F8ED7 /* Packages */,
+				AC933BF26CFDB5342E649DA3 /* yeosu */,
 				D520BCF1F836E478A167B219 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -1361,6 +1343,15 @@
 				1B7490B2B75179425CAFC62D /* UpdatesUI.swift */,
 			);
 			path = Updates;
+			sourceTree = "<group>";
+		};
+		AC933BF26CFDB5342E649DA3 /* yeosu */ = {
+			isa = PBXGroup;
+			children = (
+				B566AB7092CA616B9B4F5CAF /* tools */,
+			);
+			name = yeosu;
+			path = ..;
 			sourceTree = "<group>";
 		};
 		AE653527213BA1906C6046FA /* Workspace */ = {
@@ -1408,6 +1399,14 @@
 				4FE36F4B9D0C20CEBC060E31 /* VendorProvisioningSettingsView.swift */,
 			);
 			path = Tahoe;
+			sourceTree = "<group>";
+		};
+		B566AB7092CA616B9B4F5CAF /* tools */ = {
+			isa = PBXGroup;
+			children = (
+				2B49FE8C551770587DDC91B3 /* clawdmeter-agents */,
+			);
+			path = tools;
 			sourceTree = "<group>";
 		};
 		BAA9C9EA4FB8CA6CB7C28E34 /* ClawdmeterWatchWidgets */ = {
@@ -1496,7 +1495,6 @@
 			isa = PBXGroup;
 			children = (
 				EE0734214A6921D1EEF1015A /* .bundled-version */,
-				ED80F76ABA72930CE57AF87A /* opencode */,
 			);
 			path = opencode;
 			sourceTree = "<group>";
@@ -1663,6 +1661,8 @@
 				607B294A61BE70FE7A3F494D /* PBXTargetDependency */,
 			);
 			name = ClawdmeterMacUITests;
+			packageProductDependencies = (
+			);
 			productName = ClawdmeterMacUITests;
 			productReference = FCEA6256CB6D114C219DA5E1 /* ClawdmeterMacUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -1848,7 +1848,7 @@
 				C97F41751616AF2672BAA590 /* CodexLogo.png in Resources */,
 				389C34543E4E3E857E98DC40 /* GeminiLogo.svg in Resources */,
 				F8FA8741CD3BB21488BF313B /* Vendor in Resources */,
-				5281DED2AAE3EF81A11A7207 /* clawdmeter-agents in Resources */,
+				DAF07065152232FEEFC70B6C /* clawdmeter-agents in Resources */,
 				B54FED090644474BC4C3CBBF /* deep-research-prompt.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2434,8 +2434,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "ClawdmeterMac/ClawdmeterMac-Release.entitlements";
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2448,7 +2447,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac;
 				PRODUCT_MODULE_NAME = Clawdmeter;
 				PRODUCT_NAME = Continuum;
-				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -2564,8 +2562,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements;
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2578,7 +2575,6 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.widgets;
 				PRODUCT_NAME = ClawdmeterMacWidgets;
-				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac.widgets";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 			};
@@ -2589,8 +2585,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMac/ClawdmeterMac.entitlements;
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2603,7 +2598,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac;
 				PRODUCT_MODULE_NAME = Clawdmeter;
 				PRODUCT_NAME = Continuum;
-				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac";
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -2650,8 +2644,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements;
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2664,7 +2657,6 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.widgets;
 				PRODUCT_NAME = ClawdmeterMacWidgets;
-				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac.widgets";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 			};

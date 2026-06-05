@@ -242,7 +242,7 @@ struct SessionWorkspaceView: View {
                         isPresented: $showingWorkspaceSwitcher
                     )
                     .frame(width: 620, height: 520)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background(ContinuumTokens.surface2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .stroke(Color.black.opacity(0.10), lineWidth: 0.5)

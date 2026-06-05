@@ -79,12 +79,12 @@ struct SessionsListView: View {
 
     private func statusColor(_ raw: String) -> Color {
         switch raw {
-        case "running":  return .green
-        case "planning": return .gray
-        case "paused":   return Color(.sRGB, red: 0xFE/255.0, green: 0xBC/255.0, blue: 0x2E/255.0)
-        case "done":     return TahoeAccent.halo.base.color
-        case "degraded": return .red
-        default:         return .secondary
+        case "running":  return ContinuumTokens.live
+        case "planning": return ContinuumTokens.paused
+        case "paused":   return ContinuumTokens.warn
+        case "done":     return ContinuumTokens.live
+        case "degraded": return ContinuumTokens.error
+        default:         return ContinuumTokens.fg3
         }
     }
 

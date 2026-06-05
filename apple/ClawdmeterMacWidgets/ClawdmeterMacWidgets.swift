@@ -283,47 +283,31 @@ struct MeterGauge: View {
     let usage: UsageData
     let size: CGFloat
 
-    private var mood: UsageData.Mood { usage.mood }
-
-    private var ringColor: Color {
-        if usage.status == .notStarted { return .secondary.opacity(0.5) }
-        switch mood {
-        case .idle: return Color(red: 0xd9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0).opacity(0.7)
-        case .active: return Color(red: 0xd9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-        case .redLine: return Color(red: 0xe0 / 255.0, green: 0x7a / 255.0, blue: 0x5f / 255.0)
-        }
-    }
-
-    private var trackColor: Color { .secondary.opacity(0.15) }
-
     private var displayedPercent: Int {
         usage.status == .notStarted ? 0 : usage.sessionPct
     }
 
+    // Rail meter (the signature) — big SF Pro Rounded % over the Claude rail.
     var body: some View {
-        ZStack {
-            Circle()
-                .stroke(trackColor, lineWidth: size * 0.10)
-            Circle()
-                .trim(from: 0, to: max(0.001, min(1.0, Double(displayedPercent) / 100.0)))
-                .stroke(ringColor, style: StrokeStyle(lineWidth: size * 0.10, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-            VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: size * 0.10) {
+            HStack(alignment: .firstTextBaseline, spacing: 1) {
                 if usage.status == .notStarted {
                     Text("—")
-                        .font(.system(size: size * 0.32, weight: .bold))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
+                        .foregroundStyle(ContinuumTokens.fg3)
                 } else {
                     Text("\(usage.sessionPct)")
-                        .font(.system(size: size * 0.32, weight: .bold))
+                        .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
                         .monospacedDigit()
+                        .foregroundStyle(ContinuumTokens.metricColor(percent: Double(usage.sessionPct)))
                     Text("%")
-                        .font(.system(size: size * 0.14, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: size * 0.18, weight: .semibold))
+                        .foregroundStyle(ContinuumTokens.fg3)
                 }
             }
+            TahoeRailMeter(percent: Double(displayedPercent), provider: .claude, height: max(6, size * 0.09))
         }
-        .frame(width: size, height: size)
+        .frame(width: size, alignment: .leading)
     }
 }
 

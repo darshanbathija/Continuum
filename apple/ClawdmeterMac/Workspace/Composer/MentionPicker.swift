@@ -101,7 +101,7 @@ struct MentionPicker: View {
             }
         }
         .frame(width: 460)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .background(ContinuumTokens.surface3, in: RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.secondary.opacity(0.2), lineWidth: 1)

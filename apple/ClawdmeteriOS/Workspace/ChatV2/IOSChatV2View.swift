@@ -270,7 +270,7 @@ private struct FrontierTranscript: View {
                                     .font(TahoeFont.body(11, weight: .semibold))
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 7)
-                                    .background(.thinMaterial, in: Capsule())
+                                    .background(ContinuumTokens.surface2, in: Capsule())
                             }
                             .buttonStyle(.plain)
                             .disabled(frontierStore.snapshot.latestTurnId == "turn-0")
@@ -289,7 +289,7 @@ private struct FrontierTranscript: View {
                             } label: {
                                 TahoeIcon("arrowR", size: 13)
                                     .padding(9)
-                                    .background(.thinMaterial, in: Circle())
+                                    .background(ContinuumTokens.surface2, in: Circle())
                                     .opacity(continuing ? 0.5 : 1)
                             }
                             .buttonStyle(.plain)
@@ -1324,7 +1324,7 @@ private struct IOSChatModelSelectorSheet: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(.thinMaterial, in: Capsule())
+                    .background(ContinuumTokens.surface2, in: Capsule())
             }
         }
     }

@@ -48,13 +48,13 @@ public enum SessionsV2Theme {
 
     public enum Radius {
         /// Chips + segmented control segments (ModePicker, ModelPicker, EffortDial).
-        public static let chip: CGFloat = 6
+        public static let chip: CGFloat = ContinuumTokens.Radius.card   // 6
         /// Buttons (Start, Approve, Merge).
-        public static let button: CGFloat = 8
+        public static let button: CGFloat = ContinuumTokens.Radius.button // 5
         /// Cards + lift surfaces (cost banner, plan card, A/B compare).
-        public static let card: CGFloat = 10
+        public static let card: CGFloat = ContinuumTokens.Radius.card   // 6
         /// Sheet / modal corners.
-        public static let sheet: CGFloat = 12
+        public static let sheet: CGFloat = ContinuumTokens.Radius.modal // 8
     }
 
     // MARK: - Animation tokens
@@ -102,39 +102,27 @@ public enum SessionsV2Theme {
     // MARK: - SwiftUI Color shortcuts
 
     #if canImport(SwiftUI)
-    /// Terra-cotta brand accent.
-    public static let accent: Color = Color(
-        red: Tokens.accentRGB.red,
-        green: Tokens.accentRGB.green,
-        blue: Tokens.accentRGB.blue
-    )
-    /// Codex provider color.
-    public static let codexBlue: Color = Color(
-        red: Tokens.codexBlueRGB.red,
-        green: Tokens.codexBlueRGB.green,
-        blue: Tokens.codexBlueRGB.blue
-    )
-    public static let backgroundPrimary: Color = .black
-    public static let surfaceElev0: Color = Color(white: 0.04)   // #0A0A0A
-    public static let surfaceElev1: Color = Color(white: 0.08)   // #141414
-    public static let textPrimary: Color = .white
-    public static let textSecondary: Color = .white.opacity(0.7)
-    public static let textTertiary: Color = .white.opacity(0.5)
-    /// Mac traffic-light yellow (#febc2e) per DESIGN.md — soft-warn cost banner,
-    /// pending CI checks, paused state.
-    public static let warn: Color = Color(
-        red: 0xFE / 255.0, green: 0xBC / 255.0, blue: 0x2E / 255.0
-    )
-    /// Mac traffic-light red (#ff5f57) per DESIGN.md — autopilot banner,
-    /// destructive actions, failed checks.
-    public static let danger: Color = Color(
-        red: 0xFF / 255.0, green: 0x5F / 255.0, blue: 0x57 / 255.0
-    )
-    /// Live green (#28c840) per DESIGN.md — live dots, successful checks,
-    /// enabled switches.
-    public static let success: Color = Color(
-        red: 0x28 / 255.0, green: 0xC8 / 255.0, blue: 0x40 / 255.0
-    )
+    // Quiet Black Workbench: all of SessionsV2Theme's colors now forward to the
+    // unified `ContinuumTokens`. `accent` survives only as the Claude provider
+    // dot (rationed); `codexBlue` is Codex graphite; semantics map to the
+    // DESIGN.md live/warn/error palette.
+    /// Claude provider dot (#D97757) — terra-cotta, rationed to provider signal.
+    public static let accent: Color = TahoeProvider.claude.dot
+    /// Codex provider dot (#8A9099 graphite).
+    public static let codexBlue: Color = TahoeProvider.codex.dot
+    public static let backgroundPrimary: Color = ContinuumTokens.bg
+    public static let surfaceElev0: Color = ContinuumTokens.surface1
+    public static let surfaceElev1: Color = ContinuumTokens.surface2
+    public static let textPrimary: Color = ContinuumTokens.fg
+    public static let textSecondary: Color = ContinuumTokens.fg2
+    public static let textTertiary: Color = ContinuumTokens.fg3
+    /// Approaching-cap amber (#D6A23B) — soft-warn cost banner, pending CI,
+    /// paused state.
+    public static let warn: Color = ContinuumTokens.warn
+    /// Over-cap red (#E5534B) — autopilot banner, destructive actions, failed.
+    public static let danger: Color = ContinuumTokens.error
+    /// Live green (#3CC07A) — live dots, successful checks, enabled switches.
+    public static let success: Color = ContinuumTokens.live
     #endif
 
     // MARK: - Reduce-Motion respect helper

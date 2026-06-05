@@ -9,38 +9,39 @@ public enum ClawdmeterTheme {
     // MARK: - Colors
 
     public enum Colors {
-        /// True black for AMOLED-friendly backgrounds.
-        public static let background = Color(red: 0.0, green: 0.0, blue: 0.0)
+        // Quiet Black Workbench: forward to the unified `ContinuumTokens`.
+        /// App interior base (#050507).
+        public static let background = ContinuumTokens.bg
 
-        /// Anthropic terra-cotta accent #d97757.
-        public static let accent = Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
+        /// Claude provider dot (#D97757) — the heritage terra-cotta, rationed.
+        public static let accent = TahoeProvider.claude.dot
 
-        /// Warmer red-line variant #e07a5f.
-        public static let accentRedLine = Color(red: 0xE0 / 255.0, green: 0x7A / 255.0, blue: 0x5F / 255.0)
+        /// Over-cap / red-line state — error red (#E5534B).
+        public static let accentRedLine = ContinuumTokens.error
 
-        /// Primary white for numerals (21:1 contrast on background).
-        public static let primaryText = Color.white
+        /// Primary text / live numerals.
+        public static let primaryText = ContinuumTokens.fg
 
-        /// Secondary text (white at 60% opacity).
-        public static let secondaryText = Color.white.opacity(0.6)
+        /// Secondary text.
+        public static let secondaryText = ContinuumTokens.fg2
 
-        /// Tertiary (white at 40%).
-        public static let tertiaryText = Color.white.opacity(0.4)
+        /// Tertiary.
+        public static let tertiaryText = ContinuumTokens.fg3
 
-        /// Status colors meeting WCAG AA on black.
-        public static let statusOK = Color(red: 0x10 / 255.0, green: 0xB9 / 255.0, blue: 0x81 / 255.0)
-        public static let statusWarning = Color(red: 0xE0 / 255.0, green: 0x7A / 255.0, blue: 0x5F / 255.0)
-        public static let statusError = Color(red: 0xDC / 255.0, green: 0x26 / 255.0, blue: 0x26 / 255.0)
+        /// Semantic state — live / warn / error.
+        public static let statusOK = ContinuumTokens.live
+        public static let statusWarning = ContinuumTokens.warn
+        public static let statusError = ContinuumTokens.error
 
-        /// Stale-data dim variant of accent (50% brightness).
-        public static let accentStale = Color(red: 0x6C / 255.0, green: 0x3B / 255.0, blue: 0x2B / 255.0)
+        /// Stale / idle dim variant.
+        public static let accentStale = ContinuumTokens.fg4
 
         /// Mood→color mapping (mirrors firmware's idle/active/red-line state).
         public static func accent(for mood: UsageData.Mood) -> Color {
             switch mood {
-            case .idle: return accent.opacity(0.6)
-            case .active: return accent
-            case .redLine: return accentRedLine
+            case .idle: return ContinuumTokens.paused
+            case .active: return TahoeProvider.claude.dot
+            case .redLine: return ContinuumTokens.error
             }
         }
 
@@ -58,19 +59,18 @@ public enum ClawdmeterTheme {
     /// The firmware uses pre-compiled LVGL bitmaps; on Apple platforms we use
     /// the same family names so the visual identity carries over.
     public enum Typography {
-        /// Display serif (Tiempos-style). Falls back to system-rounded if not bundled.
+        /// Display / big metrics — SF Pro Rounded (was Tiempos serif). Rounded
+        /// terminals echo the meter and warm the panel without color.
         public static func display(size: CGFloat, weight: Font.Weight = .bold) -> Font {
-            Font.custom("Tiempos", size: size, relativeTo: .largeTitle)
-                .weight(weight)
+            .system(size: size, weight: weight, design: .rounded)
         }
 
-        /// Sans serif body (Styrene-style). Falls back to system if not bundled.
+        /// UI body — SF Pro Text (was Styrene). The human voice.
         public static func body(size: CGFloat, weight: Font.Weight = .regular) -> Font {
-            Font.custom("Styrene", size: size, relativeTo: .body)
-                .weight(weight)
+            .system(size: size, weight: weight, design: .default)
         }
 
-        /// Tabular mono for countdowns and numerical streams.
+        /// Tabular mono for countdowns and numerical streams — SF Mono.
         public static func mono(size: CGFloat, weight: Font.Weight = .medium) -> Font {
             .system(size: size, weight: weight, design: .monospaced)
         }

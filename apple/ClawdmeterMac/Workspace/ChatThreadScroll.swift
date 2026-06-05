@@ -246,7 +246,7 @@ struct ChatThreadScroll: View {
                             .font(.system(size: 11, weight: .semibold))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(.thinMaterial, in: Capsule())
+                            .background(ContinuumTokens.surface2, in: Capsule())
                             .overlay(Capsule().stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
                     }
                     .buttonStyle(PressableButtonStyle())
@@ -395,7 +395,7 @@ struct ChatThreadScroll: View {
         .font(TahoeFont.body(12))
         .padding(.horizontal, 10)
         .frame(height: 34)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(ContinuumTokens.surface2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(t.hairline, lineWidth: 0.5)

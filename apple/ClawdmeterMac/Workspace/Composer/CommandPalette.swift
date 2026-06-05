@@ -221,7 +221,7 @@ struct CommandPaletteView: View {
             .frame(maxHeight: 400)
         }
         .frame(width: 520)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .background(ContinuumTokens.surface3, in: RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.secondary.opacity(0.2), lineWidth: 1)

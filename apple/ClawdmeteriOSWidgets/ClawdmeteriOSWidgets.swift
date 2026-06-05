@@ -22,8 +22,8 @@ struct ClawdmeteriOSWidgetsBundle: WidgetBundle {
 
 @available(iOSApplicationExtension 16.1, *)
 struct GeminiQuotaLiveActivityWidget: Widget {
-    /// Google blue — matches the iOS Live tab + Mac dashboard tint.
-    private let tint = Color(red: 0x42/255, green: 0x85/255, blue: 0xF4/255)
+    /// Antigravity provider dot (#5C9DFF) — rationed color signal.
+    private let tint = TahoeProvider.gemini.dot
 
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: GeminiQuotaLiveActivityAttributes.self) { context in
@@ -237,6 +237,7 @@ struct ClaudeUsageView: View {
                         .monospacedDigit()
                 }
                 .gaugeStyle(.accessoryCircularCapacity)
+                .tint(TahoeProvider.claude.dot)
             }
         } else {
             ZStack {
@@ -342,29 +343,24 @@ struct ClaudeUsageView: View {
 
     // MARK: - Building blocks
 
-    private var brand: Color {
-        Color(red: 0xd9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    /// Claude provider dot (#D97757) — rationed color signal for the mark tint.
+    private var brand: Color { TahoeProvider.claude.dot }
 
+    // Rail meter (the signature) — big SF Pro Rounded % over the provider rail.
     private func ring(percent: Int, size: CGFloat) -> some View {
-        let value = max(0.001, min(1.0, Double(percent) / 100.0))
-        return ZStack {
-            Circle()
-                .stroke(.secondary.opacity(0.15), lineWidth: size * 0.10)
-            Circle()
-                .trim(from: 0, to: value)
-                .stroke(brand, style: StrokeStyle(lineWidth: size * 0.10, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-            VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: size * 0.10) {
+            HStack(alignment: .firstTextBaseline, spacing: 1) {
                 Text("\(percent)")
-                    .font(.system(size: size * 0.32, weight: .bold))
+                    .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
                     .monospacedDigit()
+                    .foregroundStyle(ContinuumTokens.metricColor(percent: Double(percent)))
                 Text("%")
-                    .font(.system(size: size * 0.14, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: size * 0.18, weight: .semibold))
+                    .foregroundStyle(ContinuumTokens.fg3)
             }
+            TahoeRailMeter(percent: Double(percent), provider: .claude, height: max(6, size * 0.09))
         }
-        .frame(width: size, height: size)
+        .frame(width: size, alignment: .leading)
     }
 
     @ViewBuilder

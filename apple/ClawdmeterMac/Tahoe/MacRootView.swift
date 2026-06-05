@@ -318,7 +318,7 @@ struct MacRootView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(.regularMaterial))
+            .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(ContinuumTokens.surface2))
             .overlay(RoundedRectangle(cornerRadius: 999, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
             .padding(.top, 56)
             .transition(.move(edge: .top).combined(with: .opacity))
@@ -358,7 +358,7 @@ struct MacRootView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(.regularMaterial))
+            .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(ContinuumTokens.surface2))
             .overlay(RoundedRectangle(cornerRadius: 999, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
             .padding(.top, 96)
             .transition(.move(edge: .top).combined(with: .opacity))

@@ -273,37 +273,40 @@ private struct RepoRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(row.displayName)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .font(ContinuumFont.mono(12, weight: .medium))
+                    .foregroundStyle(ContinuumTokens.fg)
                     .lineLimit(1)
+                    .truncationMode(.middle)
                 if row.geminiRequests > 0 {
-                    // Gemini contributes request count, not $. Render as a
-                    // small inline pill so the user sees per-repo Gemini
-                    // activity without distorting the cost-comparable
-                    // stacked bar below. Distinct shape (capsule with
-                    // gemini blue) keeps it visually separable from cost.
-                    Text("+\(row.geminiRequests) gem")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(geminiColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(geminiColor.opacity(0.15), in: Capsule())
+                    // Antigravity contributes request count, not $. A small
+                    // inline pill keeps per-repo Antigravity activity visible
+                    // without distorting the cost-comparable stacked bar.
+                    HStack(spacing: 4) {
+                        ProviderDot(.gemini, size: 5)
+                        Text("+\(row.geminiRequests)")
+                            .font(ContinuumFont.mono(10, weight: .semibold))
+                            .foregroundStyle(ContinuumTokens.fg3)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(ContinuumTokens.surface2, in: Capsule())
+                    .overlay(Capsule().strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5))
                 }
                 Spacer()
                 if row.cost > 0 {
                     Text(AnalyticsCurrencyFormatter.format(row.cost))
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .font(ContinuumFont.mono(12, weight: .semibold))
+                        .foregroundStyle(ContinuumTokens.fg)
                         .monospacedDigit()
                 } else if row.geminiRequests > 0 {
                     Text("\(row.geminiRequests) reqs")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .font(ContinuumFont.mono(12, weight: .semibold))
+                        .foregroundStyle(ContinuumTokens.fg)
                         .monospacedDigit()
                 }
                 Text(percentString(row.share))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.mono(11))
+                    .foregroundStyle(ContinuumTokens.fg2)
                     .monospacedDigit()
                     .frame(width: 44, alignment: .trailing)
             }
@@ -312,13 +315,13 @@ private struct RepoRow: View {
             // the total window cost. Without this split, a Codex-heavy
             // repo looked identical to a Claude-heavy one in the UI.
             providerSegmentedBar
-                .frame(height: 6)
-                .clipShape(Capsule())
+                .frame(height: 7)
+                .clipShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.rail, style: .continuous))
 
             if expanded && !row.isRest {
                 Text(row.repo)
-                    .font(.system(size: 10).monospaced())
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.mono(10))
+                    .foregroundStyle(ContinuumTokens.fg3)
                     .lineLimit(2)
                     .truncationMode(.middle)
             }
@@ -343,27 +346,20 @@ private struct RepoRow: View {
             let codexWidth = totalWidth * codexShare * row.share
             ZStack(alignment: .leading) {
                 // Track
-                Capsule()
-                    .fill(Color.secondary.opacity(0.15))
+                Rectangle()
+                    .fill(ContinuumTokens.railTrack)
                 HStack(spacing: 0) {
+                    // Horizontal by-repo order: Claude → Codex (T2 gradients).
                     Rectangle()
-                        .fill(claudeColor)
+                        .fill(ProviderFill.gradient(for: .claude))
                         .frame(width: claudeWidth)
                     Rectangle()
-                        .fill(codexColor)
+                        .fill(ProviderFill.gradient(for: .codex))
                         .frame(width: codexWidth)
                     Spacer(minLength: 0)
                 }
             }
         }
-    }
-
-    private var claudeColor: Color { SessionsV2Theme.accent }
-    private var codexColor: Color {
-        Color.accentColor
-    }
-    private var geminiColor: Color {
-        Color(red: 0x42 / 255.0, green: 0x85 / 255.0, blue: 0xF4 / 255.0)
     }
 
     private var providerBreakdownTooltip: String {

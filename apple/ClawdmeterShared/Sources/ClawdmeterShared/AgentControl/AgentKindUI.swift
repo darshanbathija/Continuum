@@ -53,24 +53,25 @@ public enum AgentKindUI {
         }
     }
 
-    /// Accent color as 0-255 RGB triple. Callers wrap into AppKit/UIKit
-    /// Color / NSColor / UIColor — keeping this type-agnostic lets the
-    /// shared package compile on all four platforms.
-    /// - Claude: terra-cotta (#D97757)
-    /// - Codex: blue (#5C9DFF)
-    /// - Gemini: Google blue (#4285F4)
-    /// - OpenCode: violet (#6B5DD3) — the brand accent for the CLI's
-    ///   built-in TUI; picked to read as a distinct 4th lane next to
-    ///   Claude orange / Codex+Gemini blues.
-    /// - Unknown: neutral gray (#888888) — X3 fallback
+    /// Provider dot color as a 0-255 RGB triple (Quiet Black Workbench
+    /// rationed palette — see DESIGN.md + `TahoeProvider.dot`). This is the
+    /// cross-cutting source for non-SwiftUI / widget / menu-bar chrome that
+    /// can't read `ContinuumTokens` directly. Color travels with a glyph +
+    /// label; never used as a button/header fill.
+    /// - Claude: terra-cotta (#D97757) — the heritage warmth, only here.
+    /// - Codex: graphite (#8A9099)
+    /// - Antigravity (gemini key): cool blue (#5C9DFF)
+    /// - OpenCode: muted slate-violet (#9B8CC4)
+    /// - Cursor: light graphite (#B8BDC4)
+    /// - Grok / unknown: neutral slate / grey
     public static func accentRGB(for agent: AgentKind) -> (r: Int, g: Int, b: Int) {
         switch agent {
         case .claude: return (0xD9, 0x77, 0x57)
-        case .codex:  return (0x5C, 0x9D, 0xFF)
-        case .gemini: return (0x42, 0x85, 0xF4)
-        case .opencode: return (0x6B, 0x5D, 0xD3)
-        case .cursor: return (0x22, 0x22, 0x22)
-        case .grok: return (0x30, 0x30, 0x46) // xAI dark slate, distinct from cursor near-black
+        case .codex:  return (0x8A, 0x90, 0x99)
+        case .gemini: return (0x5C, 0x9D, 0xFF)
+        case .opencode: return (0x9B, 0x8C, 0xC4)
+        case .cursor: return (0xB8, 0xBD, 0xC4)
+        case .grok: return (0x70, 0x74, 0x7C) // neutral slate, distinct from codex graphite
         case .unknown: return (0x88, 0x88, 0x88)
         }
     }

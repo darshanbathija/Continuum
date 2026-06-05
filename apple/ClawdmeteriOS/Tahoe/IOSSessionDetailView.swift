@@ -864,7 +864,7 @@ public struct IOSSessionDetailView: View {
                             .font(.footnote.weight(.semibold))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .background(.thinMaterial, in: Capsule())
+                            .background(ContinuumTokens.surface2, in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, 18)

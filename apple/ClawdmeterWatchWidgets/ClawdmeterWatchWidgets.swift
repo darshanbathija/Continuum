@@ -97,6 +97,7 @@ struct ClaudeView: View {
                     .monospacedDigit()
             }
             .gaugeStyle(.accessoryCircularCapacity)
+            .tint(TahoeProvider.claude.dot)
         } else {
             Image(systemName: "wifi.exclamationmark")
         }
@@ -116,6 +117,7 @@ struct ClaudeView: View {
                         Text("Claude")
                     }
                     .gaugeStyle(.accessoryLinearCapacity)
+                    .tint(TahoeProvider.claude.dot)
                 }
         } else {
             Image(systemName: "questionmark")

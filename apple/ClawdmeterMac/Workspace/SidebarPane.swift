@@ -1556,7 +1556,7 @@ struct SidebarPane: View {
                     .overlay(alignment: .bottomTrailing) {
                         TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 11)
                             .padding(2)
-                            .background(.regularMaterial, in: Circle())
+                            .background(ContinuumTokens.surface2, in: Circle())
                     }
                     .overlay(alignment: .bottomTrailing) {
                         Circle()

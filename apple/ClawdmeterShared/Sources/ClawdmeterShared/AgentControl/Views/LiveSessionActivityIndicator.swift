@@ -67,7 +67,7 @@ public struct LiveSessionActivityIndicator: View {
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(.thinMaterial, in: Capsule())
+                    .background(ContinuumTokens.surface2, in: Capsule())
                     .overlay(
                         Capsule().stroke(accent.opacity(0.25), lineWidth: 0.5)
                     )

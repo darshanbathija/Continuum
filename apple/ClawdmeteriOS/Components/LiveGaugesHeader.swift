@@ -606,6 +606,6 @@ private struct UpdateMacForGeminiCard: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity)
-        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .background(ContinuumTokens.surface2, in: RoundedRectangle(cornerRadius: 8))
     }
 }

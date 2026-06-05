@@ -230,11 +230,13 @@ public struct OKLCH: Sendable, Hashable {
     }
 }
 
-/// Compact baseline numeric tokens that JSX hardcodes inside the theme object.
+/// Tight radius scale (Quiet Black Workbench) — engineered, not bubbly. A hard
+/// break from the old 10/18/26 glass radii. Maps onto DESIGN.md's
+/// row 4 / button 5 / card 6 / modal 8.
 public enum TahoeRadius {
-    public static let s: CGFloat = 10
-    public static let m: CGFloat = 18
-    public static let l: CGFloat = 26
+    public static let s: CGFloat = 5   // buttons / small controls (was 10)
+    public static let m: CGFloat = 6   // cards / panels (was 18)
+    public static let l: CGFloat = 8   // modals / popovers (was 26)
 }
 
 public enum TahoeFont {

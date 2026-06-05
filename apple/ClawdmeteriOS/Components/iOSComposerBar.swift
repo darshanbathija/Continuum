@@ -98,7 +98,7 @@ struct iOSComposerBar: View {
             )
             .padding(.top, 6)
         }
-        .background(.thinMaterial)
+        .background(ContinuumTokens.surface2)
         .overlay(alignment: .top) { Divider() }
         .onAppear { syncModelEffortFromSession() }
         .onChange(of: modelId) { _, new in handleModelChange(new) }

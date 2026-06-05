@@ -102,8 +102,7 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            ProgressView(value: Double(min(max(usage.sessionPct, 0), 100)) / 100.0)
-                .tint(brand)
+            TahoeRailMeter(percent: Double(min(max(usage.sessionPct, 0), 100)), provider: .claude, height: 7)
         }
         .padding(.top, 4)
 
@@ -123,7 +122,7 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            ProgressView(value: Double(min(max(usage.weeklyPct, 0), 100)) / 100.0)
+            TahoeRailMeter(percent: Double(min(max(usage.weeklyPct, 0), 100)), provider: .claude, height: 6, secondary: true)
         }
 
         if model.receivingFromPhone {
@@ -183,7 +182,5 @@ struct ContentView: View {
         .padding(.vertical, 8)
     }
 
-    private var brand: Color {
-        Color(red: 0xd9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var brand: Color { TahoeProvider.claude.dot }
 }

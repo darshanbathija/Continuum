@@ -13,7 +13,7 @@ struct PlanApprovalView: View {
         VStack(alignment: .leading, spacing: 8) {
             if let goal = bridge.latestGoal {
                 Text(goal)
-                    .font(.system(size: 14, weight: .semibold, design: .serif))
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
             } else {
                 Text("Plan ready")
                     .font(.system(size: 14, weight: .semibold))
