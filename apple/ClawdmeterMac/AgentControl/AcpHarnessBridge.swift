@@ -23,6 +23,9 @@ final class AcpHarnessBridge {
     private let driver: any AgentDriver
     private let store: SessionChatStore
     private let model: String?
+    private let usageProvider: UsageRecord.Provider?
+    private let usageRepo: String?
+    private let usageLedgerURL: URL?
     private let agentDisplayName: String
     private var projection: AcpHarnessProjection
     /// Maps a surfaced permission prompt id back to the driver's request id so the
@@ -30,6 +33,7 @@ final class AcpHarnessBridge {
     private var pendingPermissionRpcIds: [String: RpcId] = [:]
     private var consumeTask: Task<Void, Never>?
     private(set) var externalSessionId: String?
+    private var usageSequence: UInt64 = 0
 
     /// Designated init — an already-constructed driver + its optional stdio
     /// transport. Use the static factories below rather than calling this
@@ -41,11 +45,17 @@ final class AcpHarnessBridge {
         agentDisplayName: String,
         driver: any AgentDriver,
         child: AcpStdioChild?,
-        connection: NdjsonRpcConnection?
+        connection: NdjsonRpcConnection?,
+        usageProvider: UsageRecord.Provider? = nil,
+        usageRepo: String? = nil,
+        usageLedgerURL: URL? = nil
     ) {
         self.sessionId = sessionId
         self.store = store
         self.model = model
+        self.usageProvider = usageProvider
+        self.usageRepo = usageRepo
+        self.usageLedgerURL = usageLedgerURL
         self.agentDisplayName = agentDisplayName
         self.projection = AcpHarnessProjection(agentDisplayName: agentDisplayName)
         self.driver = driver
@@ -61,7 +71,10 @@ final class AcpHarnessBridge {
         sessionId: UUID, support: AcpAgentSupport, store: SessionChatStore,
         model: String?, agentDisplayName: String,
         trustGate: RepoTrustGate? = nil,
-        onFileAccess: (@Sendable (String, String, Bool) async -> Void)? = nil
+        onFileAccess: (@Sendable (String, String, Bool) async -> Void)? = nil,
+        usageProvider: UsageRecord.Provider? = nil,
+        usageRepo: String? = nil,
+        usageLedgerURL: URL? = nil
     ) -> AcpHarnessBridge {
         let child = AcpStdioChild()
         let connection = NdjsonRpcConnection(writer: child)
@@ -73,13 +86,19 @@ final class AcpHarnessBridge {
         )
         return AcpHarnessBridge(sessionId: sessionId, store: store, model: model,
                                 agentDisplayName: agentDisplayName, driver: driver,
-                                child: child, connection: connection)
+                                child: child, connection: connection,
+                                usageProvider: usageProvider,
+                                usageRepo: usageRepo,
+                                usageLedgerURL: usageLedgerURL)
     }
 
     /// Codex over `codex app-server` (stdio JSON-RPC): same stdio transport as
     /// ACP, different driver dialect.
     static func codexAppServer(
-        sessionId: UUID, store: SessionChatStore, model: String?, agentDisplayName: String
+        sessionId: UUID, store: SessionChatStore, model: String?, agentDisplayName: String,
+        usageProvider: UsageRecord.Provider? = nil,
+        usageRepo: String? = nil,
+        usageLedgerURL: URL? = nil
     ) -> AcpHarnessBridge {
         let child = AcpStdioChild()
         let connection = NdjsonRpcConnection(writer: child)
@@ -89,18 +108,27 @@ final class AcpHarnessBridge {
         )
         return AcpHarnessBridge(sessionId: sessionId, store: store, model: model,
                                 agentDisplayName: agentDisplayName, driver: driver,
-                                child: child, connection: connection)
+                                child: child, connection: connection,
+                                usageProvider: usageProvider,
+                                usageRepo: usageRepo,
+                                usageLedgerURL: usageLedgerURL)
     }
 
     /// A driver that owns its own transport (gRPC — Antigravity Cascade). No
     /// stdio child; `start(binary:)` skips the launch and just starts the driver.
     static func transportOwning(
         sessionId: UUID, store: SessionChatStore, model: String?,
-        agentDisplayName: String, driver: any AgentDriver
+        agentDisplayName: String, driver: any AgentDriver,
+        usageProvider: UsageRecord.Provider? = nil,
+        usageRepo: String? = nil,
+        usageLedgerURL: URL? = nil
     ) -> AcpHarnessBridge {
         AcpHarnessBridge(sessionId: sessionId, store: store, model: model,
                          agentDisplayName: agentDisplayName, driver: driver,
-                         child: nil, connection: nil)
+                         child: nil, connection: nil,
+                         usageProvider: usageProvider,
+                         usageRepo: usageRepo,
+                         usageLedgerURL: usageLedgerURL)
     }
 
     /// Spawn (stdio drivers) + handshake + session creation. Throws
@@ -176,11 +204,37 @@ final class AcpHarnessBridge {
     }
 
     private func handle(_ event: HarnessEvent) {
+        if case .usage(let usage) = event {
+            recordHarnessUsage(usage)
+        }
         // Capture the ACP request id before projecting so respond can map it.
         if case .permissionRequest(let req) = event {
             pendingPermissionRpcIds[AcpHarnessProjection.permissionPromptId(for: req.requestId)] = req.requestId
         }
         for op in projection.apply(event) { apply(op) }
+    }
+
+    private func recordHarnessUsage(_ usage: HarnessUsage) {
+        guard usageProvider == .grok else { return }
+        usageSequence &+= 1
+        guard let entry = GrokUsageLedger.Entry(
+            usage: usage,
+            sessionId: sessionId.uuidString,
+            repo: usageRepo,
+            model: model,
+            sequence: usageSequence
+        ) else { return }
+        do {
+            try GrokUsageLedger.append(entry, to: usageLedgerURL)
+            var userInfo: [String: Any] = [:]
+            if let record = entry.usageRecord() {
+                userInfo["record"] = record
+            }
+            NotificationCenter.default.post(name: .grokUsageRecorded, object: nil, userInfo: userInfo)
+        } catch {
+            // Analytics must never break chat streaming. The next harness event
+            // still projects even if Application Support is temporarily unwritable.
+        }
     }
 
     private func apply(_ op: AcpStoreOp) {

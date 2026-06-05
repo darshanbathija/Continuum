@@ -59,6 +59,9 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
     /// Cursor Agent CLI / SDK lane. The real model catalog is account-scoped,
     /// so Tahoe labels it by provider rather than by a fixed model.
     case cursor
+    /// xAI Grok / Grok Build lane. Grok does not expose a verified quota API
+    /// yet, but it is a first-class chat and analytics provider.
+    case grok
     public var id: String { rawValue }
 
     /// User-visible name. Note: internal key for the third provider stays
@@ -71,6 +74,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .gemini: return "Antigravity"
         case .opencode: return "OpenCode"
         case .cursor: return "Cursor"
+        case .grok: return "Grok"
         }
     }
 
@@ -84,6 +88,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         // visually distinct in the per-provider segmented control.
         case .opencode: return OKLCH(l: 0.55, c: 0.18, h: 295)
         case .cursor: return OKLCH(l: 0.34, c: 0.02, h: 260)
+        case .grok: return OKLCH(l: 0.50, c: 0.12, h: 155)
         }
     }
 
@@ -94,6 +99,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .gemini: return OKLCH(l: 0.78, c: 0.18, h: 250)
         case .opencode: return OKLCH(l: 0.75, c: 0.16, h: 295)
         case .cursor: return OKLCH(l: 0.72, c: 0.02, h: 260)
+        case .grok: return OKLCH(l: 0.78, c: 0.13, h: 155)
         }
     }
 
@@ -104,6 +110,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .gemini: return OKLCH(l: 0.45, c: 0.22, h: 265)
         case .opencode: return OKLCH(l: 0.38, c: 0.20, h: 295)
         case .cursor: return OKLCH(l: 0.18, c: 0.02, h: 260)
+        case .grok: return OKLCH(l: 0.34, c: 0.15, h: 165)
         }
     }
 
@@ -116,6 +123,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .gemini: return OKLCH(l: 0.72, c: 0.22, h: 285)
         case .opencode: return OKLCH(l: 0.72, c: 0.20, h: 305)
         case .cursor: return OKLCH(l: 0.76, c: 0.03, h: 260)
+        case .grok: return OKLCH(l: 0.76, c: 0.16, h: 155)
         }
     }
 
@@ -131,6 +139,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         // future Tahoe-art swap.
         case .opencode: return "tahoe-opencode-mark"
         case .cursor: return "tahoe-codex-mark"
+        case .grok: return "tahoe-grok-mark"
         }
     }
 
@@ -142,6 +151,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .gemini:         return false
         case .opencode:       return true
         case .cursor:         return true
+        case .grok:           return true
         }
     }
 }

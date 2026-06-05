@@ -109,4 +109,20 @@ public struct ProviderConfig: Identifiable, Sendable {
         supportsAutoRevive: AutoReviveSupport.supports("cursor"),
         hasWeeklyWindow: false
     )
+
+    /// Grok is a first-class chat/analytics provider, but not a live quota
+    /// provider. This metadata is for logos/display names only; AppRuntime does
+    /// not create an AppModel poller from it until a verified Grok quota API is
+    /// available.
+    public static let grok = ProviderConfig(
+        id: "grok",
+        displayName: "Grok",
+        logoAssetName: "GrokLogo",
+        reviveModel: "",
+        reviveEndpoint: URL(string: "https://grok.com")!,
+        reviveAuthVersion: nil,
+        storageKeyPrefix: "clawdmeter.grok",
+        supportsAutoRevive: false,
+        hasWeeklyWindow: false
+    )
 }

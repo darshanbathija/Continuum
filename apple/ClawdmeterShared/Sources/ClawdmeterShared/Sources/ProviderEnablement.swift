@@ -82,5 +82,5 @@ public enum ProviderEnablement {
     }
 
     /// Providers surfaced in onboarding + Settings toggles, in display order.
-    public static let allProviderIds: [String] = ["claude", "codex", "gemini", "cursor", "opencode"]
+    public static let allProviderIds: [String] = ["claude", "codex", "gemini", "cursor", "opencode", "grok"]
 }

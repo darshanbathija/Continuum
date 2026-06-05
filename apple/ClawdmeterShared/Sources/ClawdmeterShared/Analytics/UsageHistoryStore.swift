@@ -36,6 +36,7 @@ import AppKit
 /// the `UsageRecord`.
 public extension Notification.Name {
     static let opencodeUsageRecorded = Notification.Name("clawdmeter.opencode.usage.recorded")
+    static let grokUsageRecorded = Notification.Name("clawdmeter.grok.usage.recorded")
 }
 
 #if canImport(Darwin)
@@ -101,6 +102,7 @@ public final class UsageHistoryStore {
         /// SSE live-records bucket used for the menu-bar dollar gauge).
         case opencode
         case cursor
+        case grok
 
         public var label: String {
             switch self {
@@ -110,6 +112,7 @@ public final class UsageHistoryStore {
             case .gemini:     return "Gemini"
             case .opencode:   return "OpenCode"
             case .cursor:     return "Cursor"
+            case .grok:       return "Grok"
             }
         }
 
@@ -124,6 +127,7 @@ public final class UsageHistoryStore {
             case .gemini:     return provider == .gemini
             case .opencode:   return provider == .opencode
             case .cursor:     return provider == .cursor
+            case .grok:       return provider == .grok
             }
         }
     }
@@ -323,6 +327,19 @@ public final class UsageHistoryStore {
             Task { @MainActor in
                 self?.appendOpencodeRecord(record)
                 self?.scheduleOpencodeMirrorRefresh()
+            }
+        })
+
+        // Grok harness usage is written into Continuum's own JSONL ledger.
+        // Refresh analytics after each append so `.grok` appears in provider,
+        // model, day, and repo rollups without waiting for the periodic timer.
+        observers.append(center.addObserver(
+            forName: .grokUsageRecorded,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.forceRefresh()
             }
         })
     }

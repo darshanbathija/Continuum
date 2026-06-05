@@ -87,6 +87,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
                 // meaningfully in Previews.
                 case .opencode: return "via opencode"
                 case .cursor: return "Cursor Auto"
+                case .grok: return "grok-build"
                 }
             }(),
             autoReviveOn: d.reviveOn, autoReviveAgo: d.reviveAgo,
@@ -104,17 +105,20 @@ public struct TahoeLiveBindings: Equatable, Sendable {
     public var gemini: TahoeLiveRow
     public var opencode: TahoeLiveRow
     public var cursor: TahoeLiveRow
+    public var grok: TahoeLiveRow
 
     public init(
         claude: TahoeLiveRow = .demo(.claude),
         codex:  TahoeLiveRow = .demo(.codex),
         gemini: TahoeLiveRow = .demo(.gemini),
         opencode: TahoeLiveRow = .demo(.opencode),
-        cursor: TahoeLiveRow = .demo(.cursor)
+        cursor: TahoeLiveRow = .demo(.cursor),
+        grok: TahoeLiveRow = .demo(.grok)
     ) {
         self.claude = claude; self.codex = codex; self.gemini = gemini
         self.opencode = opencode
         self.cursor = cursor
+        self.grok = grok
     }
 
     public func row(for provider: TahoeProvider) -> TahoeLiveRow {
@@ -124,6 +128,7 @@ public struct TahoeLiveBindings: Equatable, Sendable {
         case .gemini: return gemini
         case .opencode: return opencode
         case .cursor: return cursor
+        case .grok: return grok
         }
     }
 

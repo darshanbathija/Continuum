@@ -92,7 +92,7 @@ public struct AnalyticsDailyChart: View {
     fileprivate static func costProviders(in snapshot: UsageHistorySnapshot, filter: UsageHistoryStore.ProviderFilter) -> [UsageRecord.Provider] {
         // Cost-bearing providers only. Gemini's $0 doesn't go in the
         // stacked dollar chart — it gets a separate request-count panel.
-        let order: [UsageRecord.Provider] = [.claude, .codex, .opencode, .cursor]
+        let order: [UsageRecord.Provider] = [.claude, .codex, .opencode, .cursor, .grok]
         return order.filter { snapshot.byProvider[$0] != nil && filter.includes($0) }
     }
 
@@ -224,6 +224,7 @@ public struct AnalyticsDailyChart: View {
                 "Codex": SessionsV2Theme.codexBlue,
                 "OpenCode": Color.green,
                 "Cursor": Color.purple,
+                "Grok": Color(red: 0.42, green: 0.82, blue: 0.62),
             ])
             .chartLegend(.hidden)
             .chartXAxis {
@@ -307,6 +308,10 @@ public struct AnalyticsDailyChart: View {
                 legendItem(asset: "CodexLogo", isTemplate: true,
                            color: Color.purple, label: "Cursor")
             }
+            if providerFilter.includes(.grok) {
+                legendItem(asset: "GrokLogo", isTemplate: true,
+                           color: Color(red: 0.42, green: 0.82, blue: 0.62), label: "Grok")
+            }
             Spacer()
         }
     }
@@ -341,6 +346,7 @@ public struct AnalyticsDailyChart: View {
         case .gemini: return "Gemini"
         case .opencode: return "OpenCode"
         case .cursor: return "Cursor"
+        case .grok: return "Grok"
         }
     }
 }

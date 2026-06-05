@@ -25,7 +25,19 @@ extension AppRuntime {
             // tahoeRow renders for un-authed providers handles the
             // "cursor-agent not logged in" case (sessionPercent: 0,
             // resetIn: "—", modelName: "Cursor").
-            cursor: tahoeRow(model: cursorModel, provider: .cursor)
+            cursor: tahoeRow(model: cursorModel, provider: .cursor),
+            grok: TahoeLiveRow(
+                sessionPercent: 0,
+                weeklyPercent: -1,
+                sessionResetIn: "\u{2014}",
+                weeklyResetIn: "",
+                modelName: "grok-build",
+                autoReviveOn: false,
+                autoReviveAgo: "",
+                supportsAutoRevive: false,
+                hasWeekly: false,
+                stale: true
+            )
         )
     }
 
@@ -191,7 +203,7 @@ extension AppRuntime {
         case .gemini: return .gemini
         case .opencode: return .opencode  // PR #31: 4th lane in TahoeProvider
         case .cursor: return .cursor
-        case .grok: return .cursor // TODO: TahoeProvider.grok identity; placeholder lane
+        case .grok: return .grok
         case .unknown:
             // X3: visual fallback. Semantic correctness lives on
             // AgentKind itself — UI degrades to Claude styling for

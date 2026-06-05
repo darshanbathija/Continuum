@@ -18,7 +18,7 @@ public struct IOSLiveView: View {
     /// the source of truth for the picker; the Mac's `setAutoReviveEnabled`
     /// is the source of truth for AutoReviver behavior.
     @State private var autoRevive: [TahoeProvider: Bool] = [
-        .claude: true, .codex: true, .gemini: true
+        .claude: true, .codex: true, .gemini: true, .grok: false
     ]
     @State private var settingsPresented: Bool = false
     @State private var refreshing: Bool = false
@@ -54,6 +54,7 @@ public struct IOSLiveView: View {
         case .gemini: return .gemini
         case .opencode: return .opencode  // PR #31
         case .cursor: return .cursor
+        case .grok: return .grok
         }
     }
 
@@ -152,14 +153,14 @@ public struct IOSLiveView: View {
                             Text("Keep 5h timer ticking")
                                 .font(TahoeFont.body(14, weight: .bold))
                                 .foregroundStyle(t.fg)
-                            Text(provider == .opencode
-                                 ? "Auto-revive unavailable for OpenCode"
+                            Text(provider == .opencode || provider == .grok
+                                 ? "Auto-revive unavailable for \(provider.displayName)"
                                  : "Auto-revive · " + (autoRevive[provider] ?? false ? "last fired \(row.autoReviveAgo)" : "off"))
                                 .font(TahoeFont.body(11.5))
                                 .foregroundStyle(t.fg3)
                         }
                         Spacer()
-                        if provider == .opencode {
+                        if provider == .opencode || provider == .grok {
                             Text("Unavailable")
                                 .font(TahoeFont.body(11, weight: .bold))
                                 .foregroundStyle(t.fg3)

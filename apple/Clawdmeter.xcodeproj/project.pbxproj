@@ -353,6 +353,7 @@
 		ECB0775FEF1BF8D1B9D4B339 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE036C3B197F45A234547AD /* MarkdownRenderer.swift */; };
 		ED74E95DB9CD21EDB7AD21F6 /* MacCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 467BAF6E9E5D52A492CEF344 /* MacCodeView.swift */; };
 		EDF8A47DEA8AA968DC543046 /* ChatStreamWebSocketChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC56D7440BE0E567075D87F5 /* ChatStreamWebSocketChannel.swift */; };
+		C8A10241D5A747FA9D0A1001 /* GrokAnalyticsRangeAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8A10241D5A747FA9D0A1000 /* GrokAnalyticsRangeAdapterTests.swift */; };
 		EE224D95613FEF7BB1DE849D /* GrokHeadlessDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 856C7552A929C04A22490BB6 /* GrokHeadlessDriverTests.swift */; };
 		EED00F050E7E1F9D4CE12AED /* WireV14ContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B86DE3B0E9C4A31A3EB01E82 /* WireV14ContractTests.swift */; };
 		F0BF40F959BBEF77FF304822 /* GitHubReleaseConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCB7FB7DB2059E1F3425D94C /* GitHubReleaseConstants.swift */; };
@@ -667,6 +668,7 @@
 		84E9F4135D88422C10ADF505 /* RunProfileManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunProfileManager.swift; sourceTree = "<group>"; };
 		8502D79883F8A1C3ED82A085 /* RepoEnvVariablesSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoEnvVariablesSettingsView.swift; sourceTree = "<group>"; };
 		8524794C9A655A7937BDCB51 /* VendorProvisioningService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VendorProvisioningService.swift; sourceTree = "<group>"; };
+		C8A10241D5A747FA9D0A1000 /* GrokAnalyticsRangeAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokAnalyticsRangeAdapterTests.swift; sourceTree = "<group>"; };
 		856C7552A929C04A22490BB6 /* GrokHeadlessDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokHeadlessDriverTests.swift; sourceTree = "<group>"; };
 		85E7DC29DED7B2A2FE149E9E /* IOSMarkdownDocumentTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSMarkdownDocumentTabView.swift; sourceTree = "<group>"; };
 		87DB105B08B1AE734AF7FF4B /* TranscriptPathLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptPathLinks.swift; sourceTree = "<group>"; };
@@ -1249,6 +1251,7 @@
 				483357794C2704F3A1892570 /* F1cWireChatParityTests.swift */,
 				012447D961770BC6D8F59436 /* F1dWireChatParityTests.swift */,
 				C7E5B17BFEC181317FE13905 /* GitDiffStoreTests.swift */,
+				C8A10241D5A747FA9D0A1000 /* GrokAnalyticsRangeAdapterTests.swift */,
 				856C7552A929C04A22490BB6 /* GrokHeadlessDriverTests.swift */,
 				B402D2971401AAA603A1AC75 /* HarnessProcessReaperTests.swift */,
 				A1441677BF0D54C2F2B6D382 /* HarnessProviderOptInTests.swift */,
@@ -1949,6 +1952,7 @@
 				36C488FE08B36947E3A98EF9 /* F1cWireChatParityTests.swift in Sources */,
 				2E243A6E1AC3086560AA1038 /* F1dWireChatParityTests.swift in Sources */,
 				8EADCCDA5DD5DDD4F91F3334 /* GitDiffStoreTests.swift in Sources */,
+				C8A10241D5A747FA9D0A1001 /* GrokAnalyticsRangeAdapterTests.swift in Sources */,
 				EE224D95613FEF7BB1DE849D /* GrokHeadlessDriverTests.swift in Sources */,
 				07107E18CE3DA43EC7619E2F /* HarnessProcessReaperTests.swift in Sources */,
 				4A5E2E079789F857DA43058F /* HarnessProviderOptInTests.swift in Sources */,
