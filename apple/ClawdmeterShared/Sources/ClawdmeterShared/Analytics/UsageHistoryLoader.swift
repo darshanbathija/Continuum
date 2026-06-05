@@ -1482,7 +1482,12 @@ struct AnalyticsCache: Codable, Sendable {
     // hints from parent Task prompts, and Cursor's persisted `tool` context
     // blobs count as input tokens instead of being dropped. v15 caches can
     // underprice long multi-subagent Cursor work, so force a one-time reparse.
-    static let currentVersion: Int = 16
+    // v17 (2026-06-06): Cursor Agent transcript estimates now count visible
+    // context per assistant request instead of once per message, and Cursor KV
+    // parsing accepts nested provider model metadata plus Bedrock tool-call
+    // fallback attribution. v16 caches undercount Claude-heavy Cursor subagent
+    // work, so force another one-time reparse.
+    static let currentVersion: Int = 17
 
     let version: Int
     var files: [String: FileEntry]

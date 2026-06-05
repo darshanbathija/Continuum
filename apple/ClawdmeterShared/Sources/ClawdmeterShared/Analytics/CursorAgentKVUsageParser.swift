@@ -10,6 +10,12 @@ import SQLite3
 /// expose first-party token counters, so this parser estimates tokens from the
 /// persisted input/output text and lets `Pricing` attach known model rates.
 public enum CursorAgentKVUsageParser {
+    private struct ModelFallbacks {
+        var anthropicBedrock: String?
+
+        static let empty = ModelFallbacks(anthropicBedrock: nil)
+    }
+
     public static func defaultStateDatabaseURL() -> URL? {
         ClawdmeterRealHome.url()
             .appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
@@ -35,6 +41,9 @@ public enum CursorAgentKVUsageParser {
         defer { sqlite3_finalize(stmt) }
 
         let fallbackTimestamp = sqliteMtime(url) ?? Date(timeIntervalSince1970: 0)
+        let modelFallbacks = collectModelFallbacks(stmt: stmt)
+        sqlite3_reset(stmt)
+
         var records: [UsageRecord] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             guard let keyPtr = sqlite3_column_text(stmt, 0),
@@ -47,7 +56,12 @@ public enum CursorAgentKVUsageParser {
                 continue
             }
             let data = Data(bytes: pointer, count: length)
-            if let record = parseBlob(key: key, data: data, fallbackTimestamp: fallbackTimestamp) {
+            if let record = parseBlob(
+                key: key,
+                data: data,
+                fallbackTimestamp: fallbackTimestamp,
+                modelFallbacks: modelFallbacks
+            ) {
                 records.append(record)
             }
         }
@@ -55,8 +69,17 @@ public enum CursorAgentKVUsageParser {
     }
 
     public static func parseBlob(key: String, data: Data, fallbackTimestamp: Date) -> UsageRecord? {
+        parseBlob(key: key, data: data, fallbackTimestamp: fallbackTimestamp, modelFallbacks: .empty)
+    }
+
+    private static func parseBlob(
+        key: String,
+        data: Data,
+        fallbackTimestamp: Date,
+        modelFallbacks: ModelFallbacks
+    ) -> UsageRecord? {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              hasCursorProviderOptions(object),
+              containsCursorProviderOptions(object),
               let role = (object["role"] as? String)?.lowercased(),
               let content = object["content"] else {
             return nil
@@ -78,7 +101,9 @@ public enum CursorAgentKVUsageParser {
         let text = textForInference(in: content)
         let timestamp = embeddedDate(in: text) ?? fallbackTimestamp
         let repo = inferRepo(from: text)
-        let model = meaningfulModel(modelName(in: object)) ?? "composer-2.5-fast"
+        let model = meaningfulModel(modelName(in: object))
+            ?? inferredModel(fromToolCallIDsIn: content, fallbacks: modelFallbacks)
+            ?? "composer-2.5-fast"
 
         return UsageRecord(
             provider: .cursor,
@@ -90,11 +115,39 @@ public enum CursorAgentKVUsageParser {
         )
     }
 
-    private static func hasCursorProviderOptions(_ object: [String: Any]) -> Bool {
-        guard let providerOptions = object["providerOptions"] as? [String: Any] else {
-            return false
+    private static func collectModelFallbacks(stmt: OpaquePointer) -> ModelFallbacks {
+        var claudeCounts: [String: Int] = [:]
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard sqlite3_column_type(stmt, 1) == SQLITE_BLOB else { continue }
+            let length = Int(sqlite3_column_bytes(stmt, 1))
+            guard length > 0, let pointer = sqlite3_column_blob(stmt, 1) else { continue }
+            let data = Data(bytes: pointer, count: length)
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (object["role"] as? String)?.lowercased() == "assistant",
+                  let model = meaningfulModel(modelName(in: object)) else {
+                continue
+            }
+            if model.lowercased().hasPrefix("claude-") {
+                claudeCounts[model, default: 0] += 1
+            }
         }
-        return providerOptions["cursor"] != nil
+        let claude = claudeCounts.max { lhs, rhs in
+            if lhs.value == rhs.value { return lhs.key > rhs.key }
+            return lhs.value < rhs.value
+        }?.key
+        return ModelFallbacks(anthropicBedrock: claude)
+    }
+
+    private static func containsCursorProviderOptions(_ value: Any) -> Bool {
+        if let array = value as? [Any] {
+            return array.contains { containsCursorProviderOptions($0) }
+        }
+        guard let dict = value as? [String: Any] else { return false }
+        if let providerOptions = dict["providerOptions"] as? [String: Any],
+           providerOptions["cursor"] != nil {
+            return true
+        }
+        return dict.values.contains { containsCursorProviderOptions($0) }
     }
 
     private static func estimatedCharacters(in value: Any) -> Int {
@@ -175,6 +228,31 @@ public enum CursorAgentKVUsageParser {
             return modelName(in: content)
         }
         return nil
+    }
+
+    private static func inferredModel(fromToolCallIDsIn value: Any, fallbacks: ModelFallbacks) -> String? {
+        let ids = toolCallIDs(in: value)
+        if ids.contains(where: { $0.hasPrefix("toolu_bdrk_") }) {
+            return fallbacks.anthropicBedrock
+        }
+        return nil
+    }
+
+    private static func toolCallIDs(in value: Any) -> [String] {
+        if let array = value as? [Any] {
+            return array.flatMap { toolCallIDs(in: $0) }
+        }
+        guard let dict = value as? [String: Any] else { return [] }
+        var out: [String] = []
+        for key in ["toolCallId", "tool_call_id", "id"] {
+            if let id = dict[key] as? String {
+                out.append(id)
+            }
+        }
+        for value in dict.values {
+            out.append(contentsOf: toolCallIDs(in: value))
+        }
+        return out
     }
 
     private static func meaningfulModel(_ raw: String?) -> String? {

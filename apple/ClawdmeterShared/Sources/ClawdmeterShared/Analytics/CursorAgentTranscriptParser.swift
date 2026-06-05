@@ -36,6 +36,7 @@ public enum CursorAgentTranscriptParser {
             .flatMap { modelHints[$0] }
 
         var records: [UsageRecord] = []
+        var accumulatedContextCharacters = 0
         for (offset, rawLine) in lines.enumerated() {
             guard let object = try? JSONSerialization.jsonObject(with: Data(rawLine)) as? [String: Any] else {
                 continue
@@ -43,34 +44,37 @@ public enum CursorAgentTranscriptParser {
             let role = (object["role"] as? String)?.lowercased() ?? ""
             guard let message = object["message"] else { continue }
 
-            let model = meaningfulModel(modelName(in: message)) ?? sessionModelHint ?? "composer-2.5-fast"
+            let model = meaningfulModel(providerModelName(in: message)) ?? sessionModelHint ?? "composer-2.5-fast"
             let charCount = max(0, estimatedCharacters(in: message))
-            guard charCount > 0 else { continue }
-
-            let estimatedTokens = max(1, (charCount + 3) / 4)
-            let tokens: TokenTotals
             switch role {
             case "user":
-                tokens = TokenTotals(inputTokens: estimatedTokens, requestCount: 1)
+                accumulatedContextCharacters += charCount
             case "assistant":
-                tokens = TokenTotals(outputTokens: estimatedTokens, requestCount: 1)
+                let inputTokens = accumulatedContextCharacters > 0 ? max(1, (accumulatedContextCharacters + 3) / 4) : 0
+                let outputTokens = charCount > 0 ? max(1, (charCount + 3) / 4) : 0
+                guard inputTokens > 0 || outputTokens > 0 else { continue }
+                let tokens = TokenTotals(
+                    inputTokens: inputTokens,
+                    outputTokens: outputTokens,
+                    requestCount: 1
+                )
+                records.append(UsageRecord(
+                    provider: .cursor,
+                    timestamp: timestamp,
+                    model: model,
+                    tokens: tokens,
+                    repo: repo,
+                    dedupKey: [
+                        "cursor-agent-transcript",
+                        sessionId,
+                        String(offset),
+                        role
+                    ].joined(separator: ":")
+                ))
+                accumulatedContextCharacters += charCount
             default:
-                continue
+                accumulatedContextCharacters += charCount
             }
-
-            records.append(UsageRecord(
-                provider: .cursor,
-                timestamp: timestamp,
-                model: model,
-                tokens: tokens,
-                repo: repo,
-                dedupKey: [
-                    "cursor-agent-transcript",
-                    sessionId,
-                    String(offset),
-                    role
-                ].joined(separator: ":")
-            ))
         }
         return records
     }
@@ -150,10 +154,10 @@ public enum CursorAgentTranscriptParser {
         return parts.joined(separator: "\n")
     }
 
-    private static func modelName(in value: Any) -> String? {
+    private static func providerModelName(in value: Any) -> String? {
         if let array = value as? [Any] {
             for item in array {
-                if let model = modelName(in: item) {
+                if let model = providerModelName(in: item) {
                     return model
                 }
             }
@@ -167,12 +171,10 @@ public enum CursorAgentTranscriptParser {
            let model = cursor["modelName"] as? String {
             return model
         }
-        if let input = dict["input"] as? [String: Any],
-           let model = input["model"] as? String {
-            return model
-        }
+        if let model = dict["model"] as? String { return model }
+        if let model = dict["modelName"] as? String { return model }
         if let content = dict["content"] {
-            return modelName(in: content)
+            return providerModelName(in: content)
         }
         return nil
     }

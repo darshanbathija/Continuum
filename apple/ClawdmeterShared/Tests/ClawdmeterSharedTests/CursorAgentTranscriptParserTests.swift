@@ -25,16 +25,49 @@ final class CursorAgentTranscriptParserTests: XCTestCase {
 
         let records = try CursorAgentTranscriptParser.parse(file: file)
 
-        XCTAssertEqual(records.count, 2)
-        XCTAssertEqual(records.map(\.provider), [.cursor, .cursor])
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.map(\.provider), [.cursor])
         XCTAssertEqual(records[0].repo, repo.path)
-        XCTAssertEqual(records[1].repo, repo.path)
         XCTAssertEqual(records[0].model, "composer-2.5-fast")
-        XCTAssertEqual(records[1].model, "composer-2.5-fast")
         XCTAssertGreaterThan(records[0].tokens.inputTokens, 0)
-        XCTAssertGreaterThan(records[1].tokens.outputTokens, 0)
+        XCTAssertGreaterThan(records[0].tokens.outputTokens, 0)
         XCTAssertNotNil(records[0].dedupKey)
-        XCTAssertNotNil(records[1].dedupKey)
+    }
+
+    func test_parseAgentTranscript_estimatesCumulativeContextPerAssistantRequest() throws {
+        let dir = try tempDir()
+        let file = dir.appendingPathComponent("session.jsonl")
+        let firstPrompt = String(repeating: "first prompt ", count: 80)
+        let firstReply = String(repeating: "first reply ", count: 80)
+        let secondPrompt = String(repeating: "second prompt ", count: 80)
+        let secondReply = String(repeating: "second reply ", count: 80)
+        let json = """
+        {"role":"user","message":{"content":[{"type":"text","text":\(jsonString(firstPrompt))}]}}
+        {"role":"assistant","message":{"content":[{"type":"text","text":\(jsonString(firstReply))}]}}
+        {"role":"user","message":{"content":[{"type":"text","text":\(jsonString(secondPrompt))}]}}
+        {"role":"assistant","message":{"content":[{"type":"text","text":\(jsonString(secondReply))}]}}
+        """
+        try json.write(to: file, atomically: true, encoding: .utf8)
+
+        let records = try CursorAgentTranscriptParser.parse(file: file)
+
+        XCTAssertEqual(records.count, 2)
+        XCTAssertGreaterThan(records[1].tokens.inputTokens, records[0].tokens.inputTokens)
+        XCTAssertGreaterThan(records[1].tokens.totalTokens, records[1].tokens.outputTokens)
+    }
+
+    func test_parseAgentTranscript_doesNotTreatTaskTargetModelAsParentModel() throws {
+        let dir = try tempDir()
+        let file = dir.appendingPathComponent("parent.jsonl")
+        let json = """
+        {"role":"user","message":{"content":[{"type":"text","text":"Launch an Opus worker."}]}}
+        {"role":"assistant","message":{"content":[{"type":"text","text":"Launching worker."},{"type":"tool_use","name":"Task","input":{"description":"Review","model":"claude-opus-4-8-thinking-high","prompt":"Review deeply."}}]}}
+        """
+        try json.write(to: file, atomically: true, encoding: .utf8)
+
+        let records = try CursorAgentTranscriptParser.parse(file: file)
+
+        XCTAssertEqual(records.map(\.model), ["composer-2.5-fast"])
     }
 
     func test_usageHistoryLoader_includesCursorAgentTranscriptsAndDedupesDuplicateCopies() async throws {
@@ -178,6 +211,74 @@ final class CursorAgentTranscriptParserTests: XCTestCase {
         XCTAssertGreaterThan(record.tokens.inputTokens, 0)
         XCTAssertEqual(record.tokens.outputTokens, 0)
         XCTAssertEqual(record.model, "composer-2.5-fast")
+    }
+
+    func test_parseAgentKVBlob_readsNestedCursorProviderModel() throws {
+        let object: [String: Any] = [
+            "role": "assistant",
+            "content": [[
+                "type": "reasoning",
+                "text": String(repeating: "opus reasoning ", count: 100),
+                "providerOptions": [
+                    "cursor": [
+                        "modelName": "claude-opus-4-8-thinking-high",
+                    ],
+                ],
+            ]],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: object)
+
+        let record = try XCTUnwrap(CursorAgentKVUsageParser.parseBlob(
+            key: "agentKv:blob:nested-assistant",
+            data: data,
+            fallbackTimestamp: Date(timeIntervalSince1970: 1)
+        ))
+
+        XCTAssertEqual(record.model, "claude-opus-4-8-thinking-high")
+        XCTAssertEqual(record.tokens.inputTokens, 0)
+        XCTAssertGreaterThan(record.tokens.outputTokens, 0)
+    }
+
+    func test_parseAgentKVDatabase_attributesBedrockToolResultsToObservedClaudeModel() throws {
+        let dir = try tempDir()
+        let db = dir.appendingPathComponent("state.vscdb")
+        let assistantObject: [String: Any] = [
+            "role": "assistant",
+            "content": [[
+                "type": "reasoning",
+                "text": "thinking",
+                "providerOptions": [
+                    "cursor": [
+                        "modelName": "claude-opus-4-8-thinking-high",
+                    ],
+                ],
+            ]],
+        ]
+        let toolObject: [String: Any] = [
+            "role": "tool",
+            "content": [[
+                "type": "tool-result",
+                "toolCallId": "toolu_bdrk_01abc",
+                "toolName": "Read",
+                "result": String(repeating: "claude tool context ", count: 100),
+            ]],
+            "providerOptions": [
+                "cursor": [
+                    "highLevelToolCallResult": ["isError": false],
+                ],
+            ],
+        ]
+        try writeCursorAgentKVDatabase(db, rows: [
+            ("agentKv:blob:assistant", try JSONSerialization.data(withJSONObject: assistantObject)),
+            ("agentKv:blob:tool", try JSONSerialization.data(withJSONObject: toolObject)),
+        ])
+
+        let records = CursorAgentKVUsageParser.parse(databaseURL: db)
+        let tool = try XCTUnwrap(records.first { $0.dedupKey?.contains("agentKv:blob:tool") == true })
+
+        XCTAssertEqual(tool.model, "claude-opus-4-8-thinking-high")
+        XCTAssertGreaterThan(tool.tokens.inputTokens, 0)
+        XCTAssertEqual(tool.tokens.outputTokens, 0)
     }
 
     func test_usageHistoryLoader_includesCursorAgentKVDatabase() async throws {
