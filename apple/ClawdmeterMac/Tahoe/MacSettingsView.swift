@@ -193,10 +193,9 @@ public struct MacSettingsView: View {
                      sub: "Continuum is dark-only in v1 — the Quiet Black Workbench palette.") {
             SettingsRow(label: "Theme", hint: "A calibrated light variant is a deliberate later addition.") {
                 HStack(spacing: 8) {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(ContinuumTokens.surface1)
-                        .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5))
-                        .frame(width: 22, height: 16)
+                    Circle()
+                        .fill(ContinuumTokens.live)
+                        .frame(width: 6, height: 6)
                     Text("Quiet Black · Dark")
                         .font(ContinuumFont.mono(12, weight: .medium))
                         .foregroundStyle(ContinuumTokens.fg2)
@@ -225,6 +224,11 @@ public struct MacSettingsView: View {
                 .pickerStyle(.segmented)
                 .frame(width: 180)
             }
+            TahoeHair().padding(.vertical, 14)
+            SyntaxThemePreview(
+                theme: presentationStore.snapshot.syntaxTheme,
+                diffMode: presentationStore.snapshot.diffDisplayMode
+            )
         }
     }
 
@@ -803,6 +807,180 @@ private struct SettingsRow<Control: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             control
+        }
+    }
+}
+
+private struct SyntaxThemePreview: View {
+    let theme: CodeSyntaxTheme
+    let diffMode: DiffDisplayMode
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("PREVIEW")
+                    .font(ContinuumFont.etched(10))
+                    .tracking(0.6)
+                    .foregroundStyle(ContinuumTokens.fg3)
+                Spacer()
+                Text("\(theme.label) · \(diffMode.label)")
+                    .font(ContinuumFont.mono(11, weight: .semibold))
+                    .foregroundStyle(previewForeground)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("func restyleUpdaterSurface() {")
+                    .font(ContinuumFont.mono(12, weight: .medium))
+                    .foregroundStyle(previewForeground)
+                Text("    settings.preview = .live")
+                    .font(ContinuumFont.mono(12, weight: .medium))
+                    .foregroundStyle(accentForeground)
+                Text("}")
+                    .font(ContinuumFont.mono(12, weight: .medium))
+                    .foregroundStyle(previewForeground)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(previewBackground, in: RoundedRectangle(cornerRadius: ContinuumTokens.Radius.card, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: ContinuumTokens.Radius.card, style: .continuous)
+                    .strokeBorder(previewBorder, lineWidth: 0.5)
+            }
+
+            diffPreview
+        }
+    }
+
+    @ViewBuilder
+    private var diffPreview: some View {
+        switch diffMode {
+        case .unified:
+            VStack(alignment: .leading, spacing: 4) {
+                diffLine("- native setting looked unchanged", foreground: removalForeground, background: removalBackground)
+                diffLine("+ live preview updates immediately", foreground: additionForeground, background: additionBackground)
+            }
+        case .split:
+            HStack(alignment: .top, spacing: 8) {
+                diffPane(title: "Before", text: "native setting looked unchanged", foreground: removalForeground, background: removalBackground)
+                diffPane(title: "After", text: "live preview updates immediately", foreground: additionForeground, background: additionBackground)
+            }
+        }
+    }
+
+    private func diffLine(_ text: String, foreground: Color, background: Color) -> some View {
+        Text(text)
+            .font(ContinuumFont.mono(11, weight: .medium))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(background, in: RoundedRectangle(cornerRadius: ContinuumTokens.Radius.row, style: .continuous))
+    }
+
+    private func diffPane(title: String, text: String, foreground: Color, background: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(ContinuumFont.etched(9.5))
+                .tracking(0.5)
+                .foregroundStyle(ContinuumTokens.fg3)
+            Text(text)
+                .font(ContinuumFont.mono(11, weight: .medium))
+                .foregroundStyle(foreground)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(background, in: RoundedRectangle(cornerRadius: ContinuumTokens.Radius.row, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var previewBackground: Color {
+        switch theme {
+        case .tahoe:
+            return Color(.sRGB, red: 0.05, green: 0.09, blue: 0.10, opacity: 0.55)
+        case .graphite:
+            return ContinuumTokens.surface2
+        case .xcode:
+            return Color(.sRGB, red: 0.05, green: 0.06, blue: 0.10, opacity: 0.68)
+        }
+    }
+
+    private var previewForeground: Color {
+        switch theme {
+        case .tahoe:
+            return Color(.sRGB, red: 0.78, green: 0.90, blue: 0.90)
+        case .graphite:
+            return ContinuumTokens.fg2
+        case .xcode:
+            return Color(.sRGB, red: 0.74, green: 0.80, blue: 0.94)
+        }
+    }
+
+    private var accentForeground: Color {
+        switch theme {
+        case .tahoe:
+            return Color(.sRGB, red: 0.32, green: 0.92, blue: 0.66)
+        case .graphite:
+            return ContinuumTokens.fg
+        case .xcode:
+            return Color(.sRGB, red: 0.46, green: 0.95, blue: 0.60)
+        }
+    }
+
+    private var previewBorder: Color {
+        switch theme {
+        case .tahoe:
+            return Color(.sRGB, red: 0.32, green: 0.92, blue: 0.66, opacity: 0.18)
+        case .graphite:
+            return ContinuumTokens.hairline
+        case .xcode:
+            return Color(.sRGB, red: 0.46, green: 0.62, blue: 0.95, opacity: 0.22)
+        }
+    }
+
+    private var additionForeground: Color {
+        switch theme {
+        case .tahoe:
+            return Color(.sRGB, red: 0.32, green: 0.92, blue: 0.66)
+        case .graphite:
+            return Color(.sRGB, red: 0.76, green: 0.88, blue: 0.76)
+        case .xcode:
+            return Color(.sRGB, red: 0.46, green: 0.95, blue: 0.60)
+        }
+    }
+
+    private var removalForeground: Color {
+        switch theme {
+        case .tahoe:
+            return Color(.sRGB, red: 1.0, green: 0.48, blue: 0.54)
+        case .graphite:
+            return Color(.sRGB, red: 0.92, green: 0.72, blue: 0.72)
+        case .xcode:
+            return Color(.sRGB, red: 1.0, green: 0.50, blue: 0.60)
+        }
+    }
+
+    private var additionBackground: Color {
+        switch theme {
+        case .tahoe:
+            return Color.green.opacity(0.16)
+        case .graphite:
+            return Color.gray.opacity(0.18)
+        case .xcode:
+            return Color(.sRGB, red: 0.18, green: 0.72, blue: 0.36, opacity: 0.18)
+        }
+    }
+
+    private var removalBackground: Color {
+        switch theme {
+        case .tahoe:
+            return Color.red.opacity(0.16)
+        case .graphite:
+            return Color.gray.opacity(0.16)
+        case .xcode:
+            return Color(.sRGB, red: 0.86, green: 0.12, blue: 0.20, opacity: 0.18)
         }
     }
 }

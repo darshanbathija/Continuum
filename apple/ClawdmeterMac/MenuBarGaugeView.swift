@@ -119,7 +119,7 @@ struct MenuBarGaugeView {
             ))
         }
 
-        let image = imageFromAttributedString(composite, template: template)
+        let image = imageFromAttributedString(composite)
         cacheLock.lock()
         labelCache[key] = image
         cacheLock.unlock()
@@ -155,7 +155,7 @@ struct MenuBarGaugeView {
         composite.append(NSAttributedString(attachment: attach))
 
         composite.append(NSAttributedString(string: "  —", attributes: attrs))
-        let image = imageFromAttributedString(composite, template: template)
+        let image = imageFromAttributedString(composite)
         cacheLock.lock()
         cache[cacheKey] = image
         cacheLock.unlock()
@@ -185,14 +185,14 @@ struct MenuBarGaugeView {
         attach.bounds = CGRect(x: 0, y: -4, width: badgeSize, height: badgeSize)
         composite.append(NSAttributedString(attachment: attach))
         composite.append(NSAttributedString(string: "  \(text)", attributes: attrs))
-        let image = imageFromAttributedString(composite, template: template)
+        let image = imageFromAttributedString(composite)
         cacheLock.lock()
         cache[cacheKey] = image
         cacheLock.unlock()
         return image
     }
 
-    private static func imageFromAttributedString(_ attr: NSAttributedString, template: Bool = true) -> NSImage {
+    private static func imageFromAttributedString(_ attr: NSAttributedString) -> NSImage {
         let size = attr.size()
         let width = ceil(size.width) + 4
         let height: CGFloat = 22  // matches menu bar usable height; lets the 18pt burst breathe
@@ -201,7 +201,11 @@ struct MenuBarGaugeView {
             attr.draw(at: CGPoint(x: 2, y: y))
             return true
         }
-        img.isTemplate = template
+        // Status-item images must be template masks so AppKit can tint them
+        // against both light and dark menu-bar/wallpaper appearances. The
+        // provider attachment above may choose its own asset loading mode, but
+        // the final composite is a single menu-bar glyph.
+        img.isTemplate = true
         return img
     }
 
