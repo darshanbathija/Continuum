@@ -51,8 +51,14 @@ public enum RelayEnvironment: String, Codable, Sendable, CaseIterable {
     /// a malicious QR redirect iOS to an attacker-owned Worker.
     static func isKnownHostedWorkerHost(_ host: String) -> Bool {
         switch host {
-        case "clawdmeter-relay-staging.darshan-1ba.workers.dev",
-             "clawdmeter-relay.darshan-1ba.workers.dev":
+        // The live relay Workers (account subdomain `continuumai`). These MUST
+        // match `baseURL` exactly — a stale entry here silently rejects every
+        // pairing QR the Mac mints (isValidRelayURL → nil → scanner refuses).
+        // Verified live 2026-06-05: continuumai hosts answer; the prior
+        // `darshan-1ba` hosts no longer resolve. Keep exact (no wildcard) so a
+        // malicious QR can't redirect iOS to an attacker-owned Worker.
+        case "clawdmeter-relay-staging.continuumai.workers.dev",
+             "clawdmeter-relay.continuumai.workers.dev":
             return true
         default:
             return false

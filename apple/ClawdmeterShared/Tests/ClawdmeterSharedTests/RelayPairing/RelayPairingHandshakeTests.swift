@@ -160,10 +160,9 @@ final class RelayPairingHandshakeTests: XCTestCase {
     /// and a bundle past the 31-day cap must be rejected (caps a buggy/hostile
     /// far-future session).
     func testDurableTTLAcceptedAndCapEnforced() throws {
-        // Use a known-good allowlisted relay host so this test isolates the
-        // TTL behavior (the bare `RelayEnvironment.staging.baseURL` host is not
-        // in isValidRelayURL's allowlist — that's a separate pre-existing gap).
-        let goodRelay = "wss://clawdmeter-relay-staging.darshan-1ba.workers.dev"
+        // The live, allowlisted relay host (what the Mac actually mints), so
+        // this test isolates the TTL behavior from the host allowlist.
+        let goodRelay = RelayEnvironment.staging.baseURL
         func bundleURL(ttlOffset: UInt64) throws -> String {
             let now = UInt64(Date().timeIntervalSince1970)
             return try RelayPairingBundle(
@@ -207,7 +206,7 @@ final class RelayPairingHandshakeTests: XCTestCase {
             iosTok: makeValidToken(),
             ecdhPub: RelayPairingKeyPair().publicKeyBase64URL,
             ttl: UInt64(Date().timeIntervalSince1970) + 900,
-            relayUrl: "wss://clawdmeter-relay-staging.darshan-1ba.workers.dev"
+            relayUrl: "wss://clawdmeter-relay-staging.continuumai.workers.dev"
         )
         let url = try bundle.encodeToURL()
         XCTAssertEqual(RelayPairingBundle.decode(fromURL: url), bundle)
