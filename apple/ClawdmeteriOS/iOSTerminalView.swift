@@ -120,6 +120,12 @@ struct iOSTerminalView: UIViewRepresentable {
         private var ctrlEngaged = false
         var onConnectionStateChange: (IOSTerminalConnectionState) -> Void
 
+        /// Track B (B1.6): when the relay is the default transport, the terminal
+        /// rides the mux (full-duplex: output via onFrame, input/resize via
+        /// sendInput) instead of a direct WS. Captured at connect; nil ⇒ legacy.
+        private var relayMux: RelayMuxClient?
+        private var relayOpId: String?
+
         init(
             sessionId: UUID,
             host: String,
@@ -137,6 +143,12 @@ struct iOSTerminalView: UIViewRepresentable {
         }
 
         func connect() {
+            // Track B (B1.6): relay multiplex when it's the default transport.
+            if let mux = IOSRelayClientCoordinator.shared.muxClient {
+                relayMux = mux
+                relayConnect(mux)
+                return
+            }
             setState(.connecting)
             guard let url = URL(string: "ws://\(AgentControlClient.urlHostLiteral(host)):\(wsPort)/") else {
                 setState(.failed("Bad terminal tunnel URL."))
@@ -168,6 +180,13 @@ struct iOSTerminalView: UIViewRepresentable {
         }
 
         func disconnect() {
+            if let mux = relayMux, let opId = relayOpId {
+                Task { await mux.unsubscribe(opId) }
+                relayOpId = nil
+                relayMux = nil
+                setState(.disconnected)
+                return
+            }
             task?.cancel(with: .goingAway, reason: nil)
             task = nil
             setState(.disconnected)
@@ -203,12 +222,34 @@ struct iOSTerminalView: UIViewRepresentable {
             case .string(let s): bytes = Data(s.utf8)
             @unknown default: return
             }
-            guard let first = bytes.first,
-                  let tag = TerminalFrameTag(rawValue: first) else { return }
-            let payload = bytes.dropFirst()
+            feedTaggedBytes(bytes)
+        }
+
+        /// Render one daemon→iOS tagged frame. Shared by the direct-WS
+        /// (`dispatch`) and relay (`onFrame`) paths so both use the same
+        /// tag-codec; only `.output` is fed to the terminal.
+        private func feedTaggedBytes(_ bytes: Data) {
+            guard let first = bytes.first, let tag = TerminalFrameTag(rawValue: first) else { return }
             if tag == .output {
-                let arr = Array(payload)
-                terminalView?.feed(byteArray: ArraySlice(arr))
+                terminalView?.feed(byteArray: ArraySlice(Array(bytes.dropFirst())))
+            }
+        }
+
+        /// Track B (B1.6): open the terminal over the relay multiplex. Output
+        /// arrives via onFrame (same tag-codec); input/resize go up via
+        /// sendInput (full-duplex). The mux + IOSRelayClient own reconnect.
+        private func relayConnect(_ mux: RelayMuxClient) {
+            setState(.connecting)
+            let spec = RelaySubscribeSpec(op: "terminal", sessionId: sessionId.uuidString, paneId: paneId)
+            Task { [weak self] in
+                guard let self else { return }
+                let opId = await mux.subscribe(spec, handlers: .init(
+                    onFrame: { [weak self] data in self?.feedTaggedBytes(data) },
+                    onEnd: { [weak self] in self?.setState(.disconnected) },
+                    onError: { [weak self] msg in self?.setState(.failed(msg)) }
+                ))
+                self.relayOpId = opId
+                self.setState(.connected)
             }
         }
 
@@ -233,6 +274,10 @@ struct iOSTerminalView: UIViewRepresentable {
         func sendRaw(_ bytes: [UInt8]) {
             var frame = Data([TerminalFrameTag.input.rawValue])
             frame.append(contentsOf: bytes)
+            if let mux = relayMux, let opId = relayOpId {
+                Task { await mux.sendInput(opId, frame) }
+                return
+            }
             task?.send(.data(frame)) { _ in }
         }
 
@@ -245,6 +290,10 @@ struct iOSTerminalView: UIViewRepresentable {
             guard let body = try? JSONEncoder().encode(resize) else { return }
             var frame = Data([TerminalFrameTag.resize.rawValue])
             frame.append(body)
+            if let mux = relayMux, let opId = relayOpId {
+                Task { await mux.sendInput(opId, frame) }
+                return
+            }
             task?.send(.data(frame)) { _ in }
         }
 
