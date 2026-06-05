@@ -5057,36 +5057,67 @@ public final class AgentControlServer {
             return
         }
 
-        // Spawn into a new tmux window.
+        // Spawn into a new tmux window — OR, for Claude with the PTY flag on,
+        // a per-session PseudoTerminal (Track A). The two paths differ only in
+        // how the child is launched + whether the session carries a tmux pane;
+        // everything downstream (workspace record, JSONL wiring, response) is
+        // shared. Errors from either path land in the same catch below.
         do {
-            try await tmux.start()  // idempotent
             let resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: cwd)
-            let window = try await tmux.newWindow(
-                cwd: cwd,
-                child: argv,
-                environment: resolvedEnv?.environment ?? [:]
-            )
-            // Phase 2 simplification: pane id = first pane of the new window.
-            // tmux's `list-windows -F '#{pane_id}'` would tell us, but we
-            // derive it lazily for now.
-            let session = try await registry.create(
-                repoKey: req.repoKey,
-                repoDisplayName: (req.repoKey as NSString).lastPathComponent,
-                agent: req.agent,
-                model: req.model,
-                goal: req.goal,
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                tmuxWindowId: window.windowId,
-                tmuxPaneId: window.paneId,
-                planMode: effectivePlanMode,
-                mode: req.useWorktree ? .worktree : .local,
-                effort: req.effort,
-                ownsWorktree: worktreePath != nil,
-                envSetId: resolvedEnv?.set?.id,
-                envSetName: resolvedEnv?.set?.name,
-                id: provisionalSessionId ?? UUID()
-            )
+            let usePty = claudePtyEnabled && req.agent == .claude
+            let session: AgentSession
+            if usePty {
+                // Create the session FIRST (no tmux pane), then single-flight
+                // spawn the PTY host keyed by its id. argv was already verified
+                // non-empty above, so the spawn plan is present.
+                session = try await registry.create(
+                    repoKey: req.repoKey,
+                    repoDisplayName: (req.repoKey as NSString).lastPathComponent,
+                    agent: req.agent,
+                    model: req.model,
+                    goal: req.goal,
+                    worktreePath: worktreePath,
+                    provisioning: provisioning,
+                    tmuxWindowId: nil,
+                    tmuxPaneId: nil,
+                    planMode: effectivePlanMode,
+                    mode: req.useWorktree ? .worktree : .local,
+                    effort: req.effort,
+                    ownsWorktree: worktreePath != nil,
+                    envSetId: resolvedEnv?.set?.id,
+                    envSetName: resolvedEnv?.set?.name,
+                    id: provisionalSessionId ?? UUID()
+                )
+                await ensureClaudePtyWiring()
+                let plan = claudeSpawnPlan(for: session)
+                _ = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { plan })
+            } else {
+                try await tmux.start()  // idempotent
+                let window = try await tmux.newWindow(
+                    cwd: cwd,
+                    child: argv,
+                    environment: resolvedEnv?.environment ?? [:]
+                )
+                // Phase 2 simplification: pane id = first pane of the new window.
+                session = try await registry.create(
+                    repoKey: req.repoKey,
+                    repoDisplayName: (req.repoKey as NSString).lastPathComponent,
+                    agent: req.agent,
+                    model: req.model,
+                    goal: req.goal,
+                    worktreePath: worktreePath,
+                    provisioning: provisioning,
+                    tmuxWindowId: window.windowId,
+                    tmuxPaneId: window.paneId,
+                    planMode: effectivePlanMode,
+                    mode: req.useWorktree ? .worktree : .local,
+                    effort: req.effort,
+                    ownsWorktree: worktreePath != nil,
+                    envSetId: resolvedEnv?.set?.id,
+                    envSetName: resolvedEnv?.set?.name,
+                    id: provisionalSessionId ?? UUID()
+                )
+            }
             recordWorkspaceSession(repoRoot: req.repoKey, sessionId: session.id)
             // Wire up JSONL tail + done-detector + plan-watcher for this
             // session (Phase 4). Best-effort: find the agent's JSONL file
@@ -5124,15 +5155,17 @@ public final class AgentControlServer {
             // prompt does fire (e.g. brand-new worktree), it surfaces
             // through the same PermissionPromptCard the chat workspace
             // renders.
-            let warmupSession = session
-            let warmupPane = window.paneId
-            let warmupTask = Task { [weak self] in
-                await self?.warmupCLIPane(session: warmupSession, paneId: warmupPane)
-                await MainActor.run { [weak self] in
-                    self?.chatWarmupTasks[warmupSession.id] = nil
+            // tmux warmup only — a PTY session has no pane (warmup port is T6).
+            if let warmupPane = session.tmuxPaneId {
+                let warmupSession = session
+                let warmupTask = Task { [weak self] in
+                    await self?.warmupCLIPane(session: warmupSession, paneId: warmupPane)
+                    await MainActor.run { [weak self] in
+                        self?.chatWarmupTasks[warmupSession.id] = nil
+                    }
                 }
+                chatWarmupTasks[session.id] = warmupTask
             }
-            chatWarmupTasks[session.id] = warmupTask
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             if let body = try? encoder.encode(session) {
@@ -6275,6 +6308,15 @@ public final class AgentControlServer {
                 serverLogger.warning("frontier child opencode send failed: \(error.localizedDescription, privacy: .public)")
                 return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: error.localizedDescription)
             }
+        }
+        // Track A: Claude PTY child (flag on) — submit via the host, no pane.
+        if SessionCommandRouter.resolve(routeContext(for: session)) == .claudePty {
+            guard let host = await claudePtyHost(for: session) else {
+                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "agent_cli_not_found")
+            }
+            await host.submitPrompt(text, isChat: session.kind == .chat, isFollowUp: true)
+            await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
         }
         // CLI (Claude / Codex CLI)
         guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
