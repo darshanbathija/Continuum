@@ -33,6 +33,42 @@ final class SessionCommandRouterTests: XCTestCase {
         XCTAssertEqual(SessionCommandRouter.resolve(ctx(agent: .claude)), .tmux)
     }
 
+    // MARK: Track A — .claudePty flag (default OFF keeps tmux byte-identical)
+
+    private func claudeCtx(kind: SessionKind, ptyEnabled: Bool) -> SessionCommandRouter.SessionContext {
+        SessionCommandRouter.SessionContext(agent: .claude, kind: kind, claudePtyEnabled: ptyEnabled)
+    }
+
+    func testClaudeFlagOffStaysTmux() {
+        XCTAssertEqual(SessionCommandRouter.resolve(claudeCtx(kind: .code, ptyEnabled: false)), .tmux)
+        XCTAssertEqual(SessionCommandRouter.resolve(claudeCtx(kind: .chat, ptyEnabled: false)), .tmux)
+    }
+
+    func testClaudeFlagOnResolvesClaudePty() {
+        XCTAssertEqual(SessionCommandRouter.resolve(claudeCtx(kind: .code, ptyEnabled: true)), .claudePty)
+        XCTAssertEqual(SessionCommandRouter.resolve(claudeCtx(kind: .chat, ptyEnabled: true)), .claudePty)
+    }
+
+    func testFlagDoesNotDivertNonClaude() {
+        // The flag only moves Claude. Codex CLI / opencode / SDK are untouched.
+        XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
+            agent: .codex, kind: .chat, codexChatBackend: .cli, claudePtyEnabled: true)), .tmux)
+        XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
+            agent: .codex, kind: .chat, codexChatBackend: .sdk, claudePtyEnabled: true)), .codexSDK)
+        XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
+            agent: .opencode, kind: .code, claudePtyEnabled: true)), .opencodeServe)
+    }
+
+    func testFlagOnButLiveBridgeStillBridge() {
+        // A live ACP bridge still wins (precedence above the claudePty branch).
+        XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
+            agent: .claude, kind: .code, hasLiveBridge: true, claudePtyEnabled: true)), .harnessBridge)
+    }
+
+    func testClaudePtyIsPaneless() {
+        XCTAssertTrue(SessionCommandRoute.claudePty.isPaneless)
+    }
+
     func testCodexCLIChatResolvesTmux() {
         // Codex CLI (not SDK) chat has a real tmux pane → tmux, not codexSDK.
         XCTAssertEqual(
