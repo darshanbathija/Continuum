@@ -104,7 +104,7 @@ struct SessionHoverActions: View {
                 .font(.system(size: 11, weight: .semibold))
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(ContinuumTokens.surface2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(PressableButtonStyle())
         .codeHoverChrome(

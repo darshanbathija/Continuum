@@ -127,7 +127,7 @@ struct VendorProvisioningSettingsView: View {
         subtitle: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title.uppercased())

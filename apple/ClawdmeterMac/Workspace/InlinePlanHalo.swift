@@ -27,30 +27,17 @@ struct InlinePlanHalo: View {
         BodyInvalidationCounter.bump("InlinePlanHalo")
         // Per DESIGN.md: the plan halo aura is STATIC. No repeating-pulse
         // breathing animation — the halo conveys state once, not ambiently.
+        // Quiet Black: no glow halo. The card is a flat raised panel; state is
+        // conveyed by structure + the etched label, not an ambient aura.
         return ZStack {
-            RoundedRectangle(cornerRadius: 38, style: .continuous)
-                .fill(
-                    RadialGradient(
-                        colors: [t.accentGlow.color(opacity: t.muted ? 0.10 : 0.30), .clear],
-                        center: .init(x: 0.5, y: 0.30),
-                        startRadius: 0,
-                        endRadius: 520
-                    )
-                )
-                .blur(radius: 8)
-                .padding(-28)
-                .allowsHitTesting(false)
-
-            TahoeGlass(radius: 20, tone: .raised) {
+            TahoeGlass(radius: 8, tone: .raised) {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 10) {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(
-                                LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom)
-                            )
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(ContinuumTokens.surface2)
                             .frame(width: 28, height: 28)
-                            .overlay(TahoeIcon("sparkles", size: 14).foregroundStyle(.white))
-                            .shadow(color: t.accentDeep.color(opacity: 0.35), radius: 6, x: 0, y: 4)
+                            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5))
+                            .overlay(TahoeIcon("sparkles", size: 14).foregroundStyle(ContinuumTokens.fg))
                         VStack(alignment: .leading, spacing: 1) {
                             Text("Plan ready · review before run")
                                 .font(TahoeFont.body(11.5, weight: .semibold))
@@ -74,12 +61,12 @@ struct InlinePlanHalo: View {
                                 // EXCEPT step 1 which uses accent@18% fill + accent
                                 // text to mark the entry point.
                                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(index == 0 ? t.accentAlpha(0.18) : t.hair2)
+                                    .fill(index == 0 ? ContinuumTokens.selection : ContinuumTokens.hairline2)
                                     .frame(width: 20, height: 20)
                                     .overlay(
                                         Text("\(index + 1)")
                                             .font(TahoeFont.mono(11, weight: .bold))
-                                            .foregroundStyle(index == 0 ? t.accent : t.fg2)
+                                            .foregroundStyle(index == 0 ? ContinuumTokens.fg : ContinuumTokens.fg2)
                                     )
                                 Text(step)
                                     .font(TahoeFont.body(13))

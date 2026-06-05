@@ -1,10 +1,10 @@
 #if canImport(SwiftUI)
 import SwiftUI
 
-/// Generic composer chip — icon + optional label + optional caret. Used in
-/// composer chip rows (Mac IDE, iOS Chat). Mirrors JSX `ComposerChip`.
+/// Composer chip — icon + optional label + optional caret. 24px high, 6px
+/// radius, `surface-2` fill, hairline border, `fg-2`. "Tinted" now means a
+/// neutral selected state (`selection` fill + `fg`), never a terra-cotta tint.
 public struct TahoeComposerChip: View {
-    @Environment(\.tahoe) private var t
     public var icon: String
     public var label: String?
     public var caret: Bool
@@ -21,10 +21,8 @@ public struct TahoeComposerChip: View {
     }
 
     public var body: some View {
-        let fill: Color = tinted
-            ? t.accentAlpha(t.dark ? 0.18 : 0.10)
-            : (t.dark ? Color(.sRGB, white: 1, opacity: 0.05) : Color(.sRGB, white: 15.0/255, opacity: 0.04))
-        let fg: Color = tinted ? t.accent : t.fg2
+        let fill: Color = tinted ? ContinuumTokens.selection : ContinuumTokens.surface2
+        let fg: Color = tinted ? ContinuumTokens.fg : ContinuumTokens.fg2
         Group {
             if let action {
                 Button(action: action) { content(fg) }.buttonStyle(.plain)
@@ -32,9 +30,9 @@ public struct TahoeComposerChip: View {
                 content(fg)
             }
         }
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(fill))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(t.hairline, lineWidth: 0.5))
-        .frame(height: 26)
+        .background(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.card, style: .continuous).fill(fill))
+        .overlay(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.card, style: .continuous).strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5))
+        .frame(height: 24)
     }
 
     @ViewBuilder
@@ -42,8 +40,7 @@ public struct TahoeComposerChip: View {
         HStack(spacing: 5) {
             TahoeIcon(icon, size: 12)
             if let label {
-                Text(label)
-                    .font(TahoeFont.body(11.5, weight: .medium))
+                Text(label).font(ContinuumFont.body(11.5, weight: .medium))
             }
             if caret {
                 TahoeIcon("chevD", size: 9).opacity(0.6)
@@ -51,16 +48,16 @@ public struct TahoeComposerChip: View {
         }
         .foregroundStyle(fg)
         .padding(.horizontal, iconOnly ? 0 : 9)
-        .frame(minWidth: iconOnly ? 26 : nil, alignment: .center)
-        .frame(maxWidth: iconOnly ? 26 : .infinity, alignment: iconOnly ? .center : .leading)
+        .frame(minWidth: iconOnly ? 24 : nil, alignment: .center)
+        .frame(maxWidth: iconOnly ? 24 : .infinity, alignment: iconOnly ? .center : .leading)
         .fixedSize(horizontal: !iconOnly, vertical: true)
     }
 }
 
-/// Live-status / paired-device chip — accent-tinted capsule with a glowing
-/// dot. Used in Sessions titlebar, Dashboard "Sync with iPhone".
+/// Paired-device / live-status chip — neutral `surface-2` capsule + hairline +
+/// a small `live` dot (1Hz heartbeat). No accent fill, no glow. Used in the
+/// Sessions titlebar + Dashboard "Sync with iPhone".
 public struct TahoeSyncChip: View {
-    @Environment(\.tahoe) private var t
     public var icon: String?
     public var text: String
 
@@ -72,34 +69,24 @@ public struct TahoeSyncChip: View {
     public var body: some View {
         HStack(spacing: 6) {
             if let icon {
-                TahoeIcon(icon, size: 10)
+                TahoeIcon(icon, size: 10).foregroundStyle(ContinuumTokens.fg2)
             } else {
-                Circle()
-                    .fill(t.accent)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: t.accent, radius: 4, x: 0, y: 0)
+                Circle().fill(ContinuumTokens.live).frame(width: 6, height: 6)
             }
             Text(text)
-                .font(TahoeFont.body(11.5, weight: .semibold))
+                .font(ContinuumFont.body(11.5, weight: .semibold))
+                .foregroundStyle(ContinuumTokens.fg2)
         }
-        .foregroundStyle(t.accent)
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
-        .background {
-            Capsule(style: .continuous)
-                .fill(t.accentAlpha(0.14))
-        }
-        .overlay {
-            Capsule(style: .continuous)
-                .stroke(t.accentAlpha(0.35), lineWidth: 0.5)
-        }
+        .background { Capsule(style: .continuous).fill(ContinuumTokens.surface2) }
+        .overlay { Capsule(style: .continuous).strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5) }
     }
 }
 
-/// Top-row tab chip (DashTab in JSX) — active state uses solid white in light,
-/// translucent white in dark; inactive is transparent.
+/// Top-row tab chip. Active = `white@10%` fill, 5px radius, weight 700;
+/// inactive `fg-3`; hover a barely-there fill.
 public struct TahoeDashTab: View {
-    @Environment(\.tahoe) private var t
     public var label: String
     public var active: Bool
     public var help: String?
@@ -118,47 +105,34 @@ public struct TahoeDashTab: View {
     public var body: some View {
         Button(action: action) {
             Text(label)
-                .font(TahoeFont.body(12, weight: active ? .bold : .semibold))
-                .foregroundStyle(active ? t.fg : t.fg3)
+                .font(ContinuumFont.body(12, weight: active ? .bold : .semibold))
+                .foregroundStyle(active ? ContinuumTokens.fg : ContinuumTokens.fg3)
                 .padding(.horizontal, 12)
                 .frame(height: 22)
                 .background {
                     if active || isHovered {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(active
-                                  ? (t.dark ? Color(.sRGB, white: 1, opacity: 0.10) : Color.white)
-                                  : t.hair2.opacity(t.dark ? 0.9 : 1.15))
-                            .shadow(color: active ? Color.black.opacity(0.10) : .clear, radius: 1, x: 0, y: 1)
+                        RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                            .fill(active ? ContinuumTokens.white(0.10) : ContinuumTokens.hover)
                     }
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(active ? Color.black.opacity(0.08) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
                 }
         }
         .buttonStyle(.plain)
         .help(tooltip)
         .accessibilityIdentifier("dash.tab.\(label.lowercased())")
-        // .onHover is macOS / iOS / visionOS only — gated so the
-        // ClawdmeterShared package compiles for the Watch scheme.
-        // watchOS readers stay on the resting cell style; the hover
-        // state is desktop-only chrome anyway.
         #if !os(watchOS)
         .onHover { isHovered = $0 }
         #endif
     }
 
     private var tooltip: String {
-        if let shortcut, let help {
-            return "\(help) \(shortcut)"
-        }
+        if let shortcut, let help { return "\(help) \(shortcut)" }
         return help ?? shortcut ?? label
     }
 }
 
-/// Tiny round icon button used inside titlebar trays, etc.
+/// Tiny icon button used inside titlebar trays, etc. Square, 5px radius; active
+/// uses a neutral `selection` fill (not accent).
 public struct TahoeIconBtn: View {
-    @Environment(\.tahoe) private var t
     public var icon: String
     public var active: Bool
     public var action: () -> Void
@@ -172,12 +146,12 @@ public struct TahoeIconBtn: View {
     public var body: some View {
         Button(action: action) {
             TahoeIcon(icon, size: 14)
-                .foregroundStyle(active ? t.accent : t.fg2)
+                .foregroundStyle(active ? ContinuumTokens.fg : ContinuumTokens.fg2)
                 .frame(width: 26, height: 22)
                 .background {
                     if active {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(t.accentAlpha(0.18))
+                        RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                            .fill(ContinuumTokens.selection)
                     }
                 }
         }
@@ -185,14 +159,14 @@ public struct TahoeIconBtn: View {
     }
 }
 
-/// macOS-style "traffic lights" cluster.
+/// macOS "traffic lights" cluster — DESIGN.md hexes, 12px.
 public struct TahoeTrafficLights: View {
     public init() {}
     public var body: some View {
         HStack(spacing: 7) {
-            light(color: Color(.sRGB, red: 1, green: 0x5F/255.0, blue: 0x57/255.0))
-            light(color: Color(.sRGB, red: 0xFE/255.0, green: 0xBC/255.0, blue: 0x2E/255.0))
-            light(color: Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0))
+            light(color: ContinuumTokens.error) // #E5534B
+            light(color: ContinuumTokens.warn)  // #D6A23B
+            light(color: ContinuumTokens.live)  // #3CC07A
         }
     }
     @ViewBuilder private func light(color: Color) -> some View {

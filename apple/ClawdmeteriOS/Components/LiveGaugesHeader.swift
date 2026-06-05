@@ -203,15 +203,15 @@ private struct ProviderLogo: View {
 // MARK: - Brand colors
 
 private enum ClaudeBrand {
-    static let color = Color(red: 0xd9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
+    static let color = TahoeProvider.claude.dot
 }
 
 private enum CodexBrand {
-    static let color = Color.primary.opacity(0.85)
+    static let color = TahoeProvider.codex.dot
 }
 
 private enum GeminiBrand {
-    static let color = Color(red: 0x42 / 255.0, green: 0x85 / 255.0, blue: 0xF4 / 255.0)
+    static let color = TahoeProvider.gemini.dot
 }
 
 // MARK: - Per-provider sections
@@ -297,7 +297,7 @@ private struct ClaudeSection: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 6))
     }
 
     @ViewBuilder
@@ -444,7 +444,7 @@ private struct SessionCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -473,7 +473,7 @@ private struct WeeklyCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -510,7 +510,7 @@ private struct LoadingCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -538,7 +538,7 @@ private struct WaitingForMacCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -565,7 +565,7 @@ private struct UnauthenticatedCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -586,7 +586,7 @@ private struct ReauthCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -606,6 +606,6 @@ private struct UpdateMacForGeminiCard: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity)
-        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .background(ContinuumTokens.surface2, in: RoundedRectangle(cornerRadius: 8))
     }
 }

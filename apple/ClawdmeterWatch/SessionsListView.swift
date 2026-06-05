@@ -47,14 +47,14 @@ struct SessionsListView: View {
                 Spacer()
                 if summary.needsAttention {
                     Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(TahoeAccent.halo.base.color)
+                        .foregroundStyle(ContinuumTokens.live)
                         .font(.caption2)
                 }
             }
             HStack(spacing: 4) {
                 Text(summary.agent.rawValue.capitalized)
                     .font(.caption2.weight(.medium))
-                    .foregroundStyle(summary.agent == .claude ? TahoeAccent.halo.base.color : TahoeProvider.codex.halo.color)
+                    .foregroundStyle(summary.agent.tahoeProvider.dot)
                 if let model = summary.modelDisplay {
                     Text("· \(model)")
                         .font(.caption2)
@@ -79,12 +79,12 @@ struct SessionsListView: View {
 
     private func statusColor(_ raw: String) -> Color {
         switch raw {
-        case "running":  return .green
-        case "planning": return .gray
-        case "paused":   return Color(.sRGB, red: 0xFE/255.0, green: 0xBC/255.0, blue: 0x2E/255.0)
-        case "done":     return TahoeAccent.halo.base.color
-        case "degraded": return .red
-        default:         return .secondary
+        case "running":  return ContinuumTokens.live
+        case "planning": return ContinuumTokens.paused
+        case "paused":   return ContinuumTokens.warn
+        case "done":     return ContinuumTokens.live
+        case "degraded": return ContinuumTokens.error
+        default:         return ContinuumTokens.fg3
         }
     }
 
@@ -131,7 +131,7 @@ struct WatchSessionDetailView: View {
             HStack(spacing: 6) {
                 Text(summary.agent.rawValue.capitalized)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(summary.agent == .claude ? TahoeAccent.halo.base.color : TahoeProvider.codex.halo.color)
+                    .foregroundStyle(summary.agent.tahoeProvider.dot)
                 if let model = summary.modelDisplay {
                     Text(model)
                         .font(.caption2)
@@ -162,7 +162,7 @@ struct WatchSessionDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(TahoeAccent.halo.base.color)
+                .tint(ContinuumTokens.live)
                 .accessibilityLabel("Approve plan for \(summary.repoDisplayName)")
                 .accessibilityHint("Tells the agent to start running the proposed plan.")
             }

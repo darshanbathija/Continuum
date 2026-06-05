@@ -1,11 +1,12 @@
 #if canImport(SwiftUI)
 import SwiftUI
 
-/// Pill-bar gauge — replaces the original "QuotaOrb" ring (the chat history
-/// explicitly pivoted to bars in chat2). JSX: `mac-dashboard.jsx::QuotaOrb`
-/// with `dense` variant for menu-bar contexts.
+/// The signature **rail meter** card — a big SF Pro Rounded `%`, an etched
+/// label, and the horizontal rail. Length is the signal; hue never carries the
+/// reading. (Was the ring "QuotaOrb"; the chat history pivoted to bars and this
+/// is now the canonical rail.)
 public struct TahoeQuotaBar: View {
-    @Environment(\.tahoe) private var t
+    @Environment(\.theme) private var t
     public var percent: Double  // 0..100
     public var size: CGFloat
     public var label: String?
@@ -29,19 +30,23 @@ public struct TahoeQuotaBar: View {
         self.dense = dense
     }
 
+    /// The current `%` is the loudest element on the card; it adopts warn/error
+    /// past the thresholds.
+    private var metricColor: Color { ContinuumTokens.metricColor(percent: percent) }
+
     public var body: some View {
         if dense {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 1) {
                     Text("\(Int(percent))")
-                        .font(TahoeFont.rounded(22, weight: .bold))
+                        .font(ContinuumFont.display(22, weight: .bold))
                         .monospacedDigit()
-                        .foregroundStyle(t.fg)
+                        .foregroundStyle(metricColor)
                     Text("%")
-                        .font(TahoeFont.body(11, weight: .semibold))
-                        .foregroundStyle(t.fg3)
+                        .font(ContinuumFont.body(11, weight: .semibold))
+                        .foregroundStyle(ContinuumTokens.fg3)
                 }
-                TahoePillBar(percent: percent, provider: provider, height: 6)
+                TahoeRailMeter(percent: percent, provider: provider)
             }
             .frame(width: size, alignment: .leading)
         } else {
@@ -50,95 +55,144 @@ public struct TahoeQuotaBar: View {
                 HStack(alignment: .firstTextBaseline) {
                     HStack(alignment: .firstTextBaseline, spacing: 2) {
                         Text("\(Int(percent))")
-                            .font(TahoeFont.rounded(numSize, weight: .bold))
+                            .font(ContinuumFont.display(numSize, weight: .bold))
                             .monospacedDigit()
                             .tracking(-1.5)
-                            .foregroundStyle(t.fg)
+                            .foregroundStyle(metricColor)
                         Text("%")
-                            .font(TahoeFont.body(numSize * 0.42, weight: .semibold))
-                            .foregroundStyle(t.fg3)
+                            .font(ContinuumFont.display(numSize * 0.5, weight: .semibold))
+                            .foregroundStyle(ContinuumTokens.fg3)
                     }
                     Spacer(minLength: 8)
                     if let label {
                         VStack(alignment: .trailing, spacing: 2) {
                             Text(label.uppercased())
-                                .font(TahoeFont.body(10.5, weight: .bold))
-                                .tracking(0.5)
-                                .foregroundStyle(t.fg3)
+                                .font(ContinuumFont.etched(10.5))
+                                .tracking(0.95)               // ~0.09em at 10.5px
+                                .foregroundStyle(ContinuumTokens.fg3)
                             if let sublabel {
                                 Text(sublabel)
-                                    .font(TahoeFont.body(10.5))
-                                    .foregroundStyle(t.fg4)
+                                    .font(ContinuumFont.mono(10.5))
+                                    .foregroundStyle(ContinuumTokens.fg4)
                             }
                         }
                     }
                 }
-                TahoePillBar(percent: percent, provider: provider, height: 6)
+                TahoeRailMeter(percent: percent, provider: provider)
             }
             .frame(maxWidth: size * 1.6, alignment: .leading)
         }
     }
 }
 
-/// Single horizontal pill bar — matches the weekly bar geometry.
-public struct TahoePillBar: View {
-    @Environment(\.tahoe) private var t
+/// The rail meter (treatment **T2**). Track 7px `#202126` + 0.5px inset
+/// hairline; provider gradient fill (radius 3) with a 1px lit top edge; an 80%
+/// limit tick; the portion past the tick caps to warn (then error). Secondary
+/// (weekly) variant uses the same fill at half opacity with no tick. Length is
+/// the signal; the fill before the tick never recolors. Settles like a
+/// galvanometer needle.
+public struct TahoeRailMeter: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     public var percent: Double
     public var provider: TahoeProvider
     public var height: CGFloat
+    /// Weekly / secondary meter — same fill @0.5 opacity, no limit tick.
+    public var secondary: Bool
 
-    public init(percent: Double, provider: TahoeProvider, height: CGFloat = 6) {
+    public init(percent: Double, provider: TahoeProvider, height: CGFloat = 7, secondary: Bool = false) {
         self.percent = max(0, min(100, percent))
         self.provider = provider
         self.height = height
+        self.secondary = secondary
     }
 
     public var body: some View {
         GeometryReader { geo in
+            let w = geo.size.width
+            let tickX = w * ContinuumTokens.warnTickFraction
+            // Provider fill never recolors past the tick: it runs to min(pct,80%).
+            let providerPct = min(percent, ContinuumTokens.warnTickFraction * 100)
+            let providerW = fillWidth(providerPct, w)
+            // Cap segment for the region beyond the 80% tick.
+            let capEndPct = min(percent, 100)
+            let capStartX = tickX
+            let capEndX = w * capEndPct / 100
+            let capW = max(0, capEndX - capStartX)
+            let capGradient: LinearGradient = percent > 100 ? ProviderFill.error : ProviderFill.warn
+            let filledW = max(providerW, percent > ContinuumTokens.warnTickFraction * 100 ? capEndX : providerW)
+
             ZStack(alignment: .leading) {
-                Capsule(style: .continuous)
-                    .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.12)
-                                 : Color(.sRGB, white: 15.0/255, opacity: 0.08))
-                Capsule(style: .continuous)
-                    // v0.22.16: was `[glow, base]` which for Codex
-                    // resolved to `[gray, near-black]` — invisible
-                    // against the dark popover background. Now uses
-                    // the vivid `halo` color (the same color used for
-                    // each provider's outer-glow accent) as the
-                    // gradient anchor so every provider's fill is
-                    // legible even at 6pt height. Claude → bright
-                    // orange, Codex → OpenAI cool blue, Antigravity →
-                    // vivid violet, OpenCode → magenta-violet.
-                    .fill(LinearGradient(
-                        colors: [provider.halo.color, provider.glow.color],
-                        startPoint: .leading, endPoint: .trailing))
-                    .frame(width: max(geo.size.width * percent / 100,
-                                      percent > 0 ? max(height, 4) : 0))
-                    .shadow(color: provider.halo.color(opacity: 0.45), radius: 5, x: 0, y: 0)
-                    // Motion polish: smooth fill-in when percent changes.
-                    // Respects `accessibilityReduceMotion` so users who
-                    // have asked the system to dampen animation get an
-                    // instant jump-cut instead of the 0.45s easeInOut.
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.45),
-                               value: percent)
+                Rectangle().fill(ContinuumTokens.railTrack)
+                Rectangle()
+                    .fill(ProviderFill.gradient(for: provider))
+                    .opacity(secondary ? 0.5 : 1)
+                    .frame(width: providerW)
+                if !secondary, capW > 0 {
+                    Rectangle()
+                        .fill(capGradient)
+                        .frame(width: capW)
+                        .offset(x: capStartX)
+                }
+                // 1px lit top edge over the filled region.
+                if filledW > 0 {
+                    Rectangle()
+                        .fill(ContinuumTokens.railLitEdge)
+                        .frame(width: filledW, height: 1)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                }
+                // 80% limit tick.
+                if !secondary {
+                    Rectangle()
+                        .fill(ContinuumTokens.fg3)
+                        .frame(width: 1)
+                        .offset(x: tickX)
+                }
             }
+            .frame(height: height)
+            .clipShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.rail, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: ContinuumTokens.Radius.rail, style: .continuous)
+                    .strokeBorder(ContinuumTokens.railTrackInset, lineWidth: 0.5)
+            )
+            .animation(ContinuumMotion.settle(reduceMotion: reduceMotion), value: percent)
         }
         .frame(height: height)
     }
+
+    private func fillWidth(_ pct: Double, _ w: CGFloat) -> CGFloat {
+        guard pct > 0 else { return 0 }
+        return max(w * pct / 100, max(height, 4))
+    }
 }
 
-/// Menu bar popover meter — label + percent + bar + hint, all stacked.
+/// Back-compat alias — older call sites construct `TahoePillBar`. It is now the
+/// rail meter. (Default height bumped 6 → 7 per DESIGN.md.)
+public struct TahoePillBar: View {
+    public var percent: Double
+    public var provider: TahoeProvider
+    public var height: CGFloat
+    public var secondary: Bool
+
+    public init(percent: Double, provider: TahoeProvider, height: CGFloat = 7, secondary: Bool = false) {
+        self.percent = percent
+        self.provider = provider
+        self.height = height
+        self.secondary = secondary
+    }
+
+    public var body: some View {
+        TahoeRailMeter(percent: percent, provider: provider, height: height, secondary: secondary)
+    }
+}
+
+/// Menu-bar popover meter — label + percent + rail + hint, stacked. Dense mono
+/// numerics on the compact operational surface.
 public struct TahoeMenuBarMeter: View {
-    @Environment(\.tahoe) private var t
+    @Environment(\.theme) private var t
     public var label: String
     public var percent: Double
     public var hint: String?
     public var provider: TahoeProvider
-    /// v0.22.18: true when the underlying data is from a fallback /
-    /// cached source instead of a live poll. Triggers a small "Stale"
-    /// pill next to the percent so the user knows the value may not
-    /// match what each provider's own desktop app shows in real time.
     public var stale: Bool
 
     public init(
@@ -158,36 +212,33 @@ public struct TahoeMenuBarMeter: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
+                ProviderDot(provider, size: 6)
                 Text(label)
-                    .font(TahoeFont.body(11, weight: .semibold))
-                    .foregroundStyle(t.fg2)
+                    .font(ContinuumFont.body(11, weight: .semibold))
+                    .foregroundStyle(ContinuumTokens.fg2)
                 if stale {
                     Text("STALE")
-                        .font(TahoeFont.body(8.5, weight: .bold))
+                        .font(ContinuumFont.etched(8.5))
                         .tracking(0.6)
-                        .foregroundStyle(Color(.sRGB, red: 0xF4 / 255.0, green: 0xB4 / 255.0, blue: 0x00 / 255.0))
+                        .foregroundStyle(ContinuumTokens.warn)
                         .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background {
-                            Capsule(style: .continuous)
-                                .fill(Color(.sRGB, red: 0xF4 / 255.0, green: 0xB4 / 255.0, blue: 0x00 / 255.0, opacity: 0.14))
-                        }
                         .overlay {
                             Capsule(style: .continuous)
-                                .stroke(Color(.sRGB, red: 0xF4 / 255.0, green: 0xB4 / 255.0, blue: 0x00 / 255.0, opacity: 0.40), lineWidth: 0.5)
+                                .strokeBorder(ContinuumTokens.warn.opacity(0.40), lineWidth: 0.5)
                         }
                         .help("Underlying source is using cached / fallback data — value may not match the provider's live count.")
                 }
                 Spacer()
                 Text("\(Int(percent))%")
-                    .font(TahoeFont.mono(11))
+                    .font(ContinuumFont.mono(11))
                     .monospacedDigit()
-                    .foregroundStyle(t.fg2)
+                    .foregroundStyle(ContinuumTokens.metricColor(percent: percent))
             }
-            TahoePillBar(percent: percent, provider: provider, height: 6)
+            TahoeRailMeter(percent: percent, provider: provider, height: 7)
             if let hint {
                 Text(hint)
-                    .font(TahoeFont.mono(10))
-                    .foregroundStyle(t.fg3)
+                    .font(ContinuumFont.mono(10))
+                    .foregroundStyle(ContinuumTokens.fg3)
                     .padding(.top, 2)
             }
         }

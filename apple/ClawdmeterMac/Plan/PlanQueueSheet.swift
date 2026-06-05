@@ -42,7 +42,7 @@ struct PlanQueueSheet: View {
     }
 
     var body: some View {
-        TahoeGlass(radius: 18, tone: .panel, shadow: .prominent) {
+        TahoeGlass(radius: 8, tone: .panel, shadow: .prominent) {
             VStack(spacing: 0) {
                 header
 

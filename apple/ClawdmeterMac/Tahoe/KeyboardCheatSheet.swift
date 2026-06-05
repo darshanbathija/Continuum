@@ -56,9 +56,9 @@ struct KeyboardCheatSheet: View {
             .frame(maxHeight: 460)
         }
         .frame(width: 560)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(ContinuumTokens.surface3, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(t.hairline, lineWidth: 0.75)
         )
         .shadow(color: .black.opacity(0.24), radius: 34, x: 0, y: 20)

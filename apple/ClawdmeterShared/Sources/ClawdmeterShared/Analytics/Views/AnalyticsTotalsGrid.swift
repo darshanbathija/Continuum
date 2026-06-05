@@ -49,8 +49,8 @@ public struct AnalyticsTotalsGrid: View {
             ForEach(UsageHistorySnapshot.Window.allCases, id: \.self) { window in
                 GridRow {
                     Text(window.label)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(ContinuumFont.body(12, weight: .medium))
+                        .foregroundStyle(ContinuumTokens.fg2)
 
                     ForEach(visibleProviders, id: \.self) { provider in
                         cell(provider: provider, window: snapshot.totals(for: provider).window(window))
@@ -65,14 +65,11 @@ public struct AnalyticsTotalsGrid: View {
     @ViewBuilder
     private func providerHeader(_ provider: UsageRecord.Provider) -> some View {
         HStack(spacing: 5) {
-            ProviderBadgeImage(
-                assetName: Self.logoAsset(for: provider),
-                isTemplate: Self.isTemplateAsset(for: provider),
-                size: 14
-            )
+            TahoeProviderGlyph(provider: Self.tahoeProvider(for: provider), size: 16)
+            ProviderDot(Self.tahoeProvider(for: provider), size: 6)
             Text(Self.displayName(for: provider))
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(ContinuumFont.body(12, weight: .semibold))
+                .foregroundStyle(ContinuumTokens.fg2)
         }
     }
 
@@ -108,31 +105,31 @@ public struct AnalyticsTotalsGrid: View {
             switch Self.cellDisplay(for: window.totals) {
             case .cost(let primary, let secondary):
                 Text(primary)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .font(ContinuumFont.mono(14, weight: .semibold))
+                    .foregroundStyle(ContinuumTokens.fg)
                     .monospacedDigit()
                     .redacted(reason: isLoading ? .placeholder : [])
                 Text(secondary)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.mono(10))
+                    .foregroundStyle(ContinuumTokens.fg3)
                     .monospacedDigit()
                     .redacted(reason: isLoading ? .placeholder : [])
             case .tokens(let value):
                 Text(value)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .font(ContinuumFont.mono(14, weight: .semibold))
+                    .foregroundStyle(ContinuumTokens.fg)
                     .monospacedDigit()
                     .redacted(reason: isLoading ? .placeholder : [])
             case .requests(let value):
                 Text(value)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .font(ContinuumFont.mono(14, weight: .semibold))
+                    .foregroundStyle(ContinuumTokens.fg)
                     .monospacedDigit()
                     .redacted(reason: isLoading ? .placeholder : [])
             case .empty:
                 Text("—")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .font(ContinuumFont.mono(14, weight: .semibold))
+                    .foregroundStyle(ContinuumTokens.fg3)
             }
         }
     }
@@ -143,35 +140,21 @@ public struct AnalyticsTotalsGrid: View {
         switch provider {
         case .claude: return "Claude"
         case .codex:  return "Codex"
-        case .gemini: return "Gemini"
+        case .gemini: return "Antigravity"
         case .opencode: return "OpenCode"
         case .cursor: return "Cursor"
         case .grok: return "Grok"
         }
     }
 
-    private static func logoAsset(for provider: UsageRecord.Provider) -> String {
+    private static func tahoeProvider(for provider: UsageRecord.Provider) -> TahoeProvider {
         switch provider {
-        case .claude: return "ClaudeLogo"
-        case .codex:  return "CodexLogo"
-        case .gemini: return "GeminiLogo"
-        case .opencode: return "OpencodeLogo"
-        case .cursor: return "CodexLogo"
-        case .grok: return "GrokLogo"
-        }
-    }
-
-    private static func isTemplateAsset(for provider: UsageRecord.Provider) -> Bool {
-        // Both Codex (silhouette) and Gemini (G mark) are template assets;
-        // Claude (terra-cotta burst) keeps its color. OpenCode is a
-        // silhouette too — template-tints with the violet accent.
-        switch provider {
-        case .claude: return false
-        case .codex:  return true
-        case .gemini: return true
-        case .opencode: return true
-        case .cursor: return true
-        case .grok: return true
+        case .claude: return .claude
+        case .codex: return .codex
+        case .gemini: return .gemini
+        case .opencode: return .opencode
+        case .cursor: return .cursor
+        case .grok: return .grok
         }
     }
 }

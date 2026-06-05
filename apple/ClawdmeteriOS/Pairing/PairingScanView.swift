@@ -95,7 +95,7 @@ public struct PairingScanView: View {
     @ViewBuilder
     private var viewfinderOverlay: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(.white.opacity(0.18), lineWidth: 1)
                 .frame(width: 280, height: 280)
 

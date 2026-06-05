@@ -354,7 +354,7 @@ struct MacRootView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(.regularMaterial))
+            .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(ContinuumTokens.surface2))
             .overlay(RoundedRectangle(cornerRadius: 999, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
             .padding(.top, 56)
             .transition(.move(edge: .top).combined(with: .opacity))
@@ -394,7 +394,7 @@ struct MacRootView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(.regularMaterial))
+            .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(ContinuumTokens.surface2))
             .overlay(RoundedRectangle(cornerRadius: 999, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
             .padding(.top, 96)
             .transition(.move(edge: .top).combined(with: .opacity))
@@ -1143,14 +1143,14 @@ struct MacTitlebar: View {
             Color.clear.frame(width: 60, height: 1)
 
             if active == .code {
-                TahoeGlass(radius: 11, tone: .chip) {
+                TahoeGlass(radius: 6, tone: .chip) {
                     tabStrip
                         .padding(.horizontal, 14)
                         .frame(height: 30)
                 }
                 .fixedSize()
 
-                TahoeGlass(radius: 11, tone: .chip) {
+                TahoeGlass(radius: 6, tone: .chip) {
                     HStack(spacing: 8) {
                         codeBreadcrumb
                         TahoeHair(vertical: true).frame(height: 14)
@@ -1165,7 +1165,7 @@ struct MacTitlebar: View {
 
                 codeActions
             } else {
-                TahoeGlass(radius: 11, tone: .chip) {
+                TahoeGlass(radius: 6, tone: .chip) {
                     HStack(spacing: 10) {
                         tabStrip
                         Spacer(minLength: 0)
@@ -1191,8 +1191,8 @@ struct MacTitlebar: View {
     }
 
     private var codeActions: some View {
-        TahoeGlass(radius: 11, tone: .chip) {
-            HStack(spacing: 4) {
+        TahoeGlass(radius: 6, tone: .chip) {
+            HStack(spacing: 2) {
                 UpdateAppControl(coordinator: runtime?.updateCoordinator, compact: true)
                 codeActionButton(icon: "sliders", help: "Focus Code filters") {
                     NotificationCenter.default.post(name: .focusSidebarSearch, object: nil)

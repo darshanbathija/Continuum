@@ -1,7 +1,7 @@
 import SwiftUI
 import ClawdmeterShared
 
-/// Mac Usage dashboard — three provider columns + analytics row.
+/// Mac Usage dashboard — live provider columns + analytics row.
 /// Ports `mac-dashboard.jsx`. Accepts a `TahoeLiveBindings` value (defaults
 /// to the demo fixture); the Mac app injects real AppRuntime-derived data
 /// via `MacRootView.body`.
@@ -91,7 +91,7 @@ public struct MacUsageView: View {
     /// access. Tapping sets the flag and kicks the first analytics load (which
     /// is the moment the cross-app-data prompt appears, with user intent).
     private var usageAccessCTA: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(spacing: 12) {
                 Image(systemName: "lock.shield")
                     .font(.system(size: 30, weight: .regular))
@@ -99,7 +99,7 @@ public struct MacUsageView: View {
                 Text("Get access from your Mac")
                     .font(TahoeFont.body(15, weight: .bold))
                     .foregroundStyle(t.fg)
-                Text("Spend + token analytics read usage data written by Claude Code, Codex, Antigravity, OpenCode, and Grok on this Mac. Grant access to see your usage here — macOS will ask once.")
+                Text("Spend + token analytics read usage data written by Claude Code, Codex, Antigravity, OpenCode, Cursor, and Grok on this Mac. Grant access to see your usage here — macOS will ask once.")
                     .font(TahoeFont.body(11.5))
                     .foregroundStyle(t.fg3)
                     .multilineTextAlignment(.center)
@@ -180,11 +180,11 @@ private struct TokensByModelSection: View {
     /// key the same colors as the dollar charts/legend above.
     private func familyColor(_ family: String) -> Color {
         switch family {
-        case "Claude": return TahoeProvider.claude.glow.color
-        case "OpenAI": return TahoeProvider.codex.glow.color
-        case "Gemini": return TahoeProvider.gemini.glow.color
-        case "Grok":   return TahoeProvider.grok.glow.color
-        case "Cursor": return TahoeProvider.cursor.glow.color
+        case "Claude": return TahoeProvider.claude.dot
+        case "OpenAI": return TahoeProvider.codex.dot
+        case "Gemini": return TahoeProvider.gemini.dot
+        case "Grok":   return TahoeProvider.grok.dot
+        case "Cursor": return TahoeProvider.cursor.dot
         default:        return t.fg3                                      // "Other"
         }
     }
@@ -196,7 +196,7 @@ private struct TokensByModelSection: View {
         }()
         let fams = families(from: byModel)
         let grand = fams.reduce(0) { $0 + $1.total.totalTokens }
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -234,7 +234,7 @@ private struct TokensByModelSection: View {
                     .font(TahoeFont.body(10.5))
                     .foregroundStyle(t.fg4)
                 Spacer()
-                Text(Self.metric(fam.total))
+                Text(Self.fmt(fam.total.totalTokens) + " tokens")
                     .font(TahoeFont.mono(12))
                     .foregroundStyle(t.fg)
             }
@@ -258,10 +258,10 @@ private struct TokensByModelSection: View {
                         .font(TahoeFont.body(10))
                         .foregroundStyle(t.fg4)
                         .lineLimit(1)
-                    Text(Self.metric(m.totals))
+                    Text(Self.fmt(m.totals.totalTokens))
                         .font(TahoeFont.mono(11))
                         .foregroundStyle(t.fg)
-                        .frame(width: 104, alignment: .trailing)
+                        .frame(width: 64, alignment: .trailing)
                 }
             }
             TahoeHair()
@@ -285,19 +285,6 @@ private struct TokensByModelSection: View {
         if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1e6) }
         if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1e3) }
         return "\(n)"
-    }
-
-    static func metric(_ totals: TokenTotals) -> String {
-        let tokens = fmt(totals.totalTokens)
-        guard totals.costUSD > 0 else { return tokens }
-        return "\(formatUSD(totals.costUSD)) · \(tokens)"
-    }
-
-    static func formatUSD(_ value: Decimal) -> String {
-        let n = NSDecimalNumber(decimal: value).doubleValue
-        if n >= 10 { return String(format: "$%.0f", n) }
-        if n >= 0.01 { return String(format: "$%.2f", n) }
-        return String(format: "$%.4f", n)
     }
 }
 
@@ -352,7 +339,7 @@ private struct ProviderColumn: View {
     }
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
                     TahoeProviderGlyph(provider: provider, size: 28)
@@ -368,27 +355,24 @@ private struct ProviderColumn: View {
                     MenuBarCheckbox(on: $menuBar)
                 }
 
-                if provider == .cursor {
-                    cursorQuotaSection
-                } else {
-                    TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 260,
-                                  label: "session", sublabel: "resets in \(row.sessionResetIn)")
-                    .padding(.vertical, 28)
+                // QuotaBar
+                TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 260,
+                              label: "session", sublabel: "resets in \(row.sessionResetIn)")
+                .padding(.vertical, 28)
 
-                    // Weekly row — hidden when provider has no weekly window.
-                    if row.hasWeekly {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text("Weekly · all models")
-                                    .font(TahoeFont.body(11.5))
-                                    .foregroundStyle(t.fg2)
-                                Spacer()
-                                Text("\(Int(row.weeklyPercent))% · \(row.weeklyResetIn)")
-                                    .font(TahoeFont.mono(11.5))
-                                    .foregroundStyle(t.fg3)
-                            }
-                            TahoePillBar(percent: row.weeklyPercent, provider: provider, height: 6)
+                // Weekly row — hidden when provider has no weekly window.
+                if row.hasWeekly {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Weekly · all models")
+                                .font(TahoeFont.body(11.5))
+                                .foregroundStyle(t.fg2)
+                            Spacer()
+                            Text("\(Int(row.weeklyPercent))% · \(row.weeklyResetIn)")
+                                .font(TahoeFont.mono(11.5))
+                                .foregroundStyle(t.fg3)
                         }
+                        TahoePillBar(percent: row.weeklyPercent, provider: provider, height: 6)
                     }
                 }
 
@@ -396,7 +380,7 @@ private struct ProviderColumn: View {
 
                 if row.supportsAutoRevive {
                     // Auto-revive card
-                    TahoeGlass(radius: 12, tone: .chip) {
+                    TahoeGlass(radius: 6, tone: .chip) {
                         HStack(spacing: 8) {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("Keep 5h timer ticking")
@@ -434,38 +418,6 @@ private struct ProviderColumn: View {
             // The AppDelegate has a UserDefaults observer that picks this
             // up and calls `setVisible(_:)` on the matching status item.
             // No notification needed.
-        }
-    }
-
-    @ViewBuilder
-    private var cursorQuotaSection: some View {
-        let quota = row.cursorQuota
-        TahoeQuotaBar(provider: provider, percent: Double(quota?.totalPct ?? Int(row.sessionPercent)), size: 260,
-                      label: "monthly total", sublabel: "resets in \(row.sessionResetIn)")
-        .padding(.top, 28)
-        .padding(.bottom, 18)
-
-        VStack(alignment: .leading, spacing: 9) {
-            cursorQuotaRow(label: "Auto", pct: quota?.autoPct)
-            cursorQuotaRow(label: "API", pct: quota?.apiPct)
-        }
-    }
-
-    @ViewBuilder
-    private func cursorQuotaRow(label: String, pct: Int?) -> some View {
-        let value = pct ?? 0
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(label)
-                    .font(TahoeFont.body(11.5))
-                    .foregroundStyle(t.fg2)
-                Spacer()
-                Text(pct.map { "\($0)% · \(row.sessionResetIn)" } ?? "--")
-                    .font(TahoeFont.mono(11.5))
-                    .foregroundStyle(t.fg3)
-            }
-            TahoePillBar(percent: Double(value), provider: provider, height: 6)
-                .opacity(pct == nil ? 0.35 : 1)
         }
     }
 }
@@ -543,7 +495,7 @@ private struct AnalyticsRow: View {
             .padding(.horizontal, 14)
 
             HStack(alignment: .top, spacing: 14) {
-                TahoeGlass(radius: 20, tone: .panel) {
+                TahoeGlass(radius: 8, tone: .panel) {
                     VStack(alignment: .leading, spacing: 0) {
                         ChartHeader(title: "Spend over time", range: data.label, total: data.total)
                         SpendChart(series: data.series, ticks: data.ticks)
@@ -553,7 +505,7 @@ private struct AnalyticsRow: View {
                 .frame(maxWidth: .infinity)
                 .frame(idealHeight: 280)
 
-                TahoeGlass(radius: 20, tone: .panel) {
+                TahoeGlass(radius: 8, tone: .panel) {
                     VStack(alignment: .leading, spacing: 0) {
                         ChartHeader(title: "Spend by repo", range: data.label, total: nil)
                         RepoList(repos: data.repos)
@@ -575,19 +527,9 @@ private struct Legend: View {
         HStack(spacing: 14) {
             ForEach(TahoeProvider.allCases) { p in
                 HStack(spacing: 6) {
-                    // v0.29.4: match the SpendChart's bar gradient
-                    // (`halo → glow`) instead of the previous
-                    // `glow → base`. The old recipe rendered Codex as
-                    // a dark gray chip even though the chart bars use
-                    // OpenAI's bright blue — users couldn't tell which
-                    // legend entry mapped to which bar color. Halo is
-                    // the same hue family per provider so the chip now
-                    // visually keys the bar above it.
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(LinearGradient(colors: [p.halo.color, p.glow.color],
-                                             startPoint: .top, endPoint: .bottom))
+                        .fill(ProviderFill.gradient(for: p))
                         .frame(width: 9, height: 9)
-                        .shadow(color: p.halo.color(opacity: 0.6), radius: 3, x: 0, y: 0)
                     Text(p.displayName)
                         .font(TahoeFont.body(11))
                         .foregroundStyle(t.fg2)
@@ -791,7 +733,6 @@ private struct SpendChart: View {
                 if total > 0 {
                     Rectangle().fill(grad(.grok)).frame(height: d.k / total * h)
                     Rectangle().fill(grad(.cursor)).frame(height: d.r / total * h)
-                    Rectangle().fill(grad(.grok)).frame(height: d.k / total * h)
                     Rectangle().fill(grad(.opencode)).frame(height: d.o / total * h)
                     Rectangle().fill(grad(.gemini)).frame(height: d.g / total * h)
                     Rectangle().fill(grad(.codex)).frame(height: d.x / total * h)
@@ -800,10 +741,6 @@ private struct SpendChart: View {
             }
             .frame(width: w)
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-            // v0.22.24: brighten the bar slightly when hovered so user
-            // gets a visual confirmation of which bar the tooltip
-            // describes.
-            .shadow(color: TahoeProvider.claude.base.color(opacity: isHover ? 0.42 : 0.18), radius: isHover ? 11 : 7, x: 0, y: 0)
             .overlay {
                 if isHover {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -854,14 +791,8 @@ private struct SpendChart: View {
         return String(format: "$%d", Int(v))
     }
 
-    /// v0.22.17: switched from `[glow, base]` to `[halo, glow]` to
-    /// match the popover pill bar's brightening fix (v0.22.16) —
-    /// Codex's intentionally-desaturated brand palette was rendering
-    /// the stacked-bar Codex slice as a near-black sliver against
-    /// the dark chart bg. Halo is each provider's bright accent
-    /// (Codex's OpenAI cool blue, etc.) so all four show now.
     private func grad(_ p: TahoeProvider) -> LinearGradient {
-        LinearGradient(colors: [p.halo.color, p.glow.color], startPoint: .top, endPoint: .bottom)
+        ProviderFill.gradient(for: p)
     }
 }
 
@@ -869,8 +800,6 @@ private struct RepoList: View {
     @Environment(\.tahoe) private var t
     var repos: [TahoeDemo.SpendRepo]
     var body: some View {
-        // v0.22.8: include opencode in the maxTotal so the relative
-        // bar widths normalize across all four providers.
         let maxTotal = repos.map { $0.c + $0.x + $0.g + $0.o + $0.k + $0.r }.max() ?? 1
         VStack(spacing: 12) {
             ForEach(Array(repos.enumerated()), id: \.offset) { _, r in
@@ -895,7 +824,6 @@ private struct RepoList: View {
                                 Rectangle().fill(grad(.codex)).frame(width: geo.size.width * width * (r.x / total))
                                 Rectangle().fill(grad(.gemini)).frame(width: geo.size.width * width * (r.g / total))
                                 Rectangle().fill(grad(.opencode)).frame(width: geo.size.width * width * (r.o / total))
-                                Rectangle().fill(grad(.grok)).frame(width: geo.size.width * width * (r.k / total))
                                 Rectangle().fill(grad(.cursor)).frame(width: geo.size.width * width * (r.r / total))
                                 Rectangle().fill(grad(.grok)).frame(width: geo.size.width * width * (r.k / total))
                             }
@@ -904,28 +832,21 @@ private struct RepoList: View {
                     }
                     .frame(height: 8)
                     .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-                    .shadow(color: TahoeProvider.claude.base.color(opacity: 0.15), radius: 5, x: 0, y: 0)
                 }
             }
         }
         .padding(.top, 14)
     }
 
-    /// v0.22.17: switched from `[glow, base]` to `[halo, glow]` to
-    /// match the popover pill bar's brightening fix (v0.22.16) —
-    /// Codex's intentionally-desaturated brand palette was rendering
-    /// the stacked-bar Codex slice as a near-black sliver against
-    /// the dark chart bg. Halo is each provider's bright accent
-    /// (Codex's OpenAI cool blue, etc.) so all four show now.
     private func grad(_ p: TahoeProvider) -> LinearGradient {
-        LinearGradient(colors: [p.halo.color, p.glow.color], startPoint: .top, endPoint: .bottom)
+        ProviderFill.gradient(for: p)
     }
 }
 
 // MARK: - OpencodeDollarRow (PR #31 chunk 3, A2)
 
 /// OpenCode usage row — dollar-cost gauge variant per A2.
-/// Renders as a single full-width strip beneath the 3 provider columns.
+/// Renders as a single full-width strip beneath the live provider columns.
 /// Shows `$X today` + `$Y this week` (no rolling 5h quota — OpenCode
 /// is pay-as-you-go through whichever underlying provider the user
 /// signed in with).
@@ -946,7 +867,7 @@ private struct OpencodeDollarRow: View {
     }
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             HStack(spacing: 18) {
                 TahoeProviderGlyph(provider: .opencode, size: 36)
                 VStack(alignment: .leading, spacing: 2) {
@@ -1008,7 +929,7 @@ private struct GrokUsageRow: View {
     var body: some View {
         let today = providerTotals.today.totals
         let week = providerTotals.past7d.totals
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             HStack(spacing: 18) {
                 TahoeProviderGlyph(provider: .grok, size: 36)
                 VStack(alignment: .leading, spacing: 2) {
@@ -1068,7 +989,7 @@ private struct GrokUsageRow: View {
 /// Compact provider breakdown shown above the hovered bar in
 /// `SpendChart`. User reported "there's no way for me to see the codex
 /// token spend — when I hover over this, show me the specific break
-/// up." Renders four rows (one per provider) with dollar amounts +
+/// up." Renders one row per provider with dollar amounts +
 /// total, color-coded by the provider glyph that matches the bar
 /// segments below.
 private struct HoverBreakdown: View {
@@ -1087,7 +1008,6 @@ private struct HoverBreakdown: View {
             row(.codex, "Codex", point.x)
             row(.gemini, "Antigravity", point.g)
             row(.opencode, "OpenCode", point.o)
-            row(.grok, "Grok", point.k)
             row(.cursor, "Cursor", point.r)
             row(.grok, "Grok", point.k)
             TahoeHair().padding(.vertical, 2)
@@ -1119,7 +1039,7 @@ private struct HoverBreakdown: View {
     private func row(_ provider: TahoeProvider, _ label: String, _ value: Double) -> some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(provider.halo.color)
+                .fill(provider.dot)
                 .frame(width: 7, height: 7)
             Text(label)
                 .font(TahoeFont.body(10.5))

@@ -249,9 +249,9 @@ struct iOSRunPreviewPane: View {
             .padding(10)
         }
         .frame(maxHeight: 150)
-        .background(t.glassTint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(t.glassTint, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(t.hairline, lineWidth: 0.5)
         }
     }

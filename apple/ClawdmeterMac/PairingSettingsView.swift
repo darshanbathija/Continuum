@@ -237,7 +237,7 @@ struct PairingSettingsView: View {
                     .accessibilityLabel("Pairing QR code")
                     .accessibilityHint("Scan with your iPhone's camera to pair this Mac.")
             } else {
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: 6)
                     .fill(.quaternary)
                     .frame(width: 224, height: 224)
                     .overlay(ProgressView().controlSize(.small))
@@ -245,13 +245,13 @@ struct PairingSettingsView: View {
         }
         .padding(28)
         .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 28))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
         .frame(width: 280, height: 280)
         .background(
             RoundedRectangle(cornerRadius: 50, style: .continuous)
                 .fill(
                     RadialGradient(
-                        colors: [t.accent.opacity(0.30), .clear],
+                        colors: [.clear, .clear],
                         center: .center, startRadius: 0, endRadius: 200
                     )
                 )
@@ -260,7 +260,7 @@ struct PairingSettingsView: View {
                 .allowsHitTesting(false)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 28)
+            RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(.quaternary, lineWidth: 1)
         )
     }

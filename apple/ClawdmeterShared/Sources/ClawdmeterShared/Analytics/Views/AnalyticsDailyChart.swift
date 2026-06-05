@@ -209,8 +209,8 @@ public struct AnalyticsDailyChart: View {
     private func costChart(_ data: [CostPoint]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Daily spend — \(window.label.lowercased())")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(ContinuumFont.body(12.5, weight: .semibold))
+                .foregroundStyle(ContinuumTokens.fg2)
 
             Chart(data) { pt in
                 BarMark(
@@ -218,27 +218,35 @@ public struct AnalyticsDailyChart: View {
                     y: .value("USD", NSDecimalNumber(decimal: pt.cost).doubleValue)
                 )
                 .foregroundStyle(by: .value("Provider", pt.provider))
+                .cornerRadius(ContinuumTokens.Radius.rail)
             }
+            // Per-provider segments use the same T2 meter gradients as the rails.
             .chartForegroundStyleScale([
-                "Claude": SessionsV2Theme.accent,
-                "Codex": SessionsV2Theme.codexBlue,
-                "OpenCode": Color.green,
-                "Cursor": Color.purple,
-                "Grok": Color(red: 0.42, green: 0.82, blue: 0.62),
+                "Claude": ProviderFill.gradient(for: .claude),
+                "Codex": ProviderFill.gradient(for: .codex),
+                "OpenCode": ProviderFill.gradient(for: .opencode),
+                "Cursor": ProviderFill.gradient(for: .cursor),
+                "Grok": ProviderFill.gradient(for: .grok),
             ])
             .chartLegend(.hidden)
             .chartXAxis {
                 AxisMarks(values: .stride(by: .day, count: max(1, data.count / 14))) {
-                    AxisGridLine()
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+                        .foregroundStyle(ContinuumTokens.hairline)
                     AxisValueLabel(format: .dateTime.day().month(.abbreviated))
+                        .font(ContinuumFont.mono(9))
+                        .foregroundStyle(ContinuumTokens.fg3)
                 }
             }
             .chartYAxis {
                 AxisMarks { value in
-                    AxisGridLine()
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+                        .foregroundStyle(ContinuumTokens.hairline)
                     AxisValueLabel {
                         if let d = value.as(Double.self) {
                             Text(Decimal(d).formatted(.currency(code: "USD").precision(.fractionLength(0))))
+                                .font(ContinuumFont.mono(9))
+                                .foregroundStyle(ContinuumTokens.fg3)
                         }
                     }
                 }
@@ -249,8 +257,8 @@ public struct AnalyticsDailyChart: View {
 
             if let max = maxCostDay(data) {
                 Text("Max day \(AnalyticsCurrencyFormatter.format(max.cost)) · \(max.day.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.body(11))
+                    .foregroundStyle(ContinuumTokens.fg3)
             }
         }
     }
@@ -259,32 +267,34 @@ public struct AnalyticsDailyChart: View {
     private func reqsChart(_ data: [ReqsPoint]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Daily requests — \(window.label.lowercased())")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(ContinuumFont.body(12.5, weight: .semibold))
+                .foregroundStyle(ContinuumTokens.fg2)
 
             Chart(data) { pt in
                 BarMark(
                     x: .value("Day", pt.day, unit: .day),
                     y: .value("Requests", pt.reqs)
                 )
-                .foregroundStyle(Color(red: 0x42 / 255.0, green: 0x85 / 255.0, blue: 0xF4 / 255.0))
+                .foregroundStyle(ProviderFill.gradient(for: .gemini))
+                .cornerRadius(ContinuumTokens.Radius.rail)
             }
             .chartXAxis {
                 AxisMarks(values: .stride(by: .day, count: max(1, data.count / 14))) {
-                    AxisGridLine()
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+                        .foregroundStyle(ContinuumTokens.hairline)
                     AxisValueLabel(format: .dateTime.day().month(.abbreviated))
+                        .font(ContinuumFont.mono(9))
+                        .foregroundStyle(ContinuumTokens.fg3)
                 }
             }
             .frame(height: 100)
 
             HStack(spacing: 5) {
                 ProviderBadgeImage(assetName: "GeminiLogo", isTemplate: true, size: 11)
-                Circle()
-                    .fill(Color(red: 0x42 / 255.0, green: 0x85 / 255.0, blue: 0xF4 / 255.0))
-                    .frame(width: 6, height: 6)
-                Text("Gemini · token cost unavailable from CLI logs")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                ProviderDot(.gemini, size: 6)
+                Text("Antigravity · token cost unavailable from CLI logs")
+                    .font(ContinuumFont.body(11))
+                    .foregroundStyle(ContinuumTokens.fg2)
                 Spacer()
             }
         }
@@ -294,38 +304,36 @@ public struct AnalyticsDailyChart: View {
         HStack(spacing: 14) {
             if providerFilter.includes(.claude) {
                 legendItem(asset: "ClaudeLogo", isTemplate: false,
-                           color: SessionsV2Theme.accent, label: "Claude")
+                           provider: .claude, label: "Claude")
             }
             if providerFilter.includes(.codex) {
                 legendItem(asset: "CodexLogo", isTemplate: true,
-                           color: SessionsV2Theme.codexBlue, label: "Codex")
+                           provider: .codex, label: "Codex")
             }
             if providerFilter.includes(.opencode) {
                 legendItem(asset: "OpencodeLogo", isTemplate: true,
-                           color: Color.green, label: "OpenCode")
+                           provider: .opencode, label: "OpenCode")
             }
             if providerFilter.includes(.cursor) {
                 legendItem(asset: "CodexLogo", isTemplate: true,
-                           color: Color.purple, label: "Cursor")
+                           provider: .cursor, label: "Cursor")
             }
             if providerFilter.includes(.grok) {
                 legendItem(asset: "GrokLogo", isTemplate: true,
-                           color: Color(red: 0.42, green: 0.82, blue: 0.62), label: "Grok")
+                           provider: .grok, label: "Grok")
             }
             Spacer()
         }
     }
 
     @ViewBuilder
-    private func legendItem(asset: String, isTemplate: Bool, color: Color, label: String) -> some View {
+    private func legendItem(asset: String, isTemplate: Bool, provider: TahoeProvider, label: String) -> some View {
         HStack(spacing: 5) {
             ProviderBadgeImage(assetName: asset, isTemplate: isTemplate, size: 11)
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
+            ProviderDot(provider, size: 6)
             Text(label)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .font(ContinuumFont.body(11))
+                .foregroundStyle(ContinuumTokens.fg2)
         }
     }
 
@@ -343,7 +351,7 @@ public struct AnalyticsDailyChart: View {
         switch p {
         case .claude: return "Claude"
         case .codex:  return "Codex"
-        case .gemini: return "Gemini"
+        case .gemini: return "Antigravity"
         case .opencode: return "OpenCode"
         case .cursor: return "Cursor"
         case .grok: return "Grok"

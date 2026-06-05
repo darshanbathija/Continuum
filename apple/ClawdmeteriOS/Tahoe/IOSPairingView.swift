@@ -115,11 +115,11 @@ public struct IOSPairingView: View {
     private var scrim: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 50, style: .continuous)
-                .fill(RadialGradient(colors: [t.accentGlow.color(opacity: 0.30), .clear],
+                .fill(RadialGradient(colors: [.clear, .clear],
                                      center: .center, startRadius: 0, endRadius: 220))
                 .blur(radius: 10).padding(-30).allowsHitTesting(false)
 
-            TahoeGlass(radius: 28, tone: .raised) {
+            TahoeGlass(radius: 8, tone: .raised) {
                 VStack(spacing: 10) {
                     TahoeIcon("qr", size: 54).foregroundStyle(t.fg4)
                     Text("Scan the live QR")
@@ -165,7 +165,7 @@ public struct IOSPairingView: View {
 
             VStack(spacing: 10) {
                 Button { relayPastePresented = true } label: {
-                    TahoeGlass(radius: 14, tone: .chip) {
+                    TahoeGlass(radius: 6, tone: .chip) {
                         HStack(spacing: 10) {
                             TahoeIcon("link", size: 15).foregroundStyle(t.fg3)
                             Text("clawdmeter-pair://v1/…")

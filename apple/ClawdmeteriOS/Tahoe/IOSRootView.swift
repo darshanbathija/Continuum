@@ -366,7 +366,7 @@ public struct IOSUnpairedBanner: View {
     }
 
     public var body: some View {
-        TahoeGlass(radius: 18, tone: .raised) {
+        TahoeGlass(radius: 8, tone: .raised) {
             HStack(spacing: 12) {
                 ZStack {
                     Circle()

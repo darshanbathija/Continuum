@@ -242,7 +242,7 @@ private struct Sidebar: View {
     )
 
     var body: some View {
-        TahoeGlass(radius: 18, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(spacing: 0) {
                 HStack {
                     Text("Chat")
@@ -257,7 +257,7 @@ private struct Sidebar: View {
                 }
                 .padding(12)
 
-                TahoeGlass(radius: 10, tone: .chip) {
+                TahoeGlass(radius: 6, tone: .chip) {
                     HStack(spacing: 7) {
                         TahoeIcon("search", size: 11).foregroundStyle(t.fg3)
                         TextField("Search chats", text: $query)
@@ -483,8 +483,8 @@ private struct HistoryRow: View {
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(selected ? Color.white.opacity(0.11) : Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? t.accent.opacity(0.45) : t.hairline, lineWidth: 0.6))
+            .background(selected ? Color.white.opacity(0.11) : Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? t.accent.opacity(0.45) : t.hairline, lineWidth: 0.6))
         }
         .buttonStyle(PressableButtonStyle())
         .overlay(alignment: .trailing) {
@@ -534,7 +534,7 @@ private struct ProviderDraftSummary: View {
     @ObservedObject var store: ChatV2Store
 
     var body: some View {
-        TahoeGlass(radius: 14, tone: .panel) {
+        TahoeGlass(radius: 6, tone: .panel) {
             HStack(spacing: 9) {
                 TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 22)
                 VStack(alignment: .leading, spacing: 2) {
@@ -549,7 +549,7 @@ private struct ProviderDraftSummary: View {
                 Spacer()
                 Text(store.deepResearch ? "research" : "ready")
                     .font(TahoeFont.body(10, weight: .semibold))
-                    .foregroundStyle(store.deepResearch ? vendor.backingProvider.tahoeProvider.halo.color : t.fg4)
+                    .foregroundStyle(store.deepResearch ? vendor.backingProvider.tahoeProvider.dot : t.fg4)
             }
             .padding(10)
         }
@@ -562,7 +562,7 @@ private struct ProviderSummary: View {
     let session: AgentSession
 
     var body: some View {
-        TahoeGlass(radius: 14, tone: .panel) {
+        TahoeGlass(radius: 6, tone: .panel) {
             HStack(spacing: 9) {
                 TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 22)
                 VStack(alignment: .leading, spacing: 2) {
@@ -577,7 +577,7 @@ private struct ProviderSummary: View {
                 Spacer()
                 Text(session.deepResearch ? "research" : "live")
                     .font(TahoeFont.body(10, weight: .semibold))
-                    .foregroundStyle(session.deepResearch ? session.agent.tahoeProvider.halo.color : t.fg4)
+                    .foregroundStyle(session.deepResearch ? session.agent.tahoeProvider.dot : t.fg4)
             }
             .padding(10)
         }
@@ -590,7 +590,7 @@ private struct StartPanel: View {
     @ObservedObject var store: ChatV2Store
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(spacing: 16) {
                 HStack(spacing: 10) {
                     ForEach(store.selectedVendors, id: \.self) { vendor in
@@ -615,7 +615,7 @@ private struct SoloTranscript: View {
     weak var runtime: AppRuntime?
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             if let runtime, let store = runtime.agentControlServer.chatStore(for: session) {
                 TranscriptScroll(
                     items: store.snapshot.items,
@@ -650,7 +650,7 @@ private struct ReadOnlyTranscript: View {
     @State private var isLoadingOlder = false
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             if let envelope {
                 TranscriptScroll(
                     items: envelope.messages.map(ChatItem.message),
@@ -728,7 +728,7 @@ private struct BroadcastTranscript: View {
     }
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             if children.isEmpty && failedColumns.isEmpty {
                 ChatEmptyState(title: "Broadcast group is empty", subtitle: "No live child sessions are attached to this comparison.")
             } else {
@@ -815,9 +815,13 @@ private struct ProviderColumn: View {
     @State private var continuing = false
 
     var body: some View {
-        TahoeGlass(radius: 16, tone: .raised) {
+        TahoeGlass(radius: 6, tone: .raised) {
             VStack(alignment: .leading, spacing: 0) {
+                // Provider identity = a 3px column-top edge (DESIGN.md broadcast),
+                // never a colored panel.
+                ProviderEdge(session.agent.tahoeProvider, axis: .horizontal, thickness: 3)
                 HStack(spacing: 8) {
+                    ProviderDot(session.agent.tahoeProvider, size: 6)
                     TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 20)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(session.agent.brandedChatName)
@@ -831,7 +835,7 @@ private struct ProviderColumn: View {
                     Button {
                         Task { _ = await client.setFrontierTurnWinner(groupId: groupId, turnId: turnId, childIndex: session.frontierChildIndex ?? 0) }
                     } label: {
-                        TahoeIcon("bookmark", size: 13).foregroundStyle(winner == nil ? t.fg3 : session.agent.tahoeProvider.halo.color)
+                        TahoeIcon("bookmark", size: 13).foregroundStyle(winner == nil ? t.fg3 : session.agent.tahoeProvider.dot)
                     }
                     .buttonStyle(PressableButtonStyle())
                     .disabled(turnId == "turn-0")
@@ -906,7 +910,7 @@ private struct BroadcastStatusColumn: View {
     private let errColor = Color(red: 0.90, green: 0.42, blue: 0.36)
 
     var body: some View {
-        TahoeGlass(radius: 16, tone: .raised) {
+        TahoeGlass(radius: 6, tone: .raised) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
                     TahoeProviderGlyph(provider: provider.tahoeProvider, size: 20)
@@ -972,7 +976,7 @@ private struct PendingBroadcastView: View {
     let pending: PendingBroadcast
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             GeometryReader { geo in
                 let count = max(pending.columns.count, 1)
                 let spacing: CGFloat = 10
@@ -1282,8 +1286,8 @@ private struct ThinkingDotsRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(t.hairline, lineWidth: 0.5))
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.hairline, lineWidth: 0.5))
         .onAppear { animating = true }
         .accessibilityLabel("Waiting for a response")
     }
@@ -1306,7 +1310,7 @@ private struct MessageRow: View {
                         .foregroundStyle(t.fg)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 9)
-                        .background(t.accent.opacity(0.16), in: RoundedRectangle(cornerRadius: 14))
+                        .background(t.accent.opacity(0.16), in: RoundedRectangle(cornerRadius: 6))
                         .textSelection(.enabled)
                 }
             case .assistantText:
@@ -1325,8 +1329,8 @@ private struct MessageRow: View {
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(t.hairline, lineWidth: 0.5))
+                .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.hairline, lineWidth: 0.5))
             case .toolCall, .toolResult:
                 HStack(alignment: .top, spacing: 7) {
                     TahoeIcon("terminal", size: 10).foregroundStyle(t.fg3)
@@ -1403,7 +1407,7 @@ private struct ComposerBar: View {
     @StateObject private var providerDefaultsStore = ProviderDefaultsStore()
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .raised) {
+        TahoeGlass(radius: 8, tone: .raised) {
             ZStack(alignment: .bottom) {
                 VStack(alignment: .leading, spacing: 8) {
                     if !store.attachments.isEmpty {
@@ -2126,7 +2130,7 @@ private struct ChatEmptyState: View {
     let subtitle: String
 
     var body: some View {
-        TahoeGlass(radius: 20, tone: .panel) {
+        TahoeGlass(radius: 8, tone: .panel) {
             VStack(spacing: 8) {
                 Text(title)
                     .font(TahoeFont.body(16, weight: .semibold))

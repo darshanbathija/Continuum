@@ -13,9 +13,9 @@ struct MacCodeShell: View {
 
     var body: some View {
         SessionWorkspaceView(model: model, presentationStore: presentationStore)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(Color.black.opacity(0.45), lineWidth: 0.5)
             )
             .shadow(color: Color.black.opacity(0.45), radius: 34, x: 0, y: 22)

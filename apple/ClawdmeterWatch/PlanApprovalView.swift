@@ -13,7 +13,7 @@ struct PlanApprovalView: View {
         VStack(alignment: .leading, spacing: 8) {
             if let goal = bridge.latestGoal {
                 Text(goal)
-                    .font(.system(size: 14, weight: .semibold, design: .serif))
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
             } else {
                 Text("Plan ready")
                     .font(.system(size: 14, weight: .semibold))
@@ -33,7 +33,7 @@ struct PlanApprovalView: View {
             }
             .buttonStyle(.borderedProminent)
             // Tahoe 26 redesign: Halo cyan accent (was terra-cotta).
-            .tint(TahoeAccent.halo.base.color)
+            .tint(ContinuumTokens.live)
         }
         .padding(8)
     }

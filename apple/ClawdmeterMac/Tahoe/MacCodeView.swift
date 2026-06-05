@@ -100,7 +100,7 @@ struct MacCodeView: View {
         let openSession = openRepo?.sessions.first { $0.id == effectiveOpenId }
 
         HStack(spacing: 10) {
-            TahoeGlass(radius: 20, tone: .panel) {
+            TahoeGlass(radius: 8, tone: .panel) {
                 Sidebar(
                     repos: data.repos,
                     openId: Binding(get: { effectiveOpenId }, set: { openId = $0; openJsonlPath = nil }),
@@ -117,7 +117,7 @@ struct MacCodeView: View {
             }
             .frame(width: 260)
 
-            TahoeGlass(radius: 20, tone: .panel) {
+            TahoeGlass(radius: 8, tone: .panel) {
                 VStack(spacing: 0) {
                     if let openSession {
                         ThreadHeader(session: openSession, isDemo: data.isDemo)
@@ -161,7 +161,7 @@ struct MacCodeView: View {
             .frame(maxWidth: .infinity)
 
             if showRight {
-                TahoeGlass(radius: 20, tone: .panel) {
+                TahoeGlass(radius: 8, tone: .panel) {
                     ReviewPane(
                         tab: $rightTab,
                         session: openSession,
@@ -1145,7 +1145,7 @@ private struct JsonlPreviewMsg: View {
                 .textSelection(.enabled)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(t.accentAlpha(0.18))
                 }
                 .frame(maxWidth: 540, alignment: .trailing)
@@ -1338,7 +1338,7 @@ private struct ThreadMsg: View {
             GeometryReader { geo in
                 HStack {
                     Spacer()
-                    TahoeGlass(radius: 20, tone: .raised) {
+                    TahoeGlass(radius: 8, tone: .raised) {
                         Text(text)
                             .font(TahoeFont.body(13))
                             .foregroundStyle(t.fg)
@@ -1449,7 +1449,7 @@ private struct PlanHalo: View {
         ZStack {
             RoundedRectangle(cornerRadius: 38, style: .continuous)
                 .fill(RadialGradient(
-                    colors: [t.accentGlow.color(opacity: t.muted ? 0.10 : 0.30), .clear],
+                    colors: [.clear, .clear],
                     center: .init(x: 0.5, y: 0.3),
                     startRadius: 0, endRadius: 600))
                 .blur(radius: 8)
@@ -1466,7 +1466,7 @@ private struct PlanHalo: View {
                     auraGlow = !newValue
                 }
 
-            TahoeGlass(radius: 20, tone: .raised) {
+            TahoeGlass(radius: 8, tone: .raised) {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 10) {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -1611,7 +1611,7 @@ private struct ComposerBar: View {
         let planMode = state == .plan
 
         VStack(spacing: 0) {
-            TahoeGlass(radius: 18, tone: .raised) {
+            TahoeGlass(radius: 8, tone: .raised) {
                 VStack(alignment: .leading, spacing: 0) {
                     VStack(alignment: .leading, spacing: 0) {
                         if let composerText {
@@ -1672,7 +1672,7 @@ private struct ComposerBar: View {
             }
             .overlay {
                 if running {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(t.accentAlpha(0.45), lineWidth: 1)
                         .shadow(color: t.accentAlpha(0.30), radius: 11, x: 0, y: 0)
                         // Motion polish: running-state rim pulse, held static for Reduce Motion.
@@ -2836,7 +2836,7 @@ private struct ReviewPR: View {
                 .foregroundStyle(t.fg3)
                 .padding(.bottom, 14)
 
-            TahoeGlass(radius: 12, tone: .chip) {
+            TahoeGlass(radius: 6, tone: .chip) {
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Checks").font(TahoeFont.body(11)).foregroundStyle(t.fg3).padding(.bottom, 6)
                     check("unit · settlement", "passed", "14.2s")

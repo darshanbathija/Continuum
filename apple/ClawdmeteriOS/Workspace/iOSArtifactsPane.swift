@@ -68,7 +68,7 @@ struct iOSArtifactsPane: View {
                 Task { await open(entry) }
             }
         } label: {
-            TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+            TahoeGlass(radius: 6, tone: .chip, solid: t.dark ? true : nil) {
                 HStack(spacing: 12) {
                     Image(systemName: icon(for: entry.filename))
                         .font(.system(size: 16, weight: .semibold))

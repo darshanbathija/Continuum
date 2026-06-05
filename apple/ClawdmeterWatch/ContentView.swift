@@ -39,9 +39,7 @@ struct ContentView: View {
                     smallMeter(
                         title: "Codex",
                         usage: codex,
-                        // Tahoe 26: Codex's brand halo (OpenAI blue), via the
-                        // shared TahoeProvider tokens.
-                        tint: TahoeProvider.codex.halo.color
+                        provider: .codex
                     )
                 }
                 if let gemini = model.geminiUsage {
@@ -49,8 +47,7 @@ struct ContentView: View {
                     smallMeter(
                         title: "Antigravity",
                         usage: gemini,
-                        // Tahoe 26: Antigravity brand halo (renamed from Gemini).
-                        tint: TahoeProvider.gemini.halo.color
+                        provider: .gemini
                     )
                 }
 
@@ -66,7 +63,7 @@ struct ContentView: View {
                             if bridge.sessionsSummary.contains(where: { $0.needsAttention }) {
                                 Spacer()
                                 Image(systemName: "exclamationmark.circle.fill")
-                                    .foregroundStyle(TahoeAccent.halo.base.color)
+                                    .foregroundStyle(ContinuumTokens.live)
                             }
                         }
                     }
@@ -102,8 +99,7 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            ProgressView(value: Double(min(max(usage.sessionPct, 0), 100)) / 100.0)
-                .tint(brand)
+            TahoeRailMeter(percent: Double(min(max(usage.sessionPct, 0), 100)), provider: .claude, height: 7)
         }
         .padding(.top, 4)
 
@@ -123,7 +119,7 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            ProgressView(value: Double(min(max(usage.weeklyPct, 0), 100)) / 100.0)
+            TahoeRailMeter(percent: Double(min(max(usage.weeklyPct, 0), 100)), provider: .claude, height: 6, secondary: true)
         }
 
         if model.receivingFromPhone {
@@ -134,11 +130,11 @@ struct ContentView: View {
         }
     }
 
-    /// Compact secondary meter — single row, used by Codex + Gemini below
-    /// the primary Claude meter. Gemini's cloudcode-pa quota doesn't
+    /// Compact secondary rail meter — single row, used by Codex +
+    /// Antigravity below the primary Claude meter. Antigravity's cloudcode-pa quota doesn't
     /// surface a weekly window so the row stays single-line by design.
     @ViewBuilder
-    private func smallMeter(title: String, usage: UsageData, tint: Color) -> some View {
+    private func smallMeter(title: String, usage: UsageData, provider: TahoeProvider) -> some View {
         let resetDate = Date(timeIntervalSince1970: TimeInterval(usage.sessionEpoch))
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -154,8 +150,7 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            ProgressView(value: Double(min(max(usage.sessionPct, 0), 100)) / 100.0)
-                .tint(tint)
+            TahoeRailMeter(percent: Double(min(max(usage.sessionPct, 0), 100)), provider: provider, height: 6, secondary: true)
         }
     }
 
@@ -183,7 +178,5 @@ struct ContentView: View {
         .padding(.vertical, 8)
     }
 
-    private var brand: Color {
-        Color(red: 0xd9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var brand: Color { TahoeProvider.claude.dot }
 }

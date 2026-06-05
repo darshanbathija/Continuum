@@ -195,7 +195,7 @@ public struct IOSSessionDetailView: View {
                 }
                 .buttonStyle(.plain)
 
-                TahoeGlass(radius: 14, tone: .chip) {
+                TahoeGlass(radius: 6, tone: .chip) {
                     HStack(spacing: 9) {
                         TahoeProviderGlyph(provider: session?.agent ?? .claude, size: 22)
                         VStack(alignment: .leading, spacing: 1) {
@@ -864,7 +864,7 @@ public struct IOSSessionDetailView: View {
                             .font(.footnote.weight(.semibold))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .background(.thinMaterial, in: Capsule())
+                            .background(ContinuumTokens.surface2, in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, 18)
@@ -1232,7 +1232,7 @@ public struct IOSSessionDetailView: View {
     }
 
     private var queuedDraftsPanel: some View {
-        TahoeGlass(radius: 16, tone: .chip) {
+        TahoeGlass(radius: 6, tone: .chip) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     TahoeIcon("tray", size: 12)
@@ -1577,7 +1577,7 @@ private struct IOSWireChatItemRow: View {
             case .userText:
                 HStack {
                     Spacer()
-                    TahoeGlass(radius: 20, tone: .raised) {
+                    TahoeGlass(radius: 8, tone: .raised) {
                         Text(message.body)
                             .font(TahoeFont.body(13))
                             .foregroundStyle(t.fg)
@@ -1710,9 +1710,9 @@ private struct IOSWireChatItemRow: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(t.glassTintHi, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(t.glassTintHi, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(t.hairline, lineWidth: 0.5)
             }
         }
@@ -1733,7 +1733,7 @@ private struct IOSThreadMsg: View {
         case .user(let text):
             HStack {
                 Spacer()
-                TahoeGlass(radius: 20, tone: .raised) {
+                TahoeGlass(radius: 8, tone: .raised) {
                     Text(text)
                         .font(TahoeFont.body(13))
                         .foregroundStyle(t.fg)
@@ -1894,11 +1894,11 @@ private struct IOSPlanHaloMini: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 30, style: .continuous)
                     .fill(RadialGradient(
-                        colors: [t.accentGlow.color(opacity: 0.30), .clear],
+                        colors: [.clear, .clear],
                         center: UnitPoint(x: 0.5, y: 0.3), startRadius: 0, endRadius: 400))
                     .blur(radius: 6).padding(-20).allowsHitTesting(false)
 
-                TahoeGlass(radius: 20, tone: .raised) {
+                TahoeGlass(radius: 8, tone: .raised) {
                     VStack(alignment: .leading, spacing: 0) {
                         HStack(spacing: 10) {
                             RoundedRectangle(cornerRadius: 9, style: .continuous)

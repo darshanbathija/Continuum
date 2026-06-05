@@ -342,7 +342,7 @@ struct ChatItemRowContent: View {
             }
         }
         .id(msg.id)
-        .background(highlightColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(highlightColor, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(alignment: .topLeading) {
             if payload.isBookmarked {
                 Image(systemName: "bookmark.fill")
@@ -387,7 +387,7 @@ struct ChatItemRowContent: View {
         HStack {
             Spacer(minLength: 64)
             VStack(alignment: .trailing, spacing: 4) {
-                TahoeGlass(radius: 20, tone: .raised) {
+                TahoeGlass(radius: 8, tone: .raised) {
                     Text(ClawdmeterMac_displaySkillInvocations(in: msg.body))
                         .font(TahoeFont.body(bodyFontSize))
                         .foregroundStyle(t.fg)

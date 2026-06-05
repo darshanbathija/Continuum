@@ -93,7 +93,7 @@ public struct iOSAntigravityPlanView: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: 100)
                 } else if let err = store.loadError {
-                    TahoeGlass(radius: 14, tone: .chip) {
+                    TahoeGlass(radius: 6, tone: .chip) {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 8) {
                                 TahoeIcon("x", size: 12, weight: .bold)
@@ -121,7 +121,7 @@ public struct iOSAntigravityPlanView: View {
     }
 
     private var header: some View {
-        TahoeGlass(radius: 14, tone: .chip) {
+        TahoeGlass(radius: 6, tone: .chip) {
             HStack(spacing: 8) {
                 TahoeProviderGlyph(provider: .gemini, size: 20)
                 Text("Antigravity Plan")
@@ -149,7 +149,7 @@ public struct iOSAntigravityPlanView: View {
     }
 
     private func task(_ snapshot: AntigravityPlanSnapshot) -> some View {
-        TahoeGlass(radius: 14, tone: .chip) {
+        TahoeGlass(radius: 6, tone: .chip) {
             VStack(alignment: .leading, spacing: 6) {
                 if !snapshot.taskHeadline.isEmpty {
                     Text(snapshot.taskHeadline)
@@ -175,7 +175,7 @@ public struct iOSAntigravityPlanView: View {
                 .font(TahoeFont.body(10.5, weight: .bold))
                 .tracking(0.5)
                 .foregroundStyle(t.fg3)
-            TahoeGlass(radius: 14, tone: .raised) {
+            TahoeGlass(radius: 6, tone: .raised) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(snapshot.planSteps.enumerated()), id: \.element.id) { index, step in
                         HStack(alignment: .top, spacing: 8) {
@@ -208,7 +208,7 @@ public struct iOSAntigravityPlanView: View {
                 .tracking(0.5)
                 .foregroundStyle(t.fg3)
             ForEach(snapshot.annotations) { ann in
-                TahoeGlass(radius: 12, tone: .chip) {
+                TahoeGlass(radius: 6, tone: .chip) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(ann.filename)
                             .font(TahoeFont.mono(10.5, weight: .semibold))

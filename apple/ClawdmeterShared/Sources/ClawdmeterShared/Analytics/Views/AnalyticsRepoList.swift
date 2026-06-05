@@ -65,7 +65,7 @@ public struct AnalyticsRepoList: View {
     /// providers dominate sort order, but the row badge surfaces Gemini's
     /// per-repo request count when present. Repos with ONLY Gemini activity
     /// still appear (with $0 cost) when `.gemini` is in the filter.
-    fileprivate static func computeRows(_ input: RowsInput) -> [Row] {
+    nonisolated fileprivate static func computeRows(_ input: RowsInput) -> [Row] {
         let snapshot = input.snapshot
         let window = input.window
         let providerFilter = input.providerFilter
@@ -199,9 +199,9 @@ public struct AnalyticsRepoList: View {
             let restCost = restClaude + restCodex + restOpencode + restCursor + restGrok
             let restTokens = rest.map(\.value.tokens).reduce(0, +)
             let restShareDec: Decimal = totalCost > 0 ? (restCost / totalCost) : 0
-            let restShare: Double = totalCost > 0
-                ? NSDecimalNumber(decimal: restShareDec).doubleValue
-                : (totalGeminiReqs > 0 ? Double(restGemini) / Double(totalGeminiReqs) : (totalTokenActivity > 0 ? Double(restTokens) / Double(totalTokenActivity) : 0))
+            let restCostShare: Double = totalCost > 0 ? NSDecimalNumber(decimal: restShareDec).doubleValue : 0
+            let restGeminiShare: Double = (totalGeminiReqs > 0 && totalCost == 0) ? Double(restGemini) / Double(totalGeminiReqs) : 0
+            let restTokenShare: Double = (totalTokenActivity > 0 && restCost == 0) ? Double(restTokens) / Double(totalTokenActivity) : 0
             out.append(Row(
                 id: "__rest__",
                 repo: "__rest__",
@@ -215,7 +215,7 @@ public struct AnalyticsRepoList: View {
                 tokens: restTokens,
                 geminiRequests: restGemini,
                 grokTokens: restGrokTokens,
-                share: restShare,
+                share: max(restCostShare, max(restGeminiShare, restTokenShare)),
                 isRest: true,
                 restCount: rest.count
             ))
@@ -249,17 +249,21 @@ public struct AnalyticsRepoList: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("By repo")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.body(13, weight: .semibold))
+                    .foregroundStyle(ContinuumTokens.fg2)
                 Spacer()
-                Text("$").font(.caption).foregroundStyle(.secondary)
-                Text("Share").font(.caption).foregroundStyle(.secondary)
+                Text("$")
+                    .font(ContinuumFont.mono(11))
+                    .foregroundStyle(ContinuumTokens.fg3)
+                Text("Share")
+                    .font(ContinuumFont.mono(11))
+                    .foregroundStyle(ContinuumTokens.fg3)
             }
 
             if data.isEmpty {
                 Text("No usage in this window")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.body(12))
+                    .foregroundStyle(ContinuumTokens.fg3)
             } else {
                 ForEach(data) { row in
                     RepoRow(row: row)
@@ -269,8 +273,8 @@ public struct AnalyticsRepoList: View {
             if !snapshot.unpricedModelTokens.isEmpty {
                 let totalUnpricedTokens = snapshot.unpricedModelTokens.values.map(\.totalTokens).reduce(0, +)
                 Text("\(AnalyticsTokenFormatter.format(totalUnpricedTokens)) tokens against \(snapshot.unpricedModelTokens.count) unpriced model\(snapshot.unpricedModelTokens.count == 1 ? "" : "s") — update pricing.json")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.body(11))
+                    .foregroundStyle(ContinuumTokens.fg3)
                     .padding(.top, 4)
             }
         }
@@ -337,65 +341,71 @@ private struct RepoRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(row.displayName)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .font(ContinuumFont.mono(12, weight: .medium))
+                    .foregroundStyle(ContinuumTokens.fg)
                     .lineLimit(1)
+                    .truncationMode(.middle)
                 if row.geminiRequests > 0 {
-                    // Gemini contributes request count, not $. Render as a
-                    // small inline pill so the user sees per-repo Gemini
-                    // activity without distorting the cost-comparable
-                    // stacked bar below. Distinct shape (capsule with
-                    // gemini blue) keeps it visually separable from cost.
-                    Text("+\(row.geminiRequests) gem")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(geminiColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(geminiColor.opacity(0.15), in: Capsule())
+                    // Antigravity contributes request count, not $. A small
+                    // inline pill keeps per-repo Antigravity activity visible
+                    // without distorting the cost-comparable stacked bar.
+                    HStack(spacing: 4) {
+                        ProviderDot(.gemini, size: 5)
+                        Text("+\(row.geminiRequests)")
+                            .font(ContinuumFont.mono(10, weight: .semibold))
+                            .foregroundStyle(ContinuumTokens.fg3)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(ContinuumTokens.surface2, in: Capsule())
+                    .overlay(Capsule().strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5))
                 }
                 if row.grokTokens > 0 {
-                    Text("+\(AnalyticsTokenFormatter.format(row.grokTokens)) grok")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(grokColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(grokColor.opacity(0.15), in: Capsule())
+                    HStack(spacing: 4) {
+                        ProviderDot(.grok, size: 5)
+                        Text("+\(AnalyticsTokenFormatter.format(row.grokTokens))")
+                            .font(ContinuumFont.mono(10, weight: .semibold))
+                            .foregroundStyle(ContinuumTokens.fg3)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(ContinuumTokens.surface2, in: Capsule())
+                    .overlay(Capsule().strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5))
                 }
                 Spacer()
                 if row.cost > 0 {
                     Text(AnalyticsCurrencyFormatter.format(row.cost))
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .font(ContinuumFont.mono(12, weight: .semibold))
+                        .foregroundStyle(ContinuumTokens.fg)
                         .monospacedDigit()
                 } else if row.geminiRequests > 0 {
                     Text("\(row.geminiRequests) reqs")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .font(ContinuumFont.mono(12, weight: .semibold))
+                        .foregroundStyle(ContinuumTokens.fg)
                         .monospacedDigit()
                 } else if row.grokTokens > 0 {
                     Text(AnalyticsTokenFormatter.format(row.grokTokens) + " tok")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .font(ContinuumFont.mono(12, weight: .semibold))
+                        .foregroundStyle(ContinuumTokens.fg)
                         .monospacedDigit()
                 }
                 Text(percentString(row.share))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.mono(11))
+                    .foregroundStyle(ContinuumTokens.fg2)
                     .monospacedDigit()
                     .frame(width: 44, alignment: .trailing)
             }
-            // Stacked progress bar — Claude (terra-cotta) below, Codex
-            // (accent blue) on top. The widths sum to `row.share` of
-            // the total window cost. Without this split, a Codex-heavy
-            // repo looked identical to a Claude-heavy one in the UI.
+            // Stacked progress bar. The widths sum to `row.share` of
+            // the total window cost, and each cost-bearing provider keeps
+            // its canonical T2 fill.
             providerSegmentedBar
-                .frame(height: 6)
-                .clipShape(Capsule())
+                .frame(height: 7)
+                .clipShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.rail, style: .continuous))
 
             if expanded && !row.isRest {
                 Text(row.repo)
-                    .font(.system(size: 10).monospaced())
-                    .foregroundStyle(.secondary)
+                    .font(ContinuumFont.mono(10))
+                    .foregroundStyle(ContinuumTokens.fg3)
                     .lineLimit(2)
                     .truncationMode(.middle)
             }
@@ -425,41 +435,30 @@ private struct RepoRow: View {
                 : (row.grokTokens > 0 ? totalWidth * row.share : 0)
             ZStack(alignment: .leading) {
                 // Track
-                Capsule()
-                    .fill(Color.secondary.opacity(0.15))
+                Rectangle()
+                    .fill(ContinuumTokens.railTrack)
                 HStack(spacing: 0) {
+                    // Horizontal by-repo order: Claude -> Codex -> Antigravity
+                    // request pill -> OpenCode -> Cursor -> Grok.
                     Rectangle()
-                        .fill(claudeColor)
+                        .fill(ProviderFill.gradient(for: .claude))
                         .frame(width: claudeWidth)
                     Rectangle()
-                        .fill(codexColor)
+                        .fill(ProviderFill.gradient(for: .codex))
                         .frame(width: codexWidth)
                     Rectangle()
-                        .fill(opencodeColor)
+                        .fill(ProviderFill.gradient(for: .opencode))
                         .frame(width: opencodeWidth)
                     Rectangle()
-                        .fill(cursorColor)
+                        .fill(ProviderFill.gradient(for: .cursor))
                         .frame(width: cursorWidth)
                     Rectangle()
-                        .fill(grokColor)
+                        .fill(ProviderFill.gradient(for: .grok))
                         .frame(width: grokWidth)
                     Spacer(minLength: 0)
                 }
             }
         }
-    }
-
-    private var claudeColor: Color { SessionsV2Theme.accent }
-    private var codexColor: Color {
-        Color.accentColor
-    }
-    private var geminiColor: Color {
-        Color(red: 0x42 / 255.0, green: 0x85 / 255.0, blue: 0xF4 / 255.0)
-    }
-    private var opencodeColor: Color { Color.green }
-    private var cursorColor: Color { Color.purple }
-    private var grokColor: Color {
-        Color(red: 0.42, green: 0.82, blue: 0.62)
     }
 
     private var providerBreakdownTooltip: String {
@@ -481,7 +480,7 @@ private struct RepoRow: View {
             parts.append("Grok " + AnalyticsCurrencyFormatter.format(row.grokCost))
         }
         if row.geminiRequests > 0 {
-            parts.append("Gemini \(row.geminiRequests) reqs")
+            parts.append("Antigravity \(row.geminiRequests) reqs")
         }
         if row.grokTokens > 0 {
             parts.append("Grok \(AnalyticsTokenFormatter.format(row.grokTokens)) tok")

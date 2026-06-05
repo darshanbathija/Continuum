@@ -4,6 +4,21 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.0 build 199] - 2026-06-06 - Quiet Black Workbench redesign (every surface) (`v2-design-changes`)
+
+### Changed
+
+- **The whole app is redesigned to the new `DESIGN.md` "Quiet Black Workbench" direction** — a fully-neutral, near-black, instrument-grade dark tool that replaces the Tahoe liquid-glass system. Across macOS, iPhone, watchOS, and every widget/complication: glass/blur/glow/gradient-decoration is gone, panels are flat surfaces separated by 0.5px hairline seams and perceptible elevation steps (`bg #050507` → `surface-1/2/3` → `modal`), radii are tight (row 4 / button 5 / card 6 / modal 8 / rail 3), and the primary action is a **light** button rather than a chromatic one.
+- **One unified token layer (`ContinuumTokens`).** A single source of truth for the palette, semantic state (`live`/`warn`/`error`/`paused`), provider identity, radii, the SF Pro Rounded / SF Pro Text / SF Mono type split, and mechanical motion. The old `TahoeTokens`, `SessionsV2Theme`, and `ClawdmeterTheme` palettes now forward to it; dark-only for v1 (the appearance / surface / wallpaper / accent / glass-intensity knobs are gone); the custom Tiempos/Styrene fonts are dropped for system SF.
+- **The rail meter is the signature.** Quota reads as a horizontal rail (7px `#202126` track, provider T2 gradient fill, 1px lit edge, 80% limit tick, warn/error cap, ~140ms galvanometer settle). It replaces every ring/arc gauge — dashboard, menu-bar, iPhone Live, watch app, and all widgets/complications.
+- **Color is rationed.** Greyscale by default; provider color appears only as a 6px dot, a 3px column/row edge, a chart segment, or the meter fill — never a provider-colored button, header, or panel. Claude keeps the heritage terra-cotta `#D97757` (as the dot only); Codex is graphite `#8A9099`; Antigravity is `#5C9DFF`.
+- **Charts** use stacked bars with the same provider T2 gradients as the meters, SF Mono axes, dashed hairline gridlines, and keep `$0` providers in the legend.
+- **New shared primitives:** flat panel, rail meter, light primary + hairline ghost buttons, pill segmented control, live switch, composer chip, provider dot/edge/glyph, a LiveTicker (1Hz heartbeat) and an odometer counter.
+
+### Notes
+
+- All four targets build (Mac/iOS/Watch + widget extensions); the `ClawdmeterShared` suite is green (new `ContinuumTokenTests` lock the palette/radii/meter-tick/provider values). The three legacy theme types remain as thin forwarding shims (the palette is already consolidated to `ContinuumTokens`); deleting them + migrating every consumer directly is a no-user-visible-change refactor deferred to a follow-up. A light variant, LiveTicker composer wiring, and the Linux (Cairo/GTK) port are deliberate follow-ups.
+
 ## [0.30.1 build 199] - 2026-06-06 - Correct Cursor monthly usage and analytics (`darshanbathija/cursor-usage-fix`)
 
 ### Fixed

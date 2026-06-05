@@ -8,7 +8,7 @@ struct InheritedContextChips: View {
     @Environment(\.tahoe) private var t
 
     var body: some View {
-        TahoeGlass(radius: 12, tone: .raised, shadow: .subtle) {
+        TahoeGlass(radius: 6, tone: .raised, shadow: .subtle) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "text.bubble.fill")

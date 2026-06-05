@@ -91,14 +91,14 @@ struct iOSComposerBar: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(fieldBackground, in: RoundedRectangle(cornerRadius: 18))
+            .background(fieldBackground, in: RoundedRectangle(cornerRadius: 8))
             .overlay(
-                RoundedRectangle(cornerRadius: 18)
+                RoundedRectangle(cornerRadius: 8)
                     .strokeBorder(borderColor, lineWidth: 1)
             )
             .padding(.top, 6)
         }
-        .background(.thinMaterial)
+        .background(ContinuumTokens.surface2)
         .overlay(alignment: .top) { Divider() }
         .onAppear { syncModelEffortFromSession() }
         .onChange(of: modelId) { _, new in handleModelChange(new) }
