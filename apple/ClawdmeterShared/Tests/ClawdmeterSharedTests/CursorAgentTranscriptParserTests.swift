@@ -292,6 +292,11 @@ final class CursorAgentTranscriptParserTests: XCTestCase {
         """
     }
 
+    private func jsonString(_ value: String) -> String {
+        let data = try! JSONEncoder().encode(value)
+        return String(data: data, encoding: .utf8)!
+    }
+
     #if os(macOS)
     private func agentKVBlob(role: String, content: Any, modelName: String?) throws -> Data {
         var cursorOptions: [String: Any] = [
@@ -312,11 +317,6 @@ final class CursorAgentTranscriptParserTests: XCTestCase {
             ],
         ]
         return try JSONSerialization.data(withJSONObject: object)
-    }
-
-    private func jsonString(_ value: String) -> String {
-        let data = try! JSONEncoder().encode(value)
-        return String(data: data, encoding: .utf8)!
     }
 
     private func writeCursorAgentKVDatabase(_ url: URL, rows: [(String, Data)]) throws {
