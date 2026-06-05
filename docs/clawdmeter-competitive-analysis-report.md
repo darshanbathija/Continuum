@@ -1,4 +1,4 @@
-# Clawdmeter (Continuum) — Competitive Analysis & Opportunity Report
+# Continuum — Competitive Analysis & Opportunity Report
 
 **Date:** May 30, 2026  
 **Version:** v0.29.30 codebase  
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Clawdmeter is a **native, local-first, multi-device control plane and workbench** for heterogeneous AI coding agents (Claude Code, Codex, Antigravity/Gemini, OpenCode, Cursor).
+Continuum is a **native, local-first, multi-device control plane and workbench** for heterogeneous AI coding agents (Claude Code, Codex, Antigravity/Gemini, OpenCode, Cursor).
 
 The Mac daemon is the source of truth for spawning, observing, and steering sessions. It exposes a rich HTTP+WS surface consumed by a full-featured iOS companion and Apple Watch clients.
 
@@ -55,7 +55,7 @@ Extensibility scaffolding is solid (AgentKind + adapter pattern). New agents are
 
 ## Analytics & Cost Engine
 
-One of Clawdmeter’s strongest and most defensible assets.
+One of Continuum’s strongest and most defensible assets.
 
 **Key Strengths:**
 - Fully local parsing (zero telemetry exfiltration)
@@ -121,7 +121,7 @@ The shared Tahoe layer (glass primitives, provider glyphs, exact chart conventio
 
 ## Competitive Positioning
 
-| Dimension                    | Clawdmeter                          | Cursor             | Conductor             |
+| Dimension                    | Continuum                          | Cursor             | Conductor             |
 |-----------------------------|-------------------------------------|--------------------|-----------------------|
 | Mobile / Ubiquitous Control | Strong (iOS + Watch + Live Activities) | None              | None                 |
 | Cost Transparency           | Best-in-class (local, ccusage parity) | Opaque            | Minimal / none       |
@@ -147,7 +147,7 @@ Explicitly complementary to both Cursor (editor loop) and Conductor (desktop fle
 6. Watch fleet complications + quick actions
 
 ### Cursor-Complement Wedge
-7. "Send to Clawdmeter" editor bridge (Cursor/VS Code shim)
+7. "Send to Continuum" editor bridge (Cursor/VS Code shim)
 8. Lightweight on-device RAG for @mentions
 9. Agent health/telemetry overlay
 10. Real-time per-turn $ ticker + fine attribution
@@ -188,6 +188,6 @@ Explicitly complementary to both Cursor (editor loop) and Conductor (desktop fle
 
 ---
 
-*Report generated from full multi-agent analysis of the Clawdmeter codebase (May 2026).*
+*Report generated from full multi-agent analysis of the Continuum codebase (May 2026).*
 
 **To generate PDF:** Open the accompanying `.html` version in any modern browser and use **Print → Save as PDF**. The styling is optimized for clean printed output.

@@ -1,6 +1,6 @@
 # clawdmeter-relay — Cloudflare Worker (Group E2)
 
-WebSocket relay for the Clawdmeter Mac <-> iPhone pairing channel. One Durable Object per pairing session; two peers connect via WSS; the DO fans encrypted envelopes between them. **The Worker never sees plaintext** — peers derive a symmetric key via X25519 + HKDF on their own and encrypt every frame with XChaCha20-Poly1305 before handing it to the relay.
+WebSocket relay for the Continuum Mac <-> iPhone pairing channel. One Durable Object per pairing session; two peers connect via WSS; the DO fans encrypted envelopes between them. **The Worker never sees plaintext** — peers derive a symmetric key via X25519 + HKDF on their own and encrypt every frame with XChaCha20-Poly1305 before handing it to the relay.
 
 Plan: **E2** in `.claude/plans/study-this-codebase-crystalline-shore.md`.
 Design doc: [`docs/design/secure-relay-apns-2026-05-26.md`](../../docs/design/secure-relay-apns-2026-05-26.md).

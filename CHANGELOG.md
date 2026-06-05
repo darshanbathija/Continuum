@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Clawdmeter are recorded here. Marketing version
+All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
@@ -205,7 +205,7 @@ Bumps `MARKETING_VERSION` 0.29.20 -> 0.29.21, `CURRENT_PROJECT_VERSION` 159 -> 1
 ### Added
 
 - **Repo environment variables in Settings.** Developers can create repo-specific sets such as local, testnet, staging, and prod; add variables in a dense Vercel-style table; filter by set/source/type/status; import `.env` text; and share global variables into multiple repos without reading secret values into the settings list.
-- **Runtime env-set resolution.** Sessions, mode switches, restore/respawn paths, run profiles, in-app browser launches, and tmux windows resolve the pinned env set before launch, materialize only the Clawdmeter-managed block in `.env.local`, preserve manual lines, and pass tmux variables via native `-e KEY=value`.
+- **Runtime env-set resolution.** Sessions, mode switches, restore/respawn paths, run profiles, in-app browser launches, and tmux windows resolve the pinned env set before launch, materialize only the Continuum-managed block in `.env.local`, preserve manual lines, and pass tmux variables via native `-e KEY=value`.
 - **Repo env V2 design reference.** Added `docs/designs/repo-env-v2-vercel-parity.md` to capture the table-first UX, filter model, repo/set matrix, import flows, and Vercel-parity follow-up scope.
 
 ### Fixed
@@ -232,8 +232,8 @@ Bumps `MARKETING_VERSION` 0.29.15 -> 0.29.16, `CURRENT_PROJECT_VERSION` 154 -> 1
 
 ### Changed
 
-- **Code sidebar now prioritizes Clawdmeter-created work.** Managed code sessions and same-workspace tabs appear first, grouped by workspace/repo and ordered by most recent child activity. Pinned state still renders as UI state, but default ordering is recency-first.
-- **External JSONL sessions are split by activity.** Outside-Clawdmeter sessions touched within 10 minutes appear under active repo groups, while older external recents move to a visually separated bottom History section grouped by repo and date. The 30-day `RepoIndex.recentSessions` source and 5-minute live-dot behavior stay unchanged.
+- **Code sidebar now prioritizes Continuum-created work.** Managed code sessions and same-workspace tabs appear first, grouped by workspace/repo and ordered by most recent child activity. Pinned state still renders as UI state, but default ordering is recency-first.
+- **External JSONL sessions are split by activity.** Outside-Continuum sessions touched within 10 minutes appear under active repo groups, while older external recents move to a visually separated bottom History section grouped by repo and date. The 30-day `RepoIndex.recentSessions` source and 5-minute live-dot behavior stay unchanged.
 - **Repo rows can start new workspaces.** Repo headers now expose a sibling `+` action that opens the existing new-session/worktree sheet with that repo preselected without also toggling row expansion.
 
 ### Fixed
@@ -242,7 +242,7 @@ Bumps `MARKETING_VERSION` 0.29.15 -> 0.29.16, `CURRENT_PROJECT_VERSION` 154 -> 1
 - Inherited attachment staging is isolated per session to prevent sibling Codex sessions in the same checkout from leaking files into each other.
 - First-send promotion revalidates selected sibling sources before inheritance, so archived, stale, or current-session IDs are excluded safely.
 - Archived managed Code sessions no longer leak into normal Date, Agent, None, Repo, or Status views; they are visible only through the Archive filter.
-- Opening an external JSONL read-only no longer creates a duplicate first-party workspace row, and Clawdmeter-owned JSONLs are suppressed from external active/history rows without adding a new wire/schema field.
+- Opening an external JSONL read-only no longer creates a duplicate first-party workspace row, and Continuum-owned JSONLs are suppressed from external active/history rows without adding a new wire/schema field.
 - External search now matches recent-session metadata, so filtering by JSONL path, prompt text, alias, or provider still surfaces the relevant external repo/history rows.
 
 ### Tests
@@ -268,9 +268,9 @@ Bumps `MARKETING_VERSION` 0.29.13 -> 0.29.14, `CURRENT_PROJECT_VERSION` 152 -> 1
 
 Bumps `MARKETING_VERSION` 0.29.11 -> 0.29.12, `CURRENT_PROJECT_VERSION` 150 -> 151.
 
-## [0.29.13 build 152] - 2026-05-27 - Clawdmeter-owned Conductor-style workspaces (`darshanbathija/branch-issues`)
+## [0.29.13 build 152] - 2026-05-27 - Continuum-owned Conductor-style workspaces (`darshanbathija/branch-issues`)
 
-New existing-repo sessions now provision Clawdmeter-owned worktrees under `~/Clawdmeter/workspaces/<project>/<city>` instead of the legacy `.claude/worktrees` layout. The provisioning path creates the branch/worktree first, writes ownership metadata in the Git dir, copies ignored local files in full-local-clone mode by default, and launches each provider from the prepared cwd without surfacing Clawdmeter-owned trust popups.
+New existing-repo sessions now provision Continuum-owned worktrees under `~/Clawdmeter/workspaces/<project>/<city>` instead of the legacy `.claude/worktrees` layout. The provisioning path creates the branch/worktree first, writes ownership metadata in the Git dir, copies ignored local files in full-local-clone mode by default, and launches each provider from the prepared cwd without surfacing Continuum-owned trust popups.
 
 ### Added
 
@@ -314,7 +314,7 @@ Bumps `MARKETING_VERSION` 0.29.9 -> 0.29.11, `CURRENT_PROJECT_VERSION` 148 -> 15
 
 ## [0.29.9 build 148] - 2026-05-26 - OpenCode auth flows through the CLI (`feat/opencode-cli-auth`)
 
-Clawdmeter no longer maintains a parallel "paste an OpenRouter key" affordance for OpenCode. The user's `opencode` CLI session is now the single source of truth — Clawdmeter reads `~/.local/share/opencode/auth.json` to enumerate connected upstream providers and routes chat through the long-running `opencode serve` daemon (which already uses those CLI creds upstream). Settings → Providers → OpenCode now mirrors the Claude Code row's "Auth via CLI" shape.
+Continuum no longer maintains a parallel "paste an OpenRouter key" affordance for OpenCode. The user's `opencode` CLI session is now the single source of truth — Continuum reads `~/.local/share/opencode/auth.json` to enumerate connected upstream providers and routes chat through the long-running `opencode serve` daemon (which already uses those CLI creds upstream). Settings → Providers → OpenCode now mirrors the Claude Code row's "Auth via CLI" shape.
 
 ### Changed
 
@@ -324,11 +324,11 @@ Clawdmeter no longer maintains a parallel "paste an OpenRouter key" affordance f
 
 ### Removed
 
-- **`OpencodeAPIKeySheet.swift`** - the in-app API-key sheet is gone. The CLI's `opencode auth login` flow is the only supported path; pasting keys directly from Clawdmeter is no longer offered.
+- **`OpencodeAPIKeySheet.swift`** - the in-app API-key sheet is gone. The CLI's `opencode auth login` flow is the only supported path; pasting keys directly from Continuum is no longer offered.
 
 ### Verification
 
-- Manual: with `~/.local/share/opencode/auth.json` present and an OpenRouter token in it, sending a chat to OpenCode streams a response without Clawdmeter prompting for any key.
+- Manual: with `~/.local/share/opencode/auth.json` present and an OpenRouter token in it, sending a chat to OpenCode streams a response without Continuum prompting for any key.
 - Manual: removing auth.json drops the row to "No upstream providers yet" with an "Auth via CLI" button that opens Terminal with `opencode auth login` queued.
 - `xcodebuild build -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (Mac)" -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO` -> pending CI run on the PR (no local macOS toolchain on the build agent).
 
@@ -584,7 +584,7 @@ The Cursor tile on the Usage tab now shows REAL billing-period usage and reset t
 
 ### Added — full live CursorSource (mirrors CodexSource/AntigravitySource)
 
-- **`CursorTokenProvider`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/CursorTokenProvider.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/CursorTokenProvider.swift)) reads `cursor-access-token` and `cursor-refresh-token` from the macOS Keychain via `SecItemCopyMatching`. `cursor-agent login` stores both items as generic-password entries in the user's login keychain with a permissive ACL, so the sandboxed Clawdmeter can read them after a one-time "Always Allow" prompt. 5-minute in-memory cache TTL matches cursor-agent's own refresh cadence. `refreshIfNeeded()` drops the cache and re-reads — we don't call Cursor's refresh endpoint ourselves, trusting cursor-agent's own background rotation to update the on-disk copy.
+- **`CursorTokenProvider`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/CursorTokenProvider.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/CursorTokenProvider.swift)) reads `cursor-access-token` and `cursor-refresh-token` from the macOS Keychain via `SecItemCopyMatching`. `cursor-agent login` stores both items as generic-password entries in the user's login keychain with a permissive ACL, so the sandboxed Continuum can read them after a one-time "Always Allow" prompt. 5-minute in-memory cache TTL matches cursor-agent's own refresh cadence. `refreshIfNeeded()` drops the cache and re-reads — we don't call Cursor's refresh endpoint ourselves, trusting cursor-agent's own background rotation to update the on-disk copy.
 - **`CursorSource`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/CursorSource.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/CursorSource.swift)) POSTs a gRPC-Web framed empty request to `https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` with the keychain JWT bearer. Parses the proto response (hand-rolled `CursorProtoReader`, fileprivate) to extract:
   - `field 2` — billing-period end (unix epoch ms) → `sessionEpoch` + `resetMins`.
   - `field 5` — included usage count (e.g. 200 for Free) → `organizationID` plan badge ("200 included / period").
@@ -607,7 +607,7 @@ The Cursor tile on the Usage tab now shows REAL billing-period usage and reset t
 - **Token rotation:** we don't call Cursor's `/refresh` endpoint ourselves. When the access token JWT expires (~7 day life), `CursorSource` will surface `.unauthenticated` until `cursor-agent` itself rotates the keychain entry (cursor-agent runs a background refresh loop, but only when invoked). If the tile reads 0% for many days, run `cursor-agent status` once to nudge the refresh.
 - **Free-tier capture only:** the fixture is from a Free-tier account that has 0% usage in the current period, so the percent-extraction path is exercised against `"You've used 0% of your included usage"`. A future Pro-tier capture with non-zero usage should be added to broaden parser coverage.
 - **Schema drift risk:** Cursor ships weekly+, and the reverse-engineered field numbers (1/2/5/7) could change. `CursorSourceTests` catches drift in CI, but you're the on-call for re-capturing the fixture when the wire format moves.
-- **First-launch keychain prompt:** the very first time CursorSource polls in a freshly-installed Clawdmeter build, macOS may surface a "Clawdmeter wants to use confidential information stored in the keychain" dialog. Click Always Allow once — subsequent reads are silent.
+- **First-launch keychain prompt:** the very first time CursorSource polls in a freshly-installed Continuum build, macOS may surface a "Continuum wants to use confidential information stored in the keychain" dialog. Click Always Allow once — subsequent reads are silent.
 
 ### TOS posture
 
@@ -622,9 +622,9 @@ Adds Cursor as a first-class provider for Code sessions while keeping the launch
 ### Added
 
 - **Cursor Code sessions on Mac** - starts new Cursor coding sessions through the Cursor Agent CLI, preferring `cursor-agent` and falling back to `agent`, with `--workspace <repoPath>` and `--model <cursorModelId>` when a concrete Cursor model is selected.
-- **Cursor resume support** - resumes only when Clawdmeter has a real Cursor chat/session id and passes it through `--resume <cursorChatId>`. Cursor approval, respawn, and model-swap paths now require that proven resume id instead of silently starting a fresh session.
+- **Cursor resume support** - resumes only when Continuum has a real Cursor chat/session id and passes it through `--resume <cursorChatId>`. Cursor approval, respawn, and model-swap paths now require that proven resume id instead of silently starting a fresh session.
 - **iOS-to-Mac Cursor start/resume** - iOS exposes Cursor in provider pickers and sends start/resume requests to the paired Mac; the Mac owns the actual Cursor CLI launch in the repo/worktree.
-- **Dynamic Cursor model catalog** - probes authenticated Cursor CLI model visibility, caches account-visible models, includes Cursor default / Auto as the fallback, and stores the chosen model on the Clawdmeter session/runtime binding.
+- **Dynamic Cursor model catalog** - probes authenticated Cursor CLI model visibility, caches account-visible models, includes Cursor default / Auto as the fallback, and stores the chosen model on the Continuum session/runtime binding.
 - **Cursor usage and Tahoe wiring** - Cursor now appears in provider labels, picker styling, analytics totals, live/session surfaces, and Tahoe provider mappings.
 - **Cursor transcript mirror** - Cursor CLI sessions do not expose a Claude/Codex JSONL, so the daemon mirrors sent prompts and terminal snapshots into the main chat until native Cursor transcript import can attach a proven Cursor chat id.
 
@@ -758,7 +758,7 @@ After v0.26.2 unblocked the Codex provider tile, the Usage tab still showed thre
 - **`UsageHistoryLoader.init`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/UsageHistoryLoader.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/UsageHistoryLoader.swift):54) same swap — `home` is now `ClawdmeterRealHome.url()` instead of `NSHomeDirectory()`. Re-enables SPEND OVER TIME + SPEND BY REPO across Claude, Codex, and Antigravity data.
 - **`ClawdmeterMac-Release.entitlements`** adds two more read-only sandbox exceptions:
   - `/.claude/` — Anthropic CLI's `projects/` jsonls (the v0.26.2 entitlement list covered `/.codex/`, `/.gemini/`, `/.local/share/opencode/`, and `/Library/Application Support/Antigravity/` but missed Anthropic entirely because Claude itself had been working — turns out *only* via the `PastedAnthropicTokenProvider` keychain path, while `RepoIndex` and `UsageHistoryLoader` silently lost Claude data).
-  - `/Library/Application Support/Clawdmeter/` — Clawdmeter's own pre-sandbox sessions.json + workspaces.json. Users who ran an earlier non-sandboxed build have 90+ tracked sessions in the real path; the new sandboxed app now reads them instead of starting fresh in the container.
+  - `/Library/Application Support/Clawdmeter/` — Continuum's own pre-sandbox sessions.json + workspaces.json. Users who ran an earlier non-sandboxed build have 90+ tracked sessions in the real path; the new sandboxed app now reads them instead of starting fresh in the container.
 
 - **`apple/ClawdmeterMac/Info.plist`** sets `LSFileQuarantineEnabled = false`. The bundled `Contents/Resources/Vendor/opencode/opencode` is a Bun single-file executable that extracts an ad-hoc-signed `libopentui.dylib` to the app's sandbox tmp dir on every launch (under a content-hashed name like `.bbb6fbfdedbffead-00000000.dylib`). With the default LaunchServices behavior, macOS auto-stamps `com.apple.quarantine: 0086;<ts>;Clawdmeter;` on that file; opencode then dlopens it and Gatekeeper trips with "Apple could not verify '.bbb6fbfdedbffead-00000000.dylib' is free of malware" — fired on every Code-tab session start. Opting out of LSQuarantine is the standard fix for apps that host their own trusted bundled runtime (browsers, IDEs, language runtimes all do this); the app itself stays sandboxed so blast radius is unchanged.
 
@@ -809,7 +809,7 @@ This ship adds narrow, **read-only** `com.apple.security.temporary-exception.fil
   - `~/.local/share/opencode/` — OpenCode CLI auth + per-provider state (honors `XDG_DATA_HOME` if set; this is the default).
   - `~/Library/Application Support/Antigravity/` — Antigravity 2 desktop app's native conversation DB + `brain/`.
 - **Containment scope preserved everywhere else.** ~/Documents, ~/Pictures, ~/Library/Mail, ~/Library/Messages, browser cookies, SSH keys, and the rest of the user home remain outside our blast radius — a worst-case RCE in our process (e.g. via a compromised bundled Node) can read these four provider state dirs but cannot exfil the user's mail, browser session, or shell credentials.
-- **Read-only is enforced.** No write entitlement is granted; auth rotation, session writes, and SQLite mutations are all performed by the upstream CLIs in their own processes. RCE in Clawdmeter can observe provider state but cannot plant trojan auth tokens or alter session history.
+- **Read-only is enforced.** No write entitlement is granted; auth rotation, session writes, and SQLite mutations are all performed by the upstream CLIs in their own processes. RCE in Continuum can observe provider state but cannot plant trojan auth tokens or alter session history.
 
 ### Notes
 
@@ -895,7 +895,7 @@ The Mac app now surfaces a small "Update X.Y.Z" chip in the titlebar when a newe
 
 - **`UpdateCoordinator` + `UpdatesUI` + `GitHubReleaseConstants`** (`apple/ClawdmeterMac/Updates/`). The coordinator polls `https://api.github.com/repos/darshanbathija/Clawdmeter/releases/latest` once 8 seconds after launch + every 24 hours while running. Tag-pattern parsing is strict: `v<MAJOR>.<MINOR>.<PATCH>-mac` only, so experimental tags don't fire the chip until channel support exists. Version comparison is numeric, not lexicographic — `0.23.10 > 0.23.9` (the bug that lexicographic comparison would produce is locked out by a regression test).
 - **Per-version dismissal cooldown.** Click "Later" and the chip stays hidden for 24 hours for that exact version. A newer version surfaces immediately (the cooldown is per-version, not blanket).
-- **Translocation detection.** When Clawdmeter is run directly from the DMG mount or `~/Downloads` (Gatekeeper translocates the bundle to a randomized `/private/var/folders/…` path), the chip turns yellow and reads "Move to Applications" — Sparkle and any in-place install would fail anyway, so we surface the actionable explanation instead of nagging the user with an update prompt they can't follow through on. Popover has a "Show in Finder" button so the user can drag the bundle to `/Applications` and reopen.
+- **Translocation detection.** When Continuum is run directly from the DMG mount or `~/Downloads` (Gatekeeper translocates the bundle to a randomized `/private/var/folders/…` path), the chip turns yellow and reads "Move to Applications" — Sparkle and any in-place install would fail anyway, so we surface the actionable explanation instead of nagging the user with an update prompt they can't follow through on. Popover has a "Show in Finder" button so the user can drag the bundle to `/Applications` and reopen.
 - **Manual `Check now` button** in the popover, debounced 5 seconds so rapid clicks don't burn the GitHub API rate-limit budget.
 - **Debug feed-URL override.** `defaults write com.clawdmeter.mac ClawdmeterDebugReleasesURL "https://…"` points the coordinator at a static fixture URL — used by QA to test the chip against a feature-branch JSON without rebuilding the app.
 - **20 unit tests** in `ClawdmeterMacTests/UpdateCoordinatorTests.swift` covering version comparison, tag parsing, dismissal cooldown (× 3), debug URL override, translocation detection, debounce, API errors, GitHub release decoding (× 2), `chipState` pure function (× 3), and the centralized URL constants (× 3). Mocked URLSession via a `URLProtocol` subclass — no network, runs in <1 second.
@@ -920,7 +920,7 @@ group to a Solo chat that keeps the winning transcript.
 
 ### Added
 
-- **Broadcast comparison surface** — Mac dashboard now has a left history sidebar, mode toggle (Solo vs Broadcast), provider summary chips above the chat, and a horizontally-scrollable column-per-provider transcript. iOS gets a compact version: provider pills above the selected-reply card, swipe between providers. Both surfaces ship with the Tahoe glass aesthetic from the standalone Clawdmeter redesign.
+- **Broadcast comparison surface** — Mac dashboard now has a left history sidebar, mode toggle (Solo vs Broadcast), provider summary chips above the chat, and a horizontally-scrollable column-per-provider transcript. iOS gets a compact version: provider pills above the selected-reply card, swipe between providers. Both surfaces ship with the Tahoe glass aesthetic from the standalone Continuum redesign.
 - **Frontier wire protocol** (`Protocol.swift`) — `CreateFrontierRequest` / `CreateFrontierResponse` / `FrontierGroupSnapshot` / `FrontierSendRequest` / `FrontierTurnWinner` and new endpoints `POST /chat-sessions/frontier`, `POST /chat-sessions/frontier/:groupId/send`, `POST /chat-sessions/frontier/:groupId/pick-winner`, `POST /chat-sessions/frontier/:groupId/turn-winner`, `POST /chat-sessions/frontier/:groupId/retry-slot`. WebSocket subscription op `frontier-subscribe` streams live per-child turn state on a 100ms debounce.
 - **Per-turn winner metadata** — non-destructive star markings for each turn. Continue-from-winner is the destructive variant: archives losers and promotes the winner out of the Frontier group so follow-ups go through the regular `/sessions/:id/send` path.
 - **Deep Research toggle** — creation-time setting that propagates to every child in a Frontier group (Codex sandbox flag and Claude system prompt).
@@ -998,7 +998,7 @@ Also: the OpenCode logo asset was missing from every catalog in the repo. `Agent
 
 ### Changed
 
-- **Settings → Providers card** ([apple/ClawdmeterMac/Tahoe/MacSettingsView.swift](apple/ClawdmeterMac/Tahoe/MacSettingsView.swift)): now one card containing four rows — Claude Code, OpenCode, Codex SDK, Antigravity SDK — separated by `TahoeHair()`. Card subtitle simplified to "External agent runtimes Clawdmeter can drive." The previous standalone "Codex SDK" and "Antigravity SDK" `SettingsCard`s are gone; their toggle logic + provisioning + error handling moved verbatim into new private `CodexSDKProviderRow` and `AntigravitySDKProviderRow` structs that match the row shape of `OpencodeProviderRow` / `ClaudeCLIProviderRow`.
+- **Settings → Providers card** ([apple/ClawdmeterMac/Tahoe/MacSettingsView.swift](apple/ClawdmeterMac/Tahoe/MacSettingsView.swift)): now one card containing four rows — Claude Code, OpenCode, Codex SDK, Antigravity SDK — separated by `TahoeHair()`. Card subtitle simplified to "External agent runtimes Continuum can drive." The previous standalone "Codex SDK" and "Antigravity SDK" `SettingsCard`s are gone; their toggle logic + provisioning + error handling moved verbatim into new private `CodexSDKProviderRow` and `AntigravitySDKProviderRow` structs that match the row shape of `OpencodeProviderRow` / `ClaudeCLIProviderRow`.
 
 ### Added
 
@@ -1028,11 +1028,11 @@ Settings → Providers was three rows of engineer-speak: status pills, mono auth
 
 Bumps `MARKETING_VERSION` 0.23.8 → 0.23.9, `CURRENT_PROJECT_VERSION` 123 → 124. Net diff: 212 insertions / 510 deletions across three Swift files. All 635 `ClawdmeterShared` tests pass; Mac scheme builds clean.
 
-## [0.23.8 build 123] - 2026-05-23 — Refresh root README for current Clawdmeter repo shape (`darshanbathija/rewrite-readme`)
+## [0.23.8 build 123] - 2026-05-23 — Refresh root README for current Continuum repo shape (`darshanbathija/rewrite-readme`)
 
 ### Changed
 
-- **Root README now describes the current product and repository.** Reframes Clawdmeter from the old Apple-only Claude/Codex meter into the current multi-surface agent control app: Mac Tahoe workbench, iPhone and Watch companions, Linux port, shared analytics, provider runtimes, Open Design, OpenCode, and tool sidecars.
+- **Root README now describes the current product and repository.** Reframes Continuum from the old Apple-only Claude/Codex meter into the current multi-surface agent control app: Mac Tahoe workbench, iPhone and Watch companions, Linux port, shared analytics, provider runtimes, Open Design, OpenCode, and tool sidecars.
 - **Build and verification docs are current.** Documents the Apple and Linux build entry points, bundled runtime scripts, docs-only verification expectations, repo layout, provider integrations, and key runtime notes for tmux, OpenCode, Antigravity agentapi, Tailscale pairing, and sandboxed release builds.
 - **Shared Linux builds keep using the compatibility shims.** Guards the remaining unconditional `OSLog` and `Combine` imports in shared AgentControl/Chat files so Linux CI can fall back to `LoggingCompat.swift` and `CombineCompat.swift`.
 
@@ -1327,14 +1327,14 @@ Bumps `MARKETING_VERSION` 0.22.10 → 0.22.11, `CURRENT_PROJECT_VERSION` 92 → 
 
 ## [0.22.10 build 92] - 2026-05-22 — Fix: Codex 5h reading matches Codex Desktop (window-aware bucket pick) + popover force-polls on open (`fix/codex-5h-usage`)
 
-User reported the menu-bar popover's "Codex 5h session" reading was wildly off — Codex Desktop showed 93% / 12:38, Clawdmeter showed 15% / "resets in —".
+User reported the menu-bar popover's "Codex 5h session" reading was wildly off — Codex Desktop showed 93% / 12:38, Continuum showed 15% / "resets in —".
 
 Two compounding problems:
 
 ### Changed
 
 **`CodexSource.parseLiveUsagePayload` — bucket-pick rewrite**
-- Previously: pick the bucket with the highest `primary.used_percent`, then inherit that same bucket's `secondary` as the weekly. That couples session + weekly to the same bucket — wrong when `/wham/usage` returns multiple `(primary, secondary)` pairs (e.g. `codex`, `codex-pro`, `codex-fast`). A user constrained on `codex-pro` (93% on its 5h) but loose on the `codex` bucket (15% on its 5h) would always show 15% because Clawdmeter picked the bucket whose primary was highest among the wrong axis.
+- Previously: pick the bucket with the highest `primary.used_percent`, then inherit that same bucket's `secondary` as the weekly. That couples session + weekly to the same bucket — wrong when `/wham/usage` returns multiple `(primary, secondary)` pairs (e.g. `codex`, `codex-pro`, `codex-fast`). A user constrained on `codex-pro` (93% on its 5h) but loose on the `codex` bucket (15% on its 5h) would always show 15% because Continuum picked the bucket whose primary was highest among the wrong axis.
 - Now: walk every bucket and classify each `(primary, secondary)` pair by `window_minutes`. 5h-class = `window_minutes ≤ 600`; weekly-class = `window_minutes ≥ 1440`. Pick the highest `used_percent` independently for each class. Session and weekly can now come from different limit_ids.
 - `BucketView` gained a `windowMinutes: Int?` field decoded from `window_minutes` / `windowMinutes`.
 
@@ -1523,7 +1523,7 @@ dark band hung above it. Two compounding insets caused this:
 Cosmetic-but-glaring fix to the dashboard window. The Tahoe titlebar
 (tab chip + status chips) had been stacking *underneath* the native
 macOS title bar, giving the window two visible top bars: an empty
-"Clawdmeter" title strip on top, and the real interactive titlebar
+"Continuum" title strip on top, and the real interactive titlebar
 below it. The design always intended the Tahoe chip to BE the top of
 the window.
 
@@ -1588,7 +1588,7 @@ sidecar (~80MB of vendored runtime artifacts).
   `~/Library/Application Support/Clawdmeter/open-design/.daemon.lock` runs
   on a detached task so the blocking `LOCK_SH` syscall never freezes
   MainActor. Atomic rendezvous file (write-temp + `rename(2)`) lets a
-  second Clawdmeter instance attach without spawning a duplicate daemon.
+  second Continuum instance attach without spawning a duplicate daemon.
   `OD_API_TOKEN` persisted in Keychain, never written to disk. Real
   parent-death tracking via `OD_TOOLS_DEV_PARENT_PID` so `kill -9` of the
   parent reaps the child within ~1s.
@@ -1834,8 +1834,8 @@ session in the right column.
 
 - **`TahoeCodeRecent.sessionId: UUID?`** — new optional field that
   carries the real `AgentSession.id` when the row represents an
-  archived Clawdmeter session. Nil for JSONL-only entries (no
-  Clawdmeter session ever existed for those files).
+  archived Continuum session. Nil for JSONL-only entries (no
+  Continuum session ever existed for those files).
 - **MacTahoeAdapter** — merges archived AgentSessions into each repo's
   `recents` list, sorted by `archivedAt` desc. Archived entries take
   priority over JSONL-only ones; combined list capped at 4 rows.
@@ -2088,7 +2088,7 @@ spawn and stream events end-to-end.
     (lands in PR #31).
 - **OpencodeSSEAdapter** (`apple/ClawdmeterMac/AgentControl/OpencodeSSEAdapter.swift`,
   ~260 LOC): consumes `GET /event` SSE stream + translates events to
-  the AgentEventStream shape. Bidirectional UUID map (Clawdmeter ↔
+  the AgentEventStream shape. Bidirectional UUID map (Continuum ↔
   opencode session ids) + reconnect-with-backoff + Last-Event-ID
   resume. Event handlers:
   - `session.created` → registry hook (synthesis surface logged for now)
@@ -2100,7 +2100,7 @@ spawn and stream events end-to-end.
   POST /sessions through the manager + SSE adapter instead of the
   tmux argv path. Mints an opencode session id via the server's
   `/session` POST, registers the bidirectional mapping, creates the
-  Clawdmeter-side AgentSession, returns the session JSON. Failure
+  Continuum-side AgentSession, returns the session JSON. Failure
   surfaces with structured 503 bodies (install hint, spawn detail).
 - **AppRuntime.deinit**: tears down ProcessManager + SSE adapter on
   app shutdown.
@@ -2592,7 +2592,7 @@ data plumbed into the new views, and the entire legacy view layer retired.
 
 ### Why
 
-The previous Anthropic-terracotta theme was a build-out from when Clawdmeter was a
+The previous Anthropic-terracotta theme was a build-out from when Continuum was a
 Claude-only quota gauge. The product is now a three-provider workspace (Claude /
 Codex / Antigravity) with Chat, Code, Usage, Settings, Live Activities, and a paired
 iPhone surface. The chrome needed to grow up: Apple shipped Liquid Glass in macOS 26
@@ -2807,7 +2807,7 @@ NSUserActivity Handoff for chat sessions, and the
 
 ## [0.9.0 build 68] - 2026-05-21 — Gemini chat via agentapi + Frontier UI (`feat/chat-v0.9`)
 
-The first Clawdmeter release where the Chat tab actually has 3 working
+The first Continuum release where the Chat tab actually has 3 working
 providers — Claude, Codex, and Gemini (via Antigravity 2's HTTP-RPC
 `agentapi`). Frontier compare also goes live: 2-3 chat panes side-by-side
 sharing one composer, with per-pane "Pick winner" archiving the others.
@@ -2910,7 +2910,7 @@ is observation-layer skew, not actual provider response time.
 Google replaced the standalone `gemini` CLI (v0.42, runnable in a tmux
 pane) with Antigravity 2's Electron IDE backed by an embedded Go
 `language_server` binary that talks HTTP-RPC via `agentapi`. v0.8.1
-migrates Clawdmeter's Gemini surface to match — no more spawning a
+migrates Continuum's Gemini surface to match — no more spawning a
 TUI in tmux for Gemini, no more log-file-scrape discovery, no more
 encryption-blocked conversation files. Built on `feat/agy-migration`;
 v0.8.0 build 64 belongs to the parallel `chat-tab` branch (the agy
@@ -3059,7 +3059,7 @@ work skipped 0.8.0 to leave that SKU intact).
   `supportsChat/supportsFrontier/supportsCodexChatBackend` mirror the
   `supportsAntigravityPlan` pattern. iOS Chat tab gates on
   `serverWireVersion >= chatMinimum` and surfaces
-  "Update Clawdmeter on Mac" on older daemons.
+  "Update Continuum on Mac" on older daemons.
 
 - **Schema v4 → v5.** `AgentSession` gains five optional fields —
   `kind` (`.code` default; `.chat` for the Chat tab), `frontierGroupId`,
@@ -3178,7 +3178,7 @@ work skipped 0.8.0 to leave that SKU intact).
 
 - **Gemini 3.5 Flash (Thinking) + Gemini 3 Flash (Thinking) in the
   model picker.** Google ships a Standard / Extended thinking-level
-  toggle in the Antigravity UI; Clawdmeter's catalog only carried the
+  toggle in the Antigravity UI; Continuum's catalog only carried the
   Standard variant, so users had no way to pick the Extended thinking
   budget. Two new `ModelCatalog.bundled.gemini` entries:
     - `gemini-3.5-flash-thinking` — "Gemini 3.5 Flash (Thinking)",
@@ -4439,7 +4439,7 @@ End-to-end Gemini provider across Mac, iOS, and Watch. v0.5.10 shipped the share
 ### iOS Live tab + Live Activity + Settings
 
 - **Live tab Gemini section, gated on `supportsGemini` (X3-A).** `AgentControlClient.hasWireVersionMismatch` rewritten from strict equality to forward-compat semantics — fires only when `serverWireVersion < composeDraftMinimum`. New per-feature flags `supportsGemini` / `supportsChatSubscribe` / `supportsComposeDraft` route through shared `AgentControlWireVersion.supports*(_:)` helpers so the iOS gating contract is testable. v5 Mac paired to v6 iOS hides Gemini correctly; v7 Mac paired to v6 iOS keeps rendering (no false mismatch banner).
-- **`ProviderToggleHeader` shows the Gemini logo only when the paired Mac advertises wire v6+.** Falls back to Claude when an older Mac is paired; renders an `UpdateMacForGeminiCard` ("Update Clawdmeter on Mac") inside the pane when the user has the Gemini chip selected but the Mac is too old.
+- **`ProviderToggleHeader` shows the Gemini logo only when the paired Mac advertises wire v6+.** Falls back to Claude when an older Mac is paired; renders an `UpdateMacForGeminiCard` ("Update Continuum on Mac") inside the pane when the user has the Gemini chip selected but the Mac is too old.
 - **`GeminiSection` mirrors the Mac column.** Single 5h-refresh card (no weekly), Google-blue accent (#4285F4), `WaitingForMacCard` empty state when the daemon hasn't shipped the first snapshot.
 - **iOS Gemini Live Activity (D5).** New `GeminiQuotaLiveActivityAttributes` + `GeminiQuotaLiveActivityContentState` (shared package) + iOS coordinator + widget bundle entry. Lock-screen pill + Dynamic Island compact/expanded/minimal + always-on dimmed "G" + stale-flag triangle. Coordinator runs in `UsageModel.refreshFromDaemon` whenever a Gemini snapshot lands.
 - **`UsageModel` per-provider snapshots.** New `@Published geminiSnapshot: UsageStore.Snapshot?` ingested via the X1 `usageData(for: "gemini")` per-provider fallback path, mirrored to App Group + WatchTokenBridge.
@@ -4513,7 +4513,7 @@ End-to-end Gemini provider across Mac, iOS, and Watch. v0.5.10 shipped the share
 
 ### Added
 
-- **AskUserQuestion tray now renders in the iPhone outside-session view** (Recent JSONL rows the user taps from the sidebar). Previously v0.5.6's tray work only landed in the live `liveChatList` and the Mac `ChatThreadScroll`; `iOSChatTranscriptView` — which serves outside-Clawdmeter Recent JSONLs — used its OWN local `Item`/`toolRunCard` path and didn't pick up the new ChatItem partitioning. Wired in for parity: file-edit pairs render as `EditDiffRow` chips, AskUserQuestion pairs render as `AskUserQuestionTray`, everything else stays in the existing tool-run card.
+- **AskUserQuestion tray now renders in the iPhone outside-session view** (Recent JSONL rows the user taps from the sidebar). Previously v0.5.6's tray work only landed in the live `liveChatList` and the Mac `ChatThreadScroll`; `iOSChatTranscriptView` — which serves outside-Continuum Recent JSONLs — used its OWN local `Item`/`toolRunCard` path and didn't pick up the new ChatItem partitioning. Wired in for parity: file-edit pairs render as `EditDiffRow` chips, AskUserQuestion pairs render as `AskUserQuestionTray`, everything else stays in the existing tool-run card.
 - **Answer-tap promotes the outside session and forwards the answer.** When the user taps an option + "Send answer" in an outside-session tray, the view fires `client.continueReadOnly(jsonlPath:repoKey:agent:prompt: <answer>)` — same single-shot path the composer uses for typed prompts. Daemon spawns a fresh `--resume` pane with the answer as the seed turn; iOS flips navigation to the new live session. The tray dims out locally on send so the user knows the action fired even before promotion completes.
 
 ## [0.5.7 build 40] - 2026-05-19
@@ -4552,7 +4552,7 @@ End-to-end Gemini provider across Mac, iOS, and Watch. v0.5.10 shipped the share
 
 ### Added
 
-- **Rename sessions** to anything memorable. New `customName: String?` field on `AgentSession` (optional, decoder-tolerant — v3 files decode cleanly with `customName = nil`). When set, replaces the default sidebar / chat-header label so a session can be "Refactor checkout flow" instead of "Clawdmeter / Claude".
+- **Rename sessions** to anything memorable. New `customName: String?` field on `AgentSession` (optional, decoder-tolerant — v3 files decode cleanly with `customName = nil`). When set, replaces the default sidebar / chat-header label so a session can be "Refactor checkout flow" instead of "Continuum / Claude".
   - **Mac UI**: right-click any session in the sidebar → "Rename…". Alert with a text field; "Save" sets the name, "Clear name" wipes it back to the repo-derived default, "Cancel" discards. Header label + sidebar row + raw-terminal overlay title all pick up the custom name; falls back to goal, then repo name.
   - **iPhone UI**: long-press any session row → "Rename…". Same three-button alert. Navigation title on the session detail view uses the custom name too.
   - **Daemon endpoint**: `POST /sessions/:id/rename` with `{name: String?}`. Empty/whitespace-only strings normalize to nil at the registry; cap of 200 chars for the inbound name so paired peers can't push huge strings into `sessions.json`. iOS client: `AgentControlClient.renameSession(sessionId:name:)`.
@@ -4569,7 +4569,7 @@ End-to-end Gemini provider across Mac, iOS, and Watch. v0.5.10 shipped the share
 ### Fixed
 
 - **No more cold-cache slowness on first iPhone session-load after Mac restart.** The 2026-05-19 user-reported "session not loading on mobile" (which turned out to be a 10–30s wait while `/transcript` reparsed a 4–30MB JSONL on first request) is fully addressed:
-  - **`DaemonChatStoreRegistry` now also serves `/transcript`.** New path-keyed map (`pathEntries: [URL: Entry]`) alongside the existing session-id-keyed map. `snapshotStore(forJSONLPath:)` creates / reuses long-lived `SessionChatStore`s pinned to absolute JSONL paths; the iPhone outside-Clawdmeter session view hits the same warm cache as `/chat-snapshot` instead of reparsing 500 messages on every request. Cold-miss still falls back to legacy synchronous `TranscriptLoader.load`; subsequent requests within the 5-minute idle window are instant.
+  - **`DaemonChatStoreRegistry` now also serves `/transcript`.** New path-keyed map (`pathEntries: [URL: Entry]`) alongside the existing session-id-keyed map. `snapshotStore(forJSONLPath:)` creates / reuses long-lived `SessionChatStore`s pinned to absolute JSONL paths; the iPhone outside-Continuum session view hits the same warm cache as `/chat-snapshot` instead of reparsing 500 messages on every request. Cold-miss still falls back to legacy synchronous `TranscriptLoader.load`; subsequent requests within the 5-minute idle window are instant.
   - **Daemon startup pre-warms the registry.** New `registry.warm(recentLimit: 5)` scans `~/.claude/projects/` and `~/.codex/sessions/` for the 5 most-recently-modified `.jsonl` files and pre-creates stores for them. Reverse-tail parse runs on a detached background Task post-listener-bind so it doesn't block startup. First iPhone request after Mac restart hits a warm store.
 - **`SessionChatStore.ChatSnapshot` exposes `messages: [ChatMessage]`** (the raw chronologically-sorted list) so the `/transcript` envelope can serve it through the same publish cycle that drives `items`. Both fields stay consistent by construction — the snapshot rebuild publishes them together.
 
@@ -4736,7 +4736,7 @@ End-to-end Gemini provider across Mac, iOS, and Watch. v0.5.10 shipped the share
 ### Changed
 
 - **iOS Sessions tab — `By date` replaces `By status`.** The status buckets (`Needs attention / In progress / Idle / Done / Archived`) weren't earning their slot on mobile — most sessions are "in progress" all day and the rest of the buckets stayed empty. New `By date` grouping mirrors the Mac sidebar's date grouping: **Today** at the top, then **Yesterday**, then **Earlier this week**, then **Last 30 days**, then **Older**. Each header shows a count badge.
-- Live sessions (by `lastEventAt`) and Recent JSONLs (by `lastModified`) **interleave** under each date bucket, so a Conductor session you used 20 minutes ago sits next to a Clawdmeter-spawned one with the same timestamp. Recent JSONLs use the existing `OutsideSessionDetailView` so the composer-promote-to-live flow works from any date bucket.
+- Live sessions (by `lastEventAt`) and Recent JSONLs (by `lastModified`) **interleave** under each date bucket, so a Conductor session you used 20 minutes ago sits next to a Continuum-spawned one with the same timestamp. Recent JSONLs use the existing `OutsideSessionDetailView` so the composer-promote-to-live flow works from any date bucket.
 - Search + `Show archived` toggle still apply to the date list.
 - The unused `StatusBucket` enum and its bucketer are gone — net deletion.
 
@@ -4803,7 +4803,7 @@ End-to-end Gemini provider across Mac, iOS, and Watch. v0.5.10 shipped the share
 - **`@`-mention picker (scope-cut).** Typing `@` opens a popover listing open sessions + agent-cited files in this session (`SourceEntry`) + recent JSONLs across sessions. Selecting inserts `@<absolute-path>` (or `@session:<uuid>` for cross-session references). Full repo-file walker deferred to follow-up.
 - **Autopilot chip + respawn machinery (T12).** New chip in the composer chip row, between Mode and Model. Tapping opens a confirm sheet that warns the toggle interrupts the current turn. Repos not on the autopilot trust list show "Trust this repo for autopilot?" with the repo path and a stronger warning; the CTA flips to "Trust repo + enable autopilot" and calls `AutopilotState.trustRepo(repoKey)` before `setAutopilot`. Accepting respawns the agent CLI via `SessionConfigChanger.swap` with `--dangerously-skip-permissions` (Claude) or `--dangerously-bypass-approvals-and-sandbox` (Codex).
 - **Running-session cost ticker.** Composer footer shows `~$X • Y K tokens` from `SessionChatStore.snapshot` × `Pricing.shared.cost(for:tokens:)`. Soft-red `⚠︎ weekly cap N%` badge at ≥95% for Claude sessions; Codex sessions get no cap badge (Anthropic's weekly cap doesn't map to Codex usage). `NumberFormatter` cached as a static `let` so per-keystroke recompute is free.
-- **X1 cross-Apple compose-draft handoff.** New WS op `compose-draft` on the daemon's existing dispatcher. iOS new-session sheet ships an "Open on Mac" button that opens a one-shot WebSocket, posts a `ComposeDraft` envelope (text + suggested repo/agent/model/effort), awaits the daemon's 1-byte ACK, then closes. Mac dashboard listens via `NotificationCenter` and pre-fills the centered empty-state composer. Wire version bumped 3 → 4 with `composeDraftMinimum=4`; iOS gates `postComposeDraft` on `serverWireVersion >= composeDraftMinimum` and surfaces "Update Clawdmeter on the Mac" for older Macs. Inbound text capped at 64KB; AuditLog records every draft.
+- **X1 cross-Apple compose-draft handoff.** New WS op `compose-draft` on the daemon's existing dispatcher. iOS new-session sheet ships an "Open on Mac" button that opens a one-shot WebSocket, posts a `ComposeDraft` envelope (text + suggested repo/agent/model/effort), awaits the daemon's 1-byte ACK, then closes. Mac dashboard listens via `NotificationCenter` and pre-fills the centered empty-state composer. Wire version bumped 3 → 4 with `composeDraftMinimum=4`; iOS gates `postComposeDraft` on `serverWireVersion >= composeDraftMinimum` and surfaces "Update Continuum on the Mac" for older Macs. Inbound text capped at 64KB; AuditLog records every draft.
 - **iPhone "Mac unreachable" diagnostics.** The Sessions empty state on iOS now shows the actual stored host, the last polling error from the daemon client, and a hint when the stored host is `127.0.0.1`. A new "Re-pair…" button re-opens `PairingFlow`. iOS URL builder bracket-wraps IPv6 host literals.
 
 ### Changed

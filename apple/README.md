@@ -1,12 +1,12 @@
-# Clawdmeter for Apple — engineering README
+# Continuum for Apple — engineering README
 
 Detail layout for the Xcode workspace. The top-level [`../README.md`](../README.md)
 has the user-facing download + install + build flow.
 
 ## What this is built on
 
-1. **The original [Clawdmeter](https://github.com/darshanbathija/Clawdmeter)
-   ESP32 firmware.** Every gauge concept, color token (`#d97757` terra-cotta
+1. **The original [ESP32 firmware](https://github.com/darshanbathija/Clawdmeter).**
+   Every gauge concept, color token (`#d97757` terra-cotta
    on `#000`), the `UsageData` struct shape, the BLE GATT JSON payload, the
    Anthropic rate-limit-header polling math, and the auto-revive "keep the
    5h timer warm" idea were all prototyped on the ESP32 first.
@@ -125,7 +125,7 @@ DMG packaging lives one level up: `../tools/build-mac-dmg.sh`.
 
 ## ccusage ↔ Swift mapping
 
-| ccusage (TypeScript)                       | Clawdmeter (Swift) |
+| ccusage (TypeScript)                       | Continuum (Swift) |
 | ------------------------------------------ | ------------------ |
 | Claude JSONL line parse                    | `ClaudeUsageParser.parse(line:)` |
 | Codex cumulative → per-event deltas        | `CodexUsageParser.parse(file:)` |
@@ -148,7 +148,7 @@ What we added on top of ccusage (UI-only):
 
 | Surface | Source |
 | --- | --- |
-| Mac (Claude) | `PastedAnthropicTokenProvider.shared()` reads Clawdmeter's own Keychain token. Settings → Providers → Claude Code → Authenticate imports Claude Code's token once via `KeychainTokenProvider`; sandboxed builds can use the same row's paste-token fallback. |
+| Mac (Claude) | `PastedAnthropicTokenProvider.shared()` reads Continuum's own Keychain token. Settings → Providers → Claude Code → Authenticate imports Claude Code's token once via `KeychainTokenProvider`; sandboxed builds can use the same row's paste-token fallback. |
 | Mac (Codex)  | `CodexSource` reads cached rate-limit state from `~/.codex/sessions/*.jsonl`. |
 | iOS          | `PastedAnthropicTokenProvider.shared()` — iCloud-Keychain shared access group populated by the Mac Authenticate action or manual paste. |
 | Watch        | First tries `WatchTokenBridge.didReceiveToken` (iPhone pushes via WCSession). Falls back to the shared Keychain. |

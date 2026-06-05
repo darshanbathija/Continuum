@@ -13,7 +13,7 @@ Phase 0 contradicts the originally-planned spawn/relay architecture in several m
 - `new-conversation` and `send-message` are **fire-and-forget one-shot CLI calls** that return immediately with just an ID. Agent work happens asynchronously inside the running language_server process. No streamed stdout.
 - Conversations are now stored as **SQLite databases** (`<id>.db` + `.db-wal` + `.db-shm` in WAL mode), NOT protobuf `.pb` files. v0.7's `ConversationProtoParser` does NOT handle the new format.
 - Approval modes (plan/yolo/accept-edits) are **not exposed** via agentapi argv. Only `--model={flash_lite|flash|pro}`.
-- agentapi requires **a running language_server** (typically Antigravity.app's) — Clawdmeter spawning its own LS is fallback, not primary.
+- agentapi requires **a running language_server** (typically Antigravity.app's) — Continuum spawning its own LS is fallback, not primary.
 
 ## Confirmed argv contract
 
@@ -74,7 +74,7 @@ The CSRF token + LS address combo is the SAME state-machine `LanguageServerClien
 |---|---|---|
 | **D3 process lifetime fork** | Resolved → one-shot | No tmux pane needed. agentapi is HTTP-RPC. Spawn is sub-second; no process to manage per session. |
 | **D9 SDKSubscriptionRelay protocol** | OBSOLETE for agentapi | Codex pattern doesn't apply. Antigravity needs `AntigravitySnapshotPoller` (SQLite WAL reader) instead of `AntigravitySubscriptionRelay` (stdout streamer). |
-| **D12 single shared language_server** | Resolved → use Antigravity.app's LS | Clawdmeter's daemon does NOT spawn its own LS for the primary path. We attach to the existing Antigravity.app LS via probe-and-defer (D4). Spawn-our-own-LS is a fallback for when the app is closed. |
+| **D12 single shared language_server** | Resolved → use Antigravity.app's LS | Continuum's daemon does NOT spawn its own LS for the primary path. We attach to the existing Antigravity.app LS via probe-and-defer (D4). Spawn-our-own-LS is a fallback for when the app is closed. |
 | **D7 event catalog** | Pending → SQLite schema, not stdout | Need a `ConversationDBReader` that opens the SQLite, queries `steps` table, maps `step_type` integers to ChatItems. SQLite schema captured in `docs/agentapi-event-catalog.md`. |
 | **D2 dual-dir parsing** | Refined | Both `.pb` (legacy v0.7 conversations) and `.db` (new v0.8 conversations) coexist in `~/.gemini/antigravity/conversations/`. Need format-detector + dual parser. `antigravity-cli/` dir has OLD test conversations only. |
 | **D14 v0.42 fallback** | Still valid | Users without Antigravity.app installed get gemini v0.42 path. |
@@ -138,7 +138,7 @@ When Antigravity.app is running:
 
 When Antigravity.app is NOT running:
 1. No `language_server` process exists for this account
-2. Plan-D4 fallback: Clawdmeter daemon spawns its own LS with `language_server -persistent_mode=true -local_chrome_headless=true -disable_telemetry=true -app_data_dir=clawdmeter-cli -http_server_port=0 -csrf_token=$(uuidgen)`
+2. Plan-D4 fallback: Continuum daemon spawns its own LS with `language_server -persistent_mode=true -local_chrome_headless=true -disable_telemetry=true -app_data_dir=clawdmeter-cli -http_server_port=0 -csrf_token=$(uuidgen)`
 3. Parse port from `~/.gemini/antigravity-cli/log/cli-<TS>.log` (the `Language server listening on random port at <N> for HTTP` line)
 
 ## Subscription quota endpoint (`/v1internal:fetchUserInfo`)
@@ -223,7 +223,7 @@ These don't block any code path locked in the plan. Resolve during v0.8.0 implem
 
 1. `/v1internal:fetchUserInfo` exact JSON shape (needs LS running). D9 ships with a tolerant decoder + 'Open Antigravity' fallback.
 2. Concurrent `agentapi new-conversation` under load — verify multiplex works for ≥3 simultaneous calls.
-3. `setUserSettings` writeback — if we ever want to flip approval policy from Clawdmeter (not in v0.8.0).
+3. `setUserSettings` writeback — if we ever want to flip approval policy from Continuum (not in v0.8.0).
 4. Sub-chats parent-child linkage — Antigravity-side gRPC `Cascade`, deferred to v0.9.
 
 ## Untested / pending probes from original Phase 0

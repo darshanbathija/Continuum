@@ -4,7 +4,7 @@
 
 Phase 0 confirmed there is **no JSON-line event stream** from agentapi. `new-conversation` and `send-message` return immediately as one-shot HTTP-RPC calls. Agent turns happen server-side inside Antigravity's `language_server` and the output goes into a **SQLite database**.
 
-To "observe" a conversation, Clawdmeter needs ONE of:
+To "observe" a conversation, Continuum needs ONE of:
 
 1. **SQLite WAL polling** (recommended) — open `~/.gemini/antigravity/conversations/<id>.db` read-only, poll the `steps` table for new rows. WAL mode lets reads see latest writes without blocking the writer.
 2. **gRPC streaming** — language_server exposes streaming endpoints (`/v1internal:streamGenerateChat`, `/v1internal:tabChat`). Requires CSRF + gRPC client. Higher fidelity but more code.
@@ -106,7 +106,7 @@ Each `Step` row decodes to a ChatItem via the existing `appendSDKMessages` path:
 
 ## Multiplex confirmed
 
-Two concurrent `new-conversation` calls against the same running language_server returned distinct conversation IDs without state collision. Each got its own `<id>.db` file. **D12 spirit holds, but the architecture is "use Antigravity.app's LS" rather than "Clawdmeter spawns a shared LS".**
+Two concurrent `new-conversation` calls against the same running language_server returned distinct conversation IDs without state collision. Each got its own `<id>.db` file. **D12 spirit holds, but the architecture is "use Antigravity.app's LS" rather than "Continuum spawns a shared LS".**
 
 ## Approval-mode / thinking-mode — NOT exposed via agentapi argv
 

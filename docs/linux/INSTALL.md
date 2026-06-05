@@ -1,6 +1,6 @@
-# Installing Clawdmeter on Linux
+# Installing Continuum on Linux
 
-Clawdmeter ships for Ubuntu 24.04+ and ZorinOS 17+. On older LTS releases
+Continuum ships for Ubuntu 24.04+ and ZorinOS 17+. On older LTS releases
 (Ubuntu 22.04 / ZorinOS 16) use the AppImage — it bundles the GTK4 + WebKitGTK 6.0
 dependencies that the older archive doesn't ship.
 
@@ -76,7 +76,7 @@ sudo apt install gnome-shell-extension-appindicator
 # Verify in: Extensions app (or https://extensions.gnome.org/local/)
 ```
 
-If you skip this, Clawdmeter detects the missing extension on first launch
+If you skip this, Continuum detects the missing extension on first launch
 and shows a dialog with the install link. You can choose "Continue without
 menu bar" and use the dashboard window directly.
 

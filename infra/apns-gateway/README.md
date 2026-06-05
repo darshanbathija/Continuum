@@ -1,6 +1,6 @@
 # clawdmeter-apns-gateway
 
-Cloudflare Worker that signs APNS JWTs and forwards **opaque encrypted push payloads** from the Mac daemon to Apple's APNS HTTP/2 endpoint. Plan row **E5** of the Clawdmeter perf/relay/backend plan.
+Cloudflare Worker that signs APNS JWTs and forwards **opaque encrypted push payloads** from the Mac daemon to Apple's APNS HTTP/2 endpoint. Plan row **E5** of the Continuum perf/relay/backend plan.
 
 The gateway is the only component that holds the operator's `.p8`. The Mac never sees it; the iPhone never sees it; Apple validates it on every push.
 

@@ -1,6 +1,6 @@
 # clawdmeter-codex-sdk
 
-Node sidecar for Clawdmeter Codex SDK observation mode (v0.7.0+).
+Node sidecar for Continuum Codex SDK observation mode (v0.7.0+).
 
 **Status: skeleton.** Real implementation lands in v0.7.1.
 

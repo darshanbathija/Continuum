@@ -1,12 +1,12 @@
-# Clawdmeter
+# Continuum
 
-Clawdmeter is a native desktop and mobile control surface for coding agents. It
+Continuum is a native desktop and mobile control surface for coding agents. It
 started as a Claude usage meter, but the current repo is broader: a Mac menu-bar
 meter, a Tahoe-style Mac workbench, iPhone and Apple Watch companions, a Linux
 desktop port, shared usage analytics, and adapters for Claude Code, Codex,
 Antigravity/Gemini, and OpenCode.
 
-At a high level, Clawdmeter does three jobs:
+At a high level, Continuum does three jobs:
 
 - Shows live quota and spend for coding-agent providers.
 - Runs and controls local coding-agent sessions from Mac, iPhone, Watch, and Linux.
@@ -28,13 +28,13 @@ Current source version: `0.29.23` (`apple/project.yml` build `162`).
 
 ## Provider support
 
-| Provider | How Clawdmeter integrates it |
+| Provider | How Continuum integrates it |
 | --- | --- |
 | **Claude Code** | Spawns the `claude` CLI in tmux, parses Claude JSONL usage, reads local auth state where allowed, supports plan mode, accept-edits, bypass mode with repo trust, session resume, slash-command skill discovery, and live chat/code transcript ingestion. |
 | **Codex** | Supports CLI-backed sessions and a Codex SDK chat path. Usage parsing reads Codex session JSONL, including cumulative-to-delta conversion. Plan mode maps to read-only sandboxing, and send/interrupt/model/effort flows go through the same daemon surface as other agents. |
 | **Antigravity / Gemini** | Gemini quota and Antigravity 2 native sessions are represented through the shared `.gemini` agent kind in current wire contracts. The newer path talks to Antigravity's `agentapi` / language-server runtime, reads conversation DB and brain-dir state, and exposes plan snapshots. |
 | **Cursor** | Discovers account models from Cursor, launches Cursor-backed sessions, and treats effort as Cursor Auto until Cursor exposes a real effort control. |
-| **OpenRouter via OpenCode** | Runs OpenRouter models through Clawdmeter's shared `opencode serve` process, consumes SSE events, sends prompts through OpenCode's HTTP API, maps OpenRouter usage into Clawdmeter analytics, and surfaces live model metadata under Settings -> Providers. |
+| **OpenRouter via OpenCode** | Runs OpenRouter models through Continuum's shared `opencode serve` process, consumes SSE events, sends prompts through OpenCode's HTTP API, maps OpenRouter usage into Continuum analytics, and surfaces live model metadata under Settings -> Providers. |
 
 ## App model
 
@@ -81,7 +81,7 @@ Refresh pricing with:
 
 ## Security and privacy
 
-Three reference documents describe what Clawdmeter trusts, what it
+Three reference documents describe what Continuum trusts, what it
 sends over the network, and what isn't built yet:
 
 - [`docs/security.md`](docs/security.md) — trust model, cryptographic
@@ -284,7 +284,7 @@ Since v0.24.0 the Mac app checks `https://api.github.com/repos/darshanbathija/Cl
 
 There is no silent in-place install — that would require Sparkle 2.x + paid Developer ID + notarization, and is parked as a phase-2 migration in `TODOS.md`.
 
-Privacy: each daily check sends your IP and a `Clawdmeter/<version>` User-Agent to `api.github.com`. No unique identifier and no app body are transmitted. Equivalent to visiting the GitHub releases page in Safari once a day.
+Privacy: each daily check sends your IP and a legacy `Clawdmeter/<version>` User-Agent to `api.github.com`. No unique identifier and no app body are transmitted. Equivalent to visiting the GitHub releases page in Safari once a day.
 
 Maintainer notes:
 
@@ -293,11 +293,11 @@ Maintainer notes:
 
 ## Credits
 
-- Original Clawdmeter ESP32 firmware: gauge concept, color language, `UsageData`
+- Original usage-meter ESP32 firmware: gauge concept, color language, `UsageData`
   shape, and Anthropic rate-limit polling model.
 - `ccusage` by ryoppippi: reference behavior for Claude/Codex usage parsing,
   deduplication, daily bucketing, and pricing expectations.
 - LiteLLM: pricing data snapshot used by the shared analytics package.
 - SwiftTerm: terminal rendering in Mac and iOS session surfaces.
 - Open Design, OpenCode, Claude Code, Codex, and Antigravity/Gemini are external
-  tools/runtimes that Clawdmeter integrates with rather than replacing.
+  tools/runtimes that Continuum integrates with rather than replacing.

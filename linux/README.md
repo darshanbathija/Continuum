@@ -1,6 +1,6 @@
-# Clawdmeter for Linux
+# Continuum for Linux
 
-Native Linux desktop port of Clawdmeter targeting **Ubuntu 24.04+** and **ZorinOS 17+** (GNOME-based).
+Native Linux desktop port of Continuum targeting **Ubuntu 24.04+** and **ZorinOS 17+** (GNOME-based).
 
 ## What's in this directory
 

@@ -8,12 +8,12 @@ post-v1.0). See `docs/button-wiring-audit.md` for the decisions table.
 
 ## TL;DR
 
-Do not fork OpenCode. Keep building Clawdmeter's Swift agent harness,
+Do not fork OpenCode. Keep building Continuum's Swift agent harness,
 and instead use OpenCode's HTTP server as **one more provider**
 alongside Claude Code / Codex / Antigravity — a coexistence, not a
 replacement. OpenCode is a 164k-star TypeScript/Bun system that
 *replaces* the agent CLIs by calling provider APIs directly, but
-Clawdmeter's whole value proposition is being a meter and control
+Continuum's whole value proposition is being a meter and control
 surface for the user's existing CLIs and their OAuth tokens; forking
 would force a rewrite of the harness, throw away iOS portability (Bun
 won't run on iOS), and turn the app into "just another OpenCode skin"
@@ -74,7 +74,7 @@ metadata pulled from models.dev (75+ providers).
 
 ## Capability matrix
 
-| Capability | OpenCode (v1.15.7) | Clawdmeter today |
+| Capability | OpenCode (v1.15.7) | Continuum today |
 |---|---|---|
 | **License** | MIT | proprietary |
 | **Wire protocol** | HTTP/REST + SSE (Hono, OpenAPI 3.1) | HTTP + WS on 21731/21732 (Network.framework), wire-v5 |
@@ -103,7 +103,7 @@ metadata pulled from models.dev (75+ providers).
 
 ## Integration model if we forked (rejected)
 
-**Architecture sketch:** Clawdmeter.app ships the Tahoe SwiftUI Code tab as today, but
+**Architecture sketch:** Continuum.app ships the Tahoe SwiftUI Code tab as today, but
 instead of `MacCodeView` reading from `runtime.agentSessionRegistry`, it talks over HTTP+SSE
 to an embedded `opencode serve` sidecar bundled inside the `.app`. The sidecar is a
 Bun-compiled single-file binary (~150-200MB). All harness pieces — `TmuxSupervisor`,
@@ -132,7 +132,7 @@ on the Swift harness as planned. v1.0 has Claude / Codex / Antigravity as agent 
 Architecture:
 
 ```
-                    Clawdmeter.app
+                    Continuum.app
         ┌─────────────────────────────────────────┐
         │  MacCodeView / IOSChatView / etc.       │
         │  ▲                                       │
@@ -169,7 +169,7 @@ Architecture:
   same envelope shape our registry expects.
 - `OpencodeUsageMapper` — extracts cost from OpenCode's own usage
   events (OpenCode bills against the user's API key directly, so no
-  Anthropic rate-limit headers reach Clawdmeter).
+  Anthropic rate-limit headers reach Continuum).
 - **Auth UX:** Settings → Providers shows status; first-add empty state
   reads "Run `brew install opencode` then `opencode auth login`."
 

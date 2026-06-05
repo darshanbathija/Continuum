@@ -16,7 +16,7 @@
 
 ### Optional setup/run scripts for prepared worktrees
 - **What**: Conductor can run repository setup and run scripts inside each
-  workspace after the Git worktree exists. Clawdmeter now creates the branch,
+  workspace after the Git worktree exists. Continuum now creates the branch,
   writes the ownership marker, and copies configured ignored files first, but
   it does not execute `conductor.json` setup/run scripts.
 - **Why deferred**: the no-popup session path needs branch/file-copy parity
@@ -262,7 +262,7 @@ are the explicit deferrals.
 - **What**: Toggling the "Menu bar Codex" or "Menu bar Gemini"
   checkbox in the dashboard header flips AppStorage but no new
   `NSStatusItem` materializes — only the Claude burst gauge stays
-  visible. Reproducible when an older Clawdmeter instance is
+  visible. Reproducible when an older Continuum instance is
   already running (the user's pre-existing menu-bar app), which
   hints at a multi-instance race for the AppStorage key + status
   item registration.
@@ -270,7 +270,7 @@ are the explicit deferrals.
   dashboard window; menu bar gauges are a convenience surface).
 - **Why deferred**: hard to repro in isolation, needs `osascript` /
   Accessibility Inspector to introspect NSStatusBar at runtime, and
-  only bites users who run multiple Clawdmeter builds simultaneously.
+  only bites users who run multiple Continuum builds simultaneously.
 - **Hook**: `AppDelegate.applyVisibilityFromPrefs()` +
   `ProviderStatusController` lifecycle. Likely fix: when AppStorage
   flips on, force-rebuild the controller's status item even if the
@@ -390,7 +390,7 @@ are the explicit deferrals.
 ### `/transcript` endpoint should use `DaemonChatStoreRegistry` (or a parallel parsed cache)
 - **What**: today `handleGetTranscript` (`AgentControlServer.swift:1695`)
   calls `TranscriptLoader.load(from: url, maxMessages: maxMessages)`
-  on every request — no cache. iPhone outside-Clawdmeter session
+  on every request — no cache. iPhone outside-Continuum session
   views hit this endpoint via `iOSChatTranscriptView.load()` and pay
   a fresh parse on every reload AND on every Mac restart cold-cache.
 - **Symptom that surfaced this**: 2026-05-19 user-reported "session
@@ -590,10 +590,10 @@ are the explicit deferrals.
 - **Effort**: ~1 week CC.
 
 ### LaunchAgent daemon survival across Mac app quit
-- **What**: The Mac daemon stops when the Clawdmeter Mac app quits.
+- **What**: The Mac daemon stops when the Continuum Mac app quits.
   A LaunchAgent would keep it running headless.
 - **Why**: D15 / Phase 5 from 2026-05 plan deferred this. Today the
-  user keeps Clawdmeter running because it's a menu-bar app.
+  user keeps Continuum running because it's a menu-bar app.
 
 ### Watch full 4-complication family
 - **What**: `.accessoryCircular` ships in v1. The other three families
@@ -691,7 +691,7 @@ deferred items the CEO review identified.
 
 ### CLI session-id resume bug in SessionConfigChanger
 - **What**: `SessionConfigChanger.swap(sessionId:)` passes
-  `sessionId.uuidString` (the Clawdmeter UUID) as `--resume <id>` /
+  `sessionId.uuidString` (the Continuum UUID) as `--resume <id>` /
   `resume <id>` to the agent CLI. The CLI expects its OWN session id
   (Claude: JSONL `sessionId` field; Codex: rollout `payload.id`), so
   every model/effort/mode swap silently starts a *fresh* session.

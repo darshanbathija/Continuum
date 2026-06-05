@@ -33,7 +33,7 @@ Take a snapshot before each test pass so failures can be retried cleanly.
 ### Pass 2: .deb install
 
 - [ ] `sudo apt install ./clawdmeter_<version>_amd64.deb`
-- [ ] Open the app from the GNOME Activities overview — finds "Clawdmeter".
+- [ ] Open the app from the GNOME Activities overview — finds "Continuum".
 - [ ] Tray icon shows up.
 - [ ] `systemctl --user status clawdmeter.service` — service available (may be inactive; that's OK).
 - [ ] `systemctl --user enable --now clawdmeter.service` — daemon starts, listens on 21731.
@@ -46,7 +46,7 @@ Take a snapshot before each test pass so failures can be retried cleanly.
   - [ ] "Install extension" opens https://extensions.gnome.org/extension/615/ in browser via xdg-open.
   - [ ] "Continue without menu bar" — dialog dismisses, dashboard opens, opt-out persisted (relaunch doesn't re-prompt).
 - [ ] Install the extension: `sudo apt install gnome-shell-extension-appindicator`, log out + back in.
-- [ ] Relaunch Clawdmeter — tray icon now visible; no dialog.
+- [ ] Relaunch Continuum — tray icon now visible; no dialog.
 
 ### Pass 4: Live gauge update
 
@@ -57,9 +57,9 @@ Take a snapshot before each test pass so failures can be retried cleanly.
 ### Pass 5: iPhone pairing over Tailscale [if pairing changed]
 
 - [ ] `tailscale up` on the Linux VM.
-- [ ] Open Clawdmeter Settings → Sessions → "Sync with iPhone".
+- [ ] Open Continuum Settings → Sessions → "Sync with iPhone".
 - [ ] QR code visible. URL field shows `http://100.x.x.x:21731/...` (Tailscale CGNAT).
-- [ ] Scan from iPhone Clawdmeter — paired status appears.
+- [ ] Scan from iPhone Continuum — paired status appears.
 - [ ] iPhone "Open on Mac" button → Linux dashboard composer pre-fills.
 - [ ] iPhone spawn session → tmux pane created on Linux (visible via `tmux ls`).
 - [ ] Chat snapshot streams back to iPhone.
