@@ -144,6 +144,17 @@ final class PricingTests: XCTestCase {
         )
     }
 
+    func test_cursorClaudeEffortSuffix_pricesViaBaseClaudeModel() {
+        let tokens = TokenTotals(inputTokens: 100_000, outputTokens: 50_000)
+
+        XCTAssertTrue(pricing.isPriced("cursor/claude-opus-4-8-thinking-high"))
+        let suffixed = pricing.cost(for: "cursor/claude-opus-4-8-thinking-high", tokens: tokens)
+        let base = pricing.cost(for: "claude-opus-4-8", tokens: tokens)
+
+        XCTAssertEqual((suffixed as NSDecimalNumber).doubleValue, 1.75, accuracy: 0.001)
+        XCTAssertEqual(suffixed, base)
+    }
+
     func test_claudeModelPrefixMatch() {
         // claude-sonnet-4-5-20250929 is in the snapshot directly, but a
         // hypothetical future-date variant should fall back via prefix match.
