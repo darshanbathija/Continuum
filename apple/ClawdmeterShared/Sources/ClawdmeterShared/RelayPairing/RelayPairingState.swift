@@ -104,6 +104,77 @@ public struct RelayPairingRecord: Codable, Sendable, Equatable {
         self.relayUrl = relayUrl
         self.pairedAtUnixSeconds = pairedAtUnixSeconds
     }
+
+    // Track B (CB-P1g): the bearer tokens (`macTok`/`iosTok`) and the derived
+    // key (`derivedSymmetricKeyBase64URL`) are SECRETS. They must live ONLY in
+    // the Keychain, never the on-disk JSON — otherwise a filesystem image leaks
+    // durable credentials (the old "short-TTL, so JSON is fine" rationale dies
+    // once CB-P0a makes paired credentials long-lived). Custom Codable omits
+    // them from `encode`; `decode` reads them if a LEGACY file still has them
+    // (so `RelayPairingStore` can migrate them into the Keychain, then rewrite
+    // the JSON without them). `RelayPairingStore.save/loadRecord` carry the
+    // secrets via the Keychain out-of-band.
+    private enum CodingKeys: String, CodingKey {
+        case sid, macTok, iosTok, theirEcdhPublicKeyBase64URL
+        case ourEcdhPublicKeyBase64URL, derivedSymmetricKeyBase64URL
+        case ttl, relayUrl, pairedAtUnixSeconds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.sid = try c.decode(String.self, forKey: .sid)
+        // Secrets: present only in legacy files; default empty/nil otherwise.
+        self.macTok = ((try? c.decodeIfPresent(String.self, forKey: .macTok)) ?? nil) ?? ""
+        self.iosTok = ((try? c.decodeIfPresent(String.self, forKey: .iosTok)) ?? nil) ?? ""
+        self.derivedSymmetricKeyBase64URL = (try? c.decodeIfPresent(String.self, forKey: .derivedSymmetricKeyBase64URL)) ?? nil
+        self.theirEcdhPublicKeyBase64URL = try c.decodeIfPresent(String.self, forKey: .theirEcdhPublicKeyBase64URL)
+        self.ourEcdhPublicKeyBase64URL = try c.decode(String.self, forKey: .ourEcdhPublicKeyBase64URL)
+        self.ttl = try c.decode(UInt64.self, forKey: .ttl)
+        self.relayUrl = try c.decode(String.self, forKey: .relayUrl)
+        self.pairedAtUnixSeconds = try c.decode(UInt64.self, forKey: .pairedAtUnixSeconds)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(sid, forKey: .sid)
+        // macTok / iosTok / derivedSymmetricKeyBase64URL deliberately NOT encoded.
+        try c.encodeIfPresent(theirEcdhPublicKeyBase64URL, forKey: .theirEcdhPublicKeyBase64URL)
+        try c.encode(ourEcdhPublicKeyBase64URL, forKey: .ourEcdhPublicKeyBase64URL)
+        try c.encode(ttl, forKey: .ttl)
+        try c.encode(relayUrl, forKey: .relayUrl)
+        try c.encode(pairedAtUnixSeconds, forKey: .pairedAtUnixSeconds)
+    }
+
+    /// True when this record (decoded from disk) still carries secret material —
+    /// i.e. it's a LEGACY file written before CB-P1g. The store migrates these.
+    public var hasInlineSecrets: Bool {
+        !macTok.isEmpty || !iosTok.isEmpty || (derivedSymmetricKeyBase64URL?.isEmpty == false)
+    }
+
+    /// A copy with the secret fields populated from out-of-band (Keychain).
+    public func withSecrets(macTok: String, iosTok: String, derivedSymmetricKeyBase64URL: String?) -> RelayPairingRecord {
+        RelayPairingRecord(
+            sid: sid, macTok: macTok, iosTok: iosTok,
+            theirEcdhPublicKeyBase64URL: theirEcdhPublicKeyBase64URL,
+            ourEcdhPublicKeyBase64URL: ourEcdhPublicKeyBase64URL,
+            derivedSymmetricKeyBase64URL: derivedSymmetricKeyBase64URL,
+            ttl: ttl, relayUrl: relayUrl, pairedAtUnixSeconds: pairedAtUnixSeconds
+        )
+    }
+}
+
+/// Track B (CB-P1g): the secret half of a pairing record, stored Keychain-only
+/// (never in the on-disk JSON). Serialized as a small blob alongside the
+/// symmetric key.
+public struct RelayPairingSecrets: Codable, Sendable, Equatable {
+    public let macTok: String
+    public let iosTok: String
+    public let derivedSymmetricKeyBase64URL: String?
+    public init(macTok: String, iosTok: String, derivedSymmetricKeyBase64URL: String?) {
+        self.macTok = macTok
+        self.iosTok = iosTok
+        self.derivedSymmetricKeyBase64URL = derivedSymmetricKeyBase64URL
+    }
 }
 
 /// Operator-facing summary of the most recent pairing attempt. UI binds

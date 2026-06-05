@@ -41,8 +41,11 @@ public final class RelayPairingStore: @unchecked Sendable {
 #if canImport(Security)
     private let keychainService: String
     private let keychainAccount = "relay-pairing-symmetric-key"
+    /// CB-P1g: bearer tokens (macTok/iosTok) live here, NOT in the JSON file.
+    private let keychainSecretsAccount = "relay-pairing-secrets"
 #else
     private let keyFileURL: URL
+    private let secretsFileURL: URL
 #endif
 
     public init(
@@ -69,6 +72,9 @@ public final class RelayPairingStore: @unchecked Sendable {
         self.keyFileURL = resolvedFileURL
             .deletingLastPathComponent()
             .appendingPathComponent("relay-pairing.key", isDirectory: false)
+        self.secretsFileURL = resolvedFileURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("relay-pairing.secrets", isDirectory: false)
 #endif
     }
 
@@ -80,8 +86,32 @@ public final class RelayPairingStore: @unchecked Sendable {
     public func loadRecord() -> RelayPairingRecord? {
         lock.lock()
         defer { lock.unlock() }
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return try? JSONDecoder().decode(RelayPairingRecord.self, from: data)
+        guard let data = try? Data(contentsOf: fileURL),
+              let decoded = try? JSONDecoder().decode(RelayPairingRecord.self, from: data) else { return nil }
+        // CB-P1g migration: a LEGACY file still carries inline secrets. Move them
+        // into the Keychain, rewrite the JSON redacted, and use them in-memory.
+        if decoded.hasInlineSecrets {
+            let secrets = RelayPairingSecrets(macTok: decoded.macTok, iosTok: decoded.iosTok,
+                                              derivedSymmetricKeyBase64URL: decoded.derivedSymmetricKeyBase64URL)
+            if let blob = try? JSONEncoder().encode(secrets) { writeSecrets(blob) }
+            if let redacted = try? Self.encodeRedacted(decoded) {
+                try? redacted.write(to: fileURL, options: [.atomic])
+            }
+            return decoded
+        }
+        // Redacted file: rehydrate secrets from the Keychain. Missing secrets ⇒
+        // unusable record (callers re-pair) rather than a tokenless record.
+        guard let blob = readSecrets(),
+              let secrets = try? JSONDecoder().decode(RelayPairingSecrets.self, from: blob),
+              !secrets.iosTok.isEmpty else { return nil }
+        return decoded.withSecrets(macTok: secrets.macTok, iosTok: secrets.iosTok,
+                                   derivedSymmetricKeyBase64URL: secrets.derivedSymmetricKeyBase64URL)
+    }
+
+    private static func encodeRedacted(_ record: RelayPairingRecord) throws -> Data {
+        let e = JSONEncoder()
+        e.outputFormatting = [.sortedKeys, .prettyPrinted]
+        return try e.encode(record)   // RelayPairingRecord.encode omits secrets (CB-P1g)
     }
 
     /// Returns the persisted symmetric key (32 bytes) or nil if none.
@@ -99,11 +129,14 @@ public final class RelayPairingStore: @unchecked Sendable {
     public func save(record: RelayPairingRecord, symmetricKey: Data) throws {
         lock.lock()
         defer { lock.unlock() }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        let data = try encoder.encode(record)
+        // CB-P1g: the encoder omits the secret fields, so the on-disk JSON never
+        // contains the bearer tokens or the derived key.
+        let data = try Self.encodeRedacted(record)
         try data.write(to: fileURL, options: [.atomic])
         writeKeychain(symmetricKey)
+        let secrets = RelayPairingSecrets(macTok: record.macTok, iosTok: record.iosTok,
+                                          derivedSymmetricKeyBase64URL: record.derivedSymmetricKeyBase64URL)
+        if let blob = try? JSONEncoder().encode(secrets) { writeSecrets(blob) }
     }
 
     /// Drop the pairing record + symmetric key. Used by the "Forget
@@ -113,6 +146,7 @@ public final class RelayPairingStore: @unchecked Sendable {
         defer { lock.unlock() }
         try? FileManager.default.removeItem(at: fileURL)
         deleteKeychain()
+        deleteSecrets()
     }
 
     // MARK: - Key material helpers
@@ -151,6 +185,38 @@ public final class RelayPairingStore: @unchecked Sendable {
     private func deleteKeychain() {
         _ = SecItemDelete(keychainQuery() as CFDictionary)
     }
+
+    // CB-P1g: secrets blob (bearer tokens) in a separate Keychain item.
+    private func secretsQuery() -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainSecretsAccount,
+            kSecAttrSynchronizable as String: kCFBooleanFalse as Any,
+        ]
+    }
+
+    private func readSecrets() -> Data? {
+        var query = secretsQuery()
+        query[kSecReturnData as String] = kCFBooleanTrue
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let data = item as? Data else { return nil }
+        return data
+    }
+
+    private func writeSecrets(_ data: Data) {
+        deleteSecrets()
+        var query = secretsQuery()
+        query[kSecValueData as String] = data
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        _ = SecItemAdd(query as CFDictionary, nil)
+    }
+
+    private func deleteSecrets() {
+        _ = SecItemDelete(secretsQuery() as CFDictionary)
+    }
 #else
     private func readKeychain() -> Data? {
         try? Data(contentsOf: keyFileURL)
@@ -165,5 +231,13 @@ public final class RelayPairingStore: @unchecked Sendable {
     private func deleteKeychain() {
         try? FileManager.default.removeItem(at: keyFileURL)
     }
+
+    private func readSecrets() -> Data? { try? Data(contentsOf: secretsFileURL) }
+    private func writeSecrets(_ data: Data) {
+        let dir = secretsFileURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? data.write(to: secretsFileURL, options: [.atomic])
+    }
+    private func deleteSecrets() { try? FileManager.default.removeItem(at: secretsFileURL) }
 #endif
 }
