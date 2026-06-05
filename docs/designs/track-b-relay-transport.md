@@ -211,7 +211,8 @@ piece is proven; PR per phase; build green before advancing.
 ## NOT in scope
 - Track C (cloud Tier 2, Claude-Code-on-web) — separate cycle.
 - Server-side TLS termination on the daemon (the relay already provides transport encryption;
-  LAN-direct stays plain HTTP gated by the pairing token).
+  LAN-direct stays plain HTTP but is gated by a **challenge-response MAC bound to the pairing
+  key** — the raw bearer token is never sent on the wire; see Eng Review Decision D3).
 - Deleting `DirectHTTPTransport` (kept for LAN-direct).
 
 ## What already exists (reused, not rebuilt)
@@ -219,3 +220,48 @@ piece is proven; PR per phase; build green before advancing.
   `RelayRequestDispatcher` (HTTP tunnel — extended for streams), the Cloudflare DO + Hibernation,
   the pairing-token store + relay bearer auth, the 4 existing `WSChannel`s (reused unchanged via
   the loopback-WS bridge), the chat-subscribe reconnect/backoff ladder (mirror for RelayTransport).
+
+## Eng Review Decisions (`/plan-eng-review`, 2026-06-05)
+
+Scope confirmed: **one cycle, all of B0–B5.** Five architecture forks decided via AskUserQuestion; the rest folded as refinements below.
+
+- **D2 — B0 stream transport: loopback-WS bridge.** The relay dispatcher opens a `URLSessionWebSocketTask` to `ws://127.0.0.1:<wsPort>` and forwards frames, so all 4 `WSChannel`s are reused UNCHANGED. Chosen over a `WSChannelSink` refactor: the streams are 100ms-debounced (low frame rate), so the double-hop CPU cost is negligible and not touching 4 working channels is the lower-risk, right-sized diff.
+- **D3 — B3 LAN-direct security: challenge-response bound to the pairing key.** LAN-direct must NOT send the raw bearer token over plaintext HTTP (a same-WiFi impostor advertising `_clawdmeter._tcp` could harvest it → RCE on the `--dangerously-skip-permissions` daemon; passive sniff also harvests it). Instead: Bonjour TXT carries `fp = HMAC(K,"id")` that iOS checks against its stored pairing identity; iOS sends a nonce, the Mac returns `HMAC(K, nonce)` to prove possession of the pairing secret `K`; per-request auth is `MAC = HMAC(K, method|path|body|ts)` with a short replay window. The raw token never crosses the wire. (Updates the "NOT in scope" plain-HTTP line.) **Hardened per Codex CB-P1f:** the MAC must bind **role + session-id + endpoint + nonce + timestamp + protocol-version** (not just method|path|body|ts); the daemon caches recently-used nonces and expires challenges fast, so a captured frame can't be replayed against a different role/endpoint or after the window.
+- **D4 — B0/B1 multiplex + reconnect: full multiplex + auto-resubscribe.** Every request AND subscription carries an op-id; frames interleave (round-robin) and large frames chunk, so a big snapshot can't head-of-line-block a pending request. On reconnect (iOS background/WiFi switch) the client re-sends all active subscription envelopes and the server replays the current snapshot per stream — nearly free because the channels already emit debounced FULL snapshots. **Hardened per Codex:** (CB-P1b) `opId` is MANDATORY on every request/response/end/error frame, and the daemon rejects a duplicate live opId — `<op>.response` alone can't correlate concurrent same-route requests. (CB-P1c) "chunking" needs a concrete contract: each chunk carries `{messageId, index, count}`, a max-buffered-bytes cap, a reassembly timeout, and in-order delivery — because existing chat frames already exceed the DO's **64 KiB body cap**. (CB-P1a) `terminal` is **bidirectional** — input/resize/title must pump iOS→loopback-WS too, not just server-push; the bridge must be a full-duplex pump, tested both ways.
+- **D5 — Relay snapshot cost: throttle + coalesce at the bridge.** Channels stay unchanged (D2); the loopback-WS bridge applies a coarser debounce for the RELAY path only (LAN/loopback keeps 100ms). Bounds Cloudflare GB-s without delta-encoding — explicitly avoiding the delta envelope Chat V2 D6 deliberately cut. **CORRECTED per Codex CB-P1d:** coalescing is **per-channel, not global** — last-write-wins (300–500ms debounce) applies ONLY to replaceable snapshot channels (`chat-subscribe`, `frontier-subscribe`); `events` must use cursor/seq replay (no drop — every event delivered); `terminal` is flow-controlled ordered bytes (no LWW, no drop — coalescing would eat keystrokes/output). A blanket LWW would corrupt terminal + lose events.
+- **D6 — B5 cutover gate: live E2E + device drill + staged rollout.** Before flipping `clawdmeter.transport.relayDefault` ON and removing Tailscale: an automated E2E against the **staging DO** (pair → multiplex all 4 streams + requests → kill/resume the socket → assert resync), a **manual device drill** (background, lock, switch WiFi), then a **staged % rollout** (5→25→100). Tailscale code removed only after 100% green. Replaces B5's "load-test" with a real-network gate.
+
+**Folded refinements (not contested — baked into the phases):**
+- **B4 fail-closed peer auth** is largely subsumed by D3: the LAN listener requires a valid pairing-key MAC at dispatch (before any handler) — that IS fail-closed peer auth. Remaining adds: bad-auth **rate-limit/lockout** (reuse `RateLimiter`) so removing the IP allowlist doesn't open token brute-force; keep the loopback (127/::1) bearer exception for the Mac's own UI; remove the RFC1918/`TailscaleWhois` allowlist ONLY after the MAC gate is enforced (B3+B4 atomic, as written).
+- **DO 2-peer trust:** the DO models one pairing as 2 peer sockets (Mac+iOS). Both peers are authenticated by the pairing; the bridge's loopback WS needs its own loopback bearer (not the pairing token) so a relay frame can't reach the daemon's WS port unauthenticated.
+- **Pairing migration:** existing Tailscale-paired users get a one-time re-pair prompt (already noted in Risks); the iOS QR parser must accept relay+LAN hosts and the legacy `clawdmeter://`/`*.ts.net` acceptance is dropped only at B4.
+- **Offline behavior:** once relay is default, no-internet + no-LAN = no remote control (expected); the Mac's own loopback UI is unaffected.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Runs | Status | Findings |
+|--------|---------|------|--------|----------|
+| Eng Review | `/plan-eng-review` | 1 | CLEAR (PLAN) | 5 architecture forks decided (D2–D6) + 4 refinements folded |
+| Codex Review | `codex exec` gpt-5.5 (outside voice) | 1 | ISSUES_FOUND | **2 P0 + 8 P1 + 2 P2** — all folded; 2 P0s verified in-repo |
+
+**Codex outside-voice pass (2026-06-05, read-only, high reasoning) — 2 P0, 8 P1, 2 P2. All folded; the two P0s were verified against the repo and BLOCK the B5 cutover:**
+
+- **CB-P0a — relay credential TTL is 15 min (VERIFIED: `infra/relay/wrangler.toml SESSION_TTL_SECONDS="900"`, all envs).** The 15-min TTL is a *QR-bootstrap* security feature (a leaked QR dies fast), but flipping `relayDefault` ON would evict + strand every paired device idle >15 min. **Fix (new B-prereq):** split the short QR-bootstrap TTL from **long-lived paired-device credentials** with refresh/rotation/revocation. Must land before B5.
+- **CB-P0b — reconnect replay-seq asymmetry (VERIFIED: `RelayClient.swift:665 inboundHighSeq = 0` reset; both sides drop `seq <= inboundHighSeq`).** One side resets its seq on reconnect while the peer retains `inboundHighSeq`, so post-reconnect frames are dropped as replays — this directly breaks D4's auto-resubscribe. **Fix:** add a connection-epoch / session-nonce to the replay state (or persist monotonic counters across reconnects). Must land before B5.
+
+- **CB-P1a terminal bidirectional** → folded into D4 (full-duplex pump, tested both ways).
+- **CB-P1b opId mandatory + reject duplicate live IDs** → folded into D4.
+- **CB-P1c 64 KiB DO cap + concrete chunk reassembly contract** → folded into D4.
+- **CB-P1d per-channel coalescing (LWW only for snapshots; events=cursor replay; terminal=ordered bytes)** → **corrected D5** (my blanket-LWW was wrong — it would eat keystrokes + drop events).
+- **CB-P1e loopback envelope built server-side** → the bridge overwrites the WS token with the per-launch loopback token and builds the loopback envelope from an allowlisted op schema; it must NOT trust relay-peer-supplied token/op/path. Folded into the "DO 2-peer" refinement (B4).
+- **CB-P1f LAN HMAC replay binding** → folded into D3 (bind role/session/endpoint/nonce/ts/version; nonce cache).
+- **CB-P1g secrets-in-JSON (raw `macTok`/`iosTok` + derived `K` persisted to the relay JSON record, not Keychain-only)** → new B-prereq: strip `K`/raw tokens from the JSON record + migrate existing records, so the "Keychain-only secret" assumption D3 relies on becomes true.
+- **CB-P1h migration insufficiency** → strengthen Risks: require a pre-cutover migration STATE + old-app compatibility behavior + rollback, not just a re-pair prompt; the iOS QR parser keeps accepting legacy `clawdmeter://` until the cutover completes.
+- **CB-P2a failed-auth throttle/lockout** → already in the B4 refinement (per-source + per-session backoff + audit + temp bans); confirmed.
+- **CB-P2b coverage gate is hand-written** → B2/D6: generate the coverage table from the actual daemon route table (it also has `lifecycle-subscribe` + `compose-draft` WS behavior beyond the 4 streams), not a hand-listed "4 ops."
+
+**CROSS-MODEL:** the inside review owned the architecture forks (transport, LAN crypto shape, multiplex, cost, cutover gate); Codex owned the *concrete protocol + current-state* gaps the forks glossed (TTL, reconnect seq, 64 KiB cap, per-channel coalescing, secret storage). No contradiction — Codex sharpened D3/D4/D5 and added two repo-verified P0 prerequisites.
+
+**UNRESOLVED:** 0 — every finding decided (AskUserQuestion) or folded as a verified correction/prerequisite.
+
+**VERDICT:** ENG CLEARED for B0–B4 implementation. **B5 cutover is GATED** on three now-explicit prerequisites — (1) long-lived paired credentials w/ rotation [CB-P0a], (2) reconnect-epoch replay fix [CB-P0b], (3) secrets-out-of-JSON migration [CB-P1g] — plus the D6 staging-DO E2E + device drill + staged rollout. Sequencing unchanged: B0 → B1 → B2 → B3+B4 (atomic) → B5.
