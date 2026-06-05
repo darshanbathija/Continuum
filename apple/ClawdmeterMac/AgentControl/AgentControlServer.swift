@@ -84,7 +84,7 @@ public final class AgentControlServer {
     /// Track A: per-session direct PTY hosts for Claude session-drive, gated
     /// by `clawdmeter.claude.ptyHost.enabled` (default OFF → Claude stays on
     /// tmux, byte-identical). tmux stays for terminals + non-Claude providers.
-    let claudePtyRegistry = ClaudePtyRegistry()
+    let claudePtyRegistry = ClaudePtyRegistry.shared
     private var claudePtyExitWired = false
     /// T18 Wire Inspector: per-connection request context so the
     /// outgoing-response recorder can tag entries with the original

@@ -92,8 +92,33 @@ public final class SessionScheduler {
     /// primary tmux pane, then marks the registry entry as fired. Reschedule
     /// runs again automatically via the registry observer.
     private func fire(sessionId: UUID, followUpId: UUID) async {
-        guard let session = registry.session(id: sessionId),
-              let pane = session.tmuxPaneId ?? session.tmuxWindowId
+        guard let session = registry.session(id: sessionId) else {
+            schedulerLogger.warning("fire: session missing — dropping follow-up")
+            do {
+                try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
+            } catch {
+                schedulerLogger.error("markFollowUpFired write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
+        // Track A: a Claude PTY session has no tmux pane. Deliver the follow-up
+        // to its live host if one is resident. (A swept/idle host needs a
+        // claudeSessionId --resume — T7 — so we only deliver to a LIVE host here
+        // and otherwise fall through to the legacy drop, exactly as before.)
+        if session.tmuxPaneId == nil && session.tmuxWindowId == nil && session.agent == .claude {
+            if let host = await ClaudePtyRegistry.shared.host(for: sessionId),
+               let followUp = session.scheduledFollowUps.first(where: { $0.id == followUpId }) {
+                await host.submitPrompt(followUp.prompt, isChat: session.kind == .chat, isFollowUp: true)
+                do {
+                    try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
+                } catch {
+                    schedulerLogger.error("markFollowUpFired write-ahead failed: \(error.localizedDescription, privacy: .public)")
+                }
+                schedulerLogger.info("Delivered follow-up to PTY session \(sessionId.uuidString, privacy: .public)")
+                return
+            }
+        }
+        guard let pane = session.tmuxPaneId ?? session.tmuxWindowId
         else {
             schedulerLogger.warning("fire: session or pane missing — dropping follow-up")
             // F2-wire: write-ahead failure on the scheduler path is

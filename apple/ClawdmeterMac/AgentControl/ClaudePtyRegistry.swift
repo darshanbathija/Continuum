@@ -26,6 +26,14 @@ private let registryLogger = Logger(subsystem: "com.clawdmeter.mac", category: "
 ///    so the session goes `.degraded` + offers Resume.
 actor ClaudePtyRegistry {
 
+    /// Process-wide shared instance. There is one daemon per app process, so a
+    /// single registry owns all Claude PTY hosts. Sharing it (rather than
+    /// threading it through every consumer's init) lets the daemon,
+    /// SessionScheduler, and SessionConfigChanger all reach the same hosts.
+    /// Tests construct their own instances directly.
+    static let shared = ClaudePtyRegistry()
+
+
     /// Per-session spawn closure: returns full argv (argv[0] = binary) + cwd,
     /// or nil if the session can't be spawned (e.g. claude not found). The
     /// daemon supplies this so the registry stays free of AgentSession/argv
