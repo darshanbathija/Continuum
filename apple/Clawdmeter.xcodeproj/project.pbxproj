@@ -47,6 +47,7 @@
 		180979EE1D21A4EC76344D81 /* IOSChatV2View.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFCA10DE26C860C326DE2FDB /* IOSChatV2View.swift */; };
 		180F0F522D2CF2CBD7EEE500 /* MacMenubarPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 015F6FD7463F3710A54A36EB /* MacMenubarPopover.swift */; };
 		183FABC95728764FF9DEFCD6 /* TahoeDiffPreviewPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6964337810D3098CE9F66CBE /* TahoeDiffPreviewPane.swift */; };
+		19AC672180B4FBF70EB9FE37 /* RelayTransportFlag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175F5A857A4FA1D0F0C3C6D2 /* RelayTransportFlag.swift */; };
 		19CFD32B283E9A931390BD4B /* KeyboardCheatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2D094B6FFC14AA31CD6E63E /* KeyboardCheatSheet.swift */; };
 		1A33BCE35CFE5B8AFC5BD284 /* ClawdmeterMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44830246BE8DE33251B9CE1B /* ClawdmeterMacApp.swift */; };
 		1B54103BF6D1D6FED456229B /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = 7B11A2D9FF78A7B7AA8B0A88 /* ClawdmeterShared */; };
@@ -513,6 +514,7 @@
 		162AFC48DB7B96F3BD402C58 /* HarnessProcessReaper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessProcessReaper.swift; sourceTree = "<group>"; };
 		162F800D3CC14A1C33E3A4F8 /* ClawdmeterWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClawdmeterWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		174532B759A129A612A27E8F /* MarkdownDocumentTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocumentTabView.swift; sourceTree = "<group>"; };
+		175F5A857A4FA1D0F0C3C6D2 /* RelayTransportFlag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayTransportFlag.swift; sourceTree = "<group>"; };
 		1781BB5120E0848A69C5C93F /* LifecycleWebSocketChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LifecycleWebSocketChannel.swift; sourceTree = "<group>"; };
 		17DA27537713FA84A9F94D39 /* iOSOutboxPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSOutboxPane.swift; sourceTree = "<group>"; };
 		18DCEE84E585CFA9E05B9805 /* OpencodeSetupSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeSetupSheet.swift; sourceTree = "<group>"; };
@@ -1329,6 +1331,7 @@
 				95301F92EF7532BC38B5BE4E /* IOSRelayClient.swift */,
 				5DC85826013E1F3EE2672116 /* IOSRelayClientCoordinator.swift */,
 				625F0C2211326A148B15228D /* MobileCommandOutbox.swift */,
+				175F5A857A4FA1D0F0C3C6D2 /* RelayTransportFlag.swift */,
 				33825BAE58452A8D88F93860 /* WorkspaceAllowListCache.swift */,
 			);
 			path = AgentControl;
@@ -2227,6 +2230,7 @@
 				1F57B15A40CE4503F7909A98 /* PairingCTAButtons.swift in Sources */,
 				E42C70E146F11D56309CCED8 /* PairingScanView.swift in Sources */,
 				21394E54DBC8130457573563 /* PairingScannerView.swift in Sources */,
+				19AC672180B4FBF70EB9FE37 /* RelayTransportFlag.swift in Sources */,
 				C33D35AB2C0B598EE86BC7BD /* RepoOnboardingErrorMessages.swift in Sources */,
 				7E7B0AB3B9AC675FB2018FAE /* RepoOnboardingIdempotencyStore.swift in Sources */,
 				3D153FBD1EF5FB96D68B6AA4 /* SettingsView.swift in Sources */,

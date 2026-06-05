@@ -47,6 +47,14 @@ public final class IOSRelayClientCoordinator: ObservableObject {
     /// Surfaced as `@Published` so a debug overlay can observe state.
     @Published public private(set) var client: IOSRelayClient?
 
+    /// Track B (B1): the single shared multiplex client, constructed ONLY when
+    /// `clawdmeter.transport.relayDefault` is on. Stores read this to route their
+    /// streams over the relay; nil ⇒ every store uses its direct path
+    /// (byte-identical). Independent of the socket lifecycle (keep-warm for APNS
+    /// stays governed by `clawdmeter.relay.enabled`), so flipping relayDefault
+    /// off never regresses the existing relay socket.
+    @Published public private(set) var muxClient: RelayMuxClient?
+
     private let pairingService: IOSRelayPairingService
     private let store: RelayPairingStore
     private var cancellables: Set<AnyCancellable> = []
@@ -86,6 +94,8 @@ public final class IOSRelayClientCoordinator: ObservableObject {
         cancellables.removeAll()
         client?.stop()
         client = nil
+        muxClient?.reset()
+        muxClient = nil
     }
 
     // MARK: - Internal
@@ -128,9 +138,22 @@ public final class IOSRelayClientCoordinator: ObservableObject {
             config: config,
             ourPublicKeyBytes: ourPub
         )
+        // Track B (B1): when the relay is the default transport, build the single
+        // shared mux client and cross-wire it: its `send` ships frames as
+        // op == "mux" via the relay client, and the relay client routes inbound
+        // mux frames back into it. The send closure holds the client weakly to
+        // avoid a retain cycle. Off ⇒ muxClient stays nil ⇒ stores stay direct.
+        if RelayTransportFlag.relayDefaultEnabled {
+            let mux = RelayMuxClient(send: { [weak newClient] frame in
+                guard let payload = try? frame.encoded() else { return }
+                try? await newClient?.send(op: RelayMux.op, payload: payload)
+            })
+            newClient.muxClient = mux
+            self.muxClient = mux
+        }
         self.client = newClient
         newClient.start()
-        coordinatorLogger.info("Relay client started (sid prefix=\(record.sid.prefix(8))…)")
+        coordinatorLogger.info("Relay client started (sid prefix=\(record.sid.prefix(8))…, relayDefault=\(RelayTransportFlag.relayDefaultEnabled))")
     }
 }
 
