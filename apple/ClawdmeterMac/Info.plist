@@ -12,17 +12,12 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
-	<!-- v0.29.7: display-only rebrand to "Continuum". CFBundleName +
-	     PRODUCT_NAME stay as "Clawdmeter" so the on-disk executable
-	     name, bundle identifier (com.clawdmeter.mac), file paths
-	     (~/Library/Application Support/Clawdmeter/), App Group, and
-	     keychain-access-group prefixes don't drift — existing installs
-	     keep their data, paired iPhones stay paired, no migration.
-	     CFBundleDisplayName overrides the name shown in Finder, Dock,
-	     menu bar, About panel, App Switcher, and the Window title. The
-	     full bundle-ID rebrand to com.montaukanalytics.continuum.* is
-	     scheduled for Phase 2 when the new Apple Developer Program
-	     enrollment under accounts@montaukanalytics.xyz is active. -->
+	<!-- v0.29.8+: display/on-disk rebrand to "Continuum". PRODUCT_NAME
+	     builds Continuum.app and the Montauk release identity now uses
+	     ai.continuum.mac. The shared app-group/keychain prefixes changed
+	     with the Apple team, so paired devices and pasted shared tokens may
+	     need one-time setup again; file paths under
+	     ~/Library/Application Support/Clawdmeter/ remain stable. -->
 	<key>CFBundleDisplayName</key>
 	<string>Continuum</string>
 	<key>CFBundlePackageType</key>
@@ -32,7 +27,17 @@
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>SUFeedURL</key>
+	<string>https://darshanbathija.github.io/Continuum/updates/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>$(SPARKLE_PUBLIC_ED_KEY)</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<true/>
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
 	<!--
 	  v0.26.4: Opt OUT of LaunchServices auto-quarantining files we write.
 

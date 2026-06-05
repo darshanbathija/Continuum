@@ -7,7 +7,8 @@
 #
 # Common invocations:
 #   bundle exec fastlane match_dev      — sync development certs locally
-#   bundle exec fastlane build_mac_dmg  — package the Mac DMG (no signing tier)
+#   bundle exec fastlane build_mac_dmg  — package the local Mac DMG
+#   bundle exec fastlane release_mac_sparkle — Developer ID + notarized Sparkle release
 #   bundle exec fastlane release        — full release: bumps build, archives Mac,
 #                                          archives iOS, uploads to TestFlight,
 #                                          drafts a GitHub release with the DMG.
@@ -75,15 +76,19 @@ end
 # Mac DMG build
 # ---------------------------------------------------------------------
 
-desc "Package the Mac app into a DMG. Uses tools/build-mac-dmg.sh which
-already drives xcodegen + xcodebuild archive + hdiutil. Output:
-`dist/Clawdmeter-<version>-arm64.dmg`."
+desc "Package the Mac app into a local DMG. Sparkle publishing uses release_mac_sparkle."
 lane :build_mac_dmg do
   build = current_build_number
   market = current_marketing_version
   UI.message "Packaging Mac DMG for v#{market} (build #{build})"
   sh("cd ../.. && ./tools/build-mac-dmg.sh")
   UI.success "Mac DMG built. Look in dist/."
+end
+
+desc "Credential-gated Mac release: Developer ID, notarization, GitHub asset, Pages appcast."
+lane :release_mac_sparkle do
+  UI.header "Running Sparkle Mac release path"
+  sh("cd ../.. && ./tools/release-mac.sh --publish")
 end
 
 # ---------------------------------------------------------------------
@@ -116,8 +121,7 @@ end
 # Full release lane
 # ---------------------------------------------------------------------
 
-desc "Full release: bump build number, archive Mac + iOS, ship TestFlight,
-draft a GitHub release with the DMG attached."
+desc "Full release: bump build number, run Sparkle Mac release, ship iOS TestFlight."
 lane :release do
   ensure_git_status_clean(show_uncommitted_changes: true)
   build = current_build_number + 1
@@ -129,28 +133,13 @@ lane :release do
   # Commit the bump so the release lane can reference a clean SHA.
   sh("git add ../project.yml ../Clawdmeter.xcodeproj && git commit -m 'release: bump build to #{build}'")
 
-  # Mac DMG.
-  build_mac_dmg
+  # Mac release. This is the only supported public Mac release path.
+  release_mac_sparkle
 
   # iOS + Watch → TestFlight.
   Fastlane::LaneManager.cruise_lane("ios", "ios_testflight")
 
-  # GitHub release with the DMG attached.
-  # Use the exact expected path for the version we just built. Globbing +
-  # sort.last is lexicographic and would prefer e.g. 0.9.2 over 0.22.32.
-  dmg = "../../dist/Clawdmeter-#{market}-arm64.dmg"
-  raise "DMG not found at #{dmg}" unless File.exist?(dmg)
-  set_github_release(
-    repository_name: "darshanbathija/Clawdmeter",
-    api_token: ENV["CLAWDMETER_GH_RELEASE_TOKEN"],
-    name: "v#{market}-build#{build}",
-    tag_name: "v#{market}-build#{build}",
-    description: "Build #{build}. See CHANGELOG.md for details.",
-    is_draft: true,
-    upload_assets: [dmg]
-  )
-
-  UI.success "Release v#{market} build #{build} drafted on GitHub. TestFlight upload in flight."
+  UI.success "Release v#{market} build #{build} completed for Mac Sparkle path and TestFlight upload is in flight."
 end
 
 # ---------------------------------------------------------------------

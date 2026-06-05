@@ -1,44 +1,68 @@
 import Foundation
 
-/// Single source of truth for GitHub repository URLs and release
-/// metadata used by the in-app update checker.
-///
-/// Centralizing here means a future repo rename touches one Swift
-/// constant and one shell variable (in `tools/build-mac-dmg.sh`) —
-/// the unit tests assert the URL formats so a typo during rename
-/// fails the build instead of silently 404-ing the appcast.
-enum GitHubReleaseConstants {
+/// Shared release/update configuration for the Mac updater, release
+/// scripts, and tests. Sparkle is the primary update detector; GitHub
+/// Releases remains the browser fallback and public asset host.
+enum ReleaseUpdateConfig {
     static let owner = "darshanbathija"
-    static let repo = "Clawdmeter"
+    static let repo = "Continuum"
+    static let appName = "Continuum"
+    static let bundleIdentifier = "ai.continuum.mac"
+    static let minimumSystemVersion = "26.0"
+    static let tagPrefix = "v"
+    static let tagSuffix = "-mac"
+    static let releaseAssetPrefix = "Continuum"
+    static let pagesBaseURL = URL(string: "https://darshanbathija.github.io/Continuum")!
+    static let appcastPath = "updates/appcast.xml"
+    static let releaseHistoryPath = "updates/history.json"
+    static let releaseNotesPath = "updates/release-notes"
 
-    /// Browser URL — the user-facing "Open in Browser" fallback.
-    /// `/releases/latest` 302-redirects to the most recent non-draft,
-    /// non-prerelease release, which matches our shipping pattern.
+    /// Browser URL for manual recovery. `/releases/latest` redirects to
+    /// the newest public release and avoids baking a possibly stale tag
+    /// into failure UI.
     static var releasesLatestURL: URL {
         URL(string: "https://github.com/\(owner)/\(repo)/releases/latest")!
     }
 
-    /// JSON API URL — the daily check hits this and decodes
-    /// `GitHubRelease`. Unauthenticated; 60 req/hr per IP budget.
+    /// Kept for release automation diagnostics and compatibility tests.
+    /// Runtime update detection does not poll this endpoint anymore.
     static var releasesLatestAPIURL: URL {
         URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases/latest")!
     }
 
-    /// Tag-scoped release page. Used if we ever want a version-derived
-    /// fallback link; the always-on fallback uses `releasesLatestURL`.
+    static var appcastURL: URL {
+        pagesBaseURL.appendingPathComponent(appcastPath)
+    }
+
+    static var releaseHistoryURL: URL {
+        pagesBaseURL.appendingPathComponent(releaseHistoryPath)
+    }
+
     static func releaseTagURL(version: String) -> URL {
-        URL(string: "https://github.com/\(owner)/\(repo)/releases/tag/v\(version)-mac")!
+        URL(string: "https://github.com/\(owner)/\(repo)/releases/tag/\(releaseTag(version: version))")!
+    }
+
+    static func releaseDownloadBaseURL(version: String) -> URL {
+        URL(string: "https://github.com/\(owner)/\(repo)/releases/download/\(releaseTag(version: version))/")!
+    }
+
+    static func releaseNotesURL(version: String) -> URL {
+        pagesBaseURL
+            .appendingPathComponent(releaseNotesPath)
+            .appendingPathComponent("\(version).md")
+    }
+
+    static func releaseTag(version: String) -> String {
+        "\(tagPrefix)\(version)\(tagSuffix)"
     }
 
     /// Parse the Mac release tag pattern `v<MAJOR>.<MINOR>.<PATCH>-mac`
-    /// into a plain semver string. Returns nil for tags that don't
-    /// match exactly (channel suffixes, linux tags, malformed) so the
-    /// coordinator skips them rather than trying to chip an update
-    /// the rest of the pipeline isn't ready for.
+    /// into a plain semver string. Channel suffixes are intentionally
+    /// rejected until beta/nightly feeds are explicitly designed.
     static func parseVersion(fromTag tag: String) -> String? {
-        guard tag.hasPrefix("v"), tag.hasSuffix("-mac") else { return nil }
-        let withoutPrefix = String(tag.dropFirst())
-        let withoutSuffix = String(withoutPrefix.dropLast("-mac".count))
+        guard tag.hasPrefix(tagPrefix), tag.hasSuffix(tagSuffix) else { return nil }
+        let withoutPrefix = String(tag.dropFirst(tagPrefix.count))
+        let withoutSuffix = String(withoutPrefix.dropLast(tagSuffix.count))
         guard !withoutSuffix.isEmpty else { return nil }
         let components = withoutSuffix.split(separator: ".")
         guard components.count == 3,
@@ -48,10 +72,7 @@ enum GitHubReleaseConstants {
     }
 
     /// Numeric semver comparison. `0.23.10 > 0.23.9` correctly
-    /// (lexicographic would give the opposite). Components beyond
-    /// `MAJOR.MINOR.PATCH` are ignored. Non-numeric components fall
-    /// back to `.orderedSame` so callers don't crash on garbage —
-    /// the caller should have validated via `parseVersion(fromTag:)`.
+    /// while preserving the existing three-part release contract.
     static func compareVersions(_ a: String, _ b: String) -> ComparisonResult {
         let aParts = a.split(separator: ".").compactMap { Int($0) }
         let bParts = b.split(separator: ".").compactMap { Int($0) }
@@ -65,22 +86,29 @@ enum GitHubReleaseConstants {
     }
 }
 
-/// Minimal Codable subset of GitHub's
-/// `GET /repos/:owner/:repo/releases/latest` response. We only
-/// consume what the chip + popover render; the API can add fields
-/// freely without breaking decode.
-struct GitHubRelease: Codable, Equatable {
-    let tagName: String
-    let name: String?
-    let body: String?
-    let htmlURL: URL
-    let publishedAt: Date?
+/// Compatibility alias for older tests/docs that still name the old
+/// GitHub-only checker. New code should use `ReleaseUpdateConfig`.
+typealias GitHubReleaseConstants = ReleaseUpdateConfig
 
-    enum CodingKeys: String, CodingKey {
-        case tagName = "tag_name"
-        case name
-        case body
-        case htmlURL = "html_url"
-        case publishedAt = "published_at"
+struct ReleaseHistoryEntry: Codable, Equatable, Identifiable {
+    var id: String { version }
+    let version: String
+    let build: String?
+    let title: String
+    let publishedAt: Date?
+    let notesURL: URL?
+
+    init(
+        version: String,
+        build: String? = nil,
+        title: String,
+        publishedAt: Date? = nil,
+        notesURL: URL? = nil
+    ) {
+        self.version = version
+        self.build = build
+        self.title = title
+        self.publishedAt = publishedAt
+        self.notesURL = notesURL
     }
 }

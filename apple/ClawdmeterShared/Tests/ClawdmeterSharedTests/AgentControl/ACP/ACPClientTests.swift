@@ -152,14 +152,13 @@ final class ACPClientTests: XCTestCase {
 
     func testPermissionRoundTrip() async throws {
         let (driver, _) = await makeDriver(mode: .withPermission)
-        var sawPermission = false
         let events = await drive(driver) { e in
             if case .permissionRequest(let req) = e {
-                sawPermission = true
                 await driver.respondToPermission(requestId: req.requestId, optionId: "allow_once")
             }
         }
-        XCTAssertTrue(sawPermission, "agent permission request must surface as a HarnessEvent")
+        XCTAssertTrue(events.contains { if case .permissionRequest = $0 { return true } else { return false } },
+                      "agent permission request must surface as a HarnessEvent")
         XCTAssertEqual(events.last, .turnEnded(.endTurn), "turn completes after we answer the permission")
     }
 

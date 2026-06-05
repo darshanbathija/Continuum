@@ -3,292 +3,599 @@ import Combine
 import AppKit
 import OSLog
 
-private let updateLogger = Logger(subsystem: "com.clawdmeter.mac", category: "UpdateChecker")
+#if canImport(Sparkle)
+import Sparkle
+#endif
 
-/// In-app update checker — polls GitHub Releases once per day, parses
-/// `tag_name` against the running build's `CFBundleShortVersionString`,
-/// and surfaces a chip in the titlebar when something newer ships.
-///
-/// Click-through is intentionally low-tech: the popover's primary CTA
-/// opens the GitHub release page in the user's browser, where they
-/// download the DMG and drag the new app into `/Applications` themselves.
-/// Sparkle one-click install is parked in `TODOS.md` as a phase-2 ship.
-///
-/// The coordinator also detects app translocation — when macOS Gatekeeper
-/// runs the bundle from a randomized `/private/var/folders/...` path,
-/// the user cannot follow the drag-to-Applications flow without first
-/// moving the current install. A separate yellow chip surfaces this.
+private let updateLogger = Logger(subsystem: "com.clawdmeter.mac", category: "Updates")
+
+// MARK: - Public update model
+
+struct SparkleUpdateInfo: Equatable {
+    let version: String
+    let displayVersion: String
+    let title: String?
+    let releaseNotesURL: URL?
+    let fullReleaseNotesURL: URL?
+    let downloadURL: URL?
+    let minimumSystemVersion: String?
+
+    init(
+        version: String,
+        displayVersion: String? = nil,
+        title: String? = nil,
+        releaseNotesURL: URL? = nil,
+        fullReleaseNotesURL: URL? = nil,
+        downloadURL: URL? = nil,
+        minimumSystemVersion: String? = nil
+    ) {
+        self.version = version
+        self.displayVersion = displayVersion ?? version
+        self.title = title
+        self.releaseNotesURL = releaseNotesURL
+        self.fullReleaseNotesURL = fullReleaseNotesURL
+        self.downloadURL = downloadURL
+        self.minimumSystemVersion = minimumSystemVersion
+    }
+}
+
+enum AppUpdateState: Equatable {
+    case idle
+    case checking
+    case upToDate(lastCheckedAt: Date?)
+    case updateAvailable(SparkleUpdateInfo)
+    case installing(SparkleUpdateInfo?)
+    case installedRelaunchPending(version: String?)
+    case userCancelled(version: String?)
+    case failed(reason: String, fallbackURL: URL)
+    case invalidAppcastSignature(reason: String, fallbackURL: URL)
+    case corruptedDownload(reason: String, fallbackURL: URL)
+    case translocated(bundleURL: URL)
+    case nonApplicationsInstall(bundleURL: URL)
+    case setupBlocked(reason: String, fallbackURL: URL)
+    case automaticChecksDisabled
+
+    var isActionable: Bool {
+        switch self {
+        case .checking, .installing:
+            return false
+        default:
+            return true
+        }
+    }
+}
+
+// MARK: - Sparkle driver seam
+
+@MainActor
+protocol SparkleUpdateDriverDelegate: AnyObject {
+    func updateDriverDidStartChecking()
+    func updateDriverDidFindUpdate(_ update: SparkleUpdateInfo)
+    func updateDriverDidNotFindUpdate()
+    func updateDriverDidStartInstalling(_ update: SparkleUpdateInfo?)
+    func updateDriverDidInstallAndAwaitRelaunch(version: String?)
+    func updateDriverDidCancel(version: String?)
+    func updateDriverDidFail(_ error: Error)
+    func updateDriverPreferencesChanged()
+}
+
+@MainActor
+protocol SparkleUpdateDriving: AnyObject {
+    var canCheckForUpdates: Bool { get }
+    var automaticallyChecksForUpdates: Bool { get set }
+    var automaticallyDownloadsUpdates: Bool { get set }
+    var lastUpdateCheckDate: Date? { get }
+
+    func start() throws
+    func checkForUpdates()
+    func checkForUpdatesInBackground()
+}
+
+// MARK: - Coordinator
+
 @MainActor
 final class UpdateCoordinator: ObservableObject {
+    typealias DriverFactory = @MainActor (SparkleUpdateDriverDelegate) throws -> SparkleUpdateDriving
 
-    // MARK: - Published view state
-
-    @Published private(set) var availableUpdate: GitHubRelease?
+    @Published private(set) var state: AppUpdateState = .idle
     @Published private(set) var lastCheckedAt: Date?
-    @Published private(set) var lastError: String?
-    @Published private(set) var isCheckingForUpdates: Bool = false
+    @Published private(set) var automaticChecksEnabled: Bool = false
+    @Published private(set) var automaticDownloadsEnabled: Bool = false
     @Published private(set) var isTranslocated: Bool = false
+    @Published private(set) var isInstalledInApplications: Bool = false
+    @Published private(set) var releaseNotes: String?
+    @Published private(set) var releaseHistory: [ReleaseHistoryEntry] = []
+    @Published private(set) var releaseMetadataError: String?
+    @Published private(set) var isLoadingReleaseMetadata: Bool = false
 
-    // MARK: - Configuration
-
-    /// Background check cadence. 24 hours.
-    static let backgroundCheckInterval: TimeInterval = 86_400
-    /// Manual-check debounce window. Prevents UI button-mashing from
-    /// burning the GitHub API rate-limit budget.
-    static let manualCheckDebounce: TimeInterval = 5
-    /// Dismissal cooldown — the chip stays hidden for this long after
-    /// the user clicks "Later" on a given version. Per-version.
-    static let dismissalCooldown: TimeInterval = 86_400
-    /// Initial check delay after init. Lets app launch settle first.
-    static let initialCheckDelay: TimeInterval = 8
-
-    // MARK: - UserDefaults keys
-
-    static let kDismissedVersion = "Update.dismissedVersion"
-    static let kDismissedAt = "Update.dismissedAt"
-    static let kDebugReleasesURL = "ClawdmeterDebugReleasesURL"
-
-    // MARK: - Injection points (for tests + production wiring)
+    static let manualCheckDebounce: TimeInterval = 2
 
     private let session: URLSession
-    private let defaults: UserDefaults
     private let bundleURLProvider: () -> URL
     private let currentVersionProvider: () -> String?
+    private let buildProvider: () -> String?
     private let nowProvider: () -> Date
     private let opener: (URL) -> Void
     private let finderRevealer: (URL) -> Void
+    private let driverFactory: DriverFactory
 
-    // MARK: - Internals
+    private var driver: SparkleUpdateDriving?
+    private var lastManualCheckAt: Date?
+    private var releaseMetadataTask: Task<Void, Never>?
+    private var currentUpdate: SparkleUpdateInfo?
 
-    private var backgroundTimerCancellable: AnyCancellable?
-    private var inFlightTask: Task<Void, Never>?
-
-    /// The effective releases API URL, accounting for the debug override.
-    /// Read lazily so tests can mutate UserDefaults between init calls.
-    var effectiveAPIURL: URL {
-        if let override = defaults.string(forKey: Self.kDebugReleasesURL),
-           let url = URL(string: override) {
-            return url
-        }
-        return GitHubReleaseConstants.releasesLatestAPIURL
+    var currentVersion: String {
+        currentVersionProvider() ?? "unknown"
     }
 
-    /// The currently-running app version (CFBundleShortVersionString).
-    /// Coordinator skips updates if this returns nil — better to do
-    /// nothing than to spam an upgrade prompt over an unknown baseline.
-    var currentVersion: String? { currentVersionProvider() }
+    var currentBuild: String {
+        buildProvider() ?? "unknown"
+    }
 
-    // MARK: - Init
+    var fallbackURL: URL {
+        ReleaseUpdateConfig.releasesLatestURL
+    }
 
     init(
         session: URLSession = .ephemeralWithTimeout(10),
-        defaults: UserDefaults = .standard,
         bundleURLProvider: @escaping () -> URL = { Bundle.main.bundleURL },
         currentVersionProvider: @escaping () -> String? = {
             Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         },
+        buildProvider: @escaping () -> String? = {
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        },
         nowProvider: @escaping () -> Date = { Date() },
         opener: @escaping (URL) -> Void = { NSWorkspace.shared.open($0) },
-        finderRevealer: @escaping (URL) -> Void = {
-            NSWorkspace.shared.activateFileViewerSelecting([$0])
-        },
-        startBackgroundScheduling: Bool = true
+        finderRevealer: @escaping (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) },
+        driverFactory: @escaping DriverFactory = { delegate in
+            #if canImport(Sparkle)
+            return SparkleUpdateDriver(delegate: delegate)
+            #else
+            throw UpdateSetupError.sparkleUnavailable
+            #endif
+        }
     ) {
         self.session = session
-        self.defaults = defaults
         self.bundleURLProvider = bundleURLProvider
         self.currentVersionProvider = currentVersionProvider
+        self.buildProvider = buildProvider
         self.nowProvider = nowProvider
         self.opener = opener
         self.finderRevealer = finderRevealer
+        self.driverFactory = driverFactory
 
-        let bundlePath = bundleURLProvider().path
-        self.isTranslocated = bundlePath.hasPrefix("/private/var/folders/")
-        if isTranslocated {
-            updateLogger.info("App is translocated at \(bundlePath, privacy: .public) — surfacing 'Move to Applications' chip")
-        }
-
-        if startBackgroundScheduling {
-            scheduleBackgroundChecks()
-        }
+        evaluateInstallLocation()
+        startSparkleIfPossible()
     }
 
     deinit {
-        backgroundTimerCancellable?.cancel()
+        releaseMetadataTask?.cancel()
     }
 
-    // MARK: - Public API (called from popover buttons)
+    // MARK: - Actions
 
-    /// User-initiated check (popover's "Check now" button). Debounced
-    /// so rapid clicks don't fire multiple requests.
     func checkForUpdates() {
-        if let last = lastCheckedAt,
-           nowProvider().timeIntervalSince(last) < Self.manualCheckDebounce {
-            updateLogger.debug("Skipping manual check — within debounce window")
+        guard canUseSparkle else { return }
+
+        if let lastManualCheckAt,
+           nowProvider().timeIntervalSince(lastManualCheckAt) < Self.manualCheckDebounce {
+            updateLogger.debug("Skipping update check because it is inside the manual debounce window")
             return
         }
-        runCheck()
+
+        guard let driver else {
+            state = .setupBlocked(reason: "Sparkle is not available in this build.", fallbackURL: fallbackURL)
+            return
+        }
+
+        guard driver.canCheckForUpdates else {
+            state = .setupBlocked(
+                reason: "Sparkle cannot check for updates right now. Open the app from /Applications and try again.",
+                fallbackURL: fallbackURL
+            )
+            return
+        }
+
+        lastManualCheckAt = nowProvider()
+        state = .checking
+        driver.checkForUpdates()
     }
 
-    /// Persist the dismissed version and refuse to surface it again
-    /// for `dismissalCooldown` seconds.
+    func checkForUpdatesInBackground() {
+        guard canUseSparkle, let driver, automaticChecksEnabled else {
+            if canUseSparkle { state = .automaticChecksDisabled }
+            return
+        }
+        driver.checkForUpdatesInBackground()
+    }
+
+    func setAutomaticChecksEnabled(_ enabled: Bool) {
+        guard let driver else {
+            automaticChecksEnabled = false
+            state = .setupBlocked(reason: "Sparkle is not configured.", fallbackURL: fallbackURL)
+            return
+        }
+        driver.automaticallyChecksForUpdates = enabled
+        automaticChecksEnabled = enabled
+        if enabled {
+            if case .automaticChecksDisabled = state { state = .idle }
+        } else {
+            state = .automaticChecksDisabled
+        }
+    }
+
+    func setAutomaticDownloadsEnabled(_ enabled: Bool) {
+        guard let driver else {
+            automaticDownloadsEnabled = false
+            return
+        }
+        driver.automaticallyDownloadsUpdates = enabled
+        automaticDownloadsEnabled = enabled
+    }
+
     func dismissUpdate() {
-        guard let update = availableUpdate,
-              let version = GitHubReleaseConstants.parseVersion(fromTag: update.tagName)
-        else {
-            availableUpdate = nil
-            return
-        }
-        defaults.set(version, forKey: Self.kDismissedVersion)
-        defaults.set(nowProvider(), forKey: Self.kDismissedAt)
-        availableUpdate = nil
-        updateLogger.info("User dismissed update \(version, privacy: .public)")
+        let version = currentUpdate?.displayVersion
+        currentUpdate = nil
+        state = .userCancelled(version: version)
     }
 
-    /// Open the GitHub releases page in the user's default browser.
-    /// This is the primary action — the user downloads the new DMG
-    /// from here.
     func openReleasePageFallback() {
-        opener(GitHubReleaseConstants.releasesLatestURL)
+        opener(fallbackURL)
     }
 
-    /// Reveal the current bundle in Finder so a translocated user can
-    /// drag it to /Applications.
+    func openAppcast() {
+        opener(ReleaseUpdateConfig.appcastURL)
+    }
+
+    func openReleaseNotes() {
+        if let url = currentUpdate?.releaseNotesURL ?? currentUpdate?.fullReleaseNotesURL {
+            opener(url)
+        } else {
+            opener(ReleaseUpdateConfig.releaseNotesURL(version: currentVersion))
+        }
+    }
+
     func showCurrentBundleInFinder() {
         finderRevealer(bundleURLProvider())
     }
 
-    // MARK: - Background scheduling
-
-    private func scheduleBackgroundChecks() {
-        // Initial check 8s after launch — gives app time to finish
-        // bringing up the rest of AppRuntime so logs don't interleave.
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.initialCheckDelay * 1_000_000_000))
-            self?.runCheckIfStale()
-        }
-
-        backgroundTimerCancellable = Timer.publish(
-            every: Self.backgroundCheckInterval,
-            on: .main,
-            in: .common
-        )
-        .autoconnect()
-        .sink { [weak self] _ in
-            self?.runCheckIfStale()
+    func refreshReleaseMetadata() {
+        guard !isLoadingReleaseMetadata else { return }
+        releaseMetadataTask?.cancel()
+        releaseMetadataTask = Task { [weak self] in
+            await self?.loadReleaseMetadata()
         }
     }
 
-    private func runCheckIfStale() {
-        if let last = lastCheckedAt,
-           nowProvider().timeIntervalSince(last) < Self.backgroundCheckInterval {
-            return
-        }
-        runCheck()
-    }
+    // MARK: - Setup
 
-    // MARK: - The actual check
-
-    private func runCheck() {
-        inFlightTask?.cancel()
-        isCheckingForUpdates = true
-        inFlightTask = Task { [weak self] in
-            guard let self else { return }
-            await self.performCheck()
+    private var canUseSparkle: Bool {
+        switch state {
+        case .translocated, .nonApplicationsInstall, .setupBlocked:
+            return false
+        default:
+            return true
         }
     }
 
-    private func performCheck() async {
-        defer { isCheckingForUpdates = false }
-        lastCheckedAt = nowProvider()
+    private func evaluateInstallLocation() {
+        let bundleURL = bundleURLProvider().standardizedFileURL
+        let bundlePath = bundleURL.path
+        isTranslocated = bundlePath.hasPrefix("/private/var/folders/")
+        isInstalledInApplications = bundlePath.hasPrefix("/Applications/")
+            || bundlePath.hasPrefix("/System/Applications/")
 
-        guard let current = currentVersion else {
-            updateLogger.warning("currentVersion is nil — skipping check")
-            lastError = "Current app version is unavailable"
-            return
+        if isTranslocated {
+            state = .translocated(bundleURL: bundleURL)
+            updateLogger.info("App is translocated at \(bundlePath, privacy: .public)")
+        } else if !isInstalledInApplications {
+            state = .nonApplicationsInstall(bundleURL: bundleURL)
+            updateLogger.info("App is outside /Applications at \(bundlePath, privacy: .public)")
         }
+    }
 
-        let url = effectiveAPIURL
-        var request = URLRequest(url: url, timeoutInterval: 10)
-        request.setValue("Clawdmeter/\(current)", forHTTPHeaderField: "User-Agent")
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+    private func startSparkleIfPossible() {
+        guard canUseSparkle else { return }
 
         do {
-            let (data, response) = try await session.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                let detail = http.statusCode == 403 ?
-                    rateLimitDetail(from: http) :
-                    "HTTP \(http.statusCode)"
-                lastError = detail
-                availableUpdate = nil
-                updateLogger.error("GitHub releases API returned \(http.statusCode, privacy: .public) — \(detail, privacy: .public)")
-                return
-            }
+            let driver = try driverFactory(self)
+            self.driver = driver
+            try driver.start()
+            syncDriverPreferences()
+            updateLogger.info("Sparkle updater started with feed \(ReleaseUpdateConfig.appcastURL.absoluteString, privacy: .public)")
+        } catch {
+            state = .setupBlocked(reason: error.localizedDescription, fallbackURL: fallbackURL)
+            updateLogger.error("Sparkle setup failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
 
+    private func syncDriverPreferences() {
+        guard let driver else { return }
+        automaticChecksEnabled = driver.automaticallyChecksForUpdates
+        automaticDownloadsEnabled = driver.automaticallyDownloadsUpdates
+        lastCheckedAt = driver.lastUpdateCheckDate
+        if !automaticChecksEnabled, case .idle = state {
+            state = .automaticChecksDisabled
+        }
+    }
+
+    private func loadReleaseMetadata() async {
+        isLoadingReleaseMetadata = true
+        releaseMetadataError = nil
+        defer { isLoadingReleaseMetadata = false }
+
+        async let historyResult: Void = loadReleaseHistory()
+        async let notesResult: Void = loadCurrentReleaseNotes()
+        _ = await (historyResult, notesResult)
+    }
+
+    private func loadReleaseHistory() async {
+        do {
+            let (data, response) = try await session.data(from: ReleaseUpdateConfig.releaseHistoryURL)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                throw URLError(.badServerResponse)
+            }
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            let release = try decoder.decode(GitHubRelease.self, from: data)
-
-            guard let latestVersion = GitHubReleaseConstants.parseVersion(fromTag: release.tagName) else {
-                updateLogger.info("Latest release tag \(release.tagName, privacy: .public) doesn't match v<n>.<n>.<n>-mac — skipping")
-                lastError = nil
-                availableUpdate = nil
-                return
-            }
-
-            let cmp = GitHubReleaseConstants.compareVersions(latestVersion, current)
-            guard cmp == .orderedDescending else {
-                lastError = nil
-                availableUpdate = nil
-                updateLogger.debug("Latest \(latestVersion, privacy: .public) is not newer than current \(current, privacy: .public)")
-                return
-            }
-
-            if isDismissedWithinCooldown(version: latestVersion) {
-                updateLogger.debug("Latest \(latestVersion, privacy: .public) was recently dismissed — staying hidden")
-                lastError = nil
-                availableUpdate = nil
-                return
-            }
-
-            lastError = nil
-            availableUpdate = release
-            updateLogger.info("Update available: \(latestVersion, privacy: .public) (current: \(current, privacy: .public))")
-
-        } catch is CancellationError {
-            updateLogger.debug("In-flight check cancelled by a newer one")
+            releaseHistory = try decoder.decode([ReleaseHistoryEntry].self, from: data)
         } catch {
-            lastError = error.localizedDescription
-            availableUpdate = nil
-            updateLogger.error("Update check failed: \(error.localizedDescription, privacy: .public)")
+            releaseMetadataError = error.localizedDescription
+            updateLogger.debug("Release history unavailable: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    private func isDismissedWithinCooldown(version: String) -> Bool {
-        guard let dismissedVersion = defaults.string(forKey: Self.kDismissedVersion),
-              let dismissedAt = defaults.object(forKey: Self.kDismissedAt) as? Date
-        else { return false }
-        guard dismissedVersion == version else { return false }
-        return nowProvider().timeIntervalSince(dismissedAt) < Self.dismissalCooldown
-    }
-
-    private func rateLimitDetail(from response: HTTPURLResponse) -> String {
-        if let resetStr = response.value(forHTTPHeaderField: "X-RateLimit-Reset"),
-           let resetEpoch = TimeInterval(resetStr) {
-            let resetDate = Date(timeIntervalSince1970: resetEpoch)
-            let fmt = ISO8601DateFormatter()
-            return "Rate-limited until \(fmt.string(from: resetDate))"
+    private func loadCurrentReleaseNotes() async {
+        let url = currentUpdate?.releaseNotesURL
+            ?? currentUpdate?.fullReleaseNotesURL
+            ?? ReleaseUpdateConfig.releaseNotesURL(version: currentVersion)
+        do {
+            let (data, response) = try await session.data(from: url)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                throw URLError(.badServerResponse)
+            }
+            releaseNotes = String(data: data, encoding: .utf8)
+        } catch {
+            if releaseMetadataError == nil { releaseMetadataError = error.localizedDescription }
+            updateLogger.debug("Release notes unavailable: \(error.localizedDescription, privacy: .public)")
         }
-        return "Rate-limited (HTTP 403)"
     }
 }
+
+// MARK: - Driver delegate
+
+extension UpdateCoordinator: SparkleUpdateDriverDelegate {
+    func updateDriverDidStartChecking() {
+        state = .checking
+    }
+
+    func updateDriverDidFindUpdate(_ update: SparkleUpdateInfo) {
+        currentUpdate = update
+        state = .updateAvailable(update)
+        refreshReleaseMetadata()
+    }
+
+    func updateDriverDidNotFindUpdate() {
+        currentUpdate = nil
+        lastCheckedAt = driver?.lastUpdateCheckDate ?? nowProvider()
+        state = .upToDate(lastCheckedAt: lastCheckedAt)
+        refreshReleaseMetadata()
+    }
+
+    func updateDriverDidStartInstalling(_ update: SparkleUpdateInfo?) {
+        if let update { currentUpdate = update }
+        state = .installing(update ?? currentUpdate)
+    }
+
+    func updateDriverDidInstallAndAwaitRelaunch(version: String?) {
+        state = .installedRelaunchPending(version: version ?? currentUpdate?.displayVersion)
+    }
+
+    func updateDriverDidCancel(version: String?) {
+        state = .userCancelled(version: version ?? currentUpdate?.displayVersion)
+    }
+
+    func updateDriverDidFail(_ error: Error) {
+        state = SparkleErrorClassifier.state(for: error, fallbackURL: fallbackURL)
+    }
+
+    func updateDriverPreferencesChanged() {
+        syncDriverPreferences()
+    }
+}
+
+// MARK: - Error classification
+
+enum SparkleErrorClassifier {
+    static func isNoUpdate(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return isSparkleError(nsError, code: 1001)
+    }
+
+    static func isUserCancellation(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.code == NSUserCancelledError { return true }
+        return isSparkleError(nsError, code: 4007)
+            || isSparkleError(nsError, code: 4008)
+    }
+
+    static func state(for error: Error, fallbackURL: URL) -> AppUpdateState {
+        let nsError = error as NSError
+        let text = ([nsError.domain, nsError.localizedDescription, nsError.localizedFailureReason]
+            + nsError.userInfo.values.map { "\($0)" })
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+
+        if text.contains("ed25519")
+            || text.contains("signature")
+            || text.contains("appcast")
+            || text.contains("dsasignature") {
+            return .invalidAppcastSignature(reason: nsError.localizedDescription, fallbackURL: fallbackURL)
+        }
+
+        if text.contains("corrupt")
+            || text.contains("checksum")
+            || text.contains("archive")
+            || text.contains("extract") {
+            return .corruptedDownload(reason: nsError.localizedDescription, fallbackURL: fallbackURL)
+        }
+
+        return .failed(reason: nsError.localizedDescription, fallbackURL: fallbackURL)
+    }
+
+    private static func isSparkleError(_ error: NSError, code: Int) -> Bool {
+        guard error.code == code else { return false }
+        if error.domain == "SUSparkleErrorDomain" { return true }
+        return error.domain.localizedCaseInsensitiveContains("Sparkle")
+    }
+}
+
+enum UpdateSetupError: LocalizedError {
+    case sparkleUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .sparkleUnavailable:
+            return "Sparkle is not linked into this build."
+        }
+    }
+}
+
+// MARK: - Sparkle adapter
+
+#if canImport(Sparkle)
+@MainActor
+final class SparkleUpdateDriver: NSObject, SparkleUpdateDriving, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
+    private weak var delegate: SparkleUpdateDriverDelegate?
+    private lazy var updaterController = SPUStandardUpdaterController(
+        startingUpdater: false,
+        updaterDelegate: self,
+        userDriverDelegate: self
+    )
+    private var installingUpdate: SparkleUpdateInfo?
+
+    init(delegate: SparkleUpdateDriverDelegate) {
+        self.delegate = delegate
+        super.init()
+    }
+
+    var canCheckForUpdates: Bool {
+        updaterController.updater.canCheckForUpdates
+    }
+
+    var automaticallyChecksForUpdates: Bool {
+        get { updaterController.updater.automaticallyChecksForUpdates }
+        set {
+            updaterController.updater.automaticallyChecksForUpdates = newValue
+            delegate?.updateDriverPreferencesChanged()
+        }
+    }
+
+    var automaticallyDownloadsUpdates: Bool {
+        get { updaterController.updater.automaticallyDownloadsUpdates }
+        set {
+            updaterController.updater.automaticallyDownloadsUpdates = newValue
+            delegate?.updateDriverPreferencesChanged()
+        }
+    }
+
+    var lastUpdateCheckDate: Date? {
+        updaterController.updater.lastUpdateCheckDate
+    }
+
+    func start() throws {
+        try updaterController.updater.start()
+    }
+
+    func checkForUpdates() {
+        delegate?.updateDriverDidStartChecking()
+        updaterController.updater.checkForUpdates()
+    }
+
+    func checkForUpdatesInBackground() {
+        updaterController.updater.checkForUpdatesInBackground()
+    }
+
+    func feedURLString(for updater: SPUUpdater) -> String? {
+        ReleaseUpdateConfig.appcastURL.absoluteString
+    }
+
+    func updaterShouldPromptForPermissionToCheck(forUpdates updater: SPUUpdater) -> Bool {
+        false
+    }
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        let update = Self.info(from: item)
+        installingUpdate = update
+        delegate?.updateDriverDidFindUpdate(update)
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
+        delegate?.updateDriverDidNotFindUpdate()
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: any Error) {
+        if SparkleErrorClassifier.isUserCancellation(error) {
+            delegate?.updateDriverDidCancel(version: nil)
+        } else {
+            delegate?.updateDriverDidNotFindUpdate()
+        }
+    }
+
+    func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        let update = Self.info(from: item)
+        installingUpdate = update
+        delegate?.updateDriverDidStartInstalling(update)
+    }
+
+    func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
+        delegate?.updateDriverDidFail(error)
+    }
+
+    func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: any Error) {
+        delegate?.updateDriverDidFail(error)
+    }
+
+    func userDidCancelDownload(_ updater: SPUUpdater) {
+        delegate?.updateDriverDidCancel(version: installingUpdate?.displayVersion)
+    }
+
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        delegate?.updateDriverDidInstallAndAwaitRelaunch(version: installingUpdate?.displayVersion)
+    }
+
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
+        if let error {
+            if SparkleErrorClassifier.isNoUpdate(error) {
+                delegate?.updateDriverDidNotFindUpdate()
+            } else if SparkleErrorClassifier.isUserCancellation(error) {
+                delegate?.updateDriverDidCancel(version: installingUpdate?.displayVersion)
+            } else {
+                delegate?.updateDriverDidFail(error)
+            }
+        } else {
+            delegate?.updateDriverPreferencesChanged()
+        }
+    }
+
+    private static func info(from item: SUAppcastItem) -> SparkleUpdateInfo {
+        SparkleUpdateInfo(
+            version: item.versionString,
+            displayVersion: item.displayVersionString,
+            title: item.title,
+            releaseNotesURL: item.releaseNotesURL,
+            fullReleaseNotesURL: item.fullReleaseNotesURL,
+            downloadURL: item.fileURL,
+            minimumSystemVersion: item.minimumSystemVersion
+        )
+    }
+}
+#endif
 
 // MARK: - URLSession convenience
 
 extension URLSession {
-    /// Ephemeral session with a custom timeout — used by `UpdateCoordinator`
-    /// so update checks don't share cookies/cache with other URLSession
-    /// users and don't hang the app on a slow GitHub edge.
     static func ephemeralWithTimeout(_ timeout: TimeInterval) -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeout

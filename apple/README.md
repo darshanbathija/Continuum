@@ -79,10 +79,10 @@ apple/
 │   ├── AppDelegate.swift                       NSStatusItem + NSPopover wiring
 │   ├── AgentControl/                           v1/v2 daemon (Sessions tab)
 │   │   └── TailscaleHost.swift                 v0.3.0 getifaddrs(3) + status JSON fallback
-│   ├── Updates/                                v0.24.0 in-app update flow (GitHub Releases API checker)
-│   │   ├── UpdateCoordinator.swift             polls api.github.com once 8s after launch + every 24h
-│   │   ├── UpdatesUI.swift                     titlebar UpdateChip + release-notes popover
-│   │   └── GitHubReleaseConstants.swift        centralized owner/repo + browser/API/tag URL helpers
+│   ├── Updates/                                Sparkle-backed in-app update flow
+│   │   ├── UpdateCoordinator.swift             AppUpdateState + Sparkle driver boundary
+│   │   ├── UpdatesUI.swift                     shared Update App controls + Settings panel
+│   │   └── GitHubReleaseConstants.swift        appcast/GitHub fallback release config
 │   ├── Workspace/Composer/                     v0.3.0 Mac chat IDE module
 │   │   ├── ComposerInputCore.swift             SwiftUI composer bound to ComposerStore
 │   │   ├── EmptyStateCenteredComposer.swift    Codex-style centered first-send composer
@@ -121,7 +121,10 @@ xcodebuild -scheme "Clawdmeter (iOS)"   -destination 'generic/platform=iOS Simul
 xcodebuild -scheme "Clawdmeter (Watch)" -destination 'generic/platform=watchOS Simulator' build
 ```
 
-DMG packaging lives one level up: `../tools/build-mac-dmg.sh`.
+Local DMG packaging lives one level up: `../tools/build-mac-dmg.sh`.
+Public Mac releases must use `../tools/release-mac.sh` so Sparkle,
+Developer ID signing, notarization, GitHub release assets, and the
+GitHub Pages appcast stay in one path.
 
 ## ccusage ↔ Swift mapping
 
@@ -163,18 +166,23 @@ re-parse on first load. Recent versions:
 - v7 — added downward "sole-git-child" descent (catches parent-of-repo cwds)
 - v8 — non-git cwds collapse into `RepoKey.other` instead of polluting the list
 
-## What still needs Xcode / a paid developer account
+## Account and signing requirements
 
-- **Notarization.** The current build is signed with a personal Apple
-  Developer team (free tier). It works fine — Gatekeeper just asks the
-  user to right-click → Open the first time. Notarization needs the
-  `$99/yr` Apple Developer Program.
-- **iCloud capabilities.** The iCloud KV sync used for Mac → iOS analytics
-  needs the iCloud entitlement, which is also paid-tier-only. Without it,
-  the iOS analytics tab shows "iCloud not enabled" / "Waiting for Mac sync"
-  cards. The Mac app silently no-ops the `UsageCloudMirror.write*` calls.
-- **CloudKit container.** Same paid-tier requirement.
+- **Local development.** Debug builds can still use Apple Development signing
+  or unsigned local packaging. These builds are for developer testing only and
+  are not valid Sparkle update artifacts.
+- **Public Mac releases.** Sparkle releases must go through
+  `../tools/release-mac.sh` with a Developer ID Application certificate on the
+  configured Apple team, the `clawdmeter-notary` notary profile, and the
+  matching Sparkle EdDSA private key in Keychain. The script signs nested code,
+  notarizes, staples, validates Sparkle signatures, uploads GitHub release
+  assets, and publishes the GitHub Pages appcast.
+- **iCloud capabilities.** The iCloud KV sync used for Mac -> iOS analytics
+  needs the iCloud entitlement. Without it, the iOS analytics tab shows
+  "iCloud not enabled" / "Waiting for Mac sync" cards. The Mac app silently
+  no-ops the `UsageCloudMirror.write*` calls.
+- **CloudKit container.** Same paid Apple Developer account requirement.
 
-The Mac app's primary surfaces (live polling, analytics row, menu bar)
-all work fine on the free tier. iOS works for the Live tab (it has its
-own poller via iCloud Keychain token sync). Watch works via WCSession.
+The Mac app's local primary surfaces (live polling, analytics row, menu bar)
+work without release credentials. iOS works for the Live tab with its own
+poller via iCloud Keychain token sync, and Watch works via WCSession.

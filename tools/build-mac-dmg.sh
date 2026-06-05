@@ -259,6 +259,22 @@ if [[ -n "$SIGN_ID" ]]; then
       codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" --entitlements "$HELPER_ENT" "$TS_FLAG" "$BIN" 2>&1 | sed 's/^/    /' || echo "    ⚠ failed: $BIN"
     fi
   done
+  # Sparkle's nested helpers arrive ad-hoc signed from SwiftPM. Notarization
+  # requires each Mach-O to be signed by our Developer ID identity with a
+  # secure timestamp before the framework and outer app are sealed.
+  SPARKLE_FW="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+  if [[ -d "$SPARKLE_FW" ]]; then
+    echo "▸ Re-signing Sparkle nested helpers…"
+    for SPARKLE_ITEM in \
+      "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc" \
+      "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc" \
+      "$SPARKLE_FW/Versions/B/Updater.app" \
+      "$SPARKLE_FW/Versions/B/Autoupdate"; do
+      [[ -e "$SPARKLE_ITEM" ]] || continue
+      codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" "$TS_FLAG" "$SPARKLE_ITEM" 2>&1 | sed 's/^/    /' || echo "    ⚠ failed: $SPARKLE_ITEM"
+    done
+    codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" "$TS_FLAG" "$SPARKLE_FW" 2>&1 | sed 's/^/    /' || echo "    ⚠ failed: $SPARKLE_FW"
+  fi
   # Re-seal the outer app so the modified helpers are covered. Expand the
   # $(AppIdentifierPrefix) macro in the entitlements (codesign won't).
   OUTER_ENT="$(mktemp -t outer-ent.XXXXXX.plist)"
@@ -273,13 +289,13 @@ fi
 codesign --verify --deep --strict "$APP_PATH" 2>&1 | head -3 || true
 
 # ────────────────────────────────────────────────────────────────────────
-# 7. (Developer ID + notarize) staple the app, so first launch is clean even
-#    offline. Requires the app to be notarized first; we notarize the DMG in
-#    step 9 and the app's cdhash rides along, but stapling the app needs its
-#    own ticket — so we notarize the bare app here via a zip, then staple.
+# 7. (Optional) staple the bare app bundle. The distributable artifact is the
+#    DMG, so the required release gate is DMG notarization + stapling below.
+#    Keep app-bundle notarization opt-in because Apple's app-only queue can lag
+#    while the DMG queue still completes normally.
 # ────────────────────────────────────────────────────────────────────────
 
-if [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 ]]; then
+if [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 && "${CLAWDMETER_SKIP_BUILD_SCRIPT_NOTARIZATION:-0}" != "1" && "${CLAWDMETER_NOTARIZE_APP_BUNDLE:-0}" == "1" ]]; then
   echo "▸ Notarizing the app bundle (so the ticket can be stapled to it)…"
   APP_ZIP="$BUILD_DIR/${APP_NAME}-app.zip"
   /usr/bin/ditto -c -k --keepParent "$APP_PATH" "$APP_ZIP"
@@ -291,6 +307,8 @@ if [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 ]]; then
     echo "    ⚠ app notarization not Accepted — see $BUILD_DIR/notarize-app.log"
   fi
   rm -f "$APP_ZIP"
+elif [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 ]]; then
+  echo "▸ Skipping bare app notarization (DMG notarization is the release gate)."
 fi
 
 # ────────────────────────────────────────────────────────────────────────
@@ -316,13 +334,20 @@ echo "▸ Building DMG…"
 rm -f "$DMG_PATH"
 hdiutil create -volname "$APP_NAME" -srcfolder "$STAGING_DIR" -ov \
   -format UDZO -imagekey zlib-level=9 "$DMG_PATH" >/dev/null
+
+if [[ "$SIGN_MODE" == "developerid" ]]; then
+  echo "▸ Signing DMG…"
+  codesign --force --sign "$DEVID_ID" --timestamp "$DMG_PATH"
+  codesign --verify --verbose=2 "$DMG_PATH"
+fi
+
 echo "✓ DMG: $DMG_PATH ($(du -h "$DMG_PATH" | awk '{print $1}'))"
 
 # ────────────────────────────────────────────────────────────────────────
 # 9. (Developer ID + notarize) notarize + staple the DMG container itself.
 # ────────────────────────────────────────────────────────────────────────
 
-if [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 ]]; then
+if [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 && "${CLAWDMETER_SKIP_BUILD_SCRIPT_NOTARIZATION:-0}" != "1" ]]; then
   echo "▸ Notarizing the DMG (Apple notary service, ~2-5 min)…"
   if xcrun notarytool submit "$DMG_PATH" \
        --key "$ASC_KEY_FILE" --key-id "$CLAWDMETER_ASC_KEY_ID" \
@@ -332,6 +357,8 @@ if [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 ]]; then
   else
     echo "⚠ DMG notarization not Accepted — see $BUILD_DIR/notarize-dmg.log"
   fi
+elif [[ "$SIGN_MODE" == "developerid" && "${CLAWDMETER_SKIP_BUILD_SCRIPT_NOTARIZATION:-0}" == "1" ]]; then
+  echo "▸ Skipping build-script DMG notarization; release-mac.sh owns the notarization gate."
 elif [[ "$SIGN_MODE" == "developerid" ]]; then
   echo "⚠ Developer ID signed but NOT notarized (no ASC API key env). Source ~/.continuum-ci.env to enable notarization."
 fi

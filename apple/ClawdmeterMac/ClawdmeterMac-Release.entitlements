@@ -42,6 +42,13 @@
 	<false/>
 	<key>com.apple.security.network.client</key>
 	<true/>
+	<!-- Sparkle sandbox installer service rendezvous. Required when
+	     SUEnableInstallerLauncherService is true in Info.plist. -->
+	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spki</string>
+	</array>
 	<!-- The Mac daemon listens on Tailscale CGNAT; the entitlement is
 	     required because sandbox blocks all network access otherwise. -->
 	<key>com.apple.security.network.server</key>

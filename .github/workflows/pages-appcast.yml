@@ -1,0 +1,40 @@
+name: Publish Sparkle Appcast
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/updates/**"
+      - ".github/workflows/pages-appcast.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-appcast
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate appcast payload
+        run: |
+          test -s docs/updates/appcast.xml
+          grep -q '<item' docs/updates/appcast.xml
+          grep -q 'sparkle:edSignature' docs/updates/appcast.xml
+          grep -q '26.0' docs/updates/appcast.xml
+          python3 -m json.tool docs/updates/history.json >/dev/null
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deployment
+        uses: actions/deploy-pages@v4

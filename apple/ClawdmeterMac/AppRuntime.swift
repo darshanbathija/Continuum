@@ -114,10 +114,8 @@ final class AppRuntime: ObservableObject {
     var loopbackClient: AgentControlClient?
 
     init() {
-        // v0.24.0: in-app update checker. Instantiate first — no
-        // dependencies on other subsystems, and its background timer
-        // schedules its first check 8s out so logs don't interleave
-        // with the rest of AppRuntime's init.
+        // Sparkle-backed updater. Instantiate first so app menu,
+        // titlebar, Code, and Settings all share one state model.
         self.updateCoordinator = UpdateCoordinator()
 
         // E7: relay-pairing service. Phase starts `.unpaired`; the user
