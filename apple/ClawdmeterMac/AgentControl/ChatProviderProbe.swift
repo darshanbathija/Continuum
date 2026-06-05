@@ -263,13 +263,18 @@ public actor ChatProviderProbe {
                 lastProbedAt: now,
                 reason: claudeReason ?? (probes.claudeAvailable ? nil : (probes.claudeEnabled ? "claude CLI not on PATH" : "Provider disabled"))
             ),
+            // The chat "ChatGPT" row keys on the .sdk entry, but Codex chat now
+            // drives app-server (the SDK was deleted). Report this entry's
+            // availability from the app-server/CLI probe so ChatGPT is usable
+            // whenever the codex CLI is present + authed — not gated on the dead
+            // SDK (which always probes false → the old "Enable Codex SDK" error).
             ChatProviderEntry(
                 provider: .codex, codexBackend: .sdk,
-                available: probes.codexSDKAvailable,
-                authenticated: codexSDKAuth,
-                capabilityProbePassed: probes.codexSDKAvailable && codexSDKAuth,
+                available: probes.codexAvailable,
+                authenticated: codexCLIAuth,
+                capabilityProbePassed: probes.codexAvailable && codexCLIAuth,
                 lastProbedAt: now,
-                reason: codexSDKReason ?? (probes.codexSDKAvailable ? nil : (probes.codexEnabled ? "Enable Codex SDK in Settings → Advanced → Runtime setup." : "Provider disabled"))
+                reason: codexCLIReason ?? (probes.codexAvailable ? nil : (probes.codexEnabled ? "codex CLI not on PATH — run `codex login`." : "Provider disabled"))
             ),
             ChatProviderEntry(
                 provider: .codex, codexBackend: .cli,

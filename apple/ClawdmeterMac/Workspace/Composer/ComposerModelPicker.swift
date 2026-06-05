@@ -584,13 +584,14 @@ public struct ComposerModelPicker: View {
         .disabled(!toggleable)
     }
 
-    /// Mirror MacChatModelSelectorPanel.canToggleSelectedVendor: removing needs
-    /// >1 selected (broadcast keeps ≥1); adding needs <3 selected + available.
+    /// Removing needs >1 selected (broadcast keeps ≥1); adding needs only that
+    /// the provider is available — no upper cap, since the compare columns
+    /// scroll horizontally.
     private func canToggle(_ vendor: ChatVendor) -> Bool {
         if store.isVendorSelected(vendor) {
             return store.selectedVendorCount > 1
         }
-        return store.selectedVendorCount < 3 && (vendorAvailability?(vendor) ?? true)
+        return vendorAvailability?(vendor) ?? true
     }
 
     private var modeChipContent: some View {

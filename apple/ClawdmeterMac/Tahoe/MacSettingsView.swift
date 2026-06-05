@@ -1166,7 +1166,14 @@ struct ProviderPreferenceRows: View {
                     // keychain ACL + prefs domain are per-signature) and shows
                     // 0% / "resets in —". Replaces the separate Authenticate
                     // button — turning the provider on IS the authenticate.
-                    if id == "claude" { Self.seedClaudeTokenFromClaudeCode() }
+                    if id == "claude" {
+                        // Seed the token, then force an immediate Claude poll.
+                        // setProviderEnabled already started the poller, but it
+                        // polled once with an empty token (0%); without this
+                        // kick the gauge stays 0% until the next interval.
+                        let claudeModel = runtime?.claudeModel
+                        Self.seedClaudeTokenFromClaudeCode { claudeModel?.forcePoll() }
+                    }
                 }
             }
         )
@@ -1177,12 +1184,14 @@ struct ProviderPreferenceRows: View {
     /// third-party item with user interaction (macOS prompts once → Always
     /// Allow), mirrors it via `PastedAnthropicTokenProvider`, and opts the
     /// user into launch auto-refresh so it stays seeded across rotations.
-    private static func seedClaudeTokenFromClaudeCode() {
+    private static func seedClaudeTokenFromClaudeCode(onSeeded: @escaping @MainActor () -> Void = {}) {
         Task.detached(priority: .userInitiated) {
             guard let token = KeychainTokenProvider(allowsUserInteraction: true).currentAccessToken,
                   !token.isEmpty else { return }
-            _ = PastedAnthropicTokenProvider.shared().setToken(token)
+            let ok = PastedAnthropicTokenProvider.shared().setToken(token)
             UserDefaults.standard.set(true, forKey: "clawdmeter.claude.autoImportFromClaudeCode")
+            guard ok else { return }
+            await MainActor.run { onSeeded() }
         }
     }
 

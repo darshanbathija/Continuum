@@ -1,5 +1,8 @@
 import SwiftUI
 import ClawdmeterShared
+import UIKit
+import UserNotifications
+import Combine
 
 /// Root iOS tab container. v0.8 nav reshuffle: Live tab dissolved into
 /// Analytics tab's header (`LiveGaugesHeader`); Sessions renamed to Code;
@@ -44,7 +47,22 @@ struct ContentView: View {
         IOSRootView(usageModel: model, agentClient: agentClient, outbox: outbox)
             .task {
                 await notifManager.requestAuthorizationIfNeeded()
+                // APNS: once notif auth is granted, register for remote
+                // notifications (delivers the device token to iOSAppDelegate)
+                // and push it to the paired Mac. registerIfReady is idempotent.
+                let status = await UNUserNotificationCenter.current()
+                    .notificationSettings().authorizationStatus
+                if status == .authorized || status == .provisional {
+                    await MainActor.run { UIApplication.shared.registerForRemoteNotifications() }
+                }
+                await APNSDeviceTokenHolder.shared.registerIfReady()
                 notifManager.scheduleBackgroundRefresh()
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIApplication.didBecomeActiveNotification)) { _ in
+                // Re-attempt registration after the user pairs (the token may
+                // have arrived before a pairing existed) or returns to foreground.
+                Task { await APNSDeviceTokenHolder.shared.registerIfReady() }
             }
     }
 }

@@ -92,8 +92,52 @@ public final class SessionScheduler {
     /// primary tmux pane, then marks the registry entry as fired. Reschedule
     /// runs again automatically via the registry observer.
     private func fire(sessionId: UUID, followUpId: UUID) async {
-        guard let session = registry.session(id: sessionId),
-              let pane = session.tmuxPaneId ?? session.tmuxWindowId
+        guard let session = registry.session(id: sessionId) else {
+            schedulerLogger.warning("fire: session missing — dropping follow-up")
+            do {
+                try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
+            } catch {
+                schedulerLogger.error("markFollowUpFired write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
+        // Track A: a Claude PTY session has no tmux pane. Deliver to its host,
+        // RESUMING/spawning it if it was idle/LRU-suspended (the previous version
+        // only delivered to an already-live host, so a swept session silently
+        // dropped its follow-up). Resume via the persisted claudeSessionId (T7)
+        // baked into AgentSpawner.argv(for:).
+        if session.tmuxPaneId == nil && session.tmuxWindowId == nil && session.agent == .claude {
+            guard let followUp = session.scheduledFollowUps.first(where: { $0.id == followUpId }) else { return }
+            let argv = AgentSpawner.argv(for: session)
+            let cwd = session.effectiveCwd
+            let host: ClaudePtyHost?
+            if !argv.isEmpty {
+                let env = AgentSpawner.claudePtyEnv()
+                host = try? await ClaudePtyRegistry.shared.resumeOrSpawn(
+                    id: sessionId,
+                    plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env) }
+                )
+            } else {
+                host = await ClaudePtyRegistry.shared.host(for: sessionId)
+            }
+            if let host {
+                await host.submitPrompt(followUp.prompt, isChat: session.kind == .chat, isFollowUp: true)
+                do {
+                    try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
+                } catch {
+                    schedulerLogger.error("markFollowUpFired write-ahead failed: \(error.localizedDescription, privacy: .public)")
+                }
+                schedulerLogger.info("Delivered follow-up to PTY session \(sessionId.uuidString, privacy: .public)")
+            } else {
+                // Could not resume (claude not on PATH). Mark fired to avoid a
+                // hot reschedule loop — strictly better than today, which dropped
+                // every suspended-session follow-up.
+                schedulerLogger.error("fire: could not resume PTY host for \(sessionId.uuidString, privacy: .public); dropping follow-up")
+                try? await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
+            }
+            return
+        }
+        guard let pane = session.tmuxPaneId ?? session.tmuxWindowId
         else {
             schedulerLogger.warning("fire: session or pane missing — dropping follow-up")
             // F2-wire: write-ahead failure on the scheduler path is

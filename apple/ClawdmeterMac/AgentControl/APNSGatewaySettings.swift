@@ -53,6 +53,14 @@ public final class APNSGatewaySettings: @unchecked Sendable {
         set { write(key: Self.keyPermissionPrompt, value: newValue) }
     }
 
+    /// Fire a push on any session status transition (idle→running→done, …).
+    /// The noisiest surface — fires multiple times per turn — so treat it as a
+    /// deliberate opt-in. Coalesced per session by `statusChangedMinIntervalSeconds`.
+    public var notifyOnStatusChanged: Bool {
+        get { read(key: Self.keyStatusChanged, default: true) }
+        set { write(key: Self.keyStatusChanged, value: newValue) }
+    }
+
     // MARK: - Threshold
 
     /// Sessions shorter than this are considered "trivial" and skip the
@@ -60,6 +68,13 @@ public final class APNSGatewaySettings: @unchecked Sendable {
     public var sessionDoneMinimumRuntimeSeconds: Int {
         get { read(key: Self.keySessionDoneMinRuntime, default: 60) }
         set { write(key: Self.keySessionDoneMinRuntime, value: newValue) }
+    }
+
+    /// Minimum gap between status-change pushes for the SAME session, so the
+    /// noisiest surface can't flood. Default 30s.
+    public var statusChangedMinIntervalSeconds: Int {
+        get { read(key: Self.keyStatusChangedMinInterval, default: 30) }
+        set { write(key: Self.keyStatusChangedMinInterval, value: newValue) }
     }
 
     // MARK: - Resolution helper
@@ -73,6 +88,7 @@ public final class APNSGatewaySettings: @unchecked Sendable {
         case .planApproval:     return notifyOnPlanApproval
         case .sessionDone:      return notifyOnSessionDone
         case .permissionPrompt: return notifyOnPermissionPrompt
+        case .statusChanged:    return notifyOnStatusChanged
         }
     }
 
@@ -80,6 +96,7 @@ public final class APNSGatewaySettings: @unchecked Sendable {
         case planApproval
         case sessionDone
         case permissionPrompt
+        case statusChanged
     }
 
     // MARK: - Keys
@@ -88,7 +105,9 @@ public final class APNSGatewaySettings: @unchecked Sendable {
     private static let keyPlanApproval      = "clawdmeter.apns.gateway.notify.planApproval"
     private static let keySessionDone       = "clawdmeter.apns.gateway.notify.sessionDone"
     private static let keyPermissionPrompt  = "clawdmeter.apns.gateway.notify.permissionPrompt"
+    private static let keyStatusChanged     = "clawdmeter.apns.gateway.notify.statusChanged"
     private static let keySessionDoneMinRuntime = "clawdmeter.apns.gateway.sessionDoneMinRuntimeSeconds"
+    private static let keyStatusChangedMinInterval = "clawdmeter.apns.gateway.statusChangedMinIntervalSeconds"
 
     private func read(key: String, default fallback: Bool) -> Bool {
         queue.sync {

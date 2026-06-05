@@ -23,5 +23,13 @@ public extension AgentKind {
         case .unknown:  return .claude
         }
     }
+
+    /// Branded display name for chat column headers + sidebar rows. Uses the
+    /// Tahoe branding (e.g. Gemini → "Antigravity") but corrects grok, which
+    /// shares the cursor TahoeProvider lane (placeholder) and would otherwise
+    /// render as "Cursor".
+    var brandedChatName: String {
+        self == .grok ? "Grok" : tahoeProvider.displayName
+    }
 }
 #endif

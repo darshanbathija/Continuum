@@ -2,6 +2,55 @@ import SwiftUI
 import AppKit
 import ClawdmeterShared
 
+/// Per-conversation title derived from the first user message (like other chat
+/// apps), persisted in UserDefaults keyed by the solo session id or broadcast
+/// group id. Falls back to the generic label when unset. File-scope so both the
+/// sidebar row builder and the composer send path can reach it.
+fileprivate enum ChatTitleStore {
+    private static func key(_ id: UUID) -> String { "clawdmeter.chat.title.\(id.uuidString)" }
+    static func set(_ id: UUID, _ title: String) {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        UserDefaults.standard.set(t, forKey: key(id))
+    }
+    static func get(_ id: UUID) -> String? {
+        let t = UserDefaults.standard.string(forKey: key(id))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (t?.isEmpty == false) ? t : nil
+    }
+    /// First ~5 words of the prompt, single-lined, with an ellipsis if longer.
+    static func firstWords(_ s: String, _ n: Int = 5) -> String {
+        let words = s.replacingOccurrences(of: "\n", with: " ")
+            .split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard !words.isEmpty else { return "" }
+        let head = words.prefix(n).joined(separator: " ")
+        return words.count > n ? head + "…" : head
+    }
+}
+
+/// A broadcast that's been requested but whose child sessions haven't spawned
+/// yet. Rendered as skeleton columns the instant the user hits send, so the
+/// comparison surface appears within ~200ms instead of after the multi-second
+/// spawn. A column flips to an error banner if its provider fails to start.
+fileprivate struct PendingBroadcast {
+    let prompt: String
+    var columns: [Column]
+    struct Column: Identifiable {
+        let id = UUID()
+        let provider: AgentKind
+        let model: String?
+        var error: String? = nil   // nil = still provisioning
+    }
+}
+
+/// A broadcast slot that failed to spawn — rendered as an error column next to
+/// the live ones so each provider's failure stays visible in its own lane.
+fileprivate struct FailedBroadcastColumn: Identifiable {
+    let id = UUID()
+    let provider: AgentKind
+    let model: String?
+    let reason: String
+}
+
 @available(macOS 14, *)
 struct MacChatV2View: View {
     private let loopbackClient: AgentControlClient?
@@ -31,6 +80,10 @@ private struct ChatRoot: View {
     @StateObject private var sendCtl: ComposerSendController
     @State private var openTarget: ChatOpenTarget?
     @State private var providerMatrix: ChatProvidersResponse?
+    /// Optimistic broadcast skeleton shown during the spawn gap (openTarget nil).
+    @State private var pendingBroadcast: PendingBroadcast?
+    /// Providers that failed to spawn — shown as error columns in the live group.
+    @State private var failedBroadcastColumns: [FailedBroadcastColumn] = []
 
     init(client: AgentControlClient, runtime: AppRuntime?) {
         self.client = client
@@ -48,13 +101,17 @@ private struct ChatRoot: View {
                     openTarget = nil
                     sendCtl.reset()
                     store.clearAttachments()
+                    pendingBroadcast = nil
+                    failedBroadcastColumns = []
                 }
             )
             .frame(width: 252)
 
             VStack(spacing: 10) {
                 Header(store: store, openTarget: openTarget, children: frontierChildren)
-                if let openTarget {
+                if openTarget == nil, let pending = pendingBroadcast {
+                    PendingBroadcastView(pending: pending)
+                } else if let openTarget {
                     switch openTarget {
                     case .solo(let id):
                         if let session = client.chatSessions.first(where: { $0.id == id }) {
@@ -73,6 +130,7 @@ private struct ChatRoot: View {
                         BroadcastTranscript(
                             groupId: groupId,
                             children: frontierChildren,
+                            failedColumns: failedBroadcastColumns,
                             runtime: runtime,
                             client: client,
                             onContinueWinner: { winner in
@@ -98,7 +156,9 @@ private struct ChatRoot: View {
                     sendCtl: sendCtl,
                     openTarget: $openTarget,
                     client: client,
-                    providerMatrix: providerMatrix
+                    providerMatrix: providerMatrix,
+                    pendingBroadcast: $pendingBroadcast,
+                    failedBroadcastColumns: $failedBroadcastColumns
                 )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -210,9 +270,12 @@ private struct Sidebar: View {
                     LazyVStack(spacing: 7) {
                         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             ForEach(groupRows) { row in
-                                HistoryRow(row: row, selected: openTarget == row.target) {
-                                    openTarget = row.target
-                                }
+                                HistoryRow(
+                                    row: row,
+                                    selected: openTarget == row.target,
+                                    action: { openTarget = row.target },
+                                    onArchive: { archive(row) }
+                                )
                             }
                         } else {
                             ForEach(results) { match in
@@ -263,6 +326,27 @@ private struct Sidebar: View {
     /// Pure projection. Sortable + group-aware. Exposed `fileprivate
     /// static` so the MemoizedDerivedStore's compute closure can call it
     /// without capturing `self.sessions` (closure capture would stale).
+    /// Archive the chat behind a sidebar row. Solo → archive the session;
+    /// broadcast → archive every live child of the group. Refreshes after, and
+    /// clears the open target if the archived chat was being viewed.
+    private func archive(_ row: SidebarRow) {
+        let wasOpen = (openTarget == row.target)
+        Task {
+            switch row.target {
+            case .solo(let id):
+                await client.archiveSession(id: id)
+            case .frontier(let groupId):
+                for child in sessions.filter({ $0.frontierGroupId == groupId }) {
+                    await client.archiveSession(id: child.id)
+                }
+            case .transcript:
+                break
+            }
+            await client.refreshSessions()
+            if wasOpen { await MainActor.run { openTarget = nil } }
+        }
+    }
+
     fileprivate static func computeGroupRows(_ sessions: [AgentSession]) -> [SidebarRow] {
         var seenGroups = Set<UUID>()
         var rows: [SidebarRow] = []
@@ -274,8 +358,8 @@ private struct Sidebar: View {
                 rows.append(SidebarRow(
                     id: groupId,
                     target: .frontier(groupId),
-                    title: "Broadcast comparison",
-                    subtitle: children.map { $0.agent.tahoeProvider.displayName }.joined(separator: " / "),
+                    title: ChatTitleStore.get(groupId) ?? "Broadcast comparison",
+                    subtitle: children.map { $0.agent.brandedChatName }.joined(separator: " / "),
                     providers: children.map(\.agent),
                     lastEventAt: children.map(\.lastEventAt).max() ?? session.lastEventAt
                 ))
@@ -283,7 +367,7 @@ private struct Sidebar: View {
                 rows.append(SidebarRow(
                     id: session.id,
                     target: .solo(session.id),
-                    title: session.displayLabel,
+                    title: ChatTitleStore.get(session.id) ?? session.displayLabel,
                     subtitle: session.model ?? "default",
                     providers: [session.agent],
                     lastEventAt: session.lastEventAt
@@ -352,6 +436,8 @@ private struct HistoryRow: View {
     let row: SidebarRow
     let selected: Bool
     let action: () -> Void
+    var onArchive: (() -> Void)? = nil
+    @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
@@ -380,6 +466,21 @@ private struct HistoryRow: View {
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? t.accent.opacity(0.45) : t.hairline, lineWidth: 0.6))
         }
         .buttonStyle(PressableButtonStyle())
+        .overlay(alignment: .trailing) {
+            if hovering, let onArchive {
+                Button(action: onArchive) {
+                    Image(systemName: "archivebox")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(t.fg)
+                        .padding(6)
+                        .background(Circle().fill(t.fg.opacity(0.16)))
+                }
+                .buttonStyle(PressableButtonStyle())
+                .padding(.trailing, 10)
+                .help("Archive chat")
+            }
+        }
+        .onHover { hovering = $0 }
     }
 }
 
@@ -444,7 +545,7 @@ private struct ProviderSummary: View {
             HStack(spacing: 9) {
                 TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 22)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.agent.tahoeProvider.displayName)
+                    Text(session.agent.brandedChatName)
                         .font(TahoeFont.body(12.5, weight: .semibold))
                         .foregroundStyle(t.fg)
                     Text(session.model ?? "default")
@@ -582,6 +683,7 @@ private struct BroadcastTranscript: View {
     @Environment(\.tahoe) private var t
     let groupId: UUID
     let children: [AgentSession]
+    let failedColumns: [FailedBroadcastColumn]
     weak var runtime: AppRuntime?
     @ObservedObject var client: AgentControlClient
     let onContinueWinner: (AgentSession) -> Void
@@ -590,12 +692,14 @@ private struct BroadcastTranscript: View {
     init(
         groupId: UUID,
         children: [AgentSession],
+        failedColumns: [FailedBroadcastColumn] = [],
         runtime: AppRuntime?,
         client: AgentControlClient,
         onContinueWinner: @escaping (AgentSession) -> Void
     ) {
         self.groupId = groupId
         self.children = children
+        self.failedColumns = failedColumns
         self.runtime = runtime
         self.client = client
         self.onContinueWinner = onContinueWinner
@@ -604,15 +708,14 @@ private struct BroadcastTranscript: View {
 
     var body: some View {
         TahoeGlass(radius: 20, tone: .panel) {
-            if children.isEmpty {
+            if children.isEmpty && failedColumns.isEmpty {
                 ChatEmptyState(title: "Broadcast group is empty", subtitle: "No live child sessions are attached to this comparison.")
             } else {
-                // Broadcast is capped at 3 children. Divide + FILL the full width
-                // so two providers don't leave half the page empty; only fall
-                // back to a horizontal scroll when columns would get too narrow
-                // to read.
+                // Divide + FILL the full width so two providers don't leave half
+                // the page empty; fall back to a horizontal scroll when columns
+                // would get too narrow to read (now uncapped — N providers).
                 GeometryReader { geo in
-                    let count = max(children.count, 1)
+                    let count = max(children.count + failedColumns.count, 1)
                     let spacing: CGFloat = 10
                     let pad: CGFloat = 12
                     let avail = geo.size.width - pad * 2 - spacing * CGFloat(count - 1)
@@ -622,6 +725,10 @@ private struct BroadcastTranscript: View {
                             ForEach(children, id: \.id) { child in
                                 columnView(child).frame(maxWidth: .infinity)
                             }
+                            ForEach(failedColumns) { col in
+                                BroadcastStatusColumn(provider: col.provider, model: col.model, state: .error(col.reason))
+                                    .frame(maxWidth: .infinity)
+                            }
                         }
                         .padding(pad)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -630,6 +737,10 @@ private struct BroadcastTranscript: View {
                             HStack(alignment: .top, spacing: spacing) {
                                 ForEach(children, id: \.id) { child in
                                     columnView(child).frame(width: max(300, per))
+                                }
+                                ForEach(failedColumns) { col in
+                                    BroadcastStatusColumn(provider: col.provider, model: col.model, state: .error(col.reason))
+                                        .frame(width: max(300, per))
                                 }
                             }
                             .padding(pad)
@@ -688,7 +799,7 @@ private struct ProviderColumn: View {
                 HStack(spacing: 8) {
                     TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 20)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(session.agent.tahoeProvider.displayName)
+                        Text(session.agent.brandedChatName)
                             .font(TahoeFont.body(12, weight: .semibold))
                             .foregroundStyle(t.fg)
                         Text(session.model ?? "default")
@@ -755,6 +866,123 @@ private struct ProviderColumn: View {
             }
         }
         return nil
+    }
+}
+
+/// A single broadcast column in a non-live state: either provisioning (a spawn
+/// is in flight → skeleton spinner) or failed (the provider couldn't start →
+/// error banner). Reused by the optimistic pending overlay and by the live
+/// group's per-provider error lanes.
+@available(macOS 14, *)
+private struct BroadcastStatusColumn: View {
+    @Environment(\.tahoe) private var t
+    let provider: AgentKind
+    let model: String?
+    var prompt: String? = nil
+    enum ColState { case loading, error(String) }
+    let state: ColState
+
+    private let errColor = Color(red: 0.90, green: 0.42, blue: 0.36)
+
+    var body: some View {
+        TahoeGlass(radius: 16, tone: .raised) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 8) {
+                    TahoeProviderGlyph(provider: provider.tahoeProvider, size: 20)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(provider.brandedChatName)
+                            .font(TahoeFont.body(12, weight: .semibold))
+                            .foregroundStyle(t.fg)
+                        Text(model ?? "default")
+                            .font(TahoeFont.mono(10))
+                            .foregroundStyle(t.fg4)
+                    }
+                    Spacer()
+                }
+                .padding(12)
+                TahoeHair()
+                VStack(alignment: .leading, spacing: 10) {
+                    if let prompt, !prompt.isEmpty {
+                        Text(prompt)
+                            .font(TahoeFont.body(12.5))
+                            .foregroundStyle(t.fg2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(t.fg.opacity(0.06)))
+                    }
+                    switch state {
+                    case .loading:
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Starting…").font(TahoeFont.body(11)).foregroundStyle(t.fg4)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 24)
+                    case .error(let reason):
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 5) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 11)).foregroundStyle(errColor)
+                                Text("Couldn't start").font(TahoeFont.body(11, weight: .semibold)).foregroundStyle(errColor)
+                            }
+                            Text(reason)
+                                .font(TahoeFont.body(11)).foregroundStyle(t.fg3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(errColor.opacity(0.08)))
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
+    }
+}
+
+/// Optimistic broadcast surface shown the instant the user hits send, before the
+/// child sessions finish spawning — one skeleton (or error) column per selected
+/// provider, mirroring BroadcastTranscript's fill/scroll layout.
+@available(macOS 14, *)
+private struct PendingBroadcastView: View {
+    @Environment(\.tahoe) private var t
+    let pending: PendingBroadcast
+
+    var body: some View {
+        TahoeGlass(radius: 20, tone: .panel) {
+            GeometryReader { geo in
+                let count = max(pending.columns.count, 1)
+                let spacing: CGFloat = 10
+                let pad: CGFloat = 12
+                let per = (geo.size.width - pad * 2 - spacing * CGFloat(count - 1)) / CGFloat(count)
+                if per >= 300 {
+                    HStack(alignment: .top, spacing: spacing) {
+                        ForEach(pending.columns) { col in
+                            BroadcastStatusColumn(
+                                provider: col.provider, model: col.model, prompt: pending.prompt,
+                                state: col.error.map { BroadcastStatusColumn.ColState.error($0) } ?? .loading
+                            ).frame(maxWidth: .infinity)
+                        }
+                    }
+                    .padding(pad)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                } else {
+                    ScrollView(.horizontal) {
+                        HStack(alignment: .top, spacing: spacing) {
+                            ForEach(pending.columns) { col in
+                                BroadcastStatusColumn(
+                                    provider: col.provider, model: col.model, prompt: pending.prompt,
+                                    state: col.error.map { BroadcastStatusColumn.ColState.error($0) } ?? .loading
+                                ).frame(width: max(300, per))
+                            }
+                        }
+                        .padding(pad)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1136,6 +1364,8 @@ private struct ComposerBar: View {
     @Binding var openTarget: ChatOpenTarget?
     @ObservedObject var client: AgentControlClient
     let providerMatrix: ChatProvidersResponse?
+    @Binding var pendingBroadcast: PendingBroadcast?
+    @Binding var failedBroadcastColumns: [FailedBroadcastColumn]
     @FocusState private var focused: Bool
     // v0.29.x — multi-provider selector (Option A): one compact bar that opens a
     // single popover (flat per-provider checklist + model/effort + Solo/Compare).
@@ -1563,7 +1793,7 @@ private struct ComposerBar: View {
     }
 
     private func dispatchSend() async {
-        await sendCtl.sendCustom { trimmed in
+        await sendCtl.sendCustomOptimistic { trimmed in
             switch openTarget {
             case .solo(let sessionId):
                 let prompt = await uploadAndBuildPrompt(base: trimmed, sessionId: sessionId)
@@ -1598,22 +1828,51 @@ private struct ComposerBar: View {
                         slot.chatVendor.map(isVendorAvailable(_:)) ?? isProviderAvailable(slot.provider)
                     }
                     guard slots.count >= 2 else { return "At least two selected providers must be available." }
+                    // Optimistic: paint skeleton columns immediately so the
+                    // comparison surface appears within ~200ms instead of after
+                    // the multi-second spawn. (openTarget stays nil until the
+                    // group exists, so this renders via PendingBroadcastView.)
+                    pendingBroadcast = PendingBroadcast(
+                        prompt: trimmed,
+                        columns: slots.map { PendingBroadcast.Column(provider: $0.provider, model: $0.model) }
+                    )
+                    failedBroadcastColumns = []
                     guard let created = await client.createBroadcastChat(slots: slots) else {
+                        pendingBroadcast = nil
                         return client.lastError ?? "Couldn't create broadcast chat."
                     }
-                    // P1 fix (v0.23.9): require at least two slots to
-                    // spawn successfully before opening the broadcast
-                    // surface. A single-success "broadcast" is a silent
-                    // degradation — surface the per-slot failure
-                    // reasons so the user can fix the underlying
-                    // provider problem (Antigravity not running, Codex
-                    // missing creds, etc.).
+                    // Map each failed slot back to its provider (by request index)
+                    // for a per-provider error banner instead of one blanket error.
+                    let failedByProvider: [AgentKind: String] = Dictionary(
+                        created.failedSlots.compactMap { r -> (AgentKind, String)? in
+                            guard r.index >= 0, r.index < slots.count else { return nil }
+                            return (slots[r.index].provider, r.reason ?? "Couldn't start this provider.")
+                        },
+                        uniquingKeysWith: { first, _ in first }
+                    )
+                    // P1 fix (v0.23.9): broadcast needs ≥2 live providers. Rather
+                    // than a blanket failure, keep the columns up with a per-
+                    // provider status so the user sees exactly what broke.
                     guard created.hasMinimumBroadcast else {
-                        let reasons = created.failedSlots.compactMap(\.reason)
-                        let detail = reasons.isEmpty ? "" : "\n\n" + reasons.joined(separator: "\n")
-                        return "Broadcast compares two or more providers side by side, but only \(created.successfulSlots.count) could start.\(detail)\n\nCheck those providers in Settings → Providers, pick different ones, or send to a single provider instead."
+                        pendingBroadcast = PendingBroadcast(
+                            prompt: trimmed,
+                            columns: slots.map { s in
+                                PendingBroadcast.Column(
+                                    provider: s.provider, model: s.model,
+                                    error: failedByProvider[s.provider] ?? "Broadcast needs at least two providers to start."
+                                )
+                            }
+                        )
+                        return nil
                     }
+                    failedBroadcastColumns = created.failedSlots.compactMap { r in
+                        guard r.index >= 0, r.index < slots.count else { return nil }
+                        let s = slots[r.index]
+                        return FailedBroadcastColumn(provider: s.provider, model: s.model, reason: r.reason ?? "Couldn't start this provider.")
+                    }
+                    pendingBroadcast = nil
                     openTarget = .frontier(created.groupId)
+                    ChatTitleStore.set(created.groupId, ChatTitleStore.firstWords(trimmed))
                     let sessionIds = created.successfulSlots.compactMap(\.sessionId)
                     let perChild = await uploadAndBuildPerChildPrompts(base: trimmed, sessionIds: sessionIds)
                     guard let response = await client.sendFrontierPrompt(
@@ -1627,6 +1886,17 @@ private struct ComposerBar: View {
                     return response.ok ? nil : response.results.compactMap(\.reason).joined(separator: "\n")
                 } else {
                     let vendor = selectedVendors.first ?? store.primaryVendor
+                    // Optimistic single-column skeleton so the loading animation
+                    // shows during the ~9-10s tmux spawn (Claude cold start) —
+                    // not a blank center. Reuses the broadcast pending overlay.
+                    pendingBroadcast = PendingBroadcast(
+                        prompt: trimmed,
+                        columns: [PendingBroadcast.Column(
+                            provider: vendor.backingProvider,
+                            model: store.model(for: vendor, catalog: client.modelCatalog)
+                        )]
+                    )
+                    failedBroadcastColumns = []
                     guard let session = await client.createChatSession(
                         provider: vendor.backingProvider,
                         model: store.model(for: vendor, catalog: client.modelCatalog),
@@ -1636,9 +1906,12 @@ private struct ComposerBar: View {
                         billingProvider: vendor.billingProvider,
                         deepResearch: store.deepResearch
                     ) else {
+                        pendingBroadcast = nil
                         return client.lastError ?? "Couldn't create chat."
                     }
+                    pendingBroadcast = nil
                     openTarget = .solo(session.id)
+                    ChatTitleStore.set(session.id, ChatTitleStore.firstWords(trimmed))
                     let prompt = await uploadAndBuildPrompt(base: trimmed, sessionId: session.id)
                     let ok = await client.sendPrompt(sessionId: session.id, text: prompt, asFollowUp: false)
                     if ok { store.clearAttachments() }

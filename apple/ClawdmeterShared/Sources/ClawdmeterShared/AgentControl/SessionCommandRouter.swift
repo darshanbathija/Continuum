@@ -43,12 +43,19 @@ public enum SessionCommandRoute: String, Hashable, Sendable, CaseIterable {
     /// the daemon's pending continuation.
     case tmux
 
+    /// Track A: per-session direct PTY for Claude (`ClaudePtyHost`). Replaces
+    /// Claude's slice of the shared tmux server when the
+    /// `clawdmeter.claude.ptyHost.enabled` flag is on. No tmux pane — sends/
+    /// interrupts/kills go through `ClaudePtyRegistry`. tmux STAYS for the
+    /// Terminal tab + non-Claude providers; only Claude session-drive moves.
+    case claudePty
+
     /// True for routes whose live session has no tmux pane. Surfaced for the
     /// caller's diagnostics / parity assertions; the daemon already special-
     /// cases each of these before the tmux paneId guard.
     public var isPaneless: Bool {
         switch self {
-        case .codexSDK, .opencodeServe, .harnessBridge:
+        case .codexSDK, .opencodeServe, .harnessBridge, .claudePty:
             return true
         case .tmux:
             return false
@@ -82,19 +89,35 @@ public struct SessionCommandRouter: Sendable {
         /// `harnessRegistry.bridge(for: id) != nil` on the daemon. A live ACP
         /// bridge wins over the legacy tmux path for the same session.
         public let hasLiveBridge: Bool
+        /// Track A flag (`clawdmeter.claude.ptyHost.enabled`). When true, a
+        /// Claude chat/code session resolves to `.claudePty` instead of `.tmux`.
+        /// Defaults false so the legacy tmux path is byte-identical until cutover.
+        public let claudePtyEnabled: Bool
+        /// `session.tmuxPaneId != nil || session.tmuxWindowId != nil`. A session
+        /// that ALREADY owns a tmux pane (it was born under the flag-off path)
+        /// must keep using that pane even after the flag flips on mid-session —
+        /// otherwise it would resolve `.claudePty` and `resumeOrSpawn` a SECOND
+        /// live `claude` while the tmux one keeps running (double subscription
+        /// drive + a JSONL two processes corrupt). Only paneless Claude sessions
+        /// (PTY-native, or created while the flag was on) take the PTY route.
+        public let hasTmuxPane: Bool
 
         public init(
             agent: AgentKind,
             kind: SessionKind,
             codexChatBackend: CodexChatBackend? = nil,
             runtimeIsACPDriven: Bool = false,
-            hasLiveBridge: Bool = false
+            hasLiveBridge: Bool = false,
+            claudePtyEnabled: Bool = false,
+            hasTmuxPane: Bool = false
         ) {
             self.agent = agent
             self.kind = kind
             self.codexChatBackend = codexChatBackend
             self.runtimeIsACPDriven = runtimeIsACPDriven
             self.hasLiveBridge = hasLiveBridge
+            self.claudePtyEnabled = claudePtyEnabled
+            self.hasTmuxPane = hasTmuxPane
         }
     }
 
@@ -125,6 +148,19 @@ public struct SessionCommandRouter: Sendable {
         //    here (the daemon returns 503 separately) — see the instance method.
         if ctx.hasLiveBridge {
             return .harnessBridge
+        }
+        // 4.5 Track A: Claude session-drive over a per-session PTY, gated by
+        //     the flag. Sits just above the tmux fall-through so Claude leaves
+        //     tmux ONLY when enabled; everything else (Codex-CLI, dead-bridge
+        //     ACP back-compat) still falls through to tmux unchanged.
+        //     `!hasTmuxPane` is load-bearing: a session that already owns a tmux
+        //     pane (born flag-off) stays on tmux even after a mid-session flag
+        //     flip, so we never spawn a 2nd `claude` alongside the running one.
+        if ctx.claudePtyEnabled
+            && ctx.agent == .claude
+            && (ctx.kind == .chat || ctx.kind == .code)
+            && !ctx.hasTmuxPane {
+            return .claudePty
         }
         // 5. Fall-through: the kept Claude / Codex-CLI tmux path. Back-compat —
         //    an old cursor_cli session with no live bridge lands here, matching

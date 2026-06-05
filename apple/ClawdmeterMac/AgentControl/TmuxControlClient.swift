@@ -167,7 +167,12 @@ public actor TmuxControlClient {
                 "-C",
                 "-L", configuration.socketName,
                 "attach", "-t", "control",
-            ]
+            ],
+            // tmux server inherits the daemon env on purpose (PATH etc).
+            // `environment` is non-defaulting on PseudoTerminal.spawn so this
+            // inheritance is explicit, not an accidental nil-default — the
+            // Claude PTY host instead passes ClaudeSpawnEnv.sanitized().
+            environment: ProcessInfo.processInfo.environment
         )
         self.childPid = pid
         self.isAlive = true
