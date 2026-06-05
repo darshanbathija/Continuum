@@ -2,7 +2,7 @@
 
 ## "Tray icon doesn't appear" on stock GNOME
 
-**Symptom**: launching Clawdmeter from the GNOME Activities overview
+**Symptom**: launching Continuum from the GNOME Activities overview
 flashes briefly and disappears. No icon in the top bar.
 
 **Cause**: GNOME 40+ doesn't ship native tray support. You need the
@@ -24,7 +24,7 @@ has every feature the popover does, just without the always-visible gauge.
 
 ## "Cannot open OAuth token" error
 
-**Symptom**: Clawdmeter starts but the analytics show "No data" and the
+**Symptom**: Continuum starts but the analytics show "No data" and the
 sessions tab can't spawn agents.
 
 **Cause**: the Secret Service / GNOME Keyring daemon isn't running. This
@@ -36,7 +36,7 @@ sudo apt install gnome-keyring
 # May need to log out + back in for the keyring daemon to start.
 ```
 
-Or use the file fallback. Clawdmeter automatically writes the OAuth token
+Or use the file fallback. Continuum automatically writes the OAuth token
 to `~/.config/clawdmeter/.oauth-tokens.json` (chmod 0600) when Secret
 Service isn't available. To migrate manually:
 ```bash
@@ -107,7 +107,7 @@ sudo systemctl enable --now tailscaled
 tailscale up
 ```
 
-Restart Clawdmeter; the new QR will use the 100.x.x.x CGNAT address.
+Restart Continuum; the new QR will use the 100.x.x.x CGNAT address.
 
 ## Performance: dashboard is slow on first open
 

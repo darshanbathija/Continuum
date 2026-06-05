@@ -1,12 +1,12 @@
-# Design System - Clawdmeter
+# Design System - Continuum
 
 Generated from `.context/attachments/NMOKVp/Clawdmeter Redesign _standalone_.html`.
 
-This is the design source of truth for Clawdmeter UI work. The source HTML is a bundled React design canvas titled `Clawdmeter - iOS 26 / Tahoe Redesign`. It contains Mac, iPhone, and menu-bar artboards plus a shared theme system, liquid-glass primitives, provider identity tokens, chat surfaces, a code workbench, usage analytics, settings, and pairing flows.
+This is the design source of truth for Continuum UI work. The source HTML is a bundled React design canvas for the iOS 26 / Tahoe redesign. It contains Mac, iPhone, and menu-bar artboards plus a shared theme system, liquid-glass primitives, provider identity tokens, chat surfaces, a code workbench, usage analytics, settings, and pairing flows.
 
 ## Product Context
 
-- **What this is:** A native desktop and mobile control surface for coding agents. Clawdmeter combines quota/spend monitoring, multi-provider chat, local session control, worktree/session navigation, plan review, diffs, terminal output, provider setup, and device pairing.
+- **What this is:** A native desktop and mobile control surface for coding agents. Continuum combines quota/spend monitoring, multi-provider chat, local session control, worktree/session navigation, plan review, diffs, terminal output, provider setup, and device pairing.
 - **Who it is for:** Developers who run coding agents across several local projects, providers, branches, and devices.
 - **Product type:** Native agentic-coding workbench with usage analytics and mobile companion surfaces.
 - **Design intent:** A serious workbench, not a marketing app. The UI should feel like a native Apple system surface fused with a coding IDE: quiet, precise, glassy, stateful, and fast to scan.
@@ -98,19 +98,19 @@ The iPhone frame inside each mobile artboard is `402 x 874`.
 
 ### Brand Legacy Anchor
 
-- **Legacy Clawdmeter accent:** `#d97757`
+- **Legacy Continuum accent:** `#d97757`
 - **Canvas dark shell:** `#050608`
 - **Canvas warm background:** `#f0eee9`
 - **Logo/light stroke:** `#f0eee9`
 
-The redesign expands beyond the original terra-cotta-on-black gauge language, but `#d97757` remains the historical Clawdmeter warmth and should be used where a heritage accent is needed.
+The redesign expands beyond the original terra-cotta-on-black gauge language, but `#d97757` remains the historical Continuum warmth and should be used where a heritage accent is needed.
 
 ### Accent Themes
 
 | Accent | Base | Deep | Glow | Use |
 | --- | --- | --- | --- | --- |
 | Halo | `oklch(0.78 0.16 220)` | `oklch(0.55 0.20 250)` | `oklch(0.88 0.13 205)` | Default primary accent |
-| Ember | `oklch(0.72 0.16 40)` | `oklch(0.55 0.18 30)` | `oklch(0.82 0.14 50)` | Warm Clawdmeter direction |
+| Ember | `oklch(0.72 0.16 40)` | `oklch(0.55 0.18 30)` | `oklch(0.82 0.14 50)` | Warm Continuum direction |
 | Bloom | `oklch(0.74 0.18 320)` | `oklch(0.55 0.22 320)` | `oklch(0.84 0.15 320)` | Expressive magenta variant |
 | Spring | `oklch(0.78 0.16 155)` | `oklch(0.58 0.18 155)` | `oklch(0.88 0.14 145)` | Green success-forward variant |
 
@@ -274,7 +274,7 @@ Avoid color orbs on Graphite, Studio, and Code. The prototype intentionally supp
 
 ### iPhone Live
 
-- Header: small `Clawdmeter` label and large `Live` title.
+- Header: small `Continuum` label and large `Live` title.
 - Provider segmented control: Claude, Codex, Antigravity.
 - Hero quota: session percentage plus reset timer.
 - Weekly card: percentage, reset timer, and provider-colored pill bar.

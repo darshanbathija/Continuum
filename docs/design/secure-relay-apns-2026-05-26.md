@@ -9,7 +9,7 @@ Plan: E1 / D18 / D21 / D22 from `.claude/plans/study-this-codebase-crystalline-s
 
 ## 1. Problem
 
-Clawdmeter today depends on Tailscale or LAN reachability for Mac ↔ iPhone pairing. The GTM doc names this as **Gate 3 launch blocker**:
+Continuum today depends on Tailscale or LAN reachability for Mac ↔ iPhone pairing. The GTM doc names this as **Gate 3 launch blocker**:
 
 > Tailscale/MagicDNS setup is documented or replaced by simpler transport.
 
@@ -43,14 +43,14 @@ Both share a single E2E crypto invariant: the operator's Cloudflare account neve
 ```
                                             CLOUDFLARE
                                             ┌────────────────────────────┐
-       iPhone (Clawdmeter iOS app)          │   relay Worker             │
+       iPhone (Continuum iOS app)           │   relay Worker             │
         ├── RelayClient.swift               │   (apps/relay/)            │
         │                                   │                            │
         │  WSS / TLS 1.3                    │     Durable Object         │
         │  ciphertext frames ◄────────────► │     RelaySession           │
         │  ChaCha20-Poly1305 envelopes      │     (1 per pairing)        │
         │                                   │                            │
-       Mac (Clawdmeter Mac app daemon)      │                            │
+       Mac (Continuum Mac app daemon)       │                            │
         ├── RelayClient.swift               │                            │
         │  WSS / TLS 1.3                    │                            │
         │  ciphertext frames ◄────────────► │                            │
@@ -236,7 +236,7 @@ Each downstream PR must satisfy the following before merge. These are pulled fro
 
 **E7 (pairing UX).**
 - QR codepath: `PairingPayload` CBOR encode matches §4.1 byte layout; `ttl` defaults to 15 min.
-- "Use Clawdmeter cloud" vs "Use Tailscale" choice surfaced explicitly (Open Q5).
+- "Use Continuum cloud" vs "Use Tailscale" choice surfaced explicitly (Open Q5).
 - Revoke-pairing button calls Worker admin `DELETE /sessions/:sid` (§5b).
 - Clear error UX when TLS pinning fails (no silent downgrade).
 
@@ -251,7 +251,7 @@ Each downstream PR must satisfy the following before merge. These are pulled fro
 2. **APNS sandbox vs production routing.** E5 acceptance per D21 needs explicit splits. Likely env-flag-gated; design TBD.
 3. **Audit log retention.** Suggest 90 days in KV with auto-purge. Confirm during E5.
 4. **Cost ceiling.** CF Workers free tier covers ~100k req/day per account. Single-operator at 10k users averaging 50 frames/day = 500k frames/day — hits paid tier. Budget acknowledged.
-5. **Fallback discoverability.** When relay is unavailable and Tailscale isn't installed, what does the user see? E7 pairing UX must surface this clearly (probably: "Pairing requires Tailscale or Clawdmeter cloud. [Install Tailscale] [Use Clawdmeter cloud]").
+5. **Fallback discoverability.** When relay is unavailable and Tailscale isn't installed, what does the user see? E7 pairing UX must surface this clearly (probably: "Pairing requires Tailscale or Continuum cloud. [Install Tailscale] [Use Continuum cloud]").
 
 ## 8. Cross-implementation test vectors
 

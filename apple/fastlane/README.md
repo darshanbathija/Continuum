@@ -21,7 +21,7 @@ For _fastlane_ installation instructions, see [Installing _fastlane_](https://do
 
 Package the Mac app into a DMG. Uses tools/build-mac-dmg.sh which
 already drives xcodegen + xcodebuild archive + hdiutil. Output:
-`dist/Clawdmeter-<version>-arm64.dmg`.
+`dist/Continuum-<version>-arm64.dmg`.
 
 ### release
 

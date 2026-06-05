@@ -1,4 +1,4 @@
-# Clawdmeter — Privacy
+# Continuum — Privacy
 
 This doc enumerates every byte that leaves the user's Mac. The
 companion docs are [`docs/security.md`](security.md) (how the egress
@@ -19,7 +19,7 @@ yet).
 ## 1. What data leaves the user's machine
 
 There are exactly five categories of network egress from a default
-Clawdmeter install.
+Continuum install.
 
 ### 1.1 Pairing relay (designed; shipped Worker, client lands in E3/E4)
 
@@ -77,7 +77,7 @@ Source: [PR #147](https://github.com/darshanbathija/Clawdmeter/pull/147).
 
 ### 1.3 Pricing snapshot fetch (read-only HTTPS)
 
-Clawdmeter ships a pricing snapshot at
+Continuum ships a pricing snapshot at
 `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing.json`.
 The user can refresh it by running `./tools/refresh-pricing.sh`, which
 fetches the latest pricing data from LiteLLM's public GitHub raw URL.
@@ -90,22 +90,22 @@ never invoke `refresh-pricing.sh` locally never make this request.
 
 ### 1.4 Provider CLI telemetry (third-party, opt-in by installation)
 
-Clawdmeter integrates five provider runtimes. Each runtime is its own
+Continuum integrates five provider runtimes. Each runtime is its own
 binary spawned as a child process; each owns its own network egress;
-**Clawdmeter does not proxy or inspect their traffic**.
+**Continuum does not proxy or inspect their traffic**.
 
-| Provider | Egress owner | What Clawdmeter does |
+| Provider | Egress owner | What Continuum does |
 | --- | --- | --- |
 | Claude Code (`claude` CLI) | Anthropic | Spawns `claude` in tmux, reads JSONL output, reads local auth state where allowed. Has no visibility into Claude's wire calls to Anthropic. |
 | Codex CLI / SDK | OpenAI | Spawns `codex` (CLI mode) or runs Codex SDK chat path. Reads session JSONL. No visibility into Codex's wire calls. |
-| OpenCode (`opencode serve`) | Whichever upstream providers the user has configured via `opencode auth login` — often OpenRouter, Anthropic, OpenAI | Clawdmeter consumes OpenCode's SSE locally, sends prompts through OpenCode's HTTP API on localhost. Has no visibility into OpenCode's upstream wire calls. |
+| OpenCode (`opencode serve`) | Whichever upstream providers the user has configured via `opencode auth login` — often OpenRouter, Anthropic, OpenAI | Continuum consumes OpenCode's SSE locally, sends prompts through OpenCode's HTTP API on localhost. Has no visibility into OpenCode's upstream wire calls. |
 | Cursor | Anysphere | Spawns Cursor-backed sessions. No visibility into Cursor's wire calls. |
 | Antigravity / Gemini | Google | Talks to Antigravity's `agentapi` / language-server. Reads conversation DB + brain-dir state. No visibility into Antigravity's upstream wire calls. |
 
 Each provider has its own privacy policy. The user installs each
 provider CLI separately and grants it credentials separately;
 uninstalling a provider CLI removes its egress entirely without
-affecting Clawdmeter.
+affecting Continuum.
 
 ### 1.5 In-app update check
 
@@ -115,7 +115,7 @@ Mac app fetches
 to learn whether a newer release is available. The request transmits:
 
 - The user's IP address.
-- A `Clawdmeter/<version>` User-Agent header.
+- A legacy `Clawdmeter/<version>` User-Agent header.
 
 It does NOT transmit any unique device identifier, install id,
 session token, or app body. It is equivalent to visiting the GitHub
@@ -127,12 +127,12 @@ Users who never want this request to fire can override the URL via
 
 ## 2. What stays local
 
-The vast majority of Clawdmeter's state stays on the user's Mac and
-never crosses any network boundary Clawdmeter controls:
+The vast majority of Continuum's state stays on the user's Mac and
+never crosses any network boundary Continuum controls:
 
 - **Chat transcripts.** Live and historical chat content lives in the
   per-session JSONL files under `~/.claude/projects/`,
-  `~/.codex/`, `~/.local/share/opencode/`, and analogues. Clawdmeter
+  `~/.codex/`, `~/.local/share/opencode/`, and analogues. Continuum
   parses these for analytics + display but does not exfiltrate them.
 - **Code diffs.** The diff workbench reads from local git checkouts.
   Nothing leaves the machine.
@@ -141,13 +141,13 @@ never crosses any network boundary Clawdmeter controls:
   these into the same analytics row locally; the normalized identifier
   does not leave the device.
 - **Session metadata.** Session ids, model selections, tmux pane state,
-  per-session pinning, archive flags — all local. Clawdmeter keeps a
+  per-session pinning, archive flags — all local. Continuum keeps a
   registry of sessions but does not sync it to any cloud.
 - **JSONL ingest state.** The `IncrementalJSONLIngest` actor's
   persistent offsets (shipped in B1) and the `UsageHistoryStore`'s
   cached rollups are local.
 - **Keychain entries.** Per-provider tokens, OAuth refresh tokens
-  where they apply, and Clawdmeter's pairing bearers live in the
+  where they apply, and Continuum's pairing bearers live in the
   user's macOS Keychain. The per-instance partitioning shape lands
   with F3-wire; until then they all live in the shared Keychain
   access group.
@@ -243,7 +243,7 @@ itself excluded.
 
 ### 5.3 What this means for the user
 
-Clawdmeter's session history, plan approval log, and orchestration
+Continuum's session history, plan approval log, and orchestration
 command stream are local-only by construction. Reinstalling the Mac
 from a Time Machine backup will not restore them — the user starts
 fresh, and the daemon's normal startup replay (from the new local
@@ -282,7 +282,7 @@ file size: a fully-purged session leaves no recoverable bytes on disk.
 ### 6.2 Right to access
 
 The user has full access to their data at all times — it's local on
-their Mac. There is no Clawdmeter-side server with user records to
+their Mac. There is no Continuum-side server with user records to
 request from; the relay and APNS gateway operators hold only the
 metadata enumerated in §3 and §4.
 
@@ -300,7 +300,7 @@ through any API.
 
 ## 7. Cookies and third-party trackers
 
-Clawdmeter is a native macOS / iOS / watchOS / Linux desktop app.
+Continuum is a native macOS / iOS / watchOS / Linux desktop app.
 There is no embedded web view used for analytics. There are no
 cookies. There are no third-party trackers. There is no `localStorage`
 or `IndexedDB` carrying identifiers.
@@ -310,8 +310,8 @@ URL and does not carry cookies.
 
 ## 8. Children's privacy
 
-Clawdmeter is a developer tool. It is not directed at children. No
-data collected by Clawdmeter is associated with named individuals
+Continuum is a developer tool. It is not directed at children. No
+data collected by Continuum is associated with named individuals
 or accounts; everything is keyed by anonymous pairing session ids and
 SHA-256 hashes.
 

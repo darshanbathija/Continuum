@@ -1,4 +1,4 @@
-# Clawdmeter Cloud Infra
+# Continuum Cloud Infra
 
 Cloudflare Workers + Durable Objects supporting the **Mac ↔ iPhone secure pairing relay** (Group E from `.claude/plans/study-this-codebase-crystalline-shore.md`) plus the **APNS push gateway** that cuts plan-approval latency from minutes to ~2s.
 
@@ -65,4 +65,4 @@ bun run deploy:production   # wrangler deploy --env production
 
 ## Owner handoff
 
-Operator: see [`SECRETS.md`](SECRETS.md). Single-operator deployment for v1 (no federation). Each operator runs their own pair of Workers; the Mac + iOS clients hard-code the operator's relay URL via build-time env var (defaults to the official Clawdmeter cloud).
+Operator: see [`SECRETS.md`](SECRETS.md). Single-operator deployment for v1 (no federation). Each operator runs their own pair of Workers; the Mac + iOS clients hard-code the operator's relay URL via build-time env var (defaults to the official Continuum cloud).

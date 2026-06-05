@@ -1,4 +1,4 @@
-# Clawdmeter — Known Limitations
+# Continuum — Known Limitations
 
 This doc enumerates work that is described in the plan or implied by
 the security / privacy posture, but is **not yet in main**. Companion

@@ -204,7 +204,7 @@ build 13. Source of truth for what's in the DMG is
 ## How to ship
 
 1. Bump VERSION to 2.0.0.
-2. `./tools/build-mac-dmg.sh` produces `dist/Clawdmeter-2.0.0-arm64.dmg`.
+2. `./tools/build-mac-dmg.sh` produces `dist/Continuum-2.0.0-arm64.dmg`.
 3. iOS: xcodebuild archive + manual TestFlight upload (fastlane in v2.0.1).
 4. Watch: ships embedded in iOS bundle.
 
