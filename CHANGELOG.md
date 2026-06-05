@@ -4,6 +4,14 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.1 build 201] - 2026-06-06 - Code tab sidebar alignment (`darshanbathija/code-tab-sidebar-align`)
+
+### Fixed
+
+- Removes the redundant Managed label from the Code tab sidebar so repos start directly under Projects.
+- Aligns selected worktree row backgrounds with Conductor-style symmetric margins while preserving branch indentation.
+- Bumps `MARKETING_VERSION` 0.31.0 -> 0.31.1 and `CURRENT_PROJECT_VERSION` 200 -> 201.
+
 ## [0.31.0 build 200] - 2026-06-06 - Sparkle appcast recovery (`darshanbathija/screenshot-error`)
 
 ### Fixed
