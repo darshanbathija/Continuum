@@ -22,7 +22,7 @@ public enum CursorAgentTranscriptParser {
             && url.lastPathComponent.hasSuffix(".jsonl")
     }
 
-    public static func parse(file url: URL) throws -> [UsageRecord] {
+    public static func parse(file url: URL, modelHints: [String: String] = [:]) throws -> [UsageRecord] {
         let data = try Data(contentsOf: url)
         guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
             return []
@@ -32,6 +32,8 @@ public enum CursorAgentTranscriptParser {
         let timestamp = fileMtime(url) ?? Date(timeIntervalSince1970: 0)
         let sessionId = url.deletingPathExtension().lastPathComponent
         let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
+        let sessionModelHint = firstUserPromptFingerprint(in: lines)
+            .flatMap { modelHints[$0] }
 
         var records: [UsageRecord] = []
         for (offset, rawLine) in lines.enumerated() {
@@ -41,7 +43,7 @@ public enum CursorAgentTranscriptParser {
             let role = (object["role"] as? String)?.lowercased() ?? ""
             guard let message = object["message"] else { continue }
 
-            let model = meaningfulModel(modelName(in: message)) ?? "composer-2.5-fast"
+            let model = meaningfulModel(modelName(in: message)) ?? sessionModelHint ?? "composer-2.5-fast"
             let charCount = max(0, estimatedCharacters(in: message))
             guard charCount > 0 else { continue }
 
@@ -73,6 +75,20 @@ public enum CursorAgentTranscriptParser {
         return records
     }
 
+    public static func taskModelHints(file url: URL) throws -> [String: String] {
+        let data = try Data(contentsOf: url)
+        let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
+        var hints: [String: String] = [:]
+        for rawLine in lines {
+            guard let object = try? JSONSerialization.jsonObject(with: Data(rawLine)) as? [String: Any],
+                  let message = object["message"] else {
+                continue
+            }
+            collectTaskModelHints(in: message, into: &hints)
+        }
+        return hints
+    }
+
     private static func estimatedCharacters(in value: Any) -> Int {
         if let string = value as? String {
             return string.count
@@ -95,6 +111,9 @@ public enum CursorAgentTranscriptParser {
         if type == "redacted-reasoning", let data = dict["data"] as? String {
             return data.count
         }
+        if let result = dict["result"] {
+            return estimatedCharacters(in: result)
+        }
         if type == "tool_use" {
             var count = (dict["name"] as? String)?.count ?? 0
             if let input = dict["input"] {
@@ -103,6 +122,32 @@ public enum CursorAgentTranscriptParser {
             return count
         }
         return 0
+    }
+
+    private static func textForInference(in value: Any) -> String {
+        if let string = value as? String {
+            return string
+        }
+        if let array = value as? [Any] {
+            return array.map { textForInference(in: $0) }.joined(separator: "\n")
+        }
+        guard let dict = value as? [String: Any] else {
+            return ""
+        }
+        var parts: [String] = []
+        if let text = dict["text"] as? String {
+            parts.append(text)
+        }
+        if let content = dict["content"] {
+            parts.append(textForInference(in: content))
+        }
+        if let result = dict["result"] {
+            parts.append(textForInference(in: result))
+        }
+        if let input = dict["input"], let rendered = compactJSONString(input) {
+            parts.append(rendered)
+        }
+        return parts.joined(separator: "\n")
     }
 
     private static func modelName(in value: Any) -> String? {
@@ -145,11 +190,82 @@ public enum CursorAgentTranscriptParser {
     }
 
     private static func compactJSONLength(_ value: Any) -> Int {
+        compactJSONString(value)?.utf8.count ?? 0
+    }
+
+    private static func compactJSONString(_ value: Any) -> String? {
         guard JSONSerialization.isValidJSONObject(value),
               let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else {
-            return 0
+            return nil
         }
-        return data.count
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func firstUserPromptFingerprint(in lines: [Data.SubSequence]) -> String? {
+        for rawLine in lines {
+            guard let object = try? JSONSerialization.jsonObject(with: Data(rawLine)) as? [String: Any],
+                  (object["role"] as? String)?.lowercased() == "user",
+                  let message = object["message"] else {
+                continue
+            }
+            return promptFingerprint(textForInference(in: message))
+        }
+        return nil
+    }
+
+    private static func collectTaskModelHints(in value: Any, into hints: inout [String: String]) {
+        if let array = value as? [Any] {
+            for item in array {
+                collectTaskModelHints(in: item, into: &hints)
+            }
+            return
+        }
+        guard let dict = value as? [String: Any] else {
+            return
+        }
+        if (dict["name"] as? String) == "Task",
+           let input = dict["input"] as? [String: Any],
+           let model = meaningfulModel(input["model"] as? String),
+           let prompt = input["prompt"] as? String,
+           let fingerprint = promptFingerprint(prompt) {
+            hints[fingerprint] = model
+        }
+        for value in dict.values {
+            collectTaskModelHints(in: value, into: &hints)
+        }
+    }
+
+    static func promptFingerprint(_ raw: String) -> String? {
+        var text = raw
+        if let userQuery = contentsBetween("<user_query>", and: "</user_query>", in: text) {
+            text = userQuery
+        }
+        text = removingBlocks(start: "<timestamp>", end: "</timestamp>", from: text)
+        let normalized = text
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard !normalized.isEmpty else {
+            return nil
+        }
+        return normalized
+    }
+
+    private static func contentsBetween(_ startMarker: String, and endMarker: String, in text: String) -> String? {
+        guard let startRange = text.range(of: startMarker),
+              let endRange = text.range(of: endMarker, range: startRange.upperBound..<text.endIndex) else {
+            return nil
+        }
+        return String(text[startRange.upperBound..<endRange.lowerBound])
+    }
+
+    private static func removingBlocks(start startMarker: String, end endMarker: String, from text: String) -> String {
+        var output = text
+        while let startRange = output.range(of: startMarker),
+              let endRange = output.range(of: endMarker, range: startRange.upperBound..<output.endIndex) {
+            output.removeSubrange(startRange.lowerBound..<endRange.upperBound)
+        }
+        return output
     }
 
     private static func inferRepo(from text: String) -> String? {

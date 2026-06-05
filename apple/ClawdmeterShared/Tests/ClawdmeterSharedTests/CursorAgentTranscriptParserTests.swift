@@ -99,6 +99,30 @@ final class CursorAgentTranscriptParserTests: XCTestCase {
         XCTAssertGreaterThan((modelTotals.costUSD as NSDecimalNumber).doubleValue, 0)
     }
 
+    func test_subagentTranscript_inheritsModelFromParentTaskPrompt() throws {
+        let dir = try tempDir()
+        let parent = dir.appendingPathComponent("parent.jsonl")
+        let child = dir.appendingPathComponent("child.jsonl")
+        let taskPrompt = """
+        Audit the shared analytics package for Cursor cost bugs.
+        Return concrete findings with file references.
+        """
+        let parentJSON = """
+        {"role":"assistant","message":{"content":[{"type":"tool_use","name":"Task","input":{"description":"Review Cursor analytics","model":"claude-opus-4-8-thinking-high","prompt":\(jsonString(taskPrompt))}}]}}
+        """
+        let childJSON = """
+        {"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Friday, Jun 5, 2026, 11:10 PM (UTC+7)</timestamp>\\n<user_query>\\nAudit the shared analytics package for Cursor cost bugs.\\nReturn concrete findings with file references.\\n</user_query>"}]}}
+        {"role":"assistant","message":{"content":[{"type":"text","text":"Found a Cursor analytics undercount."}]}}
+        """
+        try parentJSON.write(to: parent, atomically: true, encoding: .utf8)
+        try childJSON.write(to: child, atomically: true, encoding: .utf8)
+
+        let hints = try CursorAgentTranscriptParser.taskModelHints(file: parent)
+        let records = try CursorAgentTranscriptParser.parse(file: child, modelHints: hints)
+
+        XCTAssertEqual(Set(records.map(\.model)), ["claude-opus-4-8-thinking-high"])
+    }
+
     #if os(macOS)
     func test_parseAgentKVBlob_emitsEstimatedCursorContextRecord() throws {
         let dir = try tempDir()
@@ -132,6 +156,28 @@ final class CursorAgentTranscriptParserTests: XCTestCase {
         XCTAssertEqual(record.tokens.outputTokens, 0)
         XCTAssertNotNil(record.dedupKey)
         XCTAssertEqual(Calendar.current.component(.day, from: record.timestamp), 6)
+    }
+
+    func test_parseAgentKVBlob_countsToolResultsAsInputContext() throws {
+        let data = try agentKVBlob(
+            role: "tool",
+            content: [[
+                "type": "tool-result",
+                "toolName": "Read",
+                "result": String(repeating: "tool context ", count: 200),
+            ]],
+            modelName: "composer-2.5-fast"
+        )
+
+        let record = try XCTUnwrap(CursorAgentKVUsageParser.parseBlob(
+            key: "agentKv:blob:tool",
+            data: data,
+            fallbackTimestamp: Date(timeIntervalSince1970: 1)
+        ))
+
+        XCTAssertGreaterThan(record.tokens.inputTokens, 0)
+        XCTAssertEqual(record.tokens.outputTokens, 0)
+        XCTAssertEqual(record.model, "composer-2.5-fast")
     }
 
     func test_usageHistoryLoader_includesCursorAgentKVDatabase() async throws {
@@ -247,7 +293,7 @@ final class CursorAgentTranscriptParserTests: XCTestCase {
     }
 
     #if os(macOS)
-    private func agentKVBlob(role: String, content: String, modelName: String?) throws -> Data {
+    private func agentKVBlob(role: String, content: Any, modelName: String?) throws -> Data {
         var cursorOptions: [String: Any] = [
             "requestContextCompleteness": [
                 "rules": true,
@@ -266,6 +312,11 @@ final class CursorAgentTranscriptParserTests: XCTestCase {
             ],
         ]
         return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    private func jsonString(_ value: String) -> String {
+        let data = try! JSONEncoder().encode(value)
+        return String(data: data, encoding: .utf8)!
     }
 
     private func writeCursorAgentKVDatabase(_ url: URL, rows: [(String, Data)]) throws {

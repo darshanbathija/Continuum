@@ -302,6 +302,7 @@ public actor UsageHistoryLoader {
                     .filter { CursorAgentTranscriptParser.isTranscriptFile($0.url) }
             )
         }()
+        let cursorTranscriptModelHints = Self.cursorTranscriptModelHints(from: cursorTranscriptFiles)
         let cursorAgentKVFiles: [FileMeta] = {
             guard let cursorAgentKVDBURL,
                   FileManager.default.fileExists(atPath: cursorAgentKVDBURL.path),
@@ -393,7 +394,7 @@ public actor UsageHistoryLoader {
             cache: cache,
             activeURL: cursorTranscriptActive,
             parser: { url in
-                try Self.parseCursorAgentTranscriptFile(at: url)
+                try Self.parseCursorAgentTranscriptFile(at: url, modelHints: cursorTranscriptModelHints)
             }
         )
 
@@ -778,6 +779,18 @@ public actor UsageHistoryLoader {
         return Array(byTranscriptID.values)
     }
 
+    private nonisolated static func cursorTranscriptModelHints(from files: [FileMeta]) -> [String: String] {
+        var hints: [String: String] = [:]
+        for file in files {
+            guard !file.url.path.contains("/subagents/"),
+                  let perFile = try? CursorAgentTranscriptParser.taskModelHints(file: file.url) else {
+                continue
+            }
+            hints.merge(perFile) { current, _ in current }
+        }
+        return hints
+    }
+
     private func enumerate(dir: URL, suffix: String) -> [FileMeta] {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
@@ -956,8 +969,11 @@ public actor UsageHistoryLoader {
         )
     }
 
-    private nonisolated static func parseCursorAgentTranscriptFile(at url: URL) throws -> PerFileResult {
-        let records = try CursorAgentTranscriptParser.parse(file: url)
+    private nonisolated static func parseCursorAgentTranscriptFile(
+        at url: URL,
+        modelHints: [String: String] = [:]
+    ) throws -> PerFileResult {
+        let records = try CursorAgentTranscriptParser.parse(file: url, modelHints: modelHints)
         var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
         var dedupKeys = Set<String>()
         var unpriced: [String: TokenTotals] = [:]
@@ -1462,7 +1478,11 @@ struct AnalyticsCache: Codable, Sendable {
     // composer-2.5 / composer-2.5-fast to OpenRouter's Kimi K2.5 pricing.
     // v14 caches could have baked the same token rows with costUSD == 0, so
     // force one reparse to make Analytics and tokens-by-model show dollars.
-    static let currentVersion: Int = 15
+    // v16 (2026-06-06): Cursor Agent transcript subagents now inherit model
+    // hints from parent Task prompts, and Cursor's persisted `tool` context
+    // blobs count as input tokens instead of being dropped. v15 caches can
+    // underprice long multi-subagent Cursor work, so force a one-time reparse.
+    static let currentVersion: Int = 16
 
     let version: Int
     var files: [String: FileEntry]

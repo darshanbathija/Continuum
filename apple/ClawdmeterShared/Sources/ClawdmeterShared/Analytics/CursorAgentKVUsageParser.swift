@@ -67,7 +67,7 @@ public enum CursorAgentKVUsageParser {
         let estimatedTokens = max(1, (charCount + 3) / 4)
         let tokens: TokenTotals
         switch role {
-        case "user":
+        case "user", "system", "tool":
             tokens = TokenTotals(inputTokens: estimatedTokens, requestCount: 1)
         case "assistant":
             tokens = TokenTotals(outputTokens: estimatedTokens, requestCount: 1)
@@ -113,6 +113,9 @@ public enum CursorAgentKVUsageParser {
         if let text = dict["text"] as? String {
             return text.count
         }
+        if let result = dict["result"] {
+            return estimatedCharacters(in: result)
+        }
         if let input = dict["input"] {
             return compactJSONLength(input)
         }
@@ -135,6 +138,9 @@ public enum CursorAgentKVUsageParser {
         }
         if let content = dict["content"] {
             parts.append(textForInference(in: content))
+        }
+        if let result = dict["result"] {
+            parts.append(textForInference(in: result))
         }
         if let input = dict["input"], let rendered = compactJSONString(input) {
             parts.append(rendered)
