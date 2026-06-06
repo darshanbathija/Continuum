@@ -48,7 +48,7 @@ Cursor's dominance is driven by **owning the writing loop**. Because it is a ful
    * *Continuum:* Has no text editor engine. It displays a terminal and parses JSONL outputs to show a chat. If a user wants to quickly write code themselves, they must switch away from Continuum to another IDE (like Cursor or VS Code).
 2. **Lacking Codebase-Wide RAG and Semantic Indexing:**
    * *Cursor:* Automatically builds a local vector index of the repository, creates an Abstract Syntax Tree (AST) symbol index, and constructs a code structure graph. Users can prompt with `@Codebase` to search across all files semantically.
-   * *Continuum:* The `@MentionPicker` is limited to active sessions, agent-cited files, and recent JSONLs. It has a basic file-walker (`RepoIndex`) but possesses no vector database, semantic embedding models, or structural codebase indexing.
+   * *Continuum:* The `@MentionPicker` is limited to active Continuum sessions and agent-cited files. It possesses no vector database, semantic embedding models, or structural codebase indexing.
 3. **Optimized Multi-File Composer (`Cmd+I`):**
    * *Cursor:* The "Composer" operates as an agent across the workspace, editing 5 files concurrently. The UI presents clean, interactive side-by-side code diffs for every modified file, allowing developers to reject/accept individual hunks directly within the editor tree.
    * *Continuum:* Relies entirely on the downstream agent CLI (like `claude --permission-mode acceptEdits`) to execute modifications. Continuum's "Git Diff" pane allows basic stage/revert of hunks, but it lacks a cohesive, multi-file code editing/review UI.

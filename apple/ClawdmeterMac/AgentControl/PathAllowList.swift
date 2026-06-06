@@ -5,7 +5,7 @@ import ClawdmeterShared
 /// (`POST /workspaces/from-github`, `POST /workspaces/quick-start`) are
 /// allowed to write into. Per A9-B (locked in /plan-eng-review): iOS may
 /// only write under `clawdmeter.repos.defaultParent` OR one of the user's
-/// configured scan roots, minus a hard-coded deny-list of sensitive dirs.
+/// configured allowed roots, minus a hard-coded deny-list of sensitive dirs.
 ///
 /// Mac-flow NSOpenPanel writes are NOT gated — the user picking via the
 /// panel implies consent. This gate only fires on daemon-relayed endpoints
@@ -40,7 +40,7 @@ public enum PathAllowList {
 
     /// Resolve the allow-list against current UserDefaults + environment.
     /// `defaultParent` is always first in the list; manually-configured
-    /// scan roots follow. All entries are expanded + canonicalized.
+    /// allowed roots follow. All entries are expanded + canonicalized.
     public static func resolveAllowedRoots(
         userDefaults: UserDefaults = .standard
     ) -> [String] {

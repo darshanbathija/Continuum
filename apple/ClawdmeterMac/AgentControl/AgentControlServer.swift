@@ -370,18 +370,6 @@ public final class AgentControlServer {
         if writesServerMetadata {
             writeServerJSON(port: httpPort, wsPort: boundWsPort ?? 0)
         }
-        // v0.5.3: warm the chat-store registry for the most recently-
-        // touched JSONLs across ~/.claude/projects/ and ~/.codex/sessions/.
-        // The first iPhone /chat-snapshot or /transcript request after
-        // Mac restart hits a warm store instead of a cold reparse.
-        // Async on a detached Task so it doesn't block listener bind.
-        //
-        // v0.29.32: this read of ~/.claude + ~/.codex triggers the macOS
-        // "access data from other apps" prompt at launch — only warm for
-        // providers the user has enabled (opt-in). With both off, skip it.
-        if ProviderEnablement.isEnabled("claude") || ProviderEnablement.isEnabled("codex") {
-            chatStoreRegistry.warm(recentLimit: 5)
-        }
         // v16 Code V2: replay the last 256 mobile-command audit entries
         // so a daemon restart still dedups in-flight iOS retries. Fire
         // and forget — the cache hydrates within tens of ms.
@@ -1902,196 +1890,19 @@ public final class AgentControlServer {
         }
     }
 
-    /// `POST /sessions/continue-readonly` — server-side equivalent of the
-    /// Mac UI's `SessionsModel.continueCurrentReadOnly`. Lets iOS promote
-    /// a Recent JSONL row into a live Clawdmeter session without having
-    /// to round-trip through the Mac UI.
-    ///
-    /// Flow: parse JSONL header for the CLI session id → spawn a fresh
-    /// tmux pane with `--resume`/`resume` argv → register the new session
-    /// → optionally paste the user's first prompt once the pane is ready.
-    /// JSONL wiring picks up the existing JSONL automatically because
-    /// `--resume` appends to the same file (it's the newest in the dir).
+    /// Legacy endpoint kept for older paired clients. Continuum no longer
+    /// promotes external JSONL files into Code sessions; visible UI entry
+    /// points were removed with the external-session sidebar cleanup.
     private func handleContinueReadOnly(request: HTTPRequest, connection: NWConnection) async {
-        guard let req = try? JSONDecoder().decode(ContinueReadOnlyRequest.self, from: request.body) else {
+        guard (try? JSONDecoder().decode(ContinueReadOnlyRequest.self, from: request.body)) != nil else {
             sendResponse(.badRequest, on: connection); return
         }
-        // P1-Mac-7: defensively validate the repoKey before it flows into
-        // `tmux.newWindow(cwd:)`. P1-Mac-6 already rejects CR/LF/control
-        // bytes inside the tmux client, but a compromised paired client
-        // could still ask the daemon to spawn an agent in `..`-traversed
-        // paths or paths outside the user's home. Refuse any repoKey that
-        // isn't an absolute, traversal-free path that resolves under the
-        // user's home directory.
-        guard Self.isValidRepoKey(req.repoKey) else {
-            sendResponse(HTTPResponse(
-                status: 400, reason: "Bad Request",
-                contentType: "application/json",
-                body: Data(#"{"error":"invalid_repo_key"}"#.utf8)
-            ), on: connection)
-            serverLogger.warning("continue-readonly: rejected repoKey \(req.repoKey, privacy: .public)")
-            return
-        }
-        // Codex follow-up: also validate jsonlPath. The earlier patch
-        // only checked repoKey; a paired compromised client could send
-        // a valid repoKey together with an arbitrary local JSONL path
-        // and have its session id extracted under that repo. Restrict
-        // jsonlPath to ~/.claude/projects/, ~/.codex/sessions/,
-        // ~/.codex/projects/, or ~/.gemini/.
-        guard Self.isValidJsonlPath(req.jsonlPath) else {
-            sendResponse(HTTPResponse(
-                status: 400, reason: "Bad Request",
-                contentType: "application/json",
-                body: Data(#"{"error":"invalid_jsonl_path"}"#.utf8)
-            ), on: connection)
-            serverLogger.warning("continue-readonly: rejected jsonlPath \(req.jsonlPath, privacy: .public)")
-            return
-        }
-        let jsonlURL = URL(fileURLWithPath: req.jsonlPath)
-        guard FileManager.default.fileExists(atPath: req.jsonlPath) else {
-            let body = #"{"error":"jsonl_not_found","path":"\#(req.jsonlPath)"}"#
-            sendResponse(.notFound, on: connection)
-            serverLogger.warning("continue-readonly: jsonl missing at \(req.jsonlPath, privacy: .public)")
-            _ = body
-            return
-        }
-        let provider: JSONLSessionId.Provider = (req.agent == .codex) ? .codex : .claude
-        guard let cliSessionId = JSONLSessionId.extract(from: jsonlURL, provider: provider) else {
-            let body = #"{"error":"no_session_id_in_jsonl"}"#
-            sendResponse(HTTPResponse(
-                status: 422, reason: "Unprocessable Entity",
-                contentType: "application/json", body: Data(body.utf8)
-            ), on: connection)
-            return
-        }
-
-        // Build resume argv. New continued sessions inherit Claude Code
-        // defaults (Opus 4.7 1M + Max) to match the Mac promote path.
-        let defaults = ComposerStore.ChipDefaults.default
-        let modelDefault: String? = (req.agent == .claude)
-            ? defaults.modelId
-            : ModelCatalog.bundled.codex.first?.id
-        let argv: [String]
-        switch req.agent {
-        case .claude:
-            argv = AgentSpawner.claudeArgv(
-                model: modelDefault,
-                planMode: false,
-                effort: defaults.effort,
-                autopilot: false,
-                resumeSessionId: cliSessionId
-            ) ?? []
-        case .codex:
-            // v27: codex is harness-driven; external "Continue here" resume is
-            // deprioritized — no tmux resume argv. Empty → the missing-binary
-            // surface returns a clean 4xx (start a fresh harness session instead).
-            argv = []
-        case .gemini:
-            // No interactive Gemini CLI yet — fall through to the
-            // missing-binary surface so the request returns a 4xx
-            // instead of silently spawning an empty process.
-            argv = []
-        case .opencode:
-            // PR #29: OpenCode sessions don't spawn through tmux argv;
-            // they're SSE clients of the shared `opencode serve`
-            // process. The handler routes opencode spawns to
-            // OpencodeProcessManager + OpencodeSSEAdapter instead;
-            // dropping into the 503 branch here is unreachable in
-            // production but kept for exhaustiveness + safety.
-            argv = []
-        case .cursor:
-            // Cursor imported-session resume needs a real Cursor chat id.
-            // The current JSONL extractor only proves Claude/Codex ids, so
-            // keep this conservative until the Cursor importer can prove one.
-            argv = []
-        case .grok:
-            // ACP agent — driven via AcpAgentDriver, not a tmux argv. The
-            // daemon ACP spawn path is not wired yet, so fall through to the
-            // 503 (honest "not available" rather than an empty tmux spawn).
-            argv = []
-        case .unknown:
-            // X3: forward-compat unknown agent — no argv builder. Fall
-            // through to the 503 below so the iOS caller sees a clean
-            // failure instead of an empty spawn.
-            argv = []
-        }
-        guard !argv.isEmpty else {
-            sendResponse(HTTPResponse(
-                status: 503, reason: "Service Unavailable",
-                contentType: "application/json",
-                body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
-            ), on: connection)
-            return
-        }
-
-        // Spawn into a new tmux window cwd'd to the repo. Local mode —
-        // outside JSONLs don't carry a worktree.
-        do {
-            try await tmux.start()
-            let resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: req.repoKey)
-            let window = try await tmux.newWindow(
-                cwd: req.repoKey,
-                child: argv,
-                environment: resolvedEnv?.environment ?? [:]
-            )
-            let session = try await registry.create(
-                repoKey: req.repoKey,
-                repoDisplayName: (req.repoKey as NSString).lastPathComponent,
-                agent: req.agent,
-                model: modelDefault,
-                goal: nil,
-                worktreePath: nil,
-                tmuxWindowId: window.windowId,
-                tmuxPaneId: window.paneId,
-                planMode: false,
-                ownsWorktree: false,
-                envSetId: resolvedEnv?.set?.id,
-                envSetName: resolvedEnv?.set?.name
-            )
-            if req.agent == .claude {
-                attachClaudeWiring(for: session, cwd: req.repoKey)
-            }
-            AgentEventStream.recordEvent(
-                sessionId: session.id,
-                kind: .sessionCreated,
-                payload: [
-                    "repo": req.repoKey,
-                    "agent": req.agent.rawValue,
-                    "resumed_from": req.jsonlPath
-                ]
-            )
-
-            // If a prompt came along, paste it after the pane is ready.
-            // Fire-and-forget so the HTTP response returns quickly with
-            // the new session id; the client can also poll /sessions
-            // for status.
-            if let prompt = req.prompt, !prompt.isEmpty {
-                let bytes = prompt.hasSuffix("\n")
-                    ? Array(prompt.utf8)
-                    : Array((prompt + "\n").utf8)
-                Task { [tmux] in
-                    try? await Task.sleep(nanoseconds: 600_000_000)
-                    try? await tmux.pasteBytes(paneId: window.paneId, bytes: Data(bytes))
-                    await AuditLog.shared.recordSend(
-                        sessionId: session.id,
-                        sourcePeer: Self.endpointString(connection.endpoint),
-                        text: prompt
-                    )
-                }
-            }
-
-            let response = ContinueReadOnlyResponse(sessionId: session.id)
-            let encoder = JSONEncoder()
-            if let body = try? encoder.encode(response) {
-                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
-            } else {
-                sendResponse(.internalError, on: connection)
-            }
-        } catch {
-            if sendRepoEnvConflict(error, on: connection) { return }
-            serverLogger.error("continue-readonly failed: \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection)
-        }
+        sendResponse(HTTPResponse(
+            status: 410,
+            reason: "Gone",
+            contentType: "application/json",
+            body: Data(#"{"error":"external_session_continuation_removed"}"#.utf8)
+        ), on: connection)
     }
 
     /// `POST /sessions/:id/attachments?ext=png` — body is raw image
@@ -4565,10 +4376,8 @@ public final class AgentControlServer {
 
     /// Parse a JSONL on the Mac and return its chat messages as JSON so
     /// the iPhone can render the actual conversation instead of just a
-    /// JSONL path + last-write timestamp. Security: the path must live
-    /// under `~/.claude/projects/` or `~/.codex/sessions/` — anything
-    /// else returns 401 so a paired-but-malicious iPhone can't read
-    /// arbitrary Mac files via the daemon.
+    /// JSONL path + last-write timestamp. Security: the path must belong
+    /// to a Continuum-owned registry session or live session wiring.
     private func handleGetTranscript(path queryPath: String, connection: NWConnection) {
         guard let queryStart = queryPath.firstIndex(of: "?") else {
             sendResponse(.notFound, on: connection)
@@ -4601,12 +4410,12 @@ public final class AgentControlServer {
             sendResponse(.notFound, on: connection)
             return
         }
-        let home = ClawdmeterRealHome.path()
-        let allowedPrefixes = [
-            home + "/.claude/projects/",
-            home + "/.codex/sessions/",
-        ]
-        guard allowedPrefixes.contains(where: { jsonlPath.hasPrefix($0) }) else {
+        let standardizedPath = URL(fileURLWithPath: jsonlPath).standardizedFileURL.path
+        let registryOwnedPaths = Set(registry.sessions.compactMap {
+            chatFileResolver.resolve(session: $0)?.standardizedFileURL.path
+        })
+        let liveOwnedPaths = Set(sessionWiring.values.map { $0.sessionFileURL.standardizedFileURL.path })
+        guard registryOwnedPaths.contains(standardizedPath) || liveOwnedPaths.contains(standardizedPath) else {
             serverLogger.warning("transcript: refusing read outside allow-list — \(jsonlPath, privacy: .public)")
             sendResponse(.unauthorized, on: connection)
             return
@@ -5744,8 +5553,8 @@ public final class AgentControlServer {
         // send/interrupt/permission handlers already route to that bridge
         // (SessionCommandRouter `.harnessBridge`). The legacy SDK/agentapi/tmux
         // chat paths below are deprecated, reachable only via the per-provider
-        // kill-switch (default off). Codex → `codex app-server`.
-        if req.provider == .codex {
+        // kill-switch. Codex → `codex app-server` while the kill-switch is on.
+        if req.provider == .codex, Self.codexAppServerEnabled {
             await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
             return
         }
@@ -5841,7 +5650,8 @@ public final class AgentControlServer {
             ChatCwdManager.markTrustedForClaude(path: chatCwd)
         }
         let argv = AgentSpawner.argv(for: updatedSession)
-        if argv.isEmpty {
+        let usesCodexSDK = updatedSession.agent == .codex && updatedSession.codexChatBackend == .sdk
+        if argv.isEmpty && !usesCodexSDK {
             // No binary on PATH for this provider — clean up + surface 503.
             try? await registry.delete(id: session.id)
             try? ChatCwdManager.remove(for: session.id)
@@ -5851,6 +5661,16 @@ public final class AgentControlServer {
                 body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
             ), on: connection)
             return
+        } else if usesCodexSDK {
+            // Codex SDK chat has no tmux child. The relay is attached lazily
+            // by the send path using the registered chat session + cwd.
+            try? await registry.updateRuntime(
+                id: session.id,
+                worktreePath: chatCwd,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                mode: .local
+            )
         } else if claudePtyEnabled && updatedSession.agent == .claude {
             // Track A: Claude chat over a per-session PTY (flag on). chat-cwd
             // is pre-trusted above (markTrustedForClaude), so no warmup is
@@ -5989,9 +5809,8 @@ public final class AgentControlServer {
     /// codex behind its kill-switch (default on); claude → tmux, opencode → SSE.
     private func isChatHarnessEligible(_ provider: AgentKind) -> Bool {
         switch provider {
-        // Codex chat now ALWAYS drives over `codex app-server` (same engine as
-        // Code, readOnly+never posture) — the legacy SDK relay is removed.
-        case .grok, .cursor, .gemini, .codex: return true
+        case .codex: return Self.codexAppServerEnabled
+        case .grok, .cursor, .gemini: return true
         default: return false
         }
     }
@@ -7662,26 +7481,6 @@ public final class AgentControlServer {
         }
     }
 
-    private nonisolated func newestCodexJSONL() -> URL? {
-        let sessionsDir = ClawdmeterRealHome.url()
-            .appendingPathComponent(".codex/sessions", isDirectory: true)
-        guard let enumerator = FileManager.default.enumerator(
-            at: sessionsDir,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else { return nil }
-        var newest: URL?
-        var newestDate = Date.distantPast
-        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            if date > newestDate {
-                newestDate = date
-                newest = url
-            }
-        }
-        return newest
-    }
-
     private func handleApprovePlan(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId),
               let session = registry.session(id: uuid) else {
@@ -7930,10 +7729,9 @@ public final class AgentControlServer {
         }
     }
 
-    /// v0.5.10 — `POST /jsonl-aliases/rename` with body `{path, name}`.
-    /// Rename a Recent JSONL row (not a Clawdmeter-owned session). Persists
-    /// to `~/.clawdmeter/jsonl-aliases.json` keyed by path. Empty/whitespace
-    /// `name` clears the alias.
+    /// Legacy endpoint kept for older paired clients. External JSONL aliases
+    /// are no longer surfaced in Code, so this route validates shape only and
+    /// intentionally performs no mutation.
     private func handleRenameJSONLAlias(
         request: HTTPRequest,
         connection: NWConnection
@@ -7943,30 +7741,14 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection)
             return
         }
-        // Match the session-rename cap so a malicious paired peer can't
-        // wedge a multi-MB string into the on-disk store.
         if let n = body.name, n.count > 200 {
             sendResponse(.badRequest, on: connection)
             return
         }
-        // Belt-and-braces: insist the path is absolute and lives under one
-        // of the two well-known JSONL roots. Prevents a paired peer from
-        // wedging arbitrary keys into the alias file.
-        let home = ClawdmeterRealHome.path()
-        let allowedRoots = [
-            home + "/.claude/projects/",
-            home + "/.codex/sessions/"
-        ]
-        guard body.path.hasPrefix("/"),
-              allowedRoots.contains(where: { body.path.hasPrefix($0) })
-        else {
+        guard body.path.hasPrefix("/") else {
             sendResponse(.badRequest, on: connection)
             return
         }
-        JSONLAliasStore.shared.setAlias(path: body.path, name: body.name)
-        // Refresh the RepoIndex snapshot so the new name shows in the
-        // sidebar without waiting for the 60s tick.
-        Task { [repoIndex] in await repoIndex.refresh() }
         sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
     }
 
@@ -8204,13 +7986,9 @@ public final class AgentControlServer {
         PathValidator.isValidRepoKey(key)
     }
 
-    /// Codex follow-up to P1-Mac-7: also validate jsonlPath in the
-    /// continue-readonly handler. The repoKey check alone left a
-    /// trust-boundary gap — a compromised client could send a valid
-    /// repoKey and a jsonlPath pointing at an unrelated session, and
-    /// the handler would happily resume that one. Restrict jsonlPath
-    /// to live under the user's Claude/Codex project directories and
-    /// reject the same traversal / control-byte / symlink-escape shapes
+    /// Legacy JSONL path validation helper retained for compatibility tests.
+    /// Restrict jsonlPath to live under known provider project directories and
+    /// reject traversal / control-byte / symlink-escape shapes
     /// covered by isValidRepoKey.
     static func isValidJsonlPath(_ path: String) -> Bool {
         // v0.7.7: delegated to PathValidator. Allowlist of agent project

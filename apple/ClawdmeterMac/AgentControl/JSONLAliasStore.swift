@@ -3,13 +3,9 @@ import OSLog
 
 private let aliasLogger = Logger(subsystem: "com.clawdmeter.mac", category: "JSONLAliasStore")
 
-/// Persisted custom-name aliases for Recent JSONL rows shown in the sessions
-/// sidebar. Keyed by absolute on-disk path so a rename survives across
-/// Clawdmeter restarts and across `RepoIndex` rebuilds.
-///
-/// Why a separate store from `AgentSessionRegistry`: Recent JSONL rows are
-/// not Clawdmeter-owned sessions — they're just files Clawdmeter is
-/// monitoring. The registry's session ids don't apply, so we key by path.
+/// Legacy persisted custom-name aliases for external JSONL rows. The current
+/// Code sidebar no longer surfaces those rows; the store remains only so
+/// older alias files and compatibility routes can be decoded safely.
 ///
 /// Thread-safe via internal `NSLock` so any context (actors, HTTP handlers,
 /// SwiftUI views) can read/write without isolation hops.
@@ -38,9 +34,7 @@ public final class JSONLAliasStore: @unchecked Sendable {
         return aliases[path]
     }
 
-    /// Snapshot of all aliases. Cheap copy — used by `RepoIndex` to fold
-    /// custom names into `RecentSession` rows in one pass without taking
-    /// the lock per file.
+    /// Snapshot of all aliases. Cheap copy for compatibility/debug tooling.
     public func snapshot() -> [String: String] {
         lock.lock()
         defer { lock.unlock() }
