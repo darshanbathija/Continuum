@@ -820,6 +820,7 @@ struct SidebarPane: View {
     private func worktreeRow(_ wt: WorktreeGroup) -> some View {
         let isOpen = wt.sessions.contains { $0.id == model.openSessionId }
         let provisioning = wt.sessions.contains { model.isProvisioning($0.id) }
+        let isActive = wt.sessions.contains { $0.status == .running }
         Button {
             // openSession() keeps any in-progress draft alive (don't clear it).
             if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
@@ -827,16 +828,6 @@ struct SidebarPane: View {
             }
         } label: {
             HStack(spacing: 8) {
-                Group {
-                    if provisioning {
-                        ProgressView().controlSize(.small).scaleEffect(0.6).frame(width: 13, height: 13)
-                    } else {
-                        Image(systemName: "arrow.triangle.branch")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(isOpen ? t.accent : t.fg3)
-                            .frame(width: 13)
-                    }
-                }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(wt.branch)
                         .font(TahoeFont.body(12.5, weight: .medium))
@@ -848,6 +839,16 @@ struct SidebarPane: View {
                         .lineLimit(1).truncationMode(.tail)
                 }
                 Spacer(minLength: 4)
+                if isActive {
+                    StatusPulseDot(color: .green, isLive: true)
+                        .help("AI session running in this worktree")
+                } else if provisioning {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.6)
+                        .frame(width: 14, height: 14)
+                        .help("Setting up this worktree")
+                }
                 if wt.sessions.count > 1 {
                     Text("\(wt.sessions.count)")
                         .font(TahoeFont.body(9.5, weight: .semibold))
@@ -857,7 +858,7 @@ struct SidebarPane: View {
                         .help("\(wt.sessions.count) models on this branch — open to switch via tabs")
                 }
             }
-            .padding(.leading, 34)
+            .padding(.leading, 48)
             .padding(.trailing, 8)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
