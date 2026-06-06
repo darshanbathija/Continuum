@@ -46,6 +46,7 @@ final class CodeRunProfileService {
     private let processManager: RunProcessManaging
     private let repoEnvResolver: RepoEnvRuntimeResolver?
     private var profiles: [UUID: Profile] = [:]
+    private let previewLaunchController = PreviewLaunchController()
     private let maxBufferedLines = 200
 
     init(
@@ -75,12 +76,49 @@ final class CodeRunProfileService {
         messages: [ChatMessage]
     ) async -> CodeRunProfileSnapshot {
         let profile = profile(for: session.id)
-        let command = (rawCommand ?? profile.command ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !command.isEmpty else {
-            profile.lastError = "Enter a run command first."
-            profile.status = .failed
+        let explicitCommand = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isManualRetry = explicitCommand?.isEmpty == false
+        let current = PreviewCurrentRunSnapshot(
+            command: profile.command,
+            cwd: profile.cwd,
+            url: profile.detectedURL.flatMap(URL.init(string:)),
+            isRunning: profile.status == .running,
+            isHealthy: profile.health.state == .healthy
+        )
+        let preparation = await previewLaunchController.prepare(
+            session: session,
+            messages: messages,
+            persistedCommand: explicitCommand?.isEmpty == false ? explicitCommand : profile.command,
+            current: current,
+            forceRestart: false,
+            retryFailedSetup: isManualRetry,
+            runSetup: { [weak self, weak profile] script, cwd, environment in
+                guard let self, let profile else {
+                    return PreviewSetupResult(succeeded: false, message: "Preview runner disappeared.")
+                }
+                return await self.runSetup(script: script, cwd: cwd, environment: environment, profile: profile)
+            }
+        )
+
+        let command: String
+        let configuredLaunch: PreviewLaunchCommand
+        switch preparation {
+        case .failed(let message):
+            if profile.processHandle == nil {
+                profile.status = .failed
+            }
+            profile.lastError = message == "No preview command or local URL detected." ? "Enter a run command first." : message
             profile.updatedAt = Date()
             return profile.snapshot()
+        case .open(let url, let source):
+            publishDetectedURL(url, source: source.rawValue, profile: profile)
+            return profile.snapshot()
+        case .reuse:
+            profile.updatedAt = Date()
+            return profile.snapshot()
+        case .start(let preparedCommand, let launch, _):
+            command = preparedCommand
+            configuredLaunch = launch
         }
 
         stopProcess(profile: profile, resetToIdle: false)
@@ -94,7 +132,8 @@ final class CodeRunProfileService {
         profile.updatedAt = Date()
 
         do {
-            let env = try repoEnvResolver?.resolveForLaunch(session: session)?.environment
+            let repoEnv = try repoEnvResolver?.resolveForLaunch(session: session)?.environment ?? [:]
+            let env = repoEnv.merging(configuredLaunch.environment) { _, new in new }
             profile.processHandle = try processManager.start(
                 command: command,
                 cwd: session.effectiveCwd,
@@ -118,6 +157,9 @@ final class CodeRunProfileService {
             profile.updatedAt = Date()
         }
 
+        if let expectedURL = configuredLaunch.expectedURL {
+            publishDetectedURL(expectedURL, source: configuredLaunch.source.rawValue, profile: profile)
+        }
         detectTranscriptURLIfNeeded(profile: profile, messages: messages)
         return profile.snapshot()
     }
@@ -235,6 +277,35 @@ final class CodeRunProfileService {
             )
         } catch {
             return CodeRunProfileHealth(state: .unhealthy, message: error.localizedDescription, checkedAt: Date())
+        }
+    }
+
+    private func runSetup(script: String, cwd: String, environment: [String: String], profile: Profile) async -> PreviewSetupResult {
+        profile.status = .starting
+        profile.updatedAt = Date()
+        do {
+            let result = try await ShellRunner.shared.run(
+                executable: "/bin/zsh",
+                arguments: ["-lc", script],
+                cwd: cwd,
+                environment: ProcessInfo.processInfo.environment.merging(environment) { _, new in new },
+                timeout: 600
+            )
+            appendBuffered(result.stdoutString, to: &profile.stdoutLines)
+            appendBuffered(result.stderrString, to: &profile.stderrLines)
+            if result.exitStatus != 0 {
+                let message = "Setup exited with status \(result.exitStatus)."
+                profile.lastError = message
+                profile.updatedAt = Date()
+                return PreviewSetupResult(succeeded: false, message: message)
+            }
+            profile.updatedAt = Date()
+            return PreviewSetupResult(succeeded: true, message: nil)
+        } catch {
+            let message = "Setup failed: \(error.localizedDescription)"
+            profile.lastError = message
+            profile.updatedAt = Date()
+            return PreviewSetupResult(succeeded: false, message: message)
         }
     }
 }

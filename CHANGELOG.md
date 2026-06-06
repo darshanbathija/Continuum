@@ -4,6 +4,24 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.2 build 202] - 2026-06-06 - Browser Preview annotations (`darshanbathija/design-comments`)
+
+### Added
+
+- Code sessions now include a first-class Browser Preview surface that can open the current worktree's running app from any completed assistant turn.
+- Browser Preview keeps a persistent browser per session/worktree, supports full-workspace browsing with the repo/worktree sidebar still visible, and adds Browser as a selectable Code right-side mode.
+- Browser annotations can be attached to the composer as removable `Comment: ...` chips, with redacted browser context rendered into the outgoing draft.
+- Preview launch now resolves setup/run commands for the current worktree, reserves a local port range, reuses only matching healthy servers, and exposes setup/run health as a dedicated preview lifecycle.
+
+### Fixed
+
+- Preview no longer reopens a stale healthy browser URL from another working directory when the active session/worktree changed.
+- WebView routing is now keyed by browser workspace so multiple sessions cannot steal each other's navigation or annotation commands.
+
+### Changed
+
+- Bumps `VERSION` 0.31.0 -> 0.31.2, `MARKETING_VERSION` 0.31.1 -> 0.31.2, and `CURRENT_PROJECT_VERSION` 201 -> 202.
+
 ## [0.31.1 build 201] - 2026-06-06 - Code tab sidebar alignment (`darshanbathija/code-tab-sidebar-align`)
 
 ### Fixed

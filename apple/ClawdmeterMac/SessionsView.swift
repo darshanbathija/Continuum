@@ -271,6 +271,7 @@ struct NewSessionMacSheet: View {
 struct PendingFirstSendRecovery: Equatable {
     let text: String
     let attachments: [ComposerStore.Attachment]
+    let browserComments: [BrowserCommentContext]
     let error: ComposerStore.SendError
     /// When true, the queued draft auto-sends the moment the session is ready
     /// (used for sends made while a "+" session is still provisioning) instead
@@ -805,12 +806,14 @@ public final class SessionsModel: ObservableObject {
         sessionId: UUID,
         text: String,
         attachments: [ComposerStore.Attachment],
+        browserComments: [BrowserCommentContext] = [],
         error: ComposerStore.SendError,
         autoSendWhenReady: Bool = false
     ) {
         pendingFirstSendRecoveries[sessionId] = PendingFirstSendRecovery(
             text: text,
             attachments: attachments,
+            browserComments: browserComments,
             error: error,
             autoSendWhenReady: autoSendWhenReady
         )

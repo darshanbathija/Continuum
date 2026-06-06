@@ -12,6 +12,7 @@ struct CenterThread: View {
     let density: TranscriptDensity
     let onDensityChange: (TranscriptDensity) -> Void
     let onModeSwitch: (SessionMode) -> Void
+    let onPreviewRequested: () -> Void
 
     /// Sourced from `SessionsModel.composerStore(for:)` (a per-session cache)
     /// rather than a locally-constructed `@StateObject`. This is what lets the
@@ -65,7 +66,8 @@ struct CenterThread: View {
         presentationStore: SessionPresentationStore,
         density: TranscriptDensity,
         onDensityChange: @escaping (TranscriptDensity) -> Void,
-        onModeSwitch: @escaping (SessionMode) -> Void
+        onModeSwitch: @escaping (SessionMode) -> Void,
+        onPreviewRequested: @escaping () -> Void = {}
     ) {
         self.session = session
         self.isReadOnly = isReadOnly
@@ -76,6 +78,7 @@ struct CenterThread: View {
         self.density = density
         self.onDensityChange = onDensityChange
         self.onModeSwitch = onModeSwitch
+        self.onPreviewRequested = onPreviewRequested
         _composerStore = ObservedObject(wrappedValue: model.composerStore(for: session, catalog: catalog))
         _prMirror = ObservedObject(wrappedValue: model.prMirror(for: session))
     }
@@ -563,6 +566,13 @@ struct CenterThread: View {
                     .padding(.top, 6)
                     .help(draft.attachmentPaths.joined(separator: "\n"))
             }
+            if !draft.browserComments.isEmpty {
+                Label("\(draft.browserComments.count)", systemImage: "safari")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(SessionsV2Theme.accent)
+                    .padding(.top, 6)
+                    .help(draft.browserComments.map(\.chipLabel).joined(separator: "\n"))
+            }
             Button {
                 Task { await dispatchQueuedDraft(draft, manual: true) }
             } label: {
@@ -635,7 +645,8 @@ struct CenterThread: View {
                         guard await createLifecycleCheckpoint(summary: "Before plan approval") else { return }
                         await model.approvePlan(id: session.id)
                     }
-                }
+                },
+                onPreviewTurn: onPreviewRequested
             )
                 .id(session.id)
                 .onAppear {
@@ -732,8 +743,7 @@ struct CenterThread: View {
         guard composerStore.canSend else { return }
         let draft = QueuedWorkbenchSend(
             sessionId: session.id,
-            text: composerStore.text,
-            attachmentPaths: composerStore.attachments.map { $0.sourceURL.path }
+            payload: composerStore.draftPayload()
         )
         workbenchState.queueSend(draft)
         composerStore.clearAfterSend()
@@ -751,7 +761,7 @@ struct CenterThread: View {
 
     private func dispatchQueuedDraft(_ draft: QueuedWorkbenchSend, manual: Bool) async {
         guard session.status != .running else { return }
-        guard !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachmentPaths.isEmpty else {
+        guard draft.payload.hasContent else {
             workbenchState.removeQueuedSend(id: draft.id)
             return
         }
@@ -793,7 +803,7 @@ struct CenterThread: View {
         }
 
         let sender = MacComposerSender(port: Int(port), token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? ""))
-        let body = QueuedPromptRenderer.render(text: draft.text, attachmentPaths: stagedPaths)
+        let body = QueuedPromptRenderer.render(payload: draft.payload, attachmentPaths: stagedPaths)
         do {
             guard await createLifecycleCheckpoint(summary: "Before queued prompt") else {
                 composerStore.endSend(error: .daemonError(message: "Safety checkpoint failed. Prompt was not sent."))
@@ -880,6 +890,7 @@ struct CenterThread: View {
         composerStore.beginSend()
         let draftText = composerStore.text
         let draftAttachments = composerStore.attachments
+        let draftBrowserComments = composerStore.browserComments
         guard let runtime = AppDelegate.runtime,
               let port = runtime.agentControlServer.boundPort
         else {
@@ -934,6 +945,7 @@ struct CenterThread: View {
                 sessionId: target.id,
                 text: draftText,
                 attachments: draftAttachments,
+                browserComments: draftBrowserComments,
                 error: .offline,
                 autoSendWhenReady: true
             )
@@ -949,7 +961,8 @@ struct CenterThread: View {
                 .daemonError(message: "Safety checkpoint failed. Prompt was not sent."),
                 promotedTarget: promotedReadOnlyTarget,
                 draftText: draftText,
-                draftAttachments: draftAttachments
+                draftAttachments: draftAttachments,
+                draftBrowserComments: draftBrowserComments
             )
             return
         }
@@ -966,7 +979,8 @@ struct CenterThread: View {
                         .daemonError(message: "Couldn't stage \(att.displayName): \(error.localizedDescription)"),
                         promotedTarget: promotedReadOnlyTarget,
                         draftText: draftText,
-                        draftAttachments: draftAttachments
+                        draftAttachments: draftAttachments,
+                        draftBrowserComments: draftBrowserComments
                     )
                     return
                 }
@@ -991,21 +1005,24 @@ struct CenterThread: View {
                 sendError(forHTTPStatus: status, retryAfter: retry),
                 promotedTarget: promotedReadOnlyTarget,
                 draftText: draftText,
-                draftAttachments: draftAttachments
+                draftAttachments: draftAttachments,
+                draftBrowserComments: draftBrowserComments
             )
         } catch MacComposerSender.Error.transport(let m) {
             finishBoundSendWithError(
                 .daemonError(message: m),
                 promotedTarget: promotedReadOnlyTarget,
                 draftText: draftText,
-                draftAttachments: draftAttachments
+                draftAttachments: draftAttachments,
+                draftBrowserComments: draftBrowserComments
             )
         } catch {
             finishBoundSendWithError(
                 .daemonError(message: error.localizedDescription),
                 promotedTarget: promotedReadOnlyTarget,
                 draftText: draftText,
-                draftAttachments: draftAttachments
+                draftAttachments: draftAttachments,
+                draftBrowserComments: draftBrowserComments
             )
         }
     }
@@ -1030,8 +1047,18 @@ struct CenterThread: View {
         // Preserve any new draft the user typed since the failure.
         let liveDraft = composerStore.text
         let liveDraftAttachments = composerStore.attachments
+        let liveDraftBrowserComments = composerStore.browserComments
+        let liveDraftPayload = ComposerDraftPayload(
+            text: liveDraft,
+            attachmentPaths: liveDraftAttachments.map(\.sourceURL.path),
+            browserComments: liveDraftBrowserComments
+        )
+        let liveDraftMatchesPending = liveDraftPayload
+            .render()
+            .trimmingCharacters(in: .whitespacesAndNewlines) == pending.body.trimmingCharacters(in: .whitespacesAndNewlines)
 
         composerStore.text = pending.body
+        composerStore.clearBrowserComments()
         chatStore.markPendingRetrying()
         await performBoundSend()
 
@@ -1040,8 +1067,12 @@ struct CenterThread: View {
         // composer on success, so we only restore when the slot was
         // already populated by something other than the pending body.
         let trimmedLive = liveDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedLive.isEmpty, trimmedLive != pending.body {
-            composerStore.restoreDraft(text: liveDraft, attachments: liveDraftAttachments)
+        if !liveDraftMatchesPending && (!trimmedLive.isEmpty || !liveDraftBrowserComments.isEmpty) {
+            composerStore.restoreDraft(
+                text: liveDraft,
+                attachments: liveDraftAttachments,
+                browserComments: liveDraftBrowserComments
+            )
         }
     }
 
@@ -1094,13 +1125,15 @@ struct CenterThread: View {
         _ error: ComposerStore.SendError,
         promotedTarget: AgentSession?,
         draftText: String,
-        draftAttachments: [ComposerStore.Attachment]
+        draftAttachments: [ComposerStore.Attachment],
+        draftBrowserComments: [BrowserCommentContext]
     ) {
         if let promotedTarget {
             model.queueFirstSendRecovery(
                 sessionId: promotedTarget.id,
                 text: draftText,
                 attachments: draftAttachments,
+                browserComments: draftBrowserComments,
                 error: error
             )
         }
@@ -1370,6 +1403,7 @@ struct CenterThread: View {
         composerStore.restoreDraft(
             text: recovery.text,
             attachments: recovery.attachments,
+            browserComments: recovery.browserComments,
             error: recovery.autoSendWhenReady ? nil : recovery.error
         )
         // Auto-flush a prompt queued while the "+" session was provisioning —

@@ -50,7 +50,7 @@ The main Mac tabs are:
 
 - **Chat** - solo or broadcast chat over Claude, Codex, Antigravity, Cursor, and OpenRouter, with Frontier-style multi-provider comparison endpoints in the daemon.
 - **Usage** - live quota cards plus historical spend by provider, day, and repo. OpenCode appears as a dollar-cost lane because it does not expose Anthropic-style rolling quota headers.
-- **Code** - repo/session workbench with city-named worktrees, terminal panes, chat transcript, plan/diff/PR/artifact/source panes, archive/reopen flows, and provider filters.
+- **Code** - repo/session workbench with city-named worktrees, terminal panes, chat transcript, Browser Preview with comment chips, plan/diff/PR/artifact/source panes, archive/reopen flows, and provider filters.
 - **Settings** - visual theme, provider setup, per-provider model/effort defaults, Codex SDK diagnostics, Antigravity SDK diagnostics, pairing, Live Activities, auto-revive, and diagnostics.
 
 ## Analytics

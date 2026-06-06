@@ -28,6 +28,7 @@ struct SessionWorkspaceView: View {
     @State private var showingWorkspaceSwitcher: Bool = false
     @StateObject private var launcher = SessionLauncherModel()
     @StateObject private var workbenchState = WorkbenchState()
+    @StateObject private var browserControllers = BrowserWorkspaceControllerStore()
     /// Workspace-level width, measured via GeometryReader. Drives responsive
     /// pane collapsing so even when the user opens the review pane it only
     /// renders if the window has room for it without clipping content.
@@ -47,11 +48,27 @@ struct SessionWorkspaceView: View {
     private static let gutterThreshold: CGFloat = 900
 
     private var effectiveShowReviewPane: Bool {
-        workbenchState.showingReviewPane && workbenchState.workspaceWidth >= Self.reviewPaneThreshold
+        !isImmersiveBrowserActive
+            && workbenchState.showingReviewPane
+            && workbenchState.workspaceWidth >= Self.reviewPaneThreshold
     }
 
     private var effectiveShowGutter: Bool {
-        !effectiveShowReviewPane && workbenchState.workspaceWidth >= Self.gutterThreshold
+        !isImmersiveBrowserActive
+            && !effectiveShowReviewPane
+            && workbenchState.workspaceWidth >= Self.gutterThreshold
+    }
+
+    private var isImmersiveBrowserActive: Bool {
+        guard let session = model.openSession else { return false }
+        return workbenchState.immersiveBrowserSessionId == session.id
+            && workbenchState.selectedRightPane == .browser
+    }
+
+    private var activeBrowserControllerKeys: [String] {
+        model.registry.sessions
+            .map { BrowserWorkspaceControllerStore.identityKey(for: $0) }
+            .sorted()
     }
 
     /// Diff needs space — bump the review pane to ~58% of the workspace
@@ -94,8 +111,20 @@ struct SessionWorkspaceView: View {
                 TahoeGlass(radius: 8, tone: .panel) {
                     HStack(spacing: 0) {
                         ZStack(alignment: .bottom) {
-                            if let documentTab = model.selectedWorkspaceDocumentTab,
-                               let documentSession = model.registry.session(id: documentTab.sessionId) {
+                            if isImmersiveBrowserActive, let session = model.openSession {
+                                InAppBrowser(
+                                    session: session,
+                                    model: model,
+                                    workbenchState: workbenchState,
+                                    controller: browserController(for: session),
+                                    isFullWorkspace: true,
+                                    onCloseFullWorkspace: {
+                                        workbenchState.exitImmersiveBrowser()
+                                    }
+                                )
+                                .id("browser-\(session.id.uuidString)")
+                            } else if let documentTab = model.selectedWorkspaceDocumentTab,
+                                      let documentSession = model.registry.session(id: documentTab.sessionId) {
                                 centerDocument(documentTab, session: documentSession)
                                     .id(documentTab.id)
                             } else if let terminalTab = model.selectedWorkspaceTerminalTab,
@@ -114,6 +143,9 @@ struct SessionWorkspaceView: View {
                                     onDensityChange: { workbenchState.setDensity($0) },
                                     onModeSwitch: { newMode in
                                         Task { await switchMode(session: session, to: newMode) }
+                                    },
+                                    onPreviewRequested: {
+                                        workbenchState.requestPreview(sessionId: session.id)
                                     }
                                 )
                                 // No `.id(session.id)` here (deliberately): the
@@ -180,6 +212,7 @@ struct SessionWorkspaceView: View {
                             model: model,
                             workbenchState: workbenchState,
                             presentationStore: presentationStore,
+                            browserController: browserController(for: session),
                             selectedTab: selectedRightPaneBinding,
                             onClose: {
                                 animateWorkspaceChange(.easeOut(duration: 0.18)) {
@@ -256,9 +289,16 @@ struct SessionWorkspaceView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: showingWorkspaceSwitcher)
         .onAppear {
             restorePersistedSessionSelectionIfPossible()
+            browserControllers.prune(keeping: model.registry.sessions)
         }
         .onChange(of: model.openSessionId) { _, newValue in
             workbenchState.selectSession(newValue)
+        }
+        .onChange(of: activeBrowserControllerKeys) { _, _ in
+            browserControllers.prune(keeping: model.registry.sessions)
+        }
+        .onChange(of: workbenchState.previewIntent?.id) { _, _ in
+            Task { await handlePreviewIntent() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleCodeReviewPane)) { _ in
             guard workbenchState.workspaceWidth >= Self.reviewPaneThreshold else { return }
@@ -307,6 +347,22 @@ struct SessionWorkspaceView: View {
         Binding(
             get: { workbenchState.selectedRightPane },
             set: { workbenchState.selectRightPane($0) }
+        )
+    }
+
+    private func browserController(for session: AgentSession) -> BrowserWorkspaceController {
+        browserControllers.controller(for: session, model: model, workbenchState: workbenchState)
+    }
+
+    @MainActor
+    private func handlePreviewIntent() async {
+        guard let intent = workbenchState.previewIntent else { return }
+        let session = model.registry.session(id: intent.sessionId) ?? model.openSession
+        guard let session else { return }
+        await browserController(for: session).launchPreview(
+            session: session,
+            workbenchState: workbenchState,
+            forceRestart: intent.forceRestart
         )
     }
 

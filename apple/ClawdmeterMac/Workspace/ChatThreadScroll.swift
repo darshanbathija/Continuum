@@ -27,6 +27,7 @@ struct ChatThreadScroll: View {
     let isReviewPaneVisible: Bool
     let onPlanRefine: () -> Void
     let onPlanApprove: () -> Void
+    let onPreviewTurn: () -> Void
     @Environment(\.tahoe) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -40,7 +41,8 @@ struct ChatThreadScroll: View {
         canApprovePlan: Bool,
         isReviewPaneVisible: Bool,
         onPlanRefine: @escaping () -> Void,
-        onPlanApprove: @escaping () -> Void
+        onPlanApprove: @escaping () -> Void,
+        onPreviewTurn: @escaping () -> Void = {}
     ) {
         self.store = store
         _messagesSlice = ObservedObject(wrappedValue: store.messagesSlice)
@@ -54,6 +56,7 @@ struct ChatThreadScroll: View {
         self.isReviewPaneVisible = isReviewPaneVisible
         self.onPlanRefine = onPlanRefine
         self.onPlanApprove = onPlanApprove
+        self.onPreviewTurn = onPreviewTurn
     }
 
     /// IDs of expanded disclosure groups. Per-row `@State` would be ideal
@@ -717,8 +720,22 @@ struct ChatThreadScroll: View {
     private func turnChipStrip(_ turn: TranscriptTurn) -> some View {
         let artifacts = turn.outputArtifacts
         let files = turn.editedFiles
-        if !artifacts.isEmpty || !files.isEmpty {
+        if turn.finalAssistant != nil || !artifacts.isEmpty || !files.isEmpty {
             HStack(spacing: 8) {
+                if turn.finalAssistant != nil {
+                    Button {
+                        onPreviewTurn()
+                    } label: {
+                        transcriptChip(
+                            icon: WorkbenchPaneTab.browser.systemImage,
+                            title: "Preview",
+                            tint: SessionsV2Theme.accent
+                        )
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .help("Open the current worktree preview")
+                    .accessibilityIdentifier("code.turn.preview")
+                }
                 ForEach(artifacts.prefix(6)) { artifact in
                     Button {
                         openTranscriptArtifact(artifact)

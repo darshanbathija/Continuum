@@ -8,6 +8,7 @@ struct WorkspaceReviewPane: View {
     @ObservedObject var model: SessionsModel
     @ObservedObject var workbenchState: WorkbenchState
     @ObservedObject var presentationStore: SessionPresentationStore
+    @ObservedObject var browserController: BrowserWorkspaceController
     @Binding var selectedTab: WorkbenchPaneTab
     let onClose: () -> Void
     let onApprove: () -> Void
@@ -22,7 +23,6 @@ struct WorkspaceReviewPane: View {
             tabBar
             TahoeHairline()
             tabContent
-                .id(selectedTab)
                 .transition(.opacity)
         }
         .background(Color.clear)
@@ -53,7 +53,7 @@ struct WorkspaceReviewPane: View {
         .padding(.vertical, 6)
     }
 
-    private static let primaryTabs: [WorkbenchPaneTab] = [.plan, .diff, .sources, .pr, .terminal]
+    private static let primaryTabs: [WorkbenchPaneTab] = [.plan, .diff, .sources, .browser, .pr, .terminal]
 
     private func tabChip(_ tab: WorkbenchPaneTab) -> some View {
         let isSelected = (selectedTab == tab)
@@ -122,7 +122,12 @@ struct WorkspaceReviewPane: View {
                 }
             }
         case .browser:
-            InAppBrowser(session: session, model: model, workbenchState: workbenchState)
+            InAppBrowser(
+                session: session,
+                model: model,
+                workbenchState: workbenchState,
+                controller: browserController
+            )
         case .pr:
             TahoePRCompactPane(
                 coordinator: model.prCoordinator(for: session),

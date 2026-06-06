@@ -165,6 +165,26 @@ final class WorkbenchStateTests: XCTestCase {
         XCTAssertEqual(reloaded.selectedRightPane, .diff)
     }
 
+    func test_browserPaneStateSwitchingStaysUnder250msBudget() {
+        let sessionA = UUID()
+        let sessionB = UUID()
+        let state = WorkbenchState(store: WorkbenchStateStore(storeURL: storeURL))
+        let iterations = 50
+        let started = CFAbsoluteTimeGetCurrent()
+
+        for index in 0..<iterations {
+            let sessionId = index.isMultiple(of: 2) ? sessionA : sessionB
+            state.selectSession(sessionId)
+            state.selectRightPane(.browser)
+            state.enterImmersiveBrowser(sessionId: sessionId)
+            state.exitImmersiveBrowser()
+            state.selectRightPane(.plan)
+        }
+
+        let average = (CFAbsoluteTimeGetCurrent() - started) / Double(iterations)
+        XCTAssertLessThan(average, 0.25)
+    }
+
     func test_queueDraftsAreEditableAndScopedBySession() {
         let sessionA = UUID()
         let sessionB = UUID()
@@ -193,6 +213,36 @@ final class WorkbenchStateTests: XCTestCase {
         )
 
         XCTAssertEqual(body, "@/tmp/a.png\nfix this\n")
+    }
+
+    func test_queuedDraftPayloadRoundTripsBrowserComments() {
+        let sessionId = UUID()
+        let state = WorkbenchState(store: WorkbenchStateStore(storeURL: storeURL))
+        let comment = BrowserCommentContext(
+            urlString: "http://localhost:5173",
+            selector: "#save",
+            snippet: "Save",
+            comment: "button missing contrast"
+        )
+
+        state.queueSend(QueuedWorkbenchSend(
+            sessionId: sessionId,
+            payload: ComposerDraftPayload(
+                text: "fix preview",
+                attachmentPaths: ["/tmp/screenshot.png"],
+                browserComments: [comment]
+            )
+        ))
+
+        let reloaded = WorkbenchState(store: WorkbenchStateStore(storeURL: storeURL))
+        guard let draft = reloaded.nextQueuedSend(for: sessionId) else {
+            return XCTFail("Expected queued draft after reload")
+        }
+        XCTAssertEqual(draft.payload.text, "fix preview")
+        XCTAssertEqual(draft.payload.attachmentPaths, ["/tmp/screenshot.png"])
+        XCTAssertEqual(draft.payload.browserComments.first?.chipLabel, "Comment: button missing contrast")
+        XCTAssertTrue(QueuedPromptRenderer.render(payload: draft.payload, attachmentPaths: [])
+            .contains("[BROWSER COMMENT]"))
     }
 
     func test_checkpointServiceCreatesRefAndRestoresCleanWorktree() async throws {
@@ -259,11 +309,8 @@ final class WorkbenchStateTests: XCTestCase {
 
         let sessionId = UUID()
         let session = makeSession(id: sessionId, repo: repo)
-        var tick = 1_700_000_100.0
-        let service = CheckpointService(now: {
-            defer { tick += 1 }
-            return Date(timeIntervalSince1970: tick)
-        })
+        let ticker = TestDateTicker(startingAt: 1_700_000_100.0)
+        let service = CheckpointService(now: { ticker.next() })
         let checkpoint = try await service.createCheckpoint(session: session, summary: "Before edit")
 
         try FileManager.default.removeItem(at: scratch)
@@ -374,5 +421,23 @@ final class WorkbenchStateTests: XCTestCase {
             lastEventAt: Date(),
             lastEventSeq: 1
         )
+    }
+}
+
+private final class TestDateTicker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: TimeInterval
+
+    init(startingAt value: TimeInterval) {
+        self.value = value
+    }
+
+    func next() -> Date {
+        lock.lock()
+        defer {
+            value += 1
+            lock.unlock()
+        }
+        return Date(timeIntervalSince1970: value)
     }
 }

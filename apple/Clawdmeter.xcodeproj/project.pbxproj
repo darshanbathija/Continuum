@@ -104,6 +104,8 @@
 		3E4ECC9D7E017C2E27E605F5 /* ComposerInputCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CD788C3119613C920DFB7B0 /* ComposerInputCore.swift */; };
 		3FA93795C2490B0FF32C0353 /* TailscaleWhoisIpOnlyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D2A6ACB7ED52F90032E358F /* TailscaleWhoisIpOnlyTests.swift */; };
 		3FEC8086C160D365D5C211B0 /* AttachmentChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0273C0880168A1CE3A2927 /* AttachmentChip.swift */; };
+		A4B8C2D1E3F4456789ABCDE0 /* BrowserCommentChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4B8C2D1E3F4456789ABCDEF /* BrowserCommentChip.swift */; };
+		A4B8C2D1E3F4456789ABCDE2 /* browser-overlay.js in Resources */ = {isa = PBXBuildFile; fileRef = A4B8C2D1E3F4456789ABCDE1 /* browser-overlay.js */; };
 		40413B717F409C644643AF73 /* PRCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A629825BB527592CC870F4 /* PRCoordinatorTests.swift */; };
 		4093AB1AA42F19A94C6CCF68 /* OpencodeSendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 082C9ACB265F5683E2F5645E /* OpencodeSendTests.swift */; };
 		40D596319B0D0203AE7F1B84 /* ClawdmeterMacWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 07E588070BA9CBA723BA60EC /* ClawdmeterMacWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -687,6 +689,8 @@
 		8C1B8A7FA6946383349924D1 /* AgentSessionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionRegistry.swift; sourceTree = "<group>"; };
 		8CB1DCED1C1E9B286E0D594F /* SessionEventWiring.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionEventWiring.swift; sourceTree = "<group>"; };
 		8CD788C3119613C920DFB7B0 /* ComposerInputCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerInputCore.swift; sourceTree = "<group>"; };
+		A4B8C2D1E3F4456789ABCDEF /* BrowserCommentChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserCommentChip.swift; sourceTree = "<group>"; };
+		A4B8C2D1E3F4456789ABCDE1 /* browser-overlay.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "browser-overlay.js"; sourceTree = "<group>"; };
 		8D258CBFD20C2EA718B511CD /* IOSSessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSSessionDetailView.swift; sourceTree = "<group>"; };
 		8D2932E5B049F7DE99D05C44 /* ClawdmeteriOSWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ClawdmeteriOSWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		8E414059E5EEBAE58913412B /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
@@ -1125,6 +1129,7 @@
 				CE0273C0880168A1CE3A2927 /* AttachmentChip.swift */,
 				E2672EC5D93791232630202C /* AttachmentStaging.swift */,
 				AF71122468E94982651161D9 /* AutopilotChip.swift */,
+				A4B8C2D1E3F4456789ABCDEF /* BrowserCommentChip.swift */,
 				CCCDF9317290F56870BC0564 /* CommandPalette.swift */,
 				8CD788C3119613C920DFB7B0 /* ComposerInputCore.swift */,
 				676A5C188193624EE197578F /* ComposerInsertionInbox.swift */,
@@ -1497,6 +1502,7 @@
 			children = (
 				989678078117646A9327BB0B /* ClaudeLogo.svg */,
 				41B60D6E8F440791CA97B015 /* CodexLogo.png */,
+				A4B8C2D1E3F4456789ABCDE1 /* browser-overlay.js */,
 				26B5538D5376C29DDF7CD413 /* deep-research-prompt.txt */,
 				61DCEB1020CBB0E324C60959 /* GeminiLogo.svg */,
 				3F390A788ACC767845A4786C /* Vendor */,
@@ -1860,6 +1866,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0127E090A7799D2F4A7BC9BB /* Assets.xcassets in Resources */,
+				A4B8C2D1E3F4456789ABCDE2 /* browser-overlay.js in Resources */,
 				4A027F14FB57C10128699164 /* ClaudeLogo.svg in Resources */,
 				C97F41751616AF2672BAA590 /* CodexLogo.png in Resources */,
 				389C34543E4E3E857E98DC40 /* GeminiLogo.svg in Resources */,
@@ -2057,6 +2064,7 @@
 				1A33BCE35CFE5B8AFC5BD284 /* ClawdmeterMacApp.swift in Sources */,
 				4C543601780662CF227769D6 /* CloneRepoSheet.swift in Sources */,
 				B165EF5AFBBB3BAE43A86815 /* CodeRunProfileService.swift in Sources */,
+				A4B8C2D1E3F4456789ABCDE0 /* BrowserCommentChip.swift in Sources */,
 				51F807AB2E5043005973D0AD /* CodexAppServerDriver.swift in Sources */,
 				0190050C63A0552D50548BA8 /* CodexPlanPane.swift in Sources */,
 				536D0374AE837765530A760E /* CommandPalette.swift in Sources */,
@@ -2419,7 +2427,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 200;
+				CURRENT_PROJECT_VERSION = 202;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -2438,7 +2446,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.31.0;
+				MARKETING_VERSION = 0.31.2;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -2740,7 +2748,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 200;
+				CURRENT_PROJECT_VERSION = 202;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -2753,7 +2761,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.31.0;
+				MARKETING_VERSION = 0.31.2;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

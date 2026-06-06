@@ -1,16 +1,25 @@
 import XCTest
 
 final class CodeTabHoverShortcutUITests: XCTestCase {
+    private struct UITestFixture {
+        let appSupportDirectory: URL
+        let claudeProjectsRoot: URL
+    }
+
     private var app: XCUIApplication!
     private var testAppSupportDirectory: URL!
+    private var testClaudeProjectsRoot: URL!
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        testAppSupportDirectory = try Self.seedWorkspaceStore()
+        let fixture = try Self.seedWorkspaceStore()
+        testAppSupportDirectory = fixture.appSupportDirectory
+        testClaudeProjectsRoot = fixture.claudeProjectsRoot
         app = XCUIApplication()
         app.launchArguments += ["--ui-testing"]
         app.launchEnvironment["CLAWDMETER_UI_TESTING"] = "1"
         app.launchEnvironment["CLAWDMETER_TEST_APP_SUPPORT_DIR"] = testAppSupportDirectory.path
+        app.launchEnvironment["CLAWDMETER_TEST_CLAUDE_PROJECTS_ROOT"] = testClaudeProjectsRoot.path
         app.launch()
     }
 
@@ -20,6 +29,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             try? FileManager.default.removeItem(at: testAppSupportDirectory)
         }
         testAppSupportDirectory = nil
+        testClaudeProjectsRoot = nil
     }
 
     func testCodeTabComposerControlsExposeShortcutTargets() throws {
@@ -47,10 +57,8 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
     func testSessionRenameShortcutWhenSessionExists() throws {
         openCodeTab()
 
-        let row = element("code.session.row")
-        guard row.waitForExistence(timeout: 3) else {
-            throw XCTSkip("No Code session row exists in this UI-test environment.")
-        }
+        let row = workspaceLeafRowElement()
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
 
         row.click()
         app.typeKey("r", modifierFlags: [.command, .shift])
@@ -63,6 +71,37 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             "Command-Shift-R should use the shared rename dialog."
         )
         app.typeKey(.escape, modifierFlags: [])
+    }
+
+    func testPreviewChipOpensFullWorkspaceBrowserFromCompletedAssistantTurn() throws {
+        openCodeTab()
+
+        let row = workspaceLeafRowElement()
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
+        row.click()
+
+        let fullWorkspaceBrowser = element("code.browser.fullWorkspace")
+        if fullWorkspaceBrowser.waitForExistence(timeout: 2) {
+            XCTAssertTrue(element("code.browser.backToChat").waitForExistence(timeout: 5), "Restored Browser should expose Back to Chat.")
+            element("code.browser.backToChat").click()
+            XCTAssertTrue(waitForNonExistence(fullWorkspaceBrowser, timeout: 5), "Back to Chat should return to the transcript before exercising Preview.")
+        }
+
+        let preview = element("code.turn.preview")
+        if preview.waitForExistence(timeout: 20) {
+            preview.click()
+        } else if !fullWorkspaceBrowser.waitForExistence(timeout: 2) {
+            XCTFail("Completed assistant turn should expose a Preview chip or open the full-workspace Browser surface.")
+        }
+        XCTAssertTrue(fullWorkspaceBrowser.waitForExistence(timeout: 10), "Preview should open the full-workspace Browser surface.")
+        XCTAssertTrue(workspaceLeafRowElement().exists, "Full-workspace Browser should keep the repo/worktree sidebar visible.")
+        XCTAssertTrue(element("code.browser.backToChat").waitForExistence(timeout: 5), "Browser toolbar should expose Back to Chat.")
+        XCTAssertTrue(element("code.browser.url").waitForExistence(timeout: 5), "Browser toolbar should expose URL entry.")
+        XCTAssertTrue(element("code.browser.runStatus").waitForExistence(timeout: 5), "Browser toolbar should expose run status.")
+        XCTAssertTrue(element("code.browser.restart").waitForExistence(timeout: 5), "Browser toolbar should expose restart.")
+
+        element("code.browser.backToChat").click()
+        XCTAssertTrue(waitForNonExistence(fullWorkspaceBrowser, timeout: 5), "Back to Chat should close the full-workspace Browser surface.")
     }
 
     func testTerminalNewTabMenuWhenTerminalSurfaceExists() throws {
@@ -164,6 +203,18 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         app.descendants(matching: .any)[identifier]
     }
 
+    private func workspaceLeafRowElement() -> XCUIElement {
+        let identified = element("code.worktree.row")
+        if identified.exists {
+            return identified
+        }
+        let sessionRow = element("code.session.row")
+        if sessionRow.exists {
+            return sessionRow
+        }
+        return app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@ AND label CONTAINS[c] %@", "Repo", "Claude")).firstMatch
+    }
+
     private func waitForAny(_ elements: [XCUIElement], timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
@@ -175,7 +226,18 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         return elements.contains(where: { $0.exists })
     }
 
-    private static func seedWorkspaceStore() throws -> URL {
+    private func waitForNonExistence(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if !element.exists {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        } while Date() < deadline
+        return !element.exists
+    }
+
+    private static func seedWorkspaceStore() throws -> UITestFixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClawdmeterMacUITests-\(UUID().uuidString)", isDirectory: true)
         let repoRoot = root.appendingPathComponent("Repo", isDirectory: true)
@@ -196,6 +258,41 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         ]
         let data = try JSONSerialization.data(withJSONObject: store, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: root.appendingPathComponent("workspaces.json"), options: [.atomic])
+
+        let session: [String: Any] = [
+            "id": "66666666-6666-4666-8666-666666666666",
+            "repoKey": repoRoot.path,
+            "repoDisplayName": "UITest Repo",
+            "agent": "claude",
+            "model": "sonnet",
+            "goal": "Exercise browser preview",
+            "status": "done",
+            "createdAt": "2026-06-06T00:00:00Z",
+            "lastEventAt": "2026-06-06T00:00:02Z",
+            "lastEventSeq": 2,
+            "mode": "local",
+            "workspaceId": "11111111-1111-4111-8111-111111111111",
+            "runtimeCwd": repoRoot.path,
+            "kind": "code",
+            "ownsWorktree": false,
+            "customName": "Preview E2E",
+        ]
+        let sessionsStore: [String: Any] = [
+            "schemaVersion": 6,
+            "sessions": [session],
+        ]
+        let sessionsData = try JSONSerialization.data(withJSONObject: sessionsStore, options: [.prettyPrinted, .sortedKeys])
+        try sessionsData.write(to: root.appendingPathComponent("sessions.json"), options: [.atomic])
+
+        let claudeProjectsRoot = root.appendingPathComponent("claude-projects", isDirectory: true)
+        let projectDirectory = claudeProjectsRoot.appendingPathComponent(encodedClaudeProjectPath(repoRoot.path), isDirectory: true)
+        try FileManager.default.createDirectory(at: projectDirectory, withIntermediateDirectories: true)
+        let transcript = """
+        {"type":"user","timestamp":"2026-06-06T00:00:00.000Z","message":{"role":"user","content":"Show me the latest branch preview."}}
+        {"type":"assistant","timestamp":"2026-06-06T00:00:01.000Z","message":{"role":"assistant","model":"claude-sonnet-4","stop_reason":"end_turn","content":[{"type":"text","text":"Preview is available at http://127.0.0.1:5173."}]}}
+        """
+        let transcriptData = Data(transcript.appending("\n").utf8)
+        try transcriptData.write(to: projectDirectory.appendingPathComponent("preview-e2e.jsonl"), options: [.atomic])
 
         let envStore: [String: Any] = [
             "schemaVersion": 2,
@@ -233,6 +330,13 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         ]
         let envData = try JSONSerialization.data(withJSONObject: envStore, options: [.prettyPrinted, .sortedKeys])
         try envData.write(to: root.appendingPathComponent("repo-env-variables.json"), options: [.atomic])
-        return root
+        return UITestFixture(appSupportDirectory: root, claudeProjectsRoot: claudeProjectsRoot)
+    }
+
+    private static func encodedClaudeProjectPath(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "_", with: "-")
+            .replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: "/", with: "-")
     }
 }
