@@ -1204,8 +1204,23 @@ public final class SessionChatStore {
     /// for the parent. Walking up catches it.
     public nonisolated static func resolveSessionFileURL(repoCwd: String) -> URL? {
         let home = ClawdmeterRealHome.url()
-        let projects = home.appendingPathComponent(".claude/projects")
+        let projects = uiTestingClaudeProjectsRootOverride()
+            ?? home.appendingPathComponent(".claude/projects")
         return resolveSessionFileURL(repoCwd: repoCwd, projectsRoot: projects, homePath: home.path)
+    }
+
+    private nonisolated static func uiTestingClaudeProjectsRootOverride() -> URL? {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["CLAWDMETER_UI_TESTING"] == "1",
+              let rawPath = environment["CLAWDMETER_TEST_CLAUDE_PROJECTS_ROOT"],
+              !rawPath.isEmpty
+        else {
+            return nil
+        }
+
+        let url = URL(fileURLWithPath: rawPath, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 
     /// Testable core. `homePath` bounds the parent-walk: we match the

@@ -865,6 +865,7 @@ struct SidebarPane: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
+        .accessibilityIdentifier("code.worktree.row")
         .padding(.horizontal, 10)
     }
 
@@ -1731,6 +1732,7 @@ struct SidebarPane: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
+        .accessibilityIdentifier("code.session.row")
         .onHover { inside in
             if inside {
                 hoveredSessionId = session.id

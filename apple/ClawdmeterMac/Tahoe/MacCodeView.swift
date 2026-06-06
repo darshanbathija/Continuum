@@ -869,8 +869,10 @@ private struct SessionRow: View {
                     RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(t.accentAlpha(0.35), lineWidth: 0.5)
                 }
             }
+            .accessibilityIdentifier("code.session.row")
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("code.session.row")
         .padding(.bottom, 2)
     }
 

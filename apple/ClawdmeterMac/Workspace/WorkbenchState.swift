@@ -34,33 +34,93 @@ enum WorkbenchPaneTab: String, Codable, CaseIterable, Identifiable, Sendable {
 struct QueuedWorkbenchSend: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let sessionId: UUID
-    var text: String
-    var attachmentPaths: [String]
+    var payload: ComposerDraftPayload
     let createdAt: Date
+
+    var text: String {
+        get { payload.text }
+        set { payload.text = newValue }
+    }
+
+    var attachmentPaths: [String] {
+        get { payload.attachmentPaths }
+        set { payload.attachmentPaths = newValue }
+    }
+
+    var browserComments: [BrowserCommentContext] {
+        get { payload.browserComments }
+        set { payload.browserComments = newValue }
+    }
 
     init(
         id: UUID = UUID(),
         sessionId: UUID,
         text: String,
         attachmentPaths: [String] = [],
+        browserComments: [BrowserCommentContext] = [],
         createdAt: Date = Date()
     ) {
         self.id = id
         self.sessionId = sessionId
-        self.text = text
-        self.attachmentPaths = attachmentPaths
+        self.payload = ComposerDraftPayload(
+            text: text,
+            attachmentPaths: attachmentPaths,
+            browserComments: browserComments
+        )
         self.createdAt = createdAt
+    }
+
+    init(
+        id: UUID = UUID(),
+        sessionId: UUID,
+        payload: ComposerDraftPayload,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.sessionId = sessionId
+        self.payload = payload
+        self.createdAt = createdAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, sessionId, payload, text, attachmentPaths, browserComments, createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        sessionId = try c.decode(UUID.self, forKey: .sessionId)
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        if let payload = try c.decodeIfPresent(ComposerDraftPayload.self, forKey: .payload) {
+            self.payload = payload
+        } else {
+            self.payload = ComposerDraftPayload(
+                text: try c.decodeIfPresent(String.self, forKey: .text) ?? "",
+                attachmentPaths: try c.decodeIfPresent([String].self, forKey: .attachmentPaths) ?? [],
+                browserComments: try c.decodeIfPresent([BrowserCommentContext].self, forKey: .browserComments) ?? []
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(sessionId, forKey: .sessionId)
+        try c.encode(payload, forKey: .payload)
+        try c.encode(payload.text, forKey: .text)
+        try c.encode(payload.attachmentPaths, forKey: .attachmentPaths)
+        try c.encode(payload.browserComments, forKey: .browserComments)
+        try c.encode(createdAt, forKey: .createdAt)
     }
 }
 
 enum QueuedPromptRenderer {
     static func render(text: String, attachmentPaths: [URL]) -> String {
-        var lines: [String] = attachmentPaths.map { "@\($0.path)" }
-        let prose = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !prose.isEmpty {
-            lines.append(prose)
-        }
-        return lines.joined(separator: "\n") + "\n"
+        ComposerDraftPayload(text: text).render(attachmentPaths: attachmentPaths)
+    }
+
+    static func render(payload: ComposerDraftPayload, attachmentPaths: [URL]) -> String {
+        payload.render(attachmentPaths: attachmentPaths)
     }
 }
 
@@ -71,6 +131,7 @@ struct RunProfileStateSnapshot: Codable, Equatable, Sendable {
     var command: String?
     var detectedURL: String?
     var status: String
+    var previewState: String?
 
     init(
         profileId: UUID = UUID(),
@@ -78,7 +139,8 @@ struct RunProfileStateSnapshot: Codable, Equatable, Sendable {
         cwd: String? = nil,
         command: String? = nil,
         detectedURL: String? = nil,
-        status: String = "idle"
+        status: String = "idle",
+        previewState: String? = nil
     ) {
         self.profileId = profileId
         self.sessionId = sessionId
@@ -86,6 +148,7 @@ struct RunProfileStateSnapshot: Codable, Equatable, Sendable {
         self.command = command
         self.detectedURL = detectedURL
         self.status = status
+        self.previewState = previewState
     }
 }
 
@@ -163,6 +226,20 @@ struct WorkbenchRefreshState: Codable, Equatable, Sendable {
     }
 }
 
+struct PreviewLaunchIntent: Equatable, Identifiable, Sendable {
+    let id: UUID
+    let sessionId: UUID
+    let forceRestart: Bool
+    let createdAt: Date
+
+    init(id: UUID = UUID(), sessionId: UUID, forceRestart: Bool = false, createdAt: Date = Date()) {
+        self.id = id
+        self.sessionId = sessionId
+        self.forceRestart = forceRestart
+        self.createdAt = createdAt
+    }
+}
+
 struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
     var selectedSessionId: UUID?
     var selectedRightPane: WorkbenchPaneTab
@@ -173,6 +250,7 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
     var centerWidth: Double?
     var reviewWidth: Double?
     var selectedRightPaneBySession: [UUID: WorkbenchPaneTab]
+    var immersiveBrowserSessionId: UUID?
     var queuedSends: [QueuedWorkbenchSend]
     var runProfiles: [UUID: RunProfileStateSnapshot]
     var prCache: [UUID: PRCacheStateSnapshot]
@@ -195,6 +273,7 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
         centerWidth: Double? = nil,
         reviewWidth: Double? = nil,
         selectedRightPaneBySession: [UUID: WorkbenchPaneTab] = [:],
+        immersiveBrowserSessionId: UUID? = nil,
         queuedSends: [QueuedWorkbenchSend] = [],
         runProfiles: [UUID: RunProfileStateSnapshot] = [:],
         prCache: [UUID: PRCacheStateSnapshot] = [:],
@@ -211,6 +290,7 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
         self.centerWidth = centerWidth
         self.reviewWidth = reviewWidth
         self.selectedRightPaneBySession = selectedRightPaneBySession
+        self.immersiveBrowserSessionId = immersiveBrowserSessionId
         self.queuedSends = queuedSends
         self.runProfiles = runProfiles
         self.prCache = prCache
@@ -222,7 +302,7 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case selectedSessionId, selectedRightPane, showingReviewPane, density
         case workspaceWidth, sidebarWidth, centerWidth, reviewWidth
-        case selectedRightPaneBySession, queuedSends, runProfiles, prCache, checkpoints, refresh, updatedAt
+        case selectedRightPaneBySession, immersiveBrowserSessionId, queuedSends, runProfiles, prCache, checkpoints, refresh, updatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -236,6 +316,7 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
         centerWidth = try c.decodeIfPresent(Double.self, forKey: .centerWidth)
         reviewWidth = try c.decodeIfPresent(Double.self, forKey: .reviewWidth)
         selectedRightPaneBySession = try c.decodeIfPresent([UUID: WorkbenchPaneTab].self, forKey: .selectedRightPaneBySession) ?? [:]
+        immersiveBrowserSessionId = try c.decodeIfPresent(UUID.self, forKey: .immersiveBrowserSessionId)
         queuedSends = try c.decodeIfPresent([QueuedWorkbenchSend].self, forKey: .queuedSends) ?? []
         runProfiles = try c.decodeIfPresent([UUID: RunProfileStateSnapshot].self, forKey: .runProfiles) ?? [:]
         prCache = try c.decodeIfPresent([UUID: PRCacheStateSnapshot].self, forKey: .prCache) ?? [:]
@@ -303,6 +384,7 @@ final class WorkbenchStateStore {
 @MainActor
 final class WorkbenchState: ObservableObject {
     @Published private(set) var snapshot: WorkbenchStateSnapshot
+    @Published private(set) var previewIntent: PreviewLaunchIntent?
 
     private let store: WorkbenchStateStore
     private var lastPersistedWorkspaceWidth: Double
@@ -317,6 +399,7 @@ final class WorkbenchState: ObservableObject {
     var selectedSessionId: UUID? { snapshot.selectedSessionId }
     var selectedRightPane: WorkbenchPaneTab { snapshot.selectedRightPane }
     var showingReviewPane: Bool { snapshot.showingReviewPane }
+    var immersiveBrowserSessionId: UUID? { snapshot.immersiveBrowserSessionId }
     var density: TranscriptDensity { snapshot.density }
     var workspaceWidth: CGFloat { CGFloat(snapshot.workspaceWidth) }
     var queuedSends: [QueuedWorkbenchSend] { snapshot.queuedSends }
@@ -336,11 +419,37 @@ final class WorkbenchState: ObservableObject {
             if let sessionId = $0.selectedSessionId {
                 $0.selectedRightPaneBySession[sessionId] = tab
             }
+            if tab != .browser {
+                $0.immersiveBrowserSessionId = nil
+            }
         }
     }
 
     func setReviewPaneVisible(_ visible: Bool) {
         update { $0.showingReviewPane = visible }
+    }
+
+    func requestPreview(sessionId: UUID, forceRestart: Bool = false) {
+        previewIntent = PreviewLaunchIntent(sessionId: sessionId, forceRestart: forceRestart)
+        update {
+            $0.selectedSessionId = sessionId
+            $0.selectedRightPane = .browser
+            $0.selectedRightPaneBySession[sessionId] = .browser
+            $0.immersiveBrowserSessionId = sessionId
+            $0.showingReviewPane = false
+        }
+    }
+
+    func enterImmersiveBrowser(sessionId: UUID) {
+        update {
+            $0.selectedRightPane = .browser
+            $0.selectedRightPaneBySession[sessionId] = .browser
+            $0.immersiveBrowserSessionId = sessionId
+        }
+    }
+
+    func exitImmersiveBrowser() {
+        update { $0.immersiveBrowserSessionId = nil }
     }
 
     func setDensity(_ density: TranscriptDensity) {
@@ -438,6 +547,9 @@ final class WorkbenchState: ObservableObject {
             $0.runProfiles.removeValue(forKey: sessionId)
             $0.prCache.removeValue(forKey: sessionId)
             $0.selectedRightPaneBySession.removeValue(forKey: sessionId)
+            if $0.immersiveBrowserSessionId == sessionId {
+                $0.immersiveBrowserSessionId = nil
+            }
             if !preserveCheckpoints {
                 $0.checkpoints.removeValue(forKey: sessionId)
             }

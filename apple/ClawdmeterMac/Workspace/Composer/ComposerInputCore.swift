@@ -120,6 +120,9 @@ struct ComposerInputCore: View {
                 if !store.attachments.isEmpty {
                     attachmentChipsRow
                 }
+                if !store.browserComments.isEmpty {
+                    browserCommentChipsRow
+                }
                 inputRow
                     .opacity(planApprovalMode ? 0.56 : 1)
                     .disabled(planApprovalMode)
@@ -581,6 +584,19 @@ struct ComposerInputCore: View {
         .frame(maxHeight: 36)
     }
 
+    private var browserCommentChipsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(store.browserComments) { comment in
+                    BrowserCommentChip(comment: comment) {
+                        store.removeBrowserComment(id: comment.id)
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: 36)
+    }
+
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
             ZStack(alignment: .topLeading) {
@@ -770,11 +786,11 @@ struct ComposerInputCore: View {
     /// one as a side effect.
     private func injectOptimisticPendingIfWanted() {
         guard let chatStore else { return }
-        let trimmed = store.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = store.draftPayload().render().trimmingCharacters(in: .whitespacesAndNewlines)
         let attachmentRefs = store.attachments.map { $0.displayName }
         // Skip when there's literally nothing to render — matches
         // `ComposerStore.canSend` semantics.
-        guard !trimmed.isEmpty || !attachmentRefs.isEmpty else { return }
+        guard !trimmed.isEmpty || !attachmentRefs.isEmpty || !store.browserComments.isEmpty else { return }
         chatStore.injectPending(text: trimmed, attachmentRefs: attachmentRefs)
     }
 

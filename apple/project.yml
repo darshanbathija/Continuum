@@ -19,8 +19,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.31.1"
-    CURRENT_PROJECT_VERSION: "201"
+    MARKETING_VERSION: "0.31.2"
+    CURRENT_PROJECT_VERSION: "202"
 
 packages:
   ClawdmeterShared:
@@ -447,6 +447,20 @@ schemes:
       config: Release
     profile:
       config: Release
+    analyze:
+      config: Debug
+
+  Clawdmeter (Mac UI Tests):
+    build:
+      targets:
+        ClawdmeterMac: all
+        ClawdmeterMacUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - ClawdmeterMacUITests
     analyze:
       config: Debug
 
