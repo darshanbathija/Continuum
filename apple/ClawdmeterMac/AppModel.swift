@@ -95,7 +95,9 @@ public final class AppModel: ObservableObject {
             providerLogger.info("onEvent INVOKED")
             RunLoop.main.perform { [weak self] in
                 providerLogger.info("RunLoop.main RUNNING")
-                self?.consume(event)
+                MainActor.assumeIsolated {
+                    self?.consume(event)
+                }
             }
             // Wake the runloop in case it's idle.
             CFRunLoopWakeUp(CFRunLoopGetMain())

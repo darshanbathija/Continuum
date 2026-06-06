@@ -663,18 +663,20 @@ public final class DaemonChatStoreRegistry {
         let limit = recentLimit
         warmupTask = Task.detached(priority: .utility) { [weak self] in
             let recents = Self.scanForRecentJSONLs(limit: limit)
-            await MainActor.run {
-                guard let self else { return }
-                for url in recents {
-                    _ = self.snapshotStore(forJSONLPath: url)
-                }
-                // Audit P2 fix: clear the slot so a later force-rewarm
-                // (e.g. after the user adds a new repo) can run instead
-                // of short-circuiting on the lingering completed task.
-                self.warmupTask = nil
-                registryLogger.info("warmup complete: \(recents.count) JSONLs preloaded")
-            }
+            guard let registry = self else { return }
+            await registry.finishWarmup(recents: recents)
         }
+    }
+
+    private func finishWarmup(recents: [URL]) {
+        for url in recents {
+            _ = snapshotStore(forJSONLPath: url)
+        }
+        // Audit P2 fix: clear the slot so a later force-rewarm
+        // (e.g. after the user adds a new repo) can run instead
+        // of short-circuiting on the lingering completed task.
+        warmupTask = nil
+        registryLogger.info("warmup complete: \(recents.count) JSONLs preloaded")
     }
 
     /// Walk `~/.claude/projects/` and `~/.codex/sessions/` for the `limit`

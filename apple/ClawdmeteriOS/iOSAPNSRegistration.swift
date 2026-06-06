@@ -25,7 +25,7 @@ final class APNSDeviceTokenHolder: @unchecked Sendable {
     /// host/port/Bearer config is read from the shared UserDefaults, exactly
     /// like the BGAppRefresh path in `ClawdmeteriOSApp`.
     func registerIfReady() async {
-        lock.lock(); let hex = hexToken; lock.unlock()
+        let hex = currentToken()
         guard let hex else { return }
         guard let sid = RelayPairingStore.shared.loadRecord()?.sid else {
             log.debug("APNS token held; no pairing yet — will retry on next trigger")
@@ -35,6 +35,11 @@ final class APNSDeviceTokenHolder: @unchecked Sendable {
         let ok = await AgentControlClient().registerAPNSDeviceToken(
             deviceToken: hex, bundleId: bundleId, sessionId: sid)
         log.log("APNS device-token register: \(ok ? "ok" : "failed", privacy: .public)")
+    }
+
+    private func currentToken() -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return hexToken
     }
 }
 

@@ -23,11 +23,7 @@
 // keeps tooling uniform).
 
 import Foundation
-#if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
-#endif
 
 /// Stateless seal + open for the APNS gateway path. The caller threads in
 /// the symmetric key — it must be the 32 bytes that came out of

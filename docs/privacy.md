@@ -301,7 +301,7 @@ through any API.
 
 ## 7. Cookies and third-party trackers
 
-Continuum is a native macOS / iOS / watchOS / Linux desktop app.
+Continuum is a native macOS / iOS / watchOS app.
 There is no embedded web view used for analytics. There are no
 cookies. There are no third-party trackers. There is no `localStorage`
 or `IndexedDB` carrying identifiers.

@@ -2,10 +2,9 @@ import Foundation
 
 /// Send-to-tmux strategy heuristic.
 ///
-/// **Why this exists.** Both the Mac `Network.framework` daemon
-/// (`AgentControlServer.handleSendPrompt`) and the Linux Hummingbird daemon
-/// (`HummingbirdTransport`) need to forward a user's chat turn into the
-/// session's tmux pane. The naive approaches both have bugs:
+/// **Why this exists.** The Mac `Network.framework` daemon
+/// (`AgentControlServer.handleSendPrompt`) needs to forward a user's chat turn
+/// into the session's tmux pane. The naive approaches both have bugs:
 ///
 /// - `sendKeys` (typing the bytes into the pane) is right for short
 ///   commands but truncates pastes >256 bytes and mishandles embedded
@@ -18,8 +17,7 @@ import Foundation
 ///
 /// The shared heuristic: use `sendKeys` for the small/simple case (short,
 /// no embedded newline, not a follow-up after a prior turn), and
-/// `pasteBytes` with a guaranteed trailing newline otherwise. Both daemons
-/// call this single function so the wire is byte-identical across platforms.
+/// `pasteBytes` with a guaranteed trailing newline otherwise.
 public enum SubmitToTmux {
 
     /// Strategy chosen for the input.

@@ -665,7 +665,7 @@ public final class SessionsModel: ObservableObject {
                 }
                 let sender = MacComposerSender(
                     port: Int(port),
-                    token: runtime.agentControlServer.localLoopbackToken ?? ""
+                    token: runtime.agentControlServer.localLoopbackToken
                 )
                 let createReq = NewSessionRequest(
                     repoKey: repoKey, agent: agent, model: model, planMode: false,
@@ -1666,7 +1666,7 @@ public final class SessionsModel: ObservableObject {
         }
         let sender = MacComposerSender(
             port: Int(port),
-            token: runtime.agentControlServer.localLoopbackToken ?? ""
+            token: runtime.agentControlServer.localLoopbackToken
         )
         let req = NewSessionRequest(
             repoKey: repoPath,

@@ -1,7 +1,4 @@
 import Foundation
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
 
 /// Client-side mirror for a Frontier broadcast group. It subscribes to
 /// the daemon's aggregate `frontier-subscribe` WebSocket and replaces

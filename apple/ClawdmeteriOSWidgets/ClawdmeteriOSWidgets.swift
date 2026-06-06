@@ -52,7 +52,7 @@ struct GeminiQuotaLiveActivityWidget: Widget {
                                 .foregroundStyle(.orange)
                         }
                     }
-                    (Text("Resets ") + Text(context.state.resetDate, style: .relative))
+                    Text("Resets \(context.state.resetDate, style: .relative)")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -74,7 +74,7 @@ struct GeminiQuotaLiveActivityWidget: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack {
-                        (Text("Resets ") + Text(context.state.resetDate, style: .relative))
+                        Text("Resets \(context.state.resetDate, style: .relative)")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
@@ -260,7 +260,7 @@ struct ClaudeUsageView: View {
                 }
                 Text("\(snap.usage.sessionPct)% used")
                     .font(.subheadline)
-                (Text("Resets ") + Text(resetDate, style: .relative))
+                Text("Resets \(resetDate, style: .relative)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -295,7 +295,7 @@ struct ClaudeUsageView: View {
                 ring(percent: snap.usage.sessionPct, size: 70)
                     .frame(maxWidth: .infinity)
                 Spacer(minLength: 0)
-                (Text("Resets ") + Text(resetDate, style: .relative))
+                Text("Resets \(resetDate, style: .relative)")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -325,7 +325,7 @@ struct ClaudeUsageView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     let sessionReset = Date(timeIntervalSince1970: TimeInterval(snap.usage.sessionEpoch))
-                    (Text("\(snap.usage.sessionPct)%  ·  Resets ") + Text(sessionReset, style: .relative))
+                    Text("\(snap.usage.sessionPct)%  ·  Resets \(sessionReset, style: .relative)")
                         .font(.subheadline)
                         .monospacedDigit()
                     Text("Weekly \(snap.usage.weeklyPct)%")

@@ -10,11 +10,7 @@
 import XCTest
 import Combine
 import ClawdmeterShared
-#if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
-#endif
 @testable import Clawdmeter
 
 @MainActor

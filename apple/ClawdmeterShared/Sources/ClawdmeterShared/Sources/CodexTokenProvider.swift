@@ -100,6 +100,10 @@ public final class CodexTokenProvider: TokenProvider, @unchecked Sendable {
     /// Re-read the file so we pick up rotations the Codex CLI does on its own.
     @discardableResult
     public func refreshIfNeeded() async throws -> Bool {
+        try refreshFromDisk()
+    }
+
+    private func refreshFromDisk() throws -> Bool {
         lock.lock(); defer { lock.unlock() }
         let previous = cached?.tokens?.accessToken
         cached = nil

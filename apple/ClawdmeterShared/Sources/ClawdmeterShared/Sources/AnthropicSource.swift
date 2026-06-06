@@ -1,7 +1,4 @@
 import Foundation
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
 #if canImport(OSLog)
 import OSLog
 #endif
@@ -373,6 +370,6 @@ private struct OAuthUsageEnvelope: Decodable {
     }
 }
 
-// TokenProvider protocol moved to TokenProvider.swift (2026-05-18) so that
-// the Linux libsecret implementation can live alongside other implementations
-// without dragging in AnthropicSource's URLSession + ratelimit-parser surface.
+// TokenProvider protocol moved to TokenProvider.swift (2026-05-18) so token
+// implementations can live outside AnthropicSource's URLSession + rate-limit
+// parser surface.

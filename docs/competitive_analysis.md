@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-**Continuum** occupies a highly unique, developer-centric niche: it is a **native local-first control plane and mobile/wearable companion** for developers running CLI-based AI coding agents (Claude Code, Codex, Gemini/Antigravity, and OpenCode) locally on their macOS or Linux machines.
+**Continuum** occupies a highly unique, developer-centric niche: it is a **native local-first control plane and mobile/wearable companion** for developers running CLI-based AI coding agents (Claude Code, Codex, Gemini/Antigravity, and OpenCode) locally on their Macs.
 
 Its core product wedge is visceral and immediate: **"Run agents on your Mac; monitor, approve, and steer them from your iPhone or Apple Watch."**
 
@@ -25,7 +25,7 @@ This document breaks down the **architectural, strategic, and feature-level gaps
 | Feature / Dimension | **Continuum** | **Cursor** | **Conductor (Melty Labs)** |
 | :--- | :--- | :--- | :--- |
 | **Product Category** | Native mobile/desktop control plane & companion | Full AI-first integrated development environment (IDE) | Multi-agent parallel workbench & git worktree manager |
-| **Form Factor** | Mac (menu-bar + Tahoe window), iOS, watchOS, Linux | Desktop application (fork of VS Code) | macOS desktop app |
+| **Form Factor** | Mac (menu-bar + Tahoe window), iOS, watchOS | Desktop application (fork of VS Code) | macOS desktop app |
 | **Primary Wedge** | Mobile plan approvals, cost analytics, model comparisons | Inline autocompletions (Cursor Tab) & multi-file editing | Running 3–5 agents in parallel in clean, isolated git worktrees |
 | **Code Modification** | *Indirect:* Spawns external CLI agents (tmux/LSP) to edit files | *Direct:* Inline `Cmd+K`, codebase Composer `Cmd+I` with instant diffs | *Indirect:* Manages external agent instances (Claude Code, Codex CLI) |
 | **Repository Intelligence** | Basic file mentions (`@`), active session citations | Auto-refreshing vector index, AST graphs, codebase semantic search | Relies on the underlying CLI agents (e.g., Claude Code's own search) |

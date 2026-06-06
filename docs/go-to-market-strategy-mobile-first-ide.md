@@ -21,7 +21,6 @@ Reasons:
 - The iPhone app is real and compelling, but depends on Mac pairing, Tailscale/MagicDNS, wire compatibility, and live device validation.
 - The Watch story is strong for plan approval, interrupt, and glanceable status, but should not be marketed as full coding from the wrist.
 - TestFlight/App Store is scaffolded but not launch-ready: Fastlane exists, but paid Developer Program, App Store Connect API, signing, review assets, privacy docs, and current physical-device validation still need to be completed.
-- Linux should stay roadmap/private QA until the daemon, packaging scripts, and install artifacts are no longer skeleton/stub status.
 
 The GTM thesis:
 
@@ -63,8 +62,6 @@ Do not claim:
   - Better: "Cursor code sessions and usage visibility are integrated; Cursor chat and plan-mode semantics are intentionally gated."
 - "Universal perfect cost accounting."
   - Better: "Provider-reported, locally priced, estimated, or unavailable cost confidence is shown honestly."
-- "Linux is ready."
-  - Better: "Linux is in progress / private QA until packaging and daemon surfaces graduate from skeleton/stub status."
 - "Open source" unless LICENSE, SECURITY, CONTRIBUTING, issue templates, and public-support posture are decided.
 - "App Store ready" until TestFlight/App Review readiness gates pass.
 
@@ -287,7 +284,7 @@ Must be completed before any public announcement:
 - Add public "What Continuum reads locally" doc.
 - Fix or document the updater tag naming contract (`vX.Y.Z-mac` vs `vX.Y.Z-buildN`).
 - Confirm GitHub Release artifact names match install docs.
-- Add a single "known limitations" page with Cursor chat, Linux, TestFlight, notifications, and Tailscale caveats.
+- Add a single "known limitations" page with Cursor chat, TestFlight, notifications, and Tailscale caveats.
 
 ### Gate 1 - Mac Beta
 
@@ -323,16 +320,6 @@ Submit only after:
 - Long transcript mobile performance is validated.
 - Support path exists.
 - Crash/reporting policy is decided.
-
-### Gate 4 - Linux
-
-Do not market Linux as generally available until:
-
-- `clawdmeterd` is not a skeleton.
-- Linux desktop app opens real UI.
-- AppImage and `.deb` scripts build artifacts without stub escape hatches.
-- Ubuntu 24.04 and Zorin VM QA checklist is green.
-- Install docs match actual release assets.
 
 ## Distribution Strategy
 
@@ -381,7 +368,7 @@ Offer:
 
 - Free beta.
 - Invite users to a feedback channel.
-- Strong caveats: Mac-first, iPhone companion, Tailscale recommended, Linux experimental.
+- Strong caveats: Mac-first, iPhone companion, Tailscale recommended.
 
 CTA:
 
@@ -416,7 +403,6 @@ Add:
 - Sparkle/notarized auto-update.
 - Public roadmap.
 - Open-source or source-available posture if chosen.
-- Linux public beta.
 - Team/multi-Mac workflows.
 - Integrations/content around OpenCode, Cursor, Claude Code, Codex, Gemini.
 
@@ -763,7 +749,7 @@ Post 3:
 
 Post 4:
 
-> It is early. Mac DMG beta first; TestFlight next; Linux later. I am keeping the limitations public because this touches local dev machines and should earn trust the hard way.
+> It is early. Mac DMG beta first; TestFlight next. I am keeping the limitations public because this touches local dev machines and should earn trust the hard way.
 
 CTA:
 
@@ -1112,7 +1098,6 @@ Medium priority:
 
 Do later:
 
-- [ ] Linux public launch.
 - [ ] Sparkle auto-update.
 - [ ] Team/multi-Mac.
 - [ ] Android.

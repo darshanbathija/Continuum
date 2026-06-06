@@ -200,7 +200,7 @@ public actor RepoIndex {
         let codexSessions = home.appendingPathComponent(".codex/sessions")
         // v0.29.33: gate ~/.codex discovery on the opt-in alone.
         let codexJSONLs = ProviderEnablement.discoverParallelSessions
-            ? await readCodexSessionMeta(at: codexSessions, recentCutoff: recentCutoff)
+            ? readCodexSessionMeta(at: codexSessions, recentCutoff: recentCutoff)
             : []
         for meta in codexJSONLs {
             let key = RepoIdentity.normalize(meta.cwd)
@@ -404,7 +404,7 @@ public actor RepoIndex {
     private nonisolated func readCodexSessionMeta(
         at root: URL,
         recentCutoff: Date
-    ) async -> [CodexSessionMeta] {
+    ) -> [CodexSessionMeta] {
         var out: [CodexSessionMeta] = []
         guard let enumerator = FileManager.default.enumerator(
             at: root,

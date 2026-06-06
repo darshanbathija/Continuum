@@ -746,5 +746,5 @@ struct TahoeDiffPreviewPane: View {
 
     /// Process-lifetime cache. Diff-pane mounts are short-lived; a
     /// long-lived cache here means a Cmd-tab cycle hits warm data.
-    private static let annotatedDiffLineCache = DiffLineCache()
+    nonisolated private static let annotatedDiffLineCache = DiffLineCache()
 }

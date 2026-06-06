@@ -367,15 +367,10 @@ Cloudflare account responsibly.
 Test vectors at
 [`infra/relay/test-vectors/`](../infra/relay/test-vectors/) are the
 byte-exact contract between the TypeScript Worker side and the Swift
-client side. The TypeScript side passes via
-`libsodium-wrappers-sumo`; the Swift side will verify against CryptoKit
-when E3 lands.
-
-There is a known cross-impl gap with Swift CryptoKit's XChaCha20
-nonce size (24 bytes vs. CryptoKit's ChaChaPoly default 12 bytes).
-Bridging requires either `libsodium-swift` or a custom XChaCha20
-prelude. See [`docs/known-limitations.md`](known-limitations.md) for
-the current state and the verifier finding that surfaced this.
+client side. The TypeScript side passes via `libsodium-wrappers-sumo`;
+Apple clients verify against CryptoKit plus Continuum's pure-Swift
+HChaCha20 prelude. See [`docs/known-limitations.md`](known-limitations.md)
+for the current state and the vector contract.
 
 ## 11. Agent fs/terminal trust boundary (RepoTrustGate)
 

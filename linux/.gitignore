@@ -1,9 +1,0 @@
-.build/
-.swiftpm/
-*.xcodeproj/
-Package.resolved
-DerivedData/
-dist/
-AppDir/
-*.AppImage
-*.deb

@@ -30,7 +30,7 @@ That's the wedge. Everything below is the path to shipping it.
 | **Cursor 2.0** (Oct 2025) | Composer model (4× faster), Multi-Agent Interface, native browser integration, **agent-centric UI** | Cursor repositioned from "AI editor" to "AI platform with editor." Continuum's "cockpit for the swarm" framing is now directly competitive. |
 | **Cursor 3.0** (Apr 2026) | Composer 2 (61.3 CursorBench, 200 tok/s), up to 8 parallel agents, **Background Agents GA**, **Cloud Agents** | Now matches our "fleet" story but theirs is local-or-cloud. Owns "private by design" if we stay local-only. |
 | **Cursor 3.5** (May 20 2026) | **Cursor Automations** in Agents Window, **multi-repo automations**, scheduled runs, `/loop` skill | Their answer to our `SessionScheduler` (G15). We need to ship the UX or they own "recurring agents." |
-| **Cursor CLI** (Jan 2026 → stable) | Plan/Ask modes, **cloud handoff** (prepend `&` to message), one-click MCP auth, `/loop`, headless invocation (`cursor --headless`), stable on macOS/Linux/Windows | Cursor CLI is now a real headless agent. **A `cursor --headless` shim that pipes into our daemon would be huge for CI users** — zero-friction adoption path. |
+| **Cursor CLI** (Jan 2026 → stable) | Plan/Ask modes, **cloud handoff** (prepend `&` to message), one-click MCP auth, `/loop`, headless invocation (`cursor --headless`), stable across desktop OSes | Cursor CLI is now a real headless agent. **A `cursor --headless` shim that pipes into our daemon would be huge for CI users** — zero-friction adoption path. |
 | **Cursor mobile** | Native iOS + Android app for kicking off tasks, getting a PR before you're at your desk | Closes the mobile gap from their side. **But: still no Apple Watch, no Live Activities, no mid-run steering, no voice.** |
 | **Cursor BugBot** (Feb 2026 GA) | $40/user/mo GitHub PR reviewer, separate from editor plans | Continuum's `PRMirror` is free and in-app. Position: "BugBot is great, but we surface PR review inside your fleet dashboard, not as a separate $40 sub." |
 | **Cursor Hooks** (2026) | `onPreEdit`, `onPostEdit`, `onPreCommit`, `onApprove` — Bash/Node/Python in `.cursor/hooks/` | Continuum can ship a similar `preSend`/`postEdit` hook system on the daemon. Not P0, easy P2. |
@@ -138,7 +138,6 @@ Goal: **breadth on the agent-orchestration surface, plus the App Store unlock.**
 ## What I'd CUT (or push to Tier 4 / never)
 
 - **"Local RAG with vector embeddings" before file-level:** ship file-level search first (just ripgrep + AST-aware grep), add embeddings only after measuring whether it actually helps. The cost of a good local embedding model is 200MB+ of binary and a real perf hit.
-- **Linux parity as a v1 priority:** Linux is the lowest-leverage target. Stay WIP, don't promote. The Tahoe design language doesn't port.
 - **Full WCAG AA on every surface:** ship AA on the 5 critical user flows, audit the rest over time. Don't block the roadmap on this.
 - **Custom editor surface:** we will never beat Cursor at being a text editor. Don't try. The "send to Continuum" shim is enough.
 - **Native Cloud Agents (Cursor-style cloud background):** out of scope. Local-first is the brand. If users want cloud, they can use Cursor for that and Continuum for everything else.
@@ -171,9 +170,8 @@ If those three land in the next 30 days, the homepage tagline above stops being 
 ## Open Questions (worth a 30-min conversation)
 
 1. **Apple Developer Program enrollment timing** — is there a reason we're still on Personal Team? The blockers in TODOS are real but the cost is now blocking ~$200K/yr worth of work (Sparkle, TestFlight, multi-Mac iOS).
-2. **Linux bet** — keep as WIP indefinitely, or pick a deadline to either ship or archive? A "Linux Tier 2" with real Tahoe parity is a 4-6 week bet; a "Linux as-is, no parity promise" is fine.
-3. **Cloud Agents strategy** — if Cursor's Cloud Agents (Max tier $200/mo) start eating into the "I want agents that survive my laptop closing" market, do we (a) ignore it and double down on local, (b) build a "rent a Mac" relay, or (c) ship a thin client that runs in the user's iCloud / Linode? The answer shapes whether we're a Mac-only tool forever.
-4. **Naming the cost-aware fleet dashboard** — "Cockpit"? "Bridge"? "Mission Control" (taken by Antigravity)? The name matters for marketing.
+2. **Cloud Agents strategy** — if Cursor's Cloud Agents (Max tier $200/mo) start eating into the "I want agents that survive my laptop closing" market, do we (a) ignore it and double down on local, (b) build a "rent a Mac" relay, or (c) ship a thin client that runs in the user's iCloud / hosted Mac provider? The answer shapes the local-first roadmap.
+3. **Naming the cost-aware fleet dashboard** — "Cockpit"? "Bridge"? "Mission Control" (taken by Antigravity)? The name matters for marketing.
 
 ---
 

@@ -105,9 +105,8 @@ follow-up that didn't make the v2.0 ship but is worth picking up.
 
 ## Audit-track follow-ups — MOSTLY RESOLVED in v0.7.7 (2026-05-20)
 
-Five sub-items, four resolved in v0.7.7:
+Four sub-items, four resolved in v0.7.7:
 
-- **Stub-flag escape hatches** — STILL OPEN (Phase 3/4/7 work).
 - **5 missing regression tests** — 4 shipped in v0.7.7 via new Mac
   XCTest target; 5th (`PastedAnthropicTokenProvider`) shipped in v0.7.4.
 - **Path-validator duplication** — RESOLVED via `PathValidator` in
@@ -118,20 +117,6 @@ Five sub-items, four resolved in v0.7.7:
   fstat-from-fd).
 
 Original deferral text retained below for historical reference.
-
-### Stub-flag escape hatches
-- **What**: three env-flagged bypasses landed during the campaign without a
-  tracker:
-  - `CLAWDMETER_DAEMON_ALLOW_STUB` (`linux/Sources/ClawdmeterDaemon/main.swift`)
-    — defers Phase-3 transport wiring.
-  - `CLAWDMETER_PACKAGING_ALLOW_STUB` (`tools/build-linux-appimage.sh`,
-    `tools/build-linux-deb.sh`) — defers Phase-4 packaging completion.
-  - `CLAWDMETER_VISUAL_TEST_STRICT` (`linux/Tests/.../Visual/AssertImageEqual.swift`)
-    — skips visual-baseline tests when baselines aren't committed.
-- **Why**: each one is a known temporary backdoor. Without an entry here,
-  they survive every search-and-destroy pass after the campaign closes.
-- **Cleanup**: `grep -RE 'ALLOW_STUB|VISUAL_TEST_STRICT' linux/ tools/` at the
-  end of each phase. Delete the flag + the bypass it gates.
 
 ### Missing regression tests (5 high-value gaps from `/review`)
 - `isValidJsonlPath` + `isValidRepoKey` symlink-resolve (AgentControlServer)

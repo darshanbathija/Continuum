@@ -1390,12 +1390,14 @@ private struct RunningRow: View {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small).tint(t.accent)
                 if isDemo {
-                    Text("Editing ")
-                        .font(TahoeFont.body(12.5))
-                        .foregroundStyle(t.fg2)
-                    + Text("settlement-store.ts")
-                        .font(TahoeFont.mono(12.5))
-                        .foregroundStyle(t.fg)
+                    HStack(spacing: 0) {
+                        Text("Editing ")
+                            .font(TahoeFont.body(12.5))
+                            .foregroundStyle(t.fg2)
+                        Text("settlement-store.ts")
+                            .font(TahoeFont.mono(12.5))
+                            .foregroundStyle(t.fg)
+                    }
                 } else {
                     Text("Working…")
                         .font(TahoeFont.body(12.5))
@@ -1532,16 +1534,16 @@ private struct PlanHalo: View {
                         if let branch = session?.commitBranch, !branch.isEmpty {
                             HStack(spacing: 4) {
                                 TahoeIcon("branch", size: 10)
-                                Text("Will commit to ")
-                                + Text(branch).font(TahoeFont.mono(11)).foregroundColor(t.fg2)
+                                Text("Will commit to")
+                                Text(branch).font(TahoeFont.mono(11)).foregroundColor(t.fg2)
                             }
                             .font(TahoeFont.body(11))
                             .foregroundStyle(t.fg3)
                         } else if isDemo {
                             HStack(spacing: 4) {
                                 TahoeIcon("branch", size: 10)
-                                Text("Will commit to ")
-                                + Text("fix/settlement-dedupe").font(TahoeFont.mono(11)).foregroundColor(t.fg2)
+                                Text("Will commit to")
+                                Text("fix/settlement-dedupe").font(TahoeFont.mono(11)).foregroundColor(t.fg2)
                             }
                             .font(TahoeFont.body(11))
                             .foregroundStyle(t.fg3)
@@ -1804,7 +1806,7 @@ private struct ComposerBar: View {
     @ViewBuilder
     private var modelMenu: some View {
         Menu {
-            if let agentSession {
+            if agentSession != nil {
                 Section("Active model") {
                     Text(currentModelLabel).foregroundStyle(.secondary)
                 }
