@@ -328,7 +328,9 @@ struct iOSTerminalTabsView: View {
     }
 
     private var hasLiveTerminal: Bool {
-        return session.tmuxPaneId == nil && session.tmuxWindowId == nil
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil { return false }
+        if let binding = session.runtimeBinding, !binding.capabilities.supportsTerminal { return false }
+        return true
     }
 
     private var displayPanes: [TerminalPaneRef] {

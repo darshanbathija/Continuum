@@ -700,10 +700,10 @@ public struct IOSSessionDetailView: View {
                 emptyState(title: "No session", body: "Session unavailable.")
             }
         case .terminal:
-            if let s = realAgentSession {
+            if let s = realAgentSession, hasTerminalSurface(s) {
                 iOSTerminalTabsView(client: agentClient, session: s, chatStore: chatStore)
             } else {
-                emptyState(title: "No session", body: "Session unavailable.")
+                emptyState(title: "Terminal unavailable", body: "This session does not expose a live terminal.")
             }
         case .artifacts:
             if let s = realAgentSession {
@@ -750,6 +750,7 @@ public struct IOSSessionDetailView: View {
 
     private func hasTerminalSurface(_ session: AgentSession) -> Bool {
         if session.tmuxPaneId != nil || session.tmuxWindowId != nil { return false }
+        if let binding = session.runtimeBinding, !binding.capabilities.supportsTerminal { return false }
         return true
     }
 
