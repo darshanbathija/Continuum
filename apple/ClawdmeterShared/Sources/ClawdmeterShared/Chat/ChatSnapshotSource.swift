@@ -73,8 +73,7 @@ public protocol ChatSnapshotSource: AnyObject {
     /// CLI-side permission prompt awaiting user input. When non-nil,
     /// the V2 composer disables and the transcript scroll-anchors
     /// above the prompt card so the user can't miss it. Nil for SDK
-    /// chats (those go through the daemon's per-backend permission
-    /// channel, not tmux send-keys).
+    /// chats (those go through the daemon's per-backend permission channel).
     var pendingPermissionPrompt: PendingPermissionPrompt? { get }
 
     /// Explicit per-turn lifecycle. The V2 status strip reads this to

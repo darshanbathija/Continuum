@@ -16,9 +16,7 @@ public enum JSONLSessionId {
 
     /// Read the JSONL header in chunks until a CLI session id is found or
     /// the size cap is hit. Returns nil if the file is missing, unreadable,
-    /// or no usable id is encountered in the first `maxBytes`. Caller
-    /// (Mac "Continue here" composer / iOS continue-readonly promote)
-    /// falls back to read-only when nil is returned.
+    /// or no usable id is encountered in the first `maxBytes`.
     ///
     /// v0.5.0 robustness pass — was originally a single 64KB read which
     /// would lose to:

@@ -23,10 +23,10 @@ import Foundation
 ///    `~/.codex/sessions/` for the newly-created rollout whose
 ///    modification time falls within the session's activity window.
 ///
-/// Phase 0a of the WhatsApp-smooth pipeline used a simpler "global newest"
-/// Codex JSONL fallback. This resolver intentionally avoids that: if a
-/// rollout cannot be tied to the session's activity window, it returns nil
-/// rather than surfacing another session's transcript.
+/// Phase 0a of the WhatsApp-smooth pipeline used a simpler global-newest
+/// fallback. Phase 0b replaces that with this resolver so Codex sessions keep
+/// continuity across `approve-plan` boundaries without authorizing unrelated
+/// provider history.
 public final class SessionFileResolver: @unchecked Sendable {
 
     private let codexSessionsRoot: URL
@@ -156,6 +156,9 @@ public final class SessionFileResolver: @unchecked Sendable {
             return found
         }
 
+        // Fail closed. A global "newest Codex JSONL" fallback can point at
+        // Terminal-launched or otherwise external sessions, and resolver
+        // output is trusted by /transcript and Chat V2 search.
         return nil
     }
 
@@ -416,25 +419,4 @@ public final class SessionFileResolver: @unchecked Sendable {
         return newest
     }
 
-    /// Newest `.jsonl` under any `~/.gemini/tmp/*/chats/` — used for the
-    /// synthetic-preview fallback path on Read-only JSONL viewer.
-    public func findNewestGeminiChat() -> URL? {
-        guard let enumerator = FileManager.default.enumerator(
-            at: geminiTmpRoot,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else { return nil }
-        var newest: URL?
-        var newestDate = Date.distantPast
-        for case let url as URL in enumerator {
-            guard url.pathExtension == "jsonl",
-                  url.path.contains("/chats/") else { continue }
-            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            if date > newestDate {
-                newestDate = date
-                newest = url
-            }
-        }
-        return newest
-    }
 }

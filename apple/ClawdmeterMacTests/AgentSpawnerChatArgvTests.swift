@@ -6,7 +6,7 @@ import ClawdmeterShared
 /// `AgentSpawner.argv(for: AgentSession)`. Verifies:
 /// - chat + claude → plan-mode argv with --permission-mode plan
 /// - non-Claude providers → empty argv because managed adapters own transport
-/// - code sessions retain Claude tmux behavior
+/// - code sessions retain Claude direct-runtime argv behavior
 ///
 /// These tests run inside the Mac XCTest target because AgentSpawner
 /// is Mac-side; only Claude requires a CLI binary for these argv contracts.
@@ -93,7 +93,7 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
             let session = makeChatSession(agent: agent, codexBackend: backend, model: model)
             XCTAssertTrue(
                 AgentSpawner.argv(for: session).isEmpty,
-                "\(agent.rawValue) chat should be routed through its managed adapter, not tmux argv"
+                "\(agent.rawValue) chat should be routed through its managed adapter, not direct argv"
             )
         }
     }
@@ -114,7 +114,7 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
             )
             XCTAssertTrue(
                 AgentSpawner.argv(for: session).isEmpty,
-                "\(agent.rawValue) code should be routed through its managed adapter, not tmux argv"
+                "\(agent.rawValue) code should be routed through its managed adapter, not direct argv"
             )
         }
     }
@@ -145,7 +145,7 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
             let argv = AgentSpawner.argv(for: request, workspacePath: "/Users/foo/repo/.claude/worktrees/oslo")
             XCTAssertTrue(
                 argv.isEmpty,
-                "\(agent.rawValue) new sessions should be routed through their managed adapter, not tmux argv"
+                "\(agent.rawValue) new sessions should be routed through their managed adapter, not direct argv"
             )
         }
     }
@@ -164,7 +164,7 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
             )
             XCTAssertTrue(
                 argv.isEmpty,
-                "\(agent.rawValue) respawn should rebuild its managed adapter, not tmux argv"
+                "\(agent.rawValue) respawn should rebuild its managed adapter, not direct argv"
             )
         }
     }

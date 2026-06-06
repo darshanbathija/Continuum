@@ -5,7 +5,7 @@ import Foundation
 /// drops empty lines, caps at `cap` entries.
 ///
 /// This lives outside the SwiftUI-gated Tahoe bindings because daemon-side
-/// shared-package code also uses it on Linux.
+/// shared-package code also uses it.
 public enum TahoePlanParser {
     public static func steps(from raw: String, cap: Int) -> [String] {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)

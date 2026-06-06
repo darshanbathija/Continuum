@@ -53,15 +53,13 @@ final class AppRuntime: ObservableObject {
     let providerInstanceRegistry: ProviderInstanceRegistry
     private var modelsByInstanceWireId: [String: AppModel] = [:]
 
-    // Sessions feature (Phase 1 + 2 + supervisor):
+    // Sessions feature:
     let repoIndex: RepoIndex
     let agentSessionRegistry: AgentSessionRegistry
     let workspaceStore: WorkspaceStore
     let repoEnvStore: RepoEnvStore
     let repoEnvRuntimeResolver: RepoEnvRuntimeResolver
     let vendorProvisioningService: VendorProvisioningService
-    let tmuxClient: TmuxControlClient
-    let tmuxSupervisor: TmuxSupervisor
     let agentControlServer: AgentControlServer
     let notificationDispatcher: NotificationDispatcher
     let sessionsModel: SessionsModel
@@ -309,16 +307,10 @@ final class AppRuntime: ObservableObject {
             workspaceStore: self.workspaceStore,
             envStore: self.repoEnvStore
         )
-        self.tmuxClient = TmuxControlClient()
         self.vendorProvisioningService = VendorProvisioningService(
             workspaceStore: self.workspaceStore,
             envStore: self.repoEnvStore,
-            repoEnvResolver: self.repoEnvRuntimeResolver,
-            tmuxClient: self.tmuxClient
-        )
-        self.tmuxSupervisor = TmuxSupervisor(
-            tmux: self.tmuxClient,
-            registry: self.agentSessionRegistry
+            repoEnvResolver: self.repoEnvRuntimeResolver
         )
         self.notificationDispatcher = NotificationDispatcher()
         // v0.27.0: openDesignDaemon (the bundled Open Design Node sidecar)
@@ -326,7 +318,6 @@ final class AppRuntime: ObservableObject {
         self.agentControlServer = AgentControlServer(
             repoIndex: self.repoIndex,
             registry: self.agentSessionRegistry,
-            tmux: self.tmuxClient,
             notifications: self.notificationDispatcher,
             workspaceStore: self.workspaceStore,
             repoEnvResolver: self.repoEnvRuntimeResolver,
@@ -348,13 +339,16 @@ final class AppRuntime: ObservableObject {
         self.sessionsModel = SessionsModel(
             repoIndex: self.repoIndex,
             registry: self.agentSessionRegistry,
-            supervisor: self.tmuxSupervisor,
             workspaceStore: self.workspaceStore,
             repoEnvResolver: self.repoEnvRuntimeResolver
         )
+        let schedulerServer = self.agentControlServer
         self.sessionScheduler = SessionScheduler(
             registry: self.agentSessionRegistry,
-            tmuxClient: self.tmuxClient
+            deliverer: { [weak schedulerServer] session, followUp in
+                await schedulerServer?.deliverScheduledFollowUp(session: session, followUp: followUp)
+                    ?? .unavailable(reason: "daemon_unavailable")
+            }
         )
 
         // Vend the Mach service the widget extension queries. Created here
@@ -407,16 +401,11 @@ final class AppRuntime: ObservableObject {
             // being live at first paint.
             //
             // What DOES defer (non-critical to mobile + first-paint):
-            //   - tmuxSupervisor.start() — tmux session enumeration + spawn
-            //     warmup; doesn't block window paint, no mobile dep
             //   - sessionsModel.startPeriodicRefresh() — kicks the 60s
             //     timer + does an initial repo index walk
             //   - sessionScheduler.start() — schedules deferred session work
             //
-            // These three move into a Task that runs after AppRuntime.init
-            // returns. Cold-start latency drops by the cost of the tmux
-            // session enumeration + repo index walk (~50-200ms on a
-            // populated machine).
+            // These move into a Task that runs after AppRuntime.init returns.
             self.agentControlServer.start()
             // PR #24a A1: synchronous loopback bootstrap. `start()` above
             // is sync and assigns `boundPort`/`boundWsPort` before
@@ -492,10 +481,9 @@ final class AppRuntime: ObservableObject {
             // weak capture risks the work being dropped if init returns
             // before the Task scheduler kicks in.
             Task { @MainActor [self] in
-                self.tmuxSupervisor.start()
                 self.sessionsRefreshTask = self.sessionsModel.startPeriodicRefresh()
                 self.sessionScheduler.start()
-                runtimeLogger.info("A7 deferred subsystems started (tmux supervisor + sessions refresh + scheduler)")
+                runtimeLogger.info("A7 deferred subsystems started (sessions refresh + scheduler)")
             }
             // v0.27.0: openDesignDaemon.ensureRunning() removed along with
             // the Design tab.
@@ -689,8 +677,8 @@ final class AppRuntime: ObservableObject {
         // model (e.g. a fresh Opus) stops showing $0 within this session.
         Task.detached(priority: .utility) { [weak self] in
             let refreshed = await PricingUpdater.shared.refreshIfStale()
-            if refreshed {
-                await MainActor.run { self?.usageHistoryStore.forceRefresh() }
+            if refreshed, let runtime = self {
+                await runtime.refreshUsageHistoryStore()
             }
         }
         // v0.29.31: warm the Cursor + OpenRouter model probes on launch so the
@@ -729,6 +717,10 @@ final class AppRuntime: ObservableObject {
         Task(priority: .utility) { @MainActor in
             await ChatProviderProbe.shared.invalidate()
         }
+    }
+
+    private func refreshUsageHistoryStore() {
+        usageHistoryStore.forceRefresh()
     }
 
     private static var isRunningUnderXCTest: Bool {

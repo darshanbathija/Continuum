@@ -2,20 +2,13 @@ import Foundation
 
 /// Per-device bearer token for the daemon HTTP/WS auth gate.
 ///
-/// The daemon (Mac via Network.framework on `AgentControlServer`, Linux via
-/// `HummingbirdTransport`) requires every request to carry
+/// The Mac daemon requires every request to carry
 /// `Authorization: Bearer <token>` matching whatever this store returns.
 ///
 /// Implementations:
 /// - **Mac**: `PairingTokenStore` in `apple/ClawdmeterMac/AgentControl/` —
 ///   stored in the local Keychain via `Security.framework`. Not iCloud-synced;
 ///   the token is host-specific.
-/// - **Linux**: `PairingTokenStore+SecretService` in
-///   `linux/Sources/ClawdmeterLinux/Storage/` — stored in GNOME Keyring via
-///   `libsecret-1` Secret Service API. Falls back to
-///   `~/.config/clawdmeter/.token` (chmod 0600) when no Secret Service daemon
-///   is running (headless server installs).
-///
 /// 32 random bytes → base64url-encoded string (43 chars, no padding) on first
 /// use. `regenerate()` mints a new token; iOS clients with the old one must
 /// re-pair via QR.

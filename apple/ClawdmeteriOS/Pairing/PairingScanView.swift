@@ -29,10 +29,10 @@ public struct PairingScanView: View {
     @Environment(\.dismiss) private var dismiss
 
     public init(
-        service: IOSRelayPairingService = .shared,
+        service: IOSRelayPairingService? = nil,
         onDone: @escaping (Result<RelayPairingRecord, Error>) -> Void
     ) {
-        self.service = service
+        self.service = service ?? .shared
         self.onDone = onDone
     }
 

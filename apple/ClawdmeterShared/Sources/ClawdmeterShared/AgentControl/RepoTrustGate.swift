@@ -1,9 +1,5 @@
 import Foundation
-#if canImport(Darwin)
 import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 
 /// The fs/terminal trust boundary for harness-driven agents (Phase 6).
 ///

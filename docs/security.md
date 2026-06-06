@@ -6,13 +6,11 @@ operator's Cloudflare account can and cannot see. The full normative
 design lives at [`docs/design/secure-relay-apns-2026-05-26.md`](design/secure-relay-apns-2026-05-26.md);
 this doc is the contract with users.
 
-> Status note. Group E (the secure relay + APNS gateway) is partially
-> shipped at the time of writing. The Cloudflare Workers (E2 — relay,
-> [PR #151](https://github.com/darshanbathija/Clawdmeter/pull/151); E5 —
-> APNS gateway, [PR #147](https://github.com/darshanbathija/Clawdmeter/pull/147))
-> are in main. The Mac/iOS clients that connect to them (E3, E4, E6)
-> are not. See [`docs/known-limitations.md`](known-limitations.md) for
-> exactly what's live vs. designed.
+> Status note. Group E (the secure relay + APNS gateway) now has both
+> Worker paths and Apple-client paths in the app. Loopback/Tailscale
+> remains available for local development and fallback. See
+> [`docs/known-limitations.md`](known-limitations.md) for exactly what's
+> live vs. still deferred.
 
 ---
 
@@ -367,15 +365,10 @@ Cloudflare account responsibly.
 Test vectors at
 [`infra/relay/test-vectors/`](../infra/relay/test-vectors/) are the
 byte-exact contract between the TypeScript Worker side and the Swift
-client side. The TypeScript side passes via
-`libsodium-wrappers-sumo`; the Swift side will verify against CryptoKit
-when E3 lands.
-
-There is a known cross-impl gap with Swift CryptoKit's XChaCha20
-nonce size (24 bytes vs. CryptoKit's ChaChaPoly default 12 bytes).
-Bridging requires either `libsodium-swift` or a custom XChaCha20
-prelude. See [`docs/known-limitations.md`](known-limitations.md) for
-the current state and the verifier finding that surfaced this.
+client side. The TypeScript side passes via `libsodium-wrappers-sumo`;
+Apple clients verify against CryptoKit plus Continuum's pure-Swift
+HChaCha20 prelude. See [`docs/known-limitations.md`](known-limitations.md)
+for the current state and the vector contract.
 
 ## 11. Agent fs/terminal trust boundary (RepoTrustGate)
 

@@ -7,7 +7,7 @@ import ClawdmeterShared
 /// surface of the Chat V2 release without spawning real CLI processes.
 /// True UI-driving E2E (two-process Mac daemon + iOS simulator)
 /// requires the actual `claude` / `codex` / `gemini` binaries on PATH
-/// plus tmux plus a paired iPhone — none of that is reasonable for CI.
+/// plus live harnesses and a paired iPhone — none of that is reasonable for CI.
 /// Instead this suite locks in the contract:
 ///
 /// 1. Every new wire DTO round-trips through JSON without losing
@@ -223,8 +223,8 @@ final class WireV14ContractTests: XCTestCase {
 // True two-process E2E (daemon spawned by a test, iOS simulator
 // connecting via Tailscale loopback) requires:
 //   1. A test-only daemon spawn helper that constructs
-//      AgentControlServer with stubbed TmuxControlClient + RepoIndex
-//      + NotificationDispatcher, binds NWListener to a free port, and
+//      AgentControlServer with a stubbed RepoIndex + NotificationDispatcher,
+//      binds NWListener to a free port, and
 //      provides graceful teardown.
 //   2. An XCUITest target that launches the iOS app under
 //      XCUIApplication with `CLAWDMETER_PAIRING_HOST` /

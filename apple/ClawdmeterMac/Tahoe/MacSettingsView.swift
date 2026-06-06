@@ -77,6 +77,10 @@ public struct MacSettingsView: View {
         )
     }
 
+    private var supportsAnyAutoRevive: Bool {
+        [claudeModel, codexModel, geminiModel].contains { $0.config.supportsAutoRevive }
+    }
+
     public var body: some View {
         VStack(spacing: 18) {
             SettingsHeader(search: $settingsSearch, onReset: { theme.resetToDefaults() })
@@ -282,8 +286,14 @@ public struct MacSettingsView: View {
         SettingsCard(title: "Quota & sync",
                      sub: "Behavior that affects the menu-bar agent and the paired iPhone.") {
             SettingsRow(label: "Auto-revive 5h timer",
-                        hint: "Sends a no-op every ~4 hours so you don't lose your rolling session window. Applies to every provider that supports it.") {
-                TahoeToggleView(on: autoReviveBinding)
+                        hint: supportsAnyAutoRevive
+                            ? "Keeps rolling quota windows warm for providers that support a non-consuming keepalive."
+                            : "Paused until a provider exposes a non-consuming keepalive endpoint.") {
+                if supportsAnyAutoRevive {
+                    TahoeToggleView(on: autoReviveBinding)
+                } else {
+                    SettingsUnavailableBadge()
+                }
             }
         }
 

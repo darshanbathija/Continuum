@@ -33,6 +33,7 @@ public final class RelaySubscriptionBridge {
 
     /// A loopback WS connection to the daemon's own WS port. Prod is a
     /// `URLSessionWebSocketTask` wrapper; tests inject a fake.
+    @MainActor
     public protocol Conn: AnyObject {
         /// iOS → daemon (terminal input / resize / title).
         func send(_ data: Data) async throws

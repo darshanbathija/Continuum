@@ -273,8 +273,7 @@ public final class SessionChatStore {
     /// renders this as an AskUserQuestion-style card; on user click the
     /// daemon dispatches the corresponding keys to the CLI's TUI and
     /// clears this back to nil. Nil for non-chat sessions, sessions
-    /// where no permission is pending, and Codex SDK chat (the SDK
-    /// doesn't surface permission prompts through tmux).
+    /// where no permission is pending, and Codex SDK chat.
     public private(set) var pendingPermissionPrompt: PendingPermissionPrompt?
 
     /// A13 (perf — optimistic composer UI): slot for an in-flight user
@@ -374,8 +373,7 @@ public final class SessionChatStore {
     /// v0.23 (Chat V2): transition the session's per-turn lifecycle.
     /// Called from each provider's ingestor:
     ///   - JSONLTail (Claude) → `.streaming` on first assistant content,
-    ///     `.completed` on the JSONL `result` line, `.interrupted` on the
-    ///     SessionInterruptDispatcher's tmux ESC dispatch.
+    ///     `.completed` on the JSONL `result` line, `.interrupted` on PTY ESC.
     ///   - CodexSDKEventIngestor → `.streaming` on first SDK event of a
     ///     turn, `.completed` on `turn.completed`, `.interrupted` on
     ///     AbortController.abort().

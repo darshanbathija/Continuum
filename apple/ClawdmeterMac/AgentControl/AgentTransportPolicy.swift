@@ -1,7 +1,7 @@
 import ClawdmeterShared
 
 enum AgentTransportPolicy: Equatable {
-    case tmuxArgv
+    case directPtyArgv
     case opencodeServe
     case acpHarness
     case codexAppServer
@@ -14,7 +14,7 @@ enum AgentTransportPolicy: Equatable {
     ) -> AgentTransportPolicy {
         switch agent {
         case .claude:
-            return .tmuxArgv
+            return .directPtyArgv
         case .opencode:
             return .opencodeServe
         case .cursor:
@@ -29,12 +29,12 @@ enum AgentTransportPolicy: Equatable {
     }
 
     var requiresArgvPreflight: Bool {
-        self == .tmuxArgv || self == .unsupported
+        self == .directPtyArgv || self == .unsupported
     }
 
     var managedPreflightToken: String {
         switch self {
-        case .tmuxArgv, .unsupported:
+        case .directPtyArgv, .unsupported:
             return ""
         case .opencodeServe:
             return "opencode-managed-session"

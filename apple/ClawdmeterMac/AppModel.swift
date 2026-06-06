@@ -95,7 +95,9 @@ public final class AppModel: ObservableObject {
             providerLogger.info("onEvent INVOKED")
             RunLoop.main.perform { [weak self] in
                 providerLogger.info("RunLoop.main RUNNING")
-                self?.consume(event)
+                MainActor.assumeIsolated {
+                    self?.consume(event)
+                }
             }
             // Wake the runloop in case it's idle.
             CFRunLoopWakeUp(CFRunLoopGetMain())
@@ -135,10 +137,15 @@ public final class AppModel: ObservableObject {
     }
 
     public func setAutoReviveEnabled(_ enabled: Bool) {
+        guard config.supportsAutoRevive else {
+            autoReviver.isEnabled = false
+            return
+        }
         autoReviver.isEnabled = enabled
     }
 
     public func reviveNow() {
+        guard config.supportsAutoRevive else { return }
         Task { @MainActor in
             await autoReviver.fireNow()
             _ = await poller.forcePoll()

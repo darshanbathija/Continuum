@@ -8,12 +8,11 @@ import XCTest
 /// dashboard column would correctly hide auto-revive, but a future
 /// "Claude Pro" or similar would also hide it incorrectly.
 ///
-/// The fix shipped a `supportsAutoRevive: Bool` field on
-/// `ProviderConfig` and routed it through `AutoReviveSupport.supports(_:)`
-/// — a single source of truth in shared. This test locks the contract:
+/// `supportsAutoRevive: Bool` routes through `AutoReviveSupport.supports(_:)`
+/// — a single source of truth in shared. This test locks the current contract:
 ///
-///   - "claude" → true (Anthropic's 5h-window quota benefits from a
-///     1-token Hi ping every 5 hours to keep the meter warm).
+///   - "claude" → false (prompt-based keepalives create throwaway
+///     conversations and consume quota).
 ///   - "codex"  → false (wham/usage quota is activity-tied; ping doesn't
 ///     extend it).
 ///   - "gemini" → false (cloudcode-pa is 24h-style refreshes per model;
@@ -23,8 +22,8 @@ import XCTest
 ///     some other site).
 final class ProviderConfigAutoReviveTests: XCTestCase {
 
-    func test_claudeSupportsAutoRevive() {
-        XCTAssertTrue(AutoReviveSupport.supports("claude"))
+    func test_claudeDoesNotSupportAutoRevive() {
+        XCTAssertFalse(AutoReviveSupport.supports("claude"))
     }
 
     func test_codexDoesNotSupportAutoRevive() {

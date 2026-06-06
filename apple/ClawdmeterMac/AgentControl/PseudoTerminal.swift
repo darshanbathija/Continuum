@@ -1,25 +1,13 @@
 import Foundation
-#if canImport(Darwin)
 import Darwin
-#elseif canImport(Glibc)
-// On Linux: openpty(3) lives in libutil (not Glibc proper). The linux/
-// package adds a `CLibUtil` system-shim module map that exports
-// <pty.h> + `link "util"`. Phase 2's daemon move (T5) is what brings
-// this file into shared; until then `#elseif canImport(Glibc)` here
-// just documents the Linux story.
-import Glibc
-import CLibUtil
-#endif
 
 /// Minimal pseudo-terminal helper. Wraps `openpty(3)` and `forkpty`-style
-/// process spawning so we can run interactive subprocesses (like `tmux -CC`
-/// or `claude`) that insist on a real tty on stdin.
+/// process spawning so we can run interactive subprocesses (like `claude` or
+/// an interactive shell) that insist on a real tty on stdin.
 ///
-/// `TmuxControlClient` reuses this for the tmux server; `ClaudePtyHost`
-/// (Track A) reuses it for a per-session interactive `claude`. Foundation's
-/// `Process` standardInput/Output expect Pipes or FileHandles, and a plain
-/// Pipe trips `tcgetattr: Operation not supported by device` from tmux and
-/// makes Claude's Ink TUI refuse to render.
+/// `ClaudePtyHost` and `TerminalPtyHost` reuse it for per-session interactive
+/// processes. Foundation's `Process` standardInput/Output expect Pipes or
+/// FileHandles, and a plain Pipe makes Claude's Ink TUI refuse to render.
 public final class PseudoTerminal {
 
     /// File descriptor for the master side of the PTY. Read from this to
@@ -36,8 +24,8 @@ public final class PseudoTerminal {
     /// **Why the winsize matters (Track A).** A PTY created with a 0×0 / unset
     /// size makes Claude's Ink TUI render against a zero-column terminal — the
     /// composer is suppressed, the trust-folder warmup scraper sees nothing,
-    /// and the first paste lands nowhere. tmux sized its panes for us; a raw
-    /// PTY must set it explicitly. We pass the size straight to `openpty`'s
+    /// and the first paste lands nowhere. A raw PTY must set it explicitly.
+    /// We pass the size straight to `openpty`'s
     /// winsize argument so it's correct from the first byte (no follow-up
     /// `ioctl` race before the child execs).
     public init(cols: UInt16 = 120, rows: UInt16 = 40) throws {
@@ -113,9 +101,8 @@ public final class PseudoTerminal {
     /// inherit the daemon's full environment, which re-opens the billing leak
     /// `ClaudeSpawnEnv` exists to close: a stray `ANTHROPIC_API_KEY` would flow
     /// to the child and silently switch `claude` to pay-per-token. Every caller
-    /// must decide its env explicitly — the Claude host passes
-    /// `ClaudeSpawnEnv.sanitized()`; the tmux server passes the process env on
-    /// purpose.
+    /// must decide its env explicitly; the Claude host passes
+    /// `ClaudeSpawnEnv.sanitized()`.
     ///
     /// `cwd`, when non-nil, sets the child's working directory via
     /// `posix_spawn_file_actions_addchdir_np` — argv-only, no shell, so paths
@@ -144,7 +131,7 @@ public final class PseudoTerminal {
         // a file-action so it applies in the child only (no daemon-wide chdir
         // race). cwd-with-a-space is safe — no shell parsing involved.
         if let cwd {
-            _ = cwd.withCString { posix_spawn_file_actions_addchdir_np(&fileActions, $0) }
+            _ = cwd.withCString { posix_spawn_file_actions_addchdir(&fileActions, $0) }
         }
 
         // Dup slave fd to stdin (0), stdout (1), stderr (2)

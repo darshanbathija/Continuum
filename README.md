@@ -2,9 +2,9 @@
 
 Continuum is a native desktop and mobile control surface for coding agents. It
 started as a Claude usage meter, but the current repo is broader: a Mac menu-bar
-meter, a Tahoe-style Mac workbench, iPhone and Apple Watch companions,
-experimental Linux scaffolding, shared usage analytics, and adapters for Claude
-Code, Codex, Antigravity/Gemini, and OpenCode.
+meter, a Tahoe-style Mac workbench, iPhone and Apple Watch companions, shared
+usage analytics, and adapters for Claude Code, Codex, Antigravity/Gemini, and
+OpenCode.
 
 At a high level, Continuum does three jobs:
 
@@ -12,28 +12,28 @@ At a high level, Continuum does three jobs:
 - Runs and controls local coding-agent sessions from Mac, iPhone, and Watch.
 - Keeps chat, code, usage, device pairing, diagnostics, and provider setup in one app.
 
-Current source version: `0.31.3` (`apple/project.yml` build `203`).
+Current source version: `0.31.6` (`apple/project.yml` build `206`).
 
 ## What ships
 
 | Surface | Current role |
 | --- | --- |
-| **Mac app** | Primary app. Menu-bar gauge plus a full Tahoe-style window with Chat, Usage, Code, and Settings tabs. Owns the local daemon, provider runtimes, tmux sessions, OpenCode server, usage aggregation, pairing, and diagnostics. (Design tab + Open Design integration stripped in v0.27.0 — slated to be redesigned and rebuilt.) |
+| **Mac app** | Primary app. Menu-bar gauge plus a full Tahoe-style window with Chat, Usage, Code, and Settings tabs. Owns the local daemon, provider runtimes, direct PTY terminals, OpenCode server, usage aggregation, pairing, and diagnostics. (Design tab + Open Design integration stripped in v0.27.0 — slated to be redesigned and rebuilt.) |
 | **iPhone app** | Paired control plane for the Mac. Shows live provider status, analytics, chat/code sessions, new-session creation, plan approvals, diffs, terminal views, and Live Activities. |
 | **Apple Watch app** | Wrist view for live usage and sessions that need attention, including plan approval and interruption flows through the paired iPhone. |
 | **Widgets / complications** | iOS widgets, watchOS complications, and a Mac widget extension backed by the shared app-group cache. |
-| **Linux app** | Experimental Swift Linux scaffolding under `linux/`. Keep it compiling, but do not treat AppImage/deb, tray, daemon, or pairing docs as shipping until the stubs are replaced by real runtime code. |
-| **Shared package** | `apple/ClawdmeterShared` contains wire DTOs, analytics parsers, pricing, provider models, session protocol types, Tahoe UI primitives, and cross-platform tests. |
-| **Tools** | Build scripts, bundled runtime fetchers, Codex SDK shim, Antigravity Python sidecar skeleton, and tmux control-mode probes live under `tools/`. (Open Design bridge + plugin removed in v0.27.0.) |
+| **Shared package** | `apple/ClawdmeterShared` contains wire DTOs, analytics parsers, pricing, provider models, session protocol types, Tahoe UI primitives, and Apple-platform tests. |
+| **Tools** | Build scripts, bundled runtime fetchers, Codex SDK shim, and Antigravity Python sidecar skeleton live under `tools/`. (Open Design bridge + plugin removed in v0.27.0.) |
 
 ## Provider support
 
 | Provider | How Continuum integrates it |
 | --- | --- |
-| **Claude Code** | Spawns the `claude` CLI in tmux, parses Claude JSONL usage, reads local auth state where allowed, supports plan mode, accept-edits, bypass mode with repo trust, session resume, slash-command skill discovery, and live chat/code transcript ingestion. |
-| **Codex** | Supports CLI-backed sessions and a Codex SDK chat path. Usage parsing reads Codex session JSONL, including cumulative-to-delta conversion. Plan mode maps to read-only sandboxing, and send/interrupt/model/effort flows go through the same daemon surface as other agents. |
-| **Antigravity / Gemini** | Gemini quota and Antigravity 2 native sessions are represented through the shared `.gemini` agent kind in current wire contracts. The newer path talks to Antigravity's `agentapi` / language-server runtime, reads conversation DB and brain-dir state, and exposes plan snapshots. |
-| **Cursor** | Discovers account models from Cursor, launches Cursor-backed sessions, and treats effort as Cursor Auto until Cursor exposes a real effort control. |
+| **Claude Code** | Spawns the `claude` CLI in a per-session direct PTY, parses Claude JSONL usage, reads local auth state where allowed, supports plan mode, accept-edits, bypass mode with repo trust, session resume, slash-command skill discovery, and live chat/code transcript ingestion. |
+| **Codex** | Uses the Codex app-server harness for chat and code sessions. Usage parsing reads Codex session JSONL, including cumulative-to-delta conversion. Plan mode maps to read-only sandboxing, and send/interrupt/model/effort flows go through the same daemon surface as other agents. |
+| **Antigravity / Gemini** | Gemini quota and Antigravity native sessions are represented through the shared `.gemini` agent kind in current wire contracts. Sessions run through the headless `agy` harness, read conversation DB and brain-dir state, and expose plan snapshots. |
+| **Cursor** | Discovers account models from Cursor, launches Cursor-backed ACP harness sessions, and treats effort as Cursor Auto until Cursor exposes a real effort control. |
+| **Grok** | Runs through a headless harness, surfaces Grok usage limits and token history, and participates in Chat, Code, Usage, and provider-picker flows. |
 | **OpenRouter via OpenCode** | Runs OpenRouter models through Continuum's shared `opencode serve` process, consumes SSE events, sends prompts through OpenCode's HTTP API, maps OpenRouter usage into Continuum analytics, and surfaces live model metadata under Settings -> Providers. |
 
 ## App model
@@ -43,7 +43,7 @@ HTTP and WebSocket daemon:
 
 - HTTP listener starts at `21731`, with fallback ports through `21741`.
 - WebSocket listener normally starts at `21732`.
-- Non-loopback access is restricted to Tailscale/loopback peer ranges and bearer-token pairing.
+- Non-loopback access is restricted to the secure relay path, Tailscale/loopback peer ranges, and bearer-token pairing.
 - The same daemon backs Mac loopback clients, iPhone pairing, Watch relays, terminal streams, chat snapshots, usage, analytics, diffs, and PR actions.
 
 The main Mac tabs are:
@@ -51,7 +51,7 @@ The main Mac tabs are:
 - **Chat** - solo or broadcast chat over Claude, Codex, Antigravity, Cursor, and OpenRouter, with Frontier-style multi-provider comparison endpoints in the daemon.
 - **Usage** - live quota cards plus historical spend by provider, day, and repo. OpenCode appears as a dollar-cost lane because it does not expose Anthropic-style rolling quota headers.
 - **Code** - repo/session workbench with city-named worktrees, terminal panes, chat transcript, Browser Preview with comment chips, plan/diff/PR/artifact/source panes, archive/reopen flows, and provider filters.
-- **Settings** - visual theme, provider setup, per-provider model/effort defaults, Codex SDK diagnostics, Antigravity SDK diagnostics, pairing, Live Activities, auto-revive, and diagnostics.
+- **Settings** - visual theme, provider setup, per-provider model/effort defaults, provider diagnostics, pairing, Live Activities, auto-revive, and diagnostics.
 
 ## Analytics
 
@@ -82,7 +82,7 @@ Refresh pricing with:
 ## Security and privacy
 
 Three reference documents describe what Continuum trusts, what it
-sends over the network, and what isn't built yet:
+sends over the network, and what remains deferred:
 
 - [`docs/security.md`](docs/security.md) — trust model, cryptographic
   primitives, key lifecycle, per-peer bearer auth, APNS device-token
@@ -93,10 +93,9 @@ sends over the network, and what isn't built yet:
   telemetry, and the update check. Also covers what stays local,
   backup posture, and the GDPR / CCPA deletion story.
 - [`docs/known-limitations.md`](docs/known-limitations.md) — what's
-  NOT yet shipped: the Mac/iOS clients for the secure cloud relay
-  and APNS gateway, the Swift CryptoKit XChaCha20 gap, F3 daemon
-  wire-up, the C2 `@Observable` migration, watchOS / iOS launch
-  Tahoe-debt, and Mac Code-tab density follow-ups.
+  still deferred: F3 daemon wire-up, per-provider HOME isolation,
+  C2 `@Observable` migration, watchOS / iOS launch Tahoe-debt,
+  Sparkle follow-ups, and Mac Code-tab density follow-ups.
 
 The full normative design for the secure relay + APNS gateway lives
 at [`docs/design/secure-relay-apns-2026-05-26.md`](docs/design/secure-relay-apns-2026-05-26.md).
@@ -112,8 +111,7 @@ Requirements:
 - Apple Silicon Mac for the packaged DMG path.
 - Xcode with Swift 5.10 support and the current Apple platform SDKs used by the project.
 - `xcodegen` for regenerating `apple/Clawdmeter.xcodeproj`.
-- `tmux` for live agent sessions.
-- Provider CLIs as needed: `claude`, `codex`, `gemini` / Antigravity, and/or `opencode`.
+- Provider CLIs as needed: `claude`, `codex`, `cursor-agent`, `grok`, `gemini` / Antigravity, and/or `opencode`.
 
 Useful build commands:
 
@@ -176,48 +174,9 @@ CLAWDMETER_SKIP_BUNDLED_OPENCODE=1
 Skipping those makes the corresponding bundled feature depend on a system
 install or become inert in that local build.
 
-## Building Linux
-
-The Linux package lives under `linux/` and shares
-`apple/ClawdmeterShared`. It is a Swift package with two executables:
-`clawdmeterd` and `clawdmeter`.
-
-Development build:
-
-```bash
-sudo apt install -y \
-  libgtk-4-dev libadwaita-1-dev \
-  libayatana-appindicator3-dev libsecret-1-dev \
-  libcairo2-dev libpango1.0-dev \
-  libwebkitgtk-6.0-dev libvte-2.91-gtk4-dev \
-  pkg-config
-
-cd linux
-./scripts/configure-c-shims.sh
-swift build
-swift test
-```
-
-Distribution packaging is intentionally quarantined while the Linux daemon and
-desktop binaries are still stubs. The scripts below are placeholders and should
-not be wired into release uploads until they produce real artifacts:
-
-```bash
-./tools/build-linux-appimage.sh
-./tools/build-linux-deb.sh
-```
-
-Scaffolding docs:
-
-- `docs/linux/INSTALL.md` (not yet a shipping install guide)
-- `docs/linux/PAIRING.md` (design notes until the daemon is real)
-- `docs/linux/TROUBLESHOOTING.md`
-- `docs/linux/QA-CHECKLIST.md`
-
 ## Other test targets
 
 ```bash
-( cd tools/tmux-cc-probe && swift test )
 ( cd tools/clawdmeter-codex-sdk && npm test )
 ( cd tools/clawdmeter-agents && python3 -m pytest )
 ```
@@ -226,8 +185,6 @@ The repo has substantial XCTest coverage under:
 
 - `apple/ClawdmeterShared/Tests/ClawdmeterSharedTests`
 - `apple/ClawdmeterMacTests`
-- `linux/Tests/ClawdmeterLinuxTests`
-- `tools/tmux-cc-probe/Tests`
 
 ## Repo layout
 
@@ -244,24 +201,18 @@ The repo has substantial XCTest coverage under:
 |   |-- ClawdmeterWatch/                    watchOS app
 |   |-- ClawdmeterWatchWidgets/             watch complications
 |   `-- ClawdmeterMacWidgets/               macOS widget extension
-|-- linux/
-|   |-- Package.swift                       Linux app and daemon package
-|   |-- Sources/                            Swift Linux app, daemon, C shims
-|   |-- Tests/                              Linux tests
-|   |-- scripts/                            C-shim configuration
-|   `-- resources/                          desktop files, service, metadata
 |-- docs/
 |   |-- designs/                            Sessions/control-plane docs
-|   |-- linux/                              Linux install/pairing/QA docs
 |   |-- agentapi-*.md                       Antigravity runtime research
 |   |-- opencode-research-2026-05-22.md     OpenCode integration research
 |   `-- button-wiring-audit.md              UI/backend wiring audit
 |-- tools/
-|   |-- build-*.sh                          DMG and quarantined Linux packaging stubs
+|   |-- build-mac-dmg.sh                    Mac DMG packaging
 |   |-- download-bundled-*.sh               vendored runtime staging
 |   |-- clawdmeter-codex-sdk/               Node Codex SDK bridge
 |   |-- clawdmeter-agents/                  Python Antigravity sidecar skeleton
-|   `-- tmux-cc-probe/                      tmux control-mode test package
+|   |-- release-mac.sh                      signed/notarized Sparkle release path
+|   `-- extract-antigravity-proto.sh        Antigravity protocol inventory helper
 |-- CHANGELOG.md                            detailed release history
 |-- VERSION                                 marketing version mirror
 `-- CLAUDE.md                               maintainer-oriented implementation notes
@@ -269,11 +220,12 @@ The repo has substantial XCTest coverage under:
 
 ## Runtime notes
 
-- `tmux` is the main transport for CLI-backed code sessions.
+- Claude sessions and terminal panes run through direct PTY hosts managed by the daemon.
+- Codex, Cursor, Gemini, and Grok sessions run through their harness providers; missing live harnesses surface stale-session errors instead of falling back to a terminal.
 - Chat sessions and code sessions share the same `AgentSessionRegistry` and daemon.
-- OpenCode sessions do not use tmux; they go through `opencode serve` plus SSE.
-- Antigravity 2 native sessions are HTTP-RPC against a language server, not a long-lived CLI stream.
-- iPhone pairing is QR/token based and expects loopback or Tailscale-reachable hosts. Tailscale MagicDNS is the easiest path for iOS App Transport Security.
+- OpenCode sessions go through `opencode serve` plus SSE.
+- Legacy `tmuxWindowId` / `tmuxPaneId` fields still decode for old registries; sessions carrying them are retired and return `410 legacy_session_retired`.
+- iPhone pairing is QR/token based and can use the secure relay path; loopback/Tailscale remains available for local development and fallback.
 - Release Mac builds are sandboxed; Debug builds keep broader local access for development.
 - App Store/iCloud/CloudKit/notarization paths still depend on Apple account capabilities outside this repo.
 

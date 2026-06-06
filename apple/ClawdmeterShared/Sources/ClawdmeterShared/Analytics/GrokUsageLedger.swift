@@ -1,9 +1,5 @@
 import Foundation
-#if canImport(Darwin)
 import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 
 /// Continuum-owned Grok usage ledger.
 ///
@@ -148,7 +144,6 @@ public enum GrokUsageLedger {
     }
 
     private static func appendLocked(_ data: Data, to url: URL) throws {
-#if canImport(Darwin) || canImport(Glibc)
         let flags = O_WRONLY | O_CREAT | O_APPEND
         let mode = mode_t(S_IRUSR | S_IWUSR)
         let fd = url.path.withCString { path in
@@ -175,28 +170,13 @@ public enum GrokUsageLedger {
                 offset += written
             }
         }
-#else
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-        }
-        let handle = try FileHandle(forWritingTo: url)
-        defer { try? handle.close() }
-        try handle.seekToEnd()
-        try handle.write(contentsOf: data)
-#endif
     }
 
-#if canImport(Darwin) || canImport(Glibc)
     private static func currentPOSIXErrorCode() -> POSIXErrorCode {
         POSIXErrorCode(rawValue: currentErrno()) ?? .EIO
     }
 
     private static func currentErrno() -> Int32 {
-#if canImport(Darwin)
         Darwin.errno
-#elseif canImport(Glibc)
-        Glibc.errno
-#endif
     }
-#endif
 }

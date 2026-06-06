@@ -3,7 +3,7 @@ import Network
 import OSLog
 import ClawdmeterShared
 
-let serverLogger = Logger(subsystem: "com.clawdmeter.mac", category: "AgentControlServer")
+private let serverLogger = Logger(subsystem: "com.clawdmeter.mac", category: "AgentControlServer")
 
 /// In-process HTTP/1.1 + WebSocket server for the Sessions feature.
 ///
@@ -39,11 +39,10 @@ public final class AgentControlServer {
     public static let portFallbackRange: ClosedRange<UInt16> = 21731...21741
 
     private let pairingTokens: PairingTokenStore
-    let repoIndex: RepoIndex
-    let whois: TailscaleWhois
-    let registry: AgentSessionRegistry
-    let tmux: TmuxControlClient
-    let notifications: NotificationDispatcher
+    private let repoIndex: RepoIndex
+    private let whois: TailscaleWhois
+    private let registry: AgentSessionRegistry
+    private let notifications: NotificationDispatcher
     /// v16 Code V2: persisted per-repo workspace registry. Drives the
     /// `GET /workspaces` + `PATCH /workspaces/:id` endpoints and seeds
     /// new sessions with the repo's last-used model/effort/agent so
@@ -62,30 +61,28 @@ public final class AgentControlServer {
     let mobileCommandOutbox: MobileCommandOutbox
     /// v18 Code workbench parity: remote iOS Run/Preview is hosted by the
     /// paired Mac daemon, because iOS cannot execute local repo commands.
-    let codeRunProfiles: CodeRunProfileService
+    private let codeRunProfiles: CodeRunProfileService
     /// Prepared checkpoint restore plans are intentionally short-lived:
     /// iOS must preview a restore before it can confirm it.
-    var checkpointRestorePlans: [UUID: CheckpointRestorePlan] = [:]
+    private var checkpointRestorePlans: [UUID: CheckpointRestorePlan] = [:]
     /// Phase 0a: long-lived per-session chat-store registry. Replaces the
     /// "reparse JSONL on every /chat-snapshot request" path. Used by the
     /// HTTP handler (snapshotStore) and, in Phase 2, by the WS dispatcher
     /// for `chat-subscribe` long-lived subscriptions (acquire / release).
-    let chatStoreRegistry: DaemonChatStoreRegistry
+    private let chatStoreRegistry: DaemonChatStoreRegistry
     /// Phase 0b: shared file resolver. Owns the Codex respawn-lineage
     /// tracking — `approve-plan` invalidates the resolver so the next
     /// chat-snapshot request rescans for the new rollout file. The
     /// `chatStoreRegistry` delegates JSONL URL resolution to this.
     private let chatFileResolver: SessionFileResolver
-    /// ACP harness: live `AcpHarnessBridge`s keyed by session id. Grok (and,
-    /// later, every migrated ACP/SDK provider) is driven through one of these
-    /// instead of a tmux pane. Claude/Codex/Cursor stay on their existing
-    /// paths; the registry only holds the new harness-driven sessions.
-    let harnessRegistry = HarnessSessionRegistry()
-    /// Track A: per-session direct PTY hosts for Claude session-drive, gated
-    /// by `clawdmeter.claude.ptyHost.enabled` (default OFF → Claude stays on
-    /// tmux, byte-identical). tmux stays for terminals + non-Claude providers.
+    /// ACP harness: live `AcpHarnessBridge`s keyed by session id. Non-Claude
+    /// providers are driven through one of these instead of a terminal pane.
+    private let harnessRegistry = HarnessSessionRegistry()
+    /// Per-session direct PTY hosts for Claude session-drive.
     let claudePtyRegistry = ClaudePtyRegistry.shared
     private var claudePtyExitWired = false
+    /// Direct PTY-backed shell terminals keyed by `TerminalPaneRef.paneId`.
+    private let terminalRegistry = TerminalPtyRegistry.shared
     /// Track A: tears down dormant Claude PTY hosts (flag-gated OFF by default).
     private lazy var idleSessionSweeper = IdleSessionSweeper(
         registry: registry, chatStoreRegistry: chatStoreRegistry
@@ -96,22 +93,22 @@ public final class AgentControlServer {
     /// `connection.cancel()` runs in sendResponse's completion handler,
     /// so the dict never has more than one entry per connection at a
     /// time. Cleared in sendResponse after the response is queued.
-    var pendingRequests: [ObjectIdentifier: (method: String, path: String)] = [:]
+    private var pendingRequests: [ObjectIdentifier: (method: String, path: String)] = [:]
     /// Wired by AppRuntime after construction so the iPhone can pull live
     /// Claude/Codex usage AND the historical analytics snapshot over
     /// Tailscale instead of needing iCloud KV sync. Nil-tolerant — the
     /// endpoints just return empty payloads when the runtime hasn't
     /// attached yet (cold start, tests).
-    weak var claudeModel: AppModel?
-    weak var codexModel: AppModel?
-    weak var geminiModel: AppModel?
-    weak var cursorModel: AppModel?
-    weak var grokModel: AppModel?
-    weak var usageHistory: UsageHistoryStore?
+    private weak var claudeModel: AppModel?
+    private weak var codexModel: AppModel?
+    private weak var geminiModel: AppModel?
+    private weak var cursorModel: AppModel?
+    private weak var grokModel: AppModel?
+    private weak var usageHistory: UsageHistoryStore?
 
     private var listener: NWListener?
-    var wsListener: NWListener?
-    var listenerQueue: DispatchQueue?
+    private var wsListener: NWListener?
+    private var listenerQueue: DispatchQueue?
     private let listenPortRange: ClosedRange<UInt16>
     private let writesServerMetadata: Bool
 
@@ -141,14 +138,14 @@ public final class AgentControlServer {
     }
 
     /// Tracks live connections so we can drain on shutdown.
-    var connections: [ObjectIdentifier: NWConnection] = [:]
+    private var connections: [ObjectIdentifier: NWConnection] = [:]
 
     /// Active WebSocket channels keyed by connection. Both terminal +
     /// event streams conform to `WSChannel`.
-    var wsChannels: [ObjectIdentifier: any WSChannel] = [:]
+    private var wsChannels: [ObjectIdentifier: any WSChannel] = [:]
 
     /// JSONL tail + done-detector + plan-watcher wired per active session.
-    var sessionWiring: [UUID: SessionEventWiring] = [:]
+    private var sessionWiring: [UUID: SessionEventWiring] = [:]
 
     @MainActor
     public var ownedSessionJSONLPaths: Set<String> {
@@ -160,7 +157,7 @@ public final class AgentControlServer {
     /// handler that handles `POST /sessions/:id/send` awaits the task
     /// before pasting so the first prompt doesn't race the trust-prompt
     /// / update-prompt dismissal. Cleared once the task completes.
-    var chatWarmupTasks: [UUID: Task<Void, Never>] = [:]
+    private var chatWarmupTasks: [UUID: Task<Void, Never>] = [:]
 
     /// v0.8 QA: pending permission-prompt continuations awaiting user
     /// response. Keyed by sessionId — only one prompt at a time per
@@ -175,7 +172,7 @@ public final class AgentControlServer {
     /// where multiple prompts per session is real). Cleared alongside
     /// the continuation.
     private var pendingPermissionPromptIds: [UUID: String] = [:]
-    /// Pending prompt → option-id → tmux key sequence map. Server-side
+    /// Pending prompt -> option-id -> key sequence map. Server-side
     /// because the wire never carries raw key sequences (security).
     private var permissionOptionDispatch: [UUID: [String: [String]]] = [:]
     /// v0.8 QA F2: sentinel optionId resumed by handleDeleteSession /
@@ -188,12 +185,12 @@ public final class AgentControlServer {
     /// second 3-pane group. Bounded; entries expire on iterator-based
     /// sweep when the map crosses 256. Replays return the original
     /// group's per-slot status (one cached snapshot per groupId).
-    var frontierGroupIdempotency: [UUID: (groupId: UUID, response: CreateFrontierResponse, createdAt: Date)] = [:]
+    private var frontierGroupIdempotency: [UUID: (groupId: UUID, response: CreateFrontierResponse, createdAt: Date)] = [:]
     /// Per-group monotonic snapshot counter; advances on every child
     /// status change. Used by the frontier-subscribe WS channel (TBD)
     /// and by the response from /retry-slot.
-    var frontierUpdateCounters: [UUID: Int] = [:]
-    var frontierTurnWinners: [UUID: [String: FrontierTurnWinner]] = [:]
+    private var frontierUpdateCounters: [UUID: Int] = [:]
+    private var frontierTurnWinners: [UUID: [String: FrontierTurnWinner]] = [:]
 
     // v0.8.x: a per-session pane-scanner task for mid-conversation
     // permission prompts (e.g. Claude per-tool approvals) will land
@@ -243,7 +240,6 @@ public final class AgentControlServer {
         pairingTokens: PairingTokenStore = .shared,
         repoIndex: RepoIndex,
         registry: AgentSessionRegistry,
-        tmux: TmuxControlClient,
         notifications: NotificationDispatcher,
         whois: TailscaleWhois = .shared,
         chatStoreRegistry: DaemonChatStoreRegistry? = nil,
@@ -258,7 +254,6 @@ public final class AgentControlServer {
         self.pairingTokens = pairingTokens
         self.repoIndex = repoIndex
         self.registry = registry
-        self.tmux = tmux
         self.notifications = notifications
         self.whois = whois
         self.listenPortRange = listenPortRange
@@ -370,18 +365,6 @@ public final class AgentControlServer {
         if writesServerMetadata {
             writeServerJSON(port: httpPort, wsPort: boundWsPort ?? 0)
         }
-        // v0.5.3: warm the chat-store registry for the most recently-
-        // touched JSONLs across ~/.claude/projects/ and ~/.codex/sessions/.
-        // The first iPhone /chat-snapshot or /transcript request after
-        // Mac restart hits a warm store instead of a cold reparse.
-        // Async on a detached Task so it doesn't block listener bind.
-        //
-        // v0.29.32: this read of ~/.claude + ~/.codex triggers the macOS
-        // "access data from other apps" prompt at launch — only warm for
-        // providers the user has enabled (opt-in). With both off, skip it.
-        if ProviderEnablement.isEnabled("claude") || ProviderEnablement.isEnabled("codex") {
-            chatStoreRegistry.warm(recentLimit: 5)
-        }
         // v16 Code V2: replay the last 256 mobile-command audit entries
         // so a daemon restart still dedups in-flight iOS retries. Fire
         // and forget — the cache hydrates within tens of ms.
@@ -425,7 +408,7 @@ public final class AgentControlServer {
         return (try? decoder.decode([UUID: [String: FrontierTurnWinner]].self, from: data)) ?? [:]
     }
 
-    func saveFrontierTurnWinners() {
+    private func saveFrontierTurnWinners() {
         let url = Self.frontierTurnWinnersURL
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -465,7 +448,7 @@ public final class AgentControlServer {
             kind: .statusChanged,
             payload: ["autopilot": "false", "reason": "inactivity_timeout"]
         )
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
         let result = await changer.swap(sessionId: id)
         switch result {
         case .swapped:
@@ -537,6 +520,361 @@ public final class AgentControlServer {
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]) {
             try? data.write(to: file)
         }
+    }
+
+    /// Spin up a WebSocket-enabled listener. The first message from the
+    /// client must be a JSON subscription envelope identifying the channel
+    /// (terminal vs events) + bearer token.
+    private func startWSListening(on port: UInt16, queue: DispatchQueue) -> Bool {
+        do {
+            let nwPort = NWEndpoint.Port(rawValue: port)!
+            let wsOptions = NWProtocolWebSocket.Options()
+            wsOptions.autoReplyPing = true
+            let params = NWParameters.tcp
+            params.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
+            params.allowLocalEndpointReuse = true
+
+            let listener = try NWListener(using: params, on: nwPort)
+            self.wsListener = listener
+            listener.newConnectionHandler = { [weak self] connection in
+                Task { @MainActor in
+                    self?.handleNewWSConnection(connection)
+                }
+            }
+            listener.start(queue: queue)
+            return true
+        } catch {
+            serverLogger.debug("WS bind \(port) failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Accept a WebSocket connection. Apply the same peer filter as HTTP;
+    /// the first WS message authenticates and subscribes to a channel.
+    private func handleNewWSConnection(_ connection: NWConnection) {
+        guard Self.isAllowedPeer(connection.endpoint) else {
+            serverLogger.warning("WS: rejecting non-tailnet peer \(String(describing: connection.endpoint))")
+            connection.cancel()
+            return
+        }
+        let id = ObjectIdentifier(connection)
+        connections[id] = connection
+
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let connection else { return }
+            switch state {
+            case .ready:
+                Task { @MainActor in
+                    await self?.routeWSSubscription(on: connection)
+                }
+            case .failed, .cancelled:
+                Task { @MainActor in
+                    self?.connections.removeValue(forKey: ObjectIdentifier(connection))
+                    if let channel = self?.wsChannels.removeValue(forKey: ObjectIdentifier(connection)) {
+                        channel.stop()
+                    }
+                }
+            default: break
+            }
+        }
+        connection.start(queue: listenerQueue ?? .global())
+    }
+
+    private func routeWSSubscription(on connection: NWConnection) async {
+        // Read the first WebSocket message: a JSON envelope with op, token,
+        // and channel-specific params.
+        let firstMessage: Data
+        do {
+            firstMessage = try await receiveOne(on: connection)
+        } catch {
+            serverLogger.debug("WS: failed to receive subscription envelope: \(error.localizedDescription)")
+            connection.cancel()
+            return
+        }
+        let wsDecoder = JSONDecoder()
+        // ComposeDraft carries an ISO-8601 `createdAt` field (X1 cross-Apple
+        // handoff). iOS encodes with `.iso8601` via `encodedJSONObject()`;
+        // without setting the strategy here, the default `.deferredToDate`
+        // would expect a Double and the whole envelope would silently fail
+        // to decode — X1 broken end-to-end (caught by review 2026-05-18).
+        wsDecoder.dateDecodingStrategy = .iso8601
+        guard let envelope = try? wsDecoder.decode(WSSubscription.self, from: firstMessage) else {
+            serverLogger.debug("WS: malformed subscription envelope")
+            sendWSClose(on: connection, code: .protocolCode(.protocolError))
+            return
+        }
+        // Auth — accept either the pairing token (iOS) or the per-launch
+        // loopback token (Mac's in-process MacLoopbackClient, PR #24a).
+        guard isAuthorized(token: envelope.token) else {
+            serverLogger.warning("WS: bad bearer token")
+            sendWSClose(on: connection, code: .protocolCode(.policyViolation))
+            return
+        }
+        // Tailscale whois for non-loopback.
+        if !isLoopback(connection.endpoint) {
+            let peerString = Self.endpointString(connection.endpoint)
+            if await whois.userLoginName(for: peerString) == nil {
+                serverLogger.warning("WS: whois rejected \(peerString, privacy: .public)")
+                sendWSClose(on: connection, code: .protocolCode(.policyViolation))
+                return
+            }
+        }
+
+        switch envelope.op {
+        case "compose-draft":
+            // X1 cross-Apple handoff. Phone POSTs a draft, daemon broadcasts
+            // to any Mac /events subscriber. Here on the *server* side, the
+            // initial WS message contains the draft itself (single-shot
+            // post-as-WS) — fan it out via NotificationCenter to the local
+            // Mac UI process. The connection is then closed; we don't keep
+            // a long-lived state.
+            if let payload = envelope.draft {
+                // Cap inbound text length so a misbehaving / malicious paired
+                // device can't push a multi-MB blob into the SwiftUI TextField
+                // (review §3 finding 2026-05-18). 64KB ≈ ~10K tokens — far
+                // larger than any plausible composer prompt.
+                guard payload.text.count <= 64 * 1024 else {
+                    serverLogger.warning("compose-draft rejected: text length \(payload.text.count) > 64KB cap")
+                    sendWSClose(on: connection, code: .protocolCode(.policyViolation))
+                    return
+                }
+                NotificationCenter.default.post(
+                    name: .composeDraftIncoming,
+                    object: nil,
+                    userInfo: ["draft": payload]
+                )
+                let peer = Self.endpointString(connection.endpoint)
+                await AuditLog.shared.recordSend(
+                    sessionId: UUID(),  // synthetic — drafts don't belong to a session yet
+                    sourcePeer: peer,
+                    text: "[compose-draft] repo=\(payload.repoKey ?? "-") len=\(payload.text.count)"
+                )
+                serverLogger.info("compose-draft received: text length=\(payload.text.count, privacy: .public), repo=\(payload.repoKey ?? "-", privacy: .public), peer=\(peer, privacy: .public)")
+
+                // Send a 1-byte application-layer ACK before closing so the
+                // iOS caller can `task.receive()` instead of guessing a
+                // sleep duration. Replaces the prior 200ms hope-it-flushed
+                // race (review §10 finding 2026-05-18).
+                sendWSText("ok", on: connection)
+            }
+            sendWSClose(on: connection, code: .protocolCode(.normalClosure))
+        case "terminal":
+            guard let sessionIdString = envelope.sessionId,
+                  let sessionId = UUID(uuidString: sessionIdString),
+                  let session = registry.session(id: sessionId)
+            else {
+                sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
+                return
+            }
+            if let channel = await makeTerminalChannel(connection: connection, session: session, requestedPaneId: envelope.paneId) {
+                wsChannels[ObjectIdentifier(connection)] = channel
+                channel.start()
+            } else {
+                sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
+            }
+        case "events":
+            let since = envelope.since ?? 0
+            let stream = AgentEventStream(
+                connection: connection,
+                registry: registry,
+                sinceSeq: since
+            )
+            wsChannels[ObjectIdentifier(connection)] = stream
+            stream.start()
+        case "chat-subscribe":
+            // Phase 2 of the WhatsApp-smooth Sessions pipeline. Replaces
+            // iOS's 3-second `GET /chat-snapshot` HTTP polling with a
+            // long-lived WS subscription. A10 (wire v21) layered the
+            // shell/detail split on top:
+            //   - Client reports `wireVersion`. v21+ receives shell +
+            //     detail event pairs (one shell frame + one detail frame
+            //     per 100ms coalesced commit); v20 and earlier keep
+            //     receiving the legacy single `WireChatSnapshot` frame.
+            //   - Branch is selected ONCE in the channel constructor and
+            //     never re-evaluated mid-connection (clients that
+            //     dynamically upgrade their wire shape would have to
+            //     reconnect — which they already do across app launches).
+            // No delta encoding in v1 — Codex's outside-voice review (D6)
+            // explicitly cut that scope until measurements show it's
+            // needed; the split lands first.
+            guard let sessionIdString = envelope.sessionId,
+                  let sessionId = UUID(uuidString: sessionIdString),
+                  let session = registry.session(id: sessionId)
+            else {
+                sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
+                return
+            }
+            let chatChannel = ChatStreamWebSocketChannel(
+                connection: connection,
+                session: session,
+                registry: chatStoreRegistry,
+                clientWireVersion: envelope.wireVersion
+            )
+            wsChannels[ObjectIdentifier(connection)] = chatChannel
+            chatChannel.start()
+        case "lifecycle-subscribe":
+            // v19 lifecycle spine: full session lifecycle snapshots over WS.
+            // The first frame is immediate; subsequent frames coalesce
+            // registry changes at 50ms so UI surfaces can bind directly to
+            // phase/blocker/next-action changes.
+            guard let sessionIdString = envelope.sessionId,
+                  let sessionId = UUID(uuidString: sessionIdString),
+                  registry.session(id: sessionId) != nil
+            else {
+                sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
+                return
+            }
+            let lifecycleChannel = LifecycleWebSocketChannel(
+                connection: connection,
+                sessionId: sessionId,
+                registry: registry,
+                checkpointProvider: { [weak self] id in
+                    guard let self else { return [] }
+                    return self.storedCheckpoints(for: id).map(self.codeCheckpoint)
+                }
+            )
+            wsChannels[ObjectIdentifier(connection)] = lifecycleChannel
+            lifecycleChannel.start()
+        case "frontier-subscribe":
+            // v0.9.x — typed aggregator for the 3-pane Frontier UI.
+            // Acquires every child's chat store, observes them in
+            // parallel via Combine, emits one FrontierGroupSnapshot
+            // envelope per debounced 100ms commit window. Same auth
+            // gate as chat-subscribe; same idle-eviction lifecycle.
+            guard let groupIdString = envelope.groupId,
+                  let groupId = UUID(uuidString: groupIdString)
+            else {
+                sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
+                return
+            }
+            let frontierChannel = FrontierWebSocketChannel(
+                connection: connection,
+                groupId: groupId,
+                registry: chatStoreRegistry,
+                sessionRegistry: registry,
+                turnWinnersProvider: { [weak self] in
+                    self?.frontierTurnWinners[groupId]?.values.sorted { $0.decidedAt < $1.decidedAt } ?? []
+                }
+            )
+            wsChannels[ObjectIdentifier(connection)] = frontierChannel
+            frontierChannel.start()
+        default:
+            sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
+        }
+    }
+
+    private func sendWSClose(on connection: NWConnection, code: NWProtocolWebSocket.CloseCode) {
+        let meta = NWProtocolWebSocket.Metadata(opcode: .close)
+        meta.closeCode = code
+        let ctx = NWConnection.ContentContext(identifier: "close", metadata: [meta])
+        connection.send(content: nil, contentContext: ctx, isComplete: true,
+                        completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    /// Send a single text frame on the WS connection. Used as a tiny
+    /// application-layer ACK for one-shot ops like `compose-draft` so the
+    /// iOS caller can await receipt instead of guessing a sleep duration.
+    private func sendWSText(_ text: String, on connection: NWConnection) {
+        let meta = NWProtocolWebSocket.Metadata(opcode: .text)
+        let ctx = NWConnection.ContentContext(identifier: "ws-text", metadata: [meta])
+        connection.send(content: Data(text.utf8), contentContext: ctx,
+                        isComplete: true, completion: .contentProcessed { _ in })
+    }
+
+    private func receiveOne(on connection: NWConnection) async throws -> Data {
+        try await withCheckedThrowingContinuation { cont in
+            connection.receiveMessage { data, _, _, error in
+                if let error { cont.resume(throwing: error); return }
+                cont.resume(returning: data ?? Data())
+            }
+        }
+    }
+
+    /// Subscription envelope for WS connections.
+    private struct WSSubscription: Codable {
+        let op: String           // "terminal" | "events" | "compose-draft" | "chat-subscribe" | "lifecycle-subscribe" | "frontier-subscribe" | "codex-stream-subscribe"
+        let token: String
+        let sessionId: String?   // required for "terminal", "chat-subscribe", "lifecycle-subscribe", "codex-stream-subscribe"
+        let since: UInt64?       // optional for "events"
+        /// G12: target a specific pane (multi-terminal tab strip). When nil,
+        /// the server falls back to the session's primary pane.
+        let paneId: String?
+        /// X1: compose-draft single-shot payload. Only populated when
+        /// `op == "compose-draft"`. The Mac UI consumes via NotificationCenter.
+        let draft: ComposeDraft?
+        /// v0.9.x: required for `frontier-subscribe` — the group whose
+        /// aggregate `FrontierGroupSnapshot` envelopes the client wants.
+        let groupId: String?
+        /// A10 (wire v21): client's reported wireVersion. The server picks
+        /// the dispatch branch ONCE per connection: `wireVersion >= 21`
+        /// receives shell + detail event pairs on `chat-subscribe`; older
+        /// clients receive the legacy `WireChatSnapshot` frame on each
+        /// commit (back-compat). Optional; absent on v20 and earlier
+        /// clients that don't know to send it (the default-to-legacy path
+        /// covers them).
+        let wireVersion: Int?
+    }
+
+    private func makeTerminalChannel(
+        connection: NWConnection,
+        session: AgentSession,
+        requestedPaneId: String?
+    ) async -> TerminalWebSocketChannel? {
+        func channel(for host: TerminalPtyHost) -> TerminalWebSocketChannel {
+            TerminalWebSocketChannel(
+                connection: connection,
+                outputStream: { await host.outputStream() },
+                writeInput: { data in await host.writeBytes(data) },
+                resize: { cols, rows in await host.resize(cols: cols, rows: rows) }
+            )
+        }
+        func claudeChannel(for host: ClaudePtyHost) -> TerminalWebSocketChannel {
+            TerminalWebSocketChannel(
+                connection: connection,
+                outputStream: { await host.outputStream() },
+                writeInput: { data in await host.writeBytes(data) },
+                resize: { cols, rows in await host.resize(cols: cols, rows: rows) }
+            )
+        }
+
+        if let paneId = requestedPaneId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !paneId.isEmpty {
+            guard session.terminalPanes.contains(where: { $0.paneId == paneId }),
+                  let host = await terminalRegistry.host(id: paneId) else {
+                return nil
+            }
+            return channel(for: host)
+        }
+
+        if SessionCommandRouter.resolve(routeContext(for: session)) == .claudePty {
+            guard let host = await claudePtyHost(for: session) else { return nil }
+            return claudeChannel(for: host)
+        }
+
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil {
+            return nil
+        }
+        if let binding = session.runtimeBinding,
+           !binding.capabilities.supportsTerminal {
+            return nil
+        }
+
+        if let primary = session.terminalPanes.first(where: { $0.isPrimary }),
+           let host = await terminalRegistry.host(id: primary.paneId) {
+            return channel(for: host)
+        }
+
+        guard let host = try? await terminalRegistry.spawnShell(cwd: session.effectiveCwd, title: "Shell") else {
+            return nil
+        }
+        let pane = TerminalPaneRef(
+            id: session.terminalPanes.first(where: { $0.isPrimary })?.id ?? UUID(),
+            paneId: host.id.uuidString,
+            title: "Shell",
+            isPrimary: true
+        )
+        try? await registry.replacePrimaryTerminalPane(sessionId: session.id, pane: pane)
+        return channel(for: host)
     }
 
     // MARK: - Accept handling
@@ -1170,14 +1508,14 @@ public final class AgentControlServer {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
         let oldModel = session.model
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
         let result = await changer.swap(
             sessionId: uuid,
             newModel: req.model,
             newEffort: req.effort == nil ? nil : .some(req.effort)
         )
-        guard isSuccessfulSwap(result) else {
-            sendResponse(.internalError, on: connection); return
+        guard sendSwapFailureIfNeeded(result, on: connection) else {
+            return
         }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordSwap(
@@ -1208,10 +1546,10 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
         let result = await changer.swap(sessionId: uuid, newEffort: .some(req.effort))
-        guard isSuccessfulSwap(result) else {
-            sendResponse(.internalError, on: connection); return
+        guard sendSwapFailureIfNeeded(result, on: connection) else {
+            return
         }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordEffortChange(
@@ -1245,14 +1583,14 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
         let result = await changer.swap(
             sessionId: uuid,
             newPlanMode: req.planMode,
             newMode: req.mode
         )
-        guard isSuccessfulSwap(result) else {
-            sendResponse(.internalError, on: connection); return
+        guard sendSwapFailureIfNeeded(result, on: connection) else {
+            return
         }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordModeChange(
@@ -1268,7 +1606,7 @@ public final class AgentControlServer {
         )
     }
 
-    /// v25: respawn a degraded session whose tmux pane died. Same rate-limit
+    /// v25: revive a degraded session through its direct runtime. Same rate-limit
     /// + idempotency contract as the other config-swap commands so a retried
     /// or double-tapped revive can't double-spawn the agent.
     private func handleRevive(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
@@ -1285,10 +1623,10 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
         let result = await changer.revive(sessionId: uuid)
-        guard isSuccessfulSwap(result) else {
-            sendResponse(.internalError, on: connection); return
+        guard sendSwapFailureIfNeeded(result, on: connection) else {
+            return
         }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordSwap(
@@ -1306,10 +1644,10 @@ public final class AgentControlServer {
 
     // MARK: - Track A: Claude PTY host helpers
 
-    /// Flag reader. When false (default), Claude routes to tmux exactly as
-    /// before — the whole PTY path is dormant and there is zero behavior change.
+    /// Compatibility shim for PR #248-era call sites. Claude PTY is the only
+    /// runtime now; the old UserDefaults fallback is intentionally ignored.
     var claudePtyEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "clawdmeter.claude.ptyHost.enabled")
+        true
     }
 
     /// Build the routing context for a session, including the PTY flag. Single
@@ -1321,26 +1659,17 @@ public final class AgentControlServer {
             codexChatBackend: session.codexChatBackend,
             runtimeIsACPDriven: session.runtimeBinding?.runtimeKind.isACPDriven == true,
             hasLiveBridge: harnessRegistry.bridge(for: session.id) != nil,
-            claudePtyEnabled: claudePtyEnabled,
-            // A session that already owns a tmux pane keeps using it even if the
-            // PTY flag flips on mid-session — prevents a 2nd `claude` spawn.
-            hasTmuxPane: session.tmuxPaneId != nil || session.tmuxWindowId != nil
+            claudePtyEnabled: true,
+            // Old pane-bearing sessions are decode-compatible only and resolve
+            // to `.legacyRetired`.
+            hasLegacyPaneMetadata: session.tmuxPaneId != nil || session.tmuxWindowId != nil
         )
     }
 
-    func commandRoute(for session: AgentSession) -> (
-        context: SessionCommandRouter.SessionContext,
-        route: SessionCommandRoute
-    ) {
-        let context = routeContext(for: session)
-        return (context, SessionCommandRouter.resolve(context))
-    }
-
-    /// argv + cwd + env for a Claude PTY spawn. Mirrors the tmux spawn paths'
-    /// `AgentSpawner.argv(for:)` so the PTY child is launched identically — and
-    /// crucially carries the SAME env a tmux pane gets: the enriched login PATH
-    /// (launchd's GUI PATH is thin → node/rg/hooks vanish) plus the managed repo
-    /// env. Sanitized last so the subscription-billing rail still holds.
+    /// argv + cwd + env for a Claude PTY spawn. The PTY child gets the enriched
+    /// login PATH (launchd's GUI PATH is thin, so node/rg/hooks vanish) plus the
+    /// managed repo env. Sanitized last so the subscription-billing rail still
+    /// holds.
     func claudeSpawnPlan(for session: AgentSession) -> ClaudePtyRegistry.SpawnPlan? {
         let argv = AgentSpawner.argv(for: session)
         guard !argv.isEmpty else { return nil }
@@ -1354,7 +1683,7 @@ public final class AgentControlServer {
 
     /// Wire the registry's unexpected-exit callback once: a crashed Claude
     /// child marks its session `.degraded` (offers Resume) instead of looking
-    /// frozen-but-running. Replaces TmuxSupervisor's role per session.
+    /// frozen-but-running.
     private func ensureClaudePtyWiring() async {
         guard !claudePtyExitWired else { return }
         claudePtyExitWired = true
@@ -1388,11 +1717,10 @@ public final class AgentControlServer {
         }
     }
 
-    /// T6: port the tmux trust-folder warmup to the PTY. Claude's first run in
+    /// T6: trust-folder warmup for Claude PTY. Claude's first run in
     /// an untrusted directory shows a "trust this folder?" dialog that swallows
-    /// the first keystroke — the tmux path scrapes capture-pane + sends
-    /// Down/Up/Enter. The PTY equivalent polls `recentOutput()` (ANSI-stripped)
-    /// and writes the same keys as bytes (Down=ESC[B, Up=ESC[A, Enter=CR). chat
+    /// the first keystroke. The PTY warmup polls `recentOutput()` (ANSI-stripped)
+    /// and writes navigation keys as bytes (Down=ESC[B, Up=ESC[A, Enter=CR). chat
     /// sessions are pre-trusted (markTrustedForClaude) so this is only needed for
     /// code sessions in new worktrees. Best-effort, bounded, runs in background.
     func warmupClaudePtyHost(_ host: ClaudePtyHost) {
@@ -1405,7 +1733,7 @@ public final class AgentControlServer {
             }
             for _ in 0..<40 {   // ~12s
                 if isTrustPrompt(await host.recentOutput()) {
-                    // Down, Up, Enter — mirrors the tmux send-keys sequence.
+                    // Down, Up, Enter selects the trust option in Claude's prompt.
                     await host.writeBytes(Data([0x1b, 0x5b, 0x42, 0x1b, 0x5b, 0x41, 0x0d]))
                     return
                 }
@@ -1439,14 +1767,13 @@ public final class AgentControlServer {
         // branch now checks its route instead of re-deriving the predicate;
         // the branch ORDER + bodies are unchanged — rate-limit still sits
         // between the agentapi branch and the rest, exactly as before.
-        let routeResolution = commandRoute(for: session)
-        let routeCtx = routeResolution.context
-        let route = routeResolution.route
+        let routeCtx = routeContext(for: session)
+        let route = SessionCommandRouter.resolve(routeCtx)
         guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSend, on: connection); return
         }
-        // Track A: Claude over a per-session PTY (flag on). Resume-or-spawn the
-        // host (single-flight) and submit; no tmux pane involved.
+        // Claude over a per-session PTY. Resume-or-spawn the host
+        // (single-flight) and submit directly.
         if route == .claudePty {
             guard let host = await claudePtyHost(for: session) else {
                 sendResponse(HTTPResponse(
@@ -1456,7 +1783,14 @@ public final class AgentControlServer {
                 ), on: connection)
                 return
             }
-            await host.submitPrompt(req.text, isChat: session.kind == .chat, isFollowUp: req.asFollowUp)
+            guard await host.submitPrompt(req.text, isChat: session.kind == .chat, isFollowUp: req.asFollowUp) else {
+                sendResponse(HTTPResponse(
+                    status: 503, reason: "Service Unavailable",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"pty_write_failed"}"#.utf8)
+                ), on: connection)
+                return
+            }
             captureClaudeSessionId(for: session)   // re-capture the (possibly rotated) CLI id
             let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
@@ -1486,8 +1820,8 @@ public final class AgentControlServer {
         // The reply streams back into the session's SessionChatStore as the
         // driver emits HarnessEvents — clients on chat-subscribe see the turn
         // appear with no extra poll, like the opencode/agentapi paths. Keyed
-        // off the bridge registry so legacy tmux sessions (no bridge) fall
-        // through to the tmux path below.
+        // off the bridge registry so retired legacy sessions never masquerade
+        // as live harnesses.
         if route == .harnessBridge, let bridge = harnessRegistry.bridge(for: uuid) {
             await bridge.prompt(req.text)
             let peer = Self.endpointString(connection.endpoint)
@@ -1502,9 +1836,9 @@ public final class AgentControlServer {
             )
             return
         }
-        // An ACP session whose bridge died (daemon restart) has no tmux pane —
+        // An ACP session whose bridge died (daemon restart) has no live bridge:
         // return an explicit 503 ("paste succeeded" ≠ "provider accepted")
-        // instead of falling into the tmux-guard 500. Revive is Phase-1.
+        // return an explicit stale-session error. Revive is Phase-1.
         if SessionCommandRouter.acpExpectedButNoBridge(routeCtx) {
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
@@ -1513,292 +1847,63 @@ public final class AgentControlServer {
             ), on: connection)
             return
         }
-        guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
-            sendResponse(.internalError, on: connection); return
-        }
-        // v0.8 QA: chat-mode CLI sessions don't need the user-prompt echo
-        // anymore — the rollout JSONL (Codex) / project JSONL (Claude)
-        // contains the user turn directly, so JSONLTail picks it up and
-        // appends to the store within ~1s. Echoing here AND parsing the
-        // JSONL caused the user bubble to render twice on multi-turn
-        // (two different message IDs → seen-IDs dedup missed both).
-        // We DO still rename the session (D1 first-prompt-becomes-title)
-        // and the snapshot's update-counter bumps via the JSONL parse.
-        if session.kind == .chat {
-            if (session.customName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
-                let trimmed = req.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    let cap = 40
-                    let truncated = trimmed.count <= cap
-                        ? trimmed
-                        : String(trimmed[..<trimmed.index(trimmed.startIndex, offsetBy: cap - 1)]) + "…"
-                    try? await registry.rename(id: session.id, name: truncated)
-                }
+        sendResponse(.legacySessionRetired, on: connection)
+    }
+
+    func deliverScheduledFollowUp(
+        session: AgentSession,
+        followUp: ScheduledFollowUp
+    ) async -> SessionScheduler.DeliveryResult {
+        let current = registry.session(id: session.id) ?? session
+        let routeCtx = routeContext(for: current)
+        let route = SessionCommandRouter.resolve(routeCtx)
+        switch route {
+        case .claudePty:
+            guard let host = await claudePtyHost(for: current) else {
+                return .unavailable(reason: "agent_cli_not_found")
             }
-        }
-        // v0.8 QA: for CLI sessions (code or chat), wait for the warmup
-        // task (trust prompt + update prompt dismissal) to finish before
-        // pasting the user's first prompt. Without this barrier, sends
-        // arriving within ~3s of session creation race the dismissal —
-        // bytes land in the wrong screen and either trigger options
-        // (1/2/3) or are dropped.
-        if let warmupTask = chatWarmupTasks[uuid],
-           !(session.kind == .chat && session.agent == .claude) {
-            await warmupTask.value
-        }
-        do {
-            let data = Data(bytes)
-            var sentChatEnterViaFreshClient = false
-            // v0.8 QA: for chat-mode CLI sessions, clear the input line
-            // before pasting so multi-turn prompts don't concatenate with
-            // leftover text in the input box. C-u is a no-op when the
-            // input is empty, so the first prompt isn't affected.
-            if session.kind == .chat {
-                try await tmux.command(["send-keys", "-t", paneId, "C-u"])
+            guard await host.submitPrompt(followUp.prompt, isChat: current.kind == .chat, isFollowUp: true) else {
+                return .unavailable(reason: "pty_write_failed")
             }
-            // v0.8 QA: Codex chat needs pasteBytes; its TUI input can drop
-            // key bursts. Claude chat is the opposite on current CLI builds:
-            // paste-buffer and hex-literal sends can be ignored by the
-            // remote-control composer, while normal fresh-client send-keys
-            // fills the prompt. Keep the provider split explicit instead of
-            // using one "chat CLI" path for both TUIs.
-            if session.kind == .chat
-                && session.agent == .claude
-                && bytes.count <= 4096
-                && !req.text.contains("\n") {
-                try await tmux.sendTextUsingFreshClient(paneId: paneId, text: req.text)
-                try await submitClaudeChatPromptWhenReady(paneId: paneId, text: req.text, sessionId: session.id)
-                Task { [weak self] in
-                    await self?.dismissClaudeChatMCPPromptIfNeeded(paneId: paneId, sessionId: session.id)
-                }
-                sentChatEnterViaFreshClient = true
-            } else if session.kind == .chat
-                || req.asFollowUp
-                || bytes.count > 256
-                || req.text.contains("\n") {
-                try await tmux.pasteBytes(paneId: paneId, bytes: data)
-            } else {
-                try await tmux.sendKeys(paneId: paneId, bytes: data)
+            captureClaudeSessionId(for: current)
+            await AuditLog.shared.recordSend(sessionId: current.id, sourcePeer: "scheduler", text: followUp.prompt)
+            return .delivered
+        case .harnessBridge:
+            guard let bridge = harnessRegistry.bridge(for: current.id) else {
+                return .unavailable(reason: "acp_session_not_live")
             }
-            // v0.8 QA: chat-mode CLI prompts need a trailing Enter so the
-            // CLI's input box actually submits. The Enter key event must
-            // be sent as a key name ("Enter" / "C-m") rather than a
-            // literal CR byte — TUI apps differentiate between the two
-            // (literal CR is text input, key Enter is a submit event).
-            // Brief delay before Enter lets the CLI's input widget
-            // settle after the paste — without it, Codex CLI's input
-            // sometimes sees the Enter before its render loop has
-            // committed the pasted text, dropping the submit on the floor.
-            if session.kind == .chat && !sentChatEnterViaFreshClient {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                try await tmux.command(["send-keys", "-t", paneId, "Enter"])
+            await bridge.prompt(followUp.prompt)
+            await AuditLog.shared.recordSend(sessionId: current.id, sourcePeer: "scheduler", text: followUp.prompt)
+            return .delivered
+        case .opencodeServe:
+            do {
+                try await forwardOpencodePrompt(session: current, prompt: followUp.prompt)
+                await AuditLog.shared.recordSend(sessionId: current.id, sourcePeer: "scheduler", text: followUp.prompt)
+                return .delivered
+            } catch {
+                return .unavailable(reason: error.localizedDescription)
             }
-            let peer = Self.endpointString(connection.endpoint)
-            await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
-            await sendCommandResponse(
-                body: ["ok": true],
-                key: req.idempotencyKey,
-                kind: .send,
-                sessionId: uuid,
-                payloadHash: payloadHash,
-                on: connection
-            )
-        } catch {
-            serverLogger.error("send-prompt failed: \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection)
+        case .legacyRetired:
+            if SessionCommandRouter.acpExpectedButNoBridge(routeCtx) {
+                return .unavailable(reason: "acp_session_not_live")
+            }
+            return .retired(reason: "legacy_session_retired")
         }
     }
 
-    /// `POST /sessions/continue-readonly` — server-side equivalent of the
-    /// Mac UI's `SessionsModel.continueCurrentReadOnly`. Lets iOS promote
-    /// a Recent JSONL row into a live Clawdmeter session without having
-    /// to round-trip through the Mac UI.
-    ///
-    /// Flow: parse JSONL header for the CLI session id → spawn a fresh
-    /// tmux pane with `--resume`/`resume` argv → register the new session
-    /// → optionally paste the user's first prompt once the pane is ready.
-    /// JSONL wiring picks up the existing JSONL automatically because
-    /// `--resume` appends to the same file (it's the newest in the dir).
+    /// Legacy endpoint kept for older paired clients. Continuum no longer
+    /// promotes external JSONL files into Code sessions; visible UI entry
+    /// points were removed with the external-session sidebar cleanup.
     private func handleContinueReadOnly(request: HTTPRequest, connection: NWConnection) async {
-        guard let req = try? JSONDecoder().decode(ContinueReadOnlyRequest.self, from: request.body) else {
+        guard (try? JSONDecoder().decode(ContinueReadOnlyRequest.self, from: request.body)) != nil else {
             sendResponse(.badRequest, on: connection); return
         }
-        // P1-Mac-7: defensively validate the repoKey before it flows into
-        // `tmux.newWindow(cwd:)`. P1-Mac-6 already rejects CR/LF/control
-        // bytes inside the tmux client, but a compromised paired client
-        // could still ask the daemon to spawn an agent in `..`-traversed
-        // paths or paths outside the user's home. Refuse any repoKey that
-        // isn't an absolute, traversal-free path that resolves under the
-        // user's home directory.
-        guard Self.isValidRepoKey(req.repoKey) else {
-            sendResponse(HTTPResponse(
-                status: 400, reason: "Bad Request",
-                contentType: "application/json",
-                body: Data(#"{"error":"invalid_repo_key"}"#.utf8)
-            ), on: connection)
-            serverLogger.warning("continue-readonly: rejected repoKey \(req.repoKey, privacy: .public)")
-            return
-        }
-        // Codex follow-up: also validate jsonlPath. The earlier patch
-        // only checked repoKey; a paired compromised client could send
-        // a valid repoKey together with an arbitrary local JSONL path
-        // and have its session id extracted under that repo. Restrict
-        // jsonlPath to ~/.claude/projects/, ~/.codex/sessions/,
-        // ~/.codex/projects/, or ~/.gemini/.
-        guard Self.isValidJsonlPath(req.jsonlPath) else {
-            sendResponse(HTTPResponse(
-                status: 400, reason: "Bad Request",
-                contentType: "application/json",
-                body: Data(#"{"error":"invalid_jsonl_path"}"#.utf8)
-            ), on: connection)
-            serverLogger.warning("continue-readonly: rejected jsonlPath \(req.jsonlPath, privacy: .public)")
-            return
-        }
-        let jsonlURL = URL(fileURLWithPath: req.jsonlPath)
-        guard FileManager.default.fileExists(atPath: req.jsonlPath) else {
-            let body = #"{"error":"jsonl_not_found","path":"\#(req.jsonlPath)"}"#
-            sendResponse(.notFound, on: connection)
-            serverLogger.warning("continue-readonly: jsonl missing at \(req.jsonlPath, privacy: .public)")
-            _ = body
-            return
-        }
-        let provider: JSONLSessionId.Provider = (req.agent == .codex) ? .codex : .claude
-        guard let cliSessionId = JSONLSessionId.extract(from: jsonlURL, provider: provider) else {
-            let body = #"{"error":"no_session_id_in_jsonl"}"#
-            sendResponse(HTTPResponse(
-                status: 422, reason: "Unprocessable Entity",
-                contentType: "application/json", body: Data(body.utf8)
-            ), on: connection)
-            return
-        }
-
-        // Build resume argv. New continued sessions inherit Claude Code
-        // defaults (Opus 4.7 1M + Max) to match the Mac promote path.
-        let defaults = ComposerStore.ChipDefaults.default
-        let modelDefault: String? = (req.agent == .claude)
-            ? defaults.modelId
-            : ModelCatalog.bundled.codex.first?.id
-        let argv: [String]
-        switch req.agent {
-        case .claude:
-            argv = AgentSpawner.claudeArgv(
-                model: modelDefault,
-                planMode: false,
-                effort: defaults.effort,
-                autopilot: false,
-                resumeSessionId: cliSessionId
-            ) ?? []
-        case .codex:
-            // v27: codex is harness-driven; external "Continue here" resume is
-            // deprioritized — no tmux resume argv. Empty → the missing-binary
-            // surface returns a clean 4xx (start a fresh harness session instead).
-            argv = []
-        case .gemini:
-            // No interactive Gemini CLI yet — fall through to the
-            // missing-binary surface so the request returns a 4xx
-            // instead of silently spawning an empty process.
-            argv = []
-        case .opencode:
-            // PR #29: OpenCode sessions don't spawn through tmux argv;
-            // they're SSE clients of the shared `opencode serve`
-            // process. The handler routes opencode spawns to
-            // OpencodeProcessManager + OpencodeSSEAdapter instead;
-            // dropping into the 503 branch here is unreachable in
-            // production but kept for exhaustiveness + safety.
-            argv = []
-        case .cursor:
-            // Cursor imported-session resume needs a real Cursor chat id.
-            // The current JSONL extractor only proves Claude/Codex ids, so
-            // keep this conservative until the Cursor importer can prove one.
-            argv = []
-        case .grok:
-            // ACP agent — driven via AcpAgentDriver, not a tmux argv. The
-            // daemon ACP spawn path is not wired yet, so fall through to the
-            // 503 (honest "not available" rather than an empty tmux spawn).
-            argv = []
-        case .unknown:
-            // X3: forward-compat unknown agent — no argv builder. Fall
-            // through to the 503 below so the iOS caller sees a clean
-            // failure instead of an empty spawn.
-            argv = []
-        }
-        guard !argv.isEmpty else {
-            sendResponse(HTTPResponse(
-                status: 503, reason: "Service Unavailable",
-                contentType: "application/json",
-                body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
-            ), on: connection)
-            return
-        }
-
-        // Spawn into a new tmux window cwd'd to the repo. Local mode —
-        // outside JSONLs don't carry a worktree.
-        do {
-            try await tmux.start()
-            let resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: req.repoKey)
-            let window = try await tmux.newWindow(
-                cwd: req.repoKey,
-                child: argv,
-                environment: resolvedEnv?.environment ?? [:]
-            )
-            let session = try await registry.create(
-                repoKey: req.repoKey,
-                repoDisplayName: (req.repoKey as NSString).lastPathComponent,
-                agent: req.agent,
-                model: modelDefault,
-                goal: nil,
-                worktreePath: nil,
-                tmuxWindowId: window.windowId,
-                tmuxPaneId: window.paneId,
-                planMode: false,
-                ownsWorktree: false,
-                envSetId: resolvedEnv?.set?.id,
-                envSetName: resolvedEnv?.set?.name
-            )
-            if req.agent == .claude {
-                attachClaudeWiring(for: session, cwd: req.repoKey)
-            }
-            AgentEventStream.recordEvent(
-                sessionId: session.id,
-                kind: .sessionCreated,
-                payload: [
-                    "repo": req.repoKey,
-                    "agent": req.agent.rawValue,
-                    "resumed_from": req.jsonlPath
-                ]
-            )
-
-            // If a prompt came along, paste it after the pane is ready.
-            // Fire-and-forget so the HTTP response returns quickly with
-            // the new session id; the client can also poll /sessions
-            // for status.
-            if let prompt = req.prompt, !prompt.isEmpty {
-                let bytes = prompt.hasSuffix("\n")
-                    ? Array(prompt.utf8)
-                    : Array((prompt + "\n").utf8)
-                Task { [tmux] in
-                    try? await Task.sleep(nanoseconds: 600_000_000)
-                    try? await tmux.pasteBytes(paneId: window.paneId, bytes: Data(bytes))
-                    await AuditLog.shared.recordSend(
-                        sessionId: session.id,
-                        sourcePeer: Self.endpointString(connection.endpoint),
-                        text: prompt
-                    )
-                }
-            }
-
-            let response = ContinueReadOnlyResponse(sessionId: session.id)
-            let encoder = JSONEncoder()
-            if let body = try? encoder.encode(response) {
-                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
-            } else {
-                sendResponse(.internalError, on: connection)
-            }
-        } catch {
-            if sendRepoEnvConflict(error, on: connection) { return }
-            serverLogger.error("continue-readonly failed: \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection)
-        }
+        sendResponse(HTTPResponse(
+            status: 410,
+            reason: "Gone",
+            contentType: "application/json",
+            body: Data(#"{"error":"external_session_continuation_removed"}"#.utf8)
+        ), on: connection)
     }
 
     /// `POST /sessions/:id/attachments?ext=png` — body is raw image
@@ -1973,15 +2078,13 @@ public final class AgentControlServer {
         } }
         // ACP harness interrupt (Grok, Cursor): the SessionInterruptDispatcher
         // has no handle on the harness registry, so cancel the live bridge here
-        // first. Keyed off the bridge registry (agent-agnostic); legacy tmux
+        // first. Keyed off the bridge registry (agent-agnostic); retired legacy
         // sessions have no bridge and fall through to the dispatcher. Flip the
         // turn state up front (mirrors the dispatcher) so the V2 UI's Send
         // button restores immediately, then cancel the in-flight ACP turn.
-        let session = registry.session(id: uuid)
-        let route = session.map { commandRoute(for: $0).route }
-        if route == .harnessBridge, let bridge = harnessRegistry.bridge(for: uuid) {
-            if let session {
-                chatStoreRegistry.snapshotStore(for: session)?.setCurrentTurnState(.interrupted)
+        if let bridge = harnessRegistry.bridge(for: uuid) {
+            if let s = registry.session(id: uuid) {
+                chatStoreRegistry.snapshotStore(for: s)?.setCurrentTurnState(.interrupted)
             }
             await bridge.cancel()
             await sendCommandResponse(
@@ -1994,16 +2097,32 @@ public final class AgentControlServer {
             )
             return
         }
-        // Track A: Claude PTY session — Stop = ESC written to the PTY (the raw
-        // equivalent of the tmux ESC the dispatcher would send). The dispatcher
+        if let s = registry.session(id: uuid),
+           SessionCommandRouter.acpExpectedButNoBridge(routeContext(for: s)) {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"acp_session_not_live","cta":"Start a new session"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        // Claude PTY session: Stop = ESC written to the PTY. The dispatcher
         // has no handle on the PTY registry, so we do it here (mirrors the
-        // bridge branch above). A PTY session has no tmux pane, so the
+        // bridge branch above). A PTY session has no legacy pane metadata, so the
         // dispatcher would otherwise return .notSupported.
-        if let session, route == .claudePty {
+        if let s = registry.session(id: uuid),
+           SessionCommandRouter.resolve(routeContext(for: s)) == .claudePty {
             if let host = await claudePtyRegistry.host(for: uuid) {
-                await host.writeBytes(Data([0x1b]))   // ESC
+                guard await host.writeBytes(Data([0x1b])) else {
+                    sendResponse(HTTPResponse(
+                        status: 503, reason: "Service Unavailable",
+                        contentType: "application/json",
+                        body: Data(#"{"error":"pty_write_failed"}"#.utf8)
+                    ), on: connection)
+                    return
+                }
             }
-            chatStoreRegistry.snapshotStore(for: session)?.setCurrentTurnState(.interrupted)
+            chatStoreRegistry.snapshotStore(for: s)?.setCurrentTurnState(.interrupted)
             await sendCommandResponse(
                 body: ["ok": true], key: req.idempotencyKey, kind: .interrupt,
                 sessionId: uuid, payloadHash: payloadHash, on: connection
@@ -2012,13 +2131,12 @@ public final class AgentControlServer {
         }
         // v0.23 (Chat V2 — audit P0 #2): route through
         // SessionInterruptDispatcher so Stop works for Codex SDK and
-        // Gemini agentapi sessions too, not just tmux-backed ones.
+        // Gemini agentapi sessions too.
         // The dispatcher flips currentTurnState to .interrupted up
         // front so the V2 UI's stopwatch + Send button restore
         // immediately, then dispatches the per-backend cancel.
         let dispatcher = SessionInterruptDispatcher(
             registry: registry,
-            tmux: tmux,
             chatStoreRegistry: chatStoreRegistry
         )
         let result = await dispatcher.interrupt(sessionId: uuid)
@@ -2034,10 +2152,8 @@ public final class AgentControlServer {
             )
         case .sessionNotFound:
             sendResponse(.notFound, on: connection)
-        case .tmuxFailed:
-            sendResponse(.internalError, on: connection)
         case .notSupported:
-            sendJSON(["ok": false, "error": "notSupported"], on: connection, status: 501)
+            sendResponse(.legacySessionRetired, on: connection)
         }
     }
 
@@ -2057,7 +2173,7 @@ public final class AgentControlServer {
             let decision: String
             let source: String?
         }
-        let body = request.body ?? Data()
+        let body = request.body
         guard let payload = try? JSONDecoder().decode(DecidePayload.self, from: body),
               let decision = SidecarAskCoordinator.Decision(rawValue: payload.decision)
         else {
@@ -2204,6 +2320,1235 @@ public final class AgentControlServer {
         }
     }
 
+    // MARK: - Diff / PR / Merge / Terminals (Phase 4)
+
+    private func handleGetDiff(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let gitBin = ShellRunner.locateBinary("git") else {
+            sendResponse(.internalError, on: connection); return
+        }
+        do {
+            let files = try await loadDiffFiles(session: session, gitBin: gitBin)
+            let encoder = JSONEncoder()
+            if let body = try? encoder.encode(files) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            serverLogger.error("git diff failed: \(error.localizedDescription, privacy: .public)")
+            if (error as NSError).code == 409 {
+                sendResponse(HTTPResponse(
+                    status: 409, reason: "Conflict",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"Repo is in rebase/merge state, finish on Mac"}"#.utf8)
+                ), on: connection)
+                return
+            }
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleGetDiffFile(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let gitBin = ShellRunner.locateBinary("git") else {
+            sendResponse(.internalError, on: connection); return
+        }
+        guard let relPath = diffRelativePath(sessionId: sessionId, requestPath: request.path),
+              isSafeGitRelativePath(relPath) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let context = diffContext(from: request.path)
+        do {
+            let numstat = try await ShellRunner.shared.run(
+                executable: gitBin,
+                arguments: ["diff", "--numstat", "HEAD", "--", relPath],
+                cwd: session.effectiveCwd,
+                timeout: 10
+            )
+            let counts = parseDiffCounts(numstat.stdoutString)
+            let diff = try await ShellRunner.shared.run(
+                executable: gitBin,
+                arguments: ["diff", "--unified=\(context)", "HEAD", "--", relPath],
+                cwd: session.effectiveCwd,
+                timeout: 10
+            )
+            let file = ClawdmeterShared.GitDiffFile(
+                path: relPath,
+                status: "M",
+                additions: counts.additions,
+                deletions: counts.deletions,
+                hunks: parseUnifiedDiffHunks(diff.stdoutString),
+                truncated: false,
+                changeState: nil
+            )
+            let encoder = JSONEncoder()
+            if let body = try? encoder.encode(file) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            serverLogger.error("git diff file failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleDiffAction(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let gitBin = ShellRunner.locateBinary("git") else {
+            sendResponse(.internalError, on: connection); return
+        }
+        guard let relPath = diffActionRelativePath(sessionId: sessionId, requestPath: request.path),
+              isSafeGitRelativePath(relPath) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let req = (try? JSONDecoder().decode(GitDiffActionRequest.self, from: request.body))
+            ?? GitDiffActionRequest(action: .stageFile)
+        do {
+            switch req.action {
+            case .stageFile:
+                try await runGitDiffAction(gitBin: gitBin, cwd: session.effectiveCwd, arguments: ["add", "--", relPath])
+            case .unstageFile:
+                try await runGitDiffAction(gitBin: gitBin, cwd: session.effectiveCwd, arguments: ["restore", "--staged", "--", relPath])
+            case .discardFile:
+                if try await isUntracked(gitBin: gitBin, cwd: session.effectiveCwd, relPath: relPath) {
+                    try trashUntrackedFile(cwd: session.effectiveCwd, relPath: relPath)
+                } else {
+                    try await runGitDiffAction(
+                        gitBin: gitBin,
+                        cwd: session.effectiveCwd,
+                        arguments: ["restore", "--staged", "--worktree", "--", relPath]
+                    )
+                }
+            }
+            let files = try await loadDiffFiles(session: session, gitBin: gitBin)
+            let receipt = req.idempotencyKey.map {
+                MobileCommandReceipt(idempotencyKey: $0, status: .acknowledged, processedAt: Date())
+            }
+            sendCodable(GitDiffActionResponse(ok: true, files: files, receipt: receipt), on: connection)
+        } catch {
+            sendCodable(GitDiffActionResponse(ok: false, error: "\(error)"), on: connection)
+        }
+    }
+
+    private func loadDiffFiles(
+        session: AgentSession,
+        gitBin: String
+    ) async throws -> [ClawdmeterShared.GitDiffFile] {
+        let cwd = session.effectiveCwd
+        // Refuse to diff mid-rebase/merge (Codex #11 / T11).
+        if FileManager.default.fileExists(atPath: (cwd as NSString).appendingPathComponent(".git/rebase-merge"))
+            || FileManager.default.fileExists(atPath: (cwd as NSString).appendingPathComponent(".git/MERGE_HEAD")) {
+            throw NSError(
+                domain: "AgentControlServer.Diff",
+                code: 409,
+                userInfo: [NSLocalizedDescriptionKey: "Repo is in rebase/merge state, finish on Mac"]
+            )
+        }
+        let head = try await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: ["diff", "--numstat", "HEAD"],
+            cwd: cwd,
+            timeout: 10
+        )
+        let unstaged = try? await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: ["diff", "--numstat"],
+            cwd: cwd,
+            timeout: 10
+        )
+        let staged = try? await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: ["diff", "--cached", "--numstat"],
+            cwd: cwd,
+            timeout: 10
+        )
+        let status = try? await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: ["status", "--porcelain=v1", "-z"],
+            cwd: cwd,
+            timeout: 10
+        )
+        let unstagedPaths = Set(parseNumstatFiles(unstaged?.stdoutString ?? "").map(\.path))
+        let stagedPaths = Set(parseNumstatFiles(staged?.stdoutString ?? "").map(\.path))
+        let statusMap = parsePorcelainStatus(status?.stdout ?? Data())
+
+        var seen = Set<String>()
+        var files: [ClawdmeterShared.GitDiffFile] = parseNumstatFiles(head.stdoutString).map { item in
+            seen.insert(item.path)
+            let staged = stagedPaths.contains(item.path)
+            let unstaged = unstagedPaths.contains(item.path)
+            return ClawdmeterShared.GitDiffFile(
+                path: item.path,
+                status: statusMap[item.path] ?? "M",
+                additions: item.additions,
+                deletions: item.deletions,
+                hunks: [],
+                truncated: true,
+                changeState: diffChangeState(staged: staged, unstaged: unstaged)
+            )
+        }
+
+        let untracked = try? await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: ["ls-files", "--others", "--exclude-standard", "-z"],
+            cwd: cwd,
+            timeout: 10
+        )
+        for path in parseNulSeparatedPaths(untracked?.stdout ?? Data()) where !seen.contains(path) {
+            files.append(ClawdmeterShared.GitDiffFile(
+                path: path,
+                status: "A",
+                additions: countTextLines(cwd: cwd, relPath: path),
+                deletions: 0,
+                hunks: [],
+                truncated: true,
+                changeState: "untracked"
+            ))
+        }
+        return files.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+    }
+
+    private func diffRelativePath(sessionId: String, requestPath: String) -> String? {
+        let pathOnly = requestPath.split(separator: "?", maxSplits: 1).first.map(String.init) ?? requestPath
+        let prefix = "/sessions/\(sessionId)/diff/"
+        guard pathOnly.hasPrefix(prefix) else { return nil }
+        let encoded = String(pathOnly.dropFirst(prefix.count))
+        return encoded.removingPercentEncoding
+    }
+
+    private func diffActionRelativePath(sessionId: String, requestPath: String) -> String? {
+        let pathOnly = requestPath.split(separator: "?", maxSplits: 1).first.map(String.init) ?? requestPath
+        let prefix = "/sessions/\(sessionId)/diff-action/"
+        guard pathOnly.hasPrefix(prefix) else { return nil }
+        let encoded = String(pathOnly.dropFirst(prefix.count))
+        return encoded.removingPercentEncoding
+    }
+
+    private func isSafeGitRelativePath(_ path: String) -> Bool {
+        guard !path.isEmpty, !path.hasPrefix("/") else { return false }
+        guard !path.contains("\0"), !path.contains("\\") else { return false }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        return parts.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+    }
+
+    private func diffContext(from requestPath: String) -> Int {
+        guard let comps = URLComponents(string: requestPath),
+              let raw = comps.queryItems?.first(where: { $0.name == "context" })?.value,
+              let value = Int(raw) else {
+            return 80
+        }
+        return min(max(value, 0), 500)
+    }
+
+    private func runGitDiffAction(gitBin: String, cwd: String, arguments: [String]) async throws {
+        let result = try await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: arguments,
+            cwd: cwd,
+            timeout: 15
+        )
+        guard result.exitStatus == 0 else {
+            throw NSError(
+                domain: "AgentControlServer.DiffAction",
+                code: Int(result.exitStatus),
+                userInfo: [NSLocalizedDescriptionKey: result.stderrString]
+            )
+        }
+    }
+
+    private func isUntracked(gitBin: String, cwd: String, relPath: String) async throws -> Bool {
+        let result = try await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: ["ls-files", "--error-unmatch", "--", relPath],
+            cwd: cwd,
+            timeout: 10
+        )
+        return result.exitStatus != 0
+    }
+
+    private func trashUntrackedFile(cwd: String, relPath: String) throws {
+        guard let fileURL = safeFileURL(cwd: cwd, relPath: relPath) else {
+            throw NSError(
+                domain: "AgentControlServer.DiffAction",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "unsafe path"]
+            )
+        }
+        var trashedURL: NSURL?
+        try FileManager.default.trashItem(at: fileURL, resultingItemURL: &trashedURL)
+    }
+
+    private func safeFileURL(cwd: String, relPath: String) -> URL? {
+        guard isSafeGitRelativePath(relPath) else { return nil }
+        let root = URL(fileURLWithPath: cwd, isDirectory: true).standardizedFileURL
+        let candidate = root.appendingPathComponent(relPath).standardizedFileURL
+        guard candidate.path == root.path || candidate.path.hasPrefix(root.path + "/") else {
+            return nil
+        }
+        return candidate
+    }
+
+    private func parseNulSeparatedPaths(_ data: Data) -> [String] {
+        data.split(separator: 0).compactMap { String(data: Data($0), encoding: .utf8) }
+    }
+
+    private struct DiffNumstatItem {
+        let path: String
+        let additions: Int
+        let deletions: Int
+    }
+
+    private func parseNumstatFiles(_ stdout: String) -> [DiffNumstatItem] {
+        stdout.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
+            guard parts.count == 3 else { return nil }
+            return DiffNumstatItem(
+                path: normalizeNumstatPath(parts[2]),
+                additions: Int(parts[0]) ?? 0,
+                deletions: Int(parts[1]) ?? 0
+            )
+        }
+    }
+
+    private func normalizeNumstatPath(_ path: String) -> String {
+        // Rename numstat can emit "{old => new}/file"; fall back to the
+        // post-image path when the compact rename syntax is obvious.
+        guard let arrow = path.range(of: " => ") else { return path }
+        var normalized = path
+        normalized.removeSubrange(path.startIndex..<arrow.upperBound)
+        normalized.removeAll { $0 == "{" || $0 == "}" }
+        return normalized
+    }
+
+    private func parsePorcelainStatus(_ data: Data) -> [String: String] {
+        let entries = parseNulSeparatedPaths(data)
+        var out: [String: String] = [:]
+        var index = 0
+        while index < entries.count {
+            let entry = entries[index]
+            guard entry.count >= 4 else {
+                index += 1
+                continue
+            }
+            let xy = String(entry.prefix(2))
+            var path = String(entry.dropFirst(3))
+            if (xy.contains("R") || xy.contains("C")), index + 1 < entries.count {
+                index += 1
+                path = entries[index]
+            }
+            out[path] = gitStatus(from: xy)
+            index += 1
+        }
+        return out
+    }
+
+    private func gitStatus(from xy: String) -> String {
+        if xy == "??" { return "A" }
+        if xy.contains("R") { return "R" }
+        if xy.contains("C") { return "C" }
+        if xy.contains("A") { return "A" }
+        if xy.contains("D") { return "D" }
+        return "M"
+    }
+
+    private func diffChangeState(staged: Bool, unstaged: Bool) -> String {
+        if staged && unstaged { return "mixed" }
+        if staged { return "staged" }
+        return "unstaged"
+    }
+
+    private func countTextLines(cwd: String, relPath: String) -> Int {
+        guard let url = safeFileURL(cwd: cwd, relPath: relPath),
+              let data = try? Data(contentsOf: url, options: [.mappedIfSafe]),
+              data.count <= 512_000,
+              !data.contains(0) else {
+            return 0
+        }
+        if data.isEmpty { return 0 }
+        return data.reduce(0) { $1 == 10 ? $0 + 1 : $0 } + (data.last == 10 ? 0 : 1)
+    }
+
+    private func parseDiffCounts(_ stdout: String) -> (additions: Int, deletions: Int) {
+        guard let line = stdout.split(separator: "\n").first else { return (0, 0) }
+        let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
+        guard parts.count >= 2 else { return (0, 0) }
+        return (Int(parts[0]) ?? 0, Int(parts[1]) ?? 0)
+    }
+
+    private func parseUnifiedDiffHunks(_ stdout: String) -> [ClawdmeterShared.GitDiffHunk] {
+        var hunks: [ClawdmeterShared.GitDiffHunk] = []
+        var currentHeader: String?
+        var currentLines: [ClawdmeterShared.GitDiffHunk.Line] = []
+
+        func flush() {
+            guard let header = currentHeader else { return }
+            hunks.append(ClawdmeterShared.GitDiffHunk(header: header, lines: currentLines))
+            currentHeader = nil
+            currentLines = []
+        }
+
+        for rawLine in stdout.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            if rawLine.hasPrefix("@@") {
+                flush()
+                currentHeader = rawLine
+                continue
+            }
+            guard currentHeader != nil else { continue }
+            if rawLine.hasPrefix("+") {
+                currentLines.append(.init(kind: .addition, text: String(rawLine.dropFirst())))
+            } else if rawLine.hasPrefix("-") {
+                currentLines.append(.init(kind: .deletion, text: String(rawLine.dropFirst())))
+            } else if rawLine.hasPrefix(" ") {
+                currentLines.append(.init(kind: .context, text: String(rawLine.dropFirst())))
+            } else {
+                currentLines.append(.init(kind: .context, text: rawLine))
+            }
+        }
+        flush()
+        return hunks
+    }
+
+    private func fetchPRStatus(cwd: String) async throws -> PRStatus? {
+        guard let ghBin = ShellRunner.locateBinary("gh") else { return nil }
+        let fields = [
+            "url",
+            "number",
+            "title",
+            "body",
+            "state",
+            "isDraft",
+            "additions",
+            "deletions",
+            "changedFiles",
+            "reviewDecision",
+            "statusCheckRollup",
+        ].joined(separator: ",")
+        let result = try await ShellRunner.shared.run(
+            executable: ghBin,
+            arguments: ["pr", "view", "--json", fields],
+            cwd: cwd,
+            timeout: 20
+        )
+        guard result.exitStatus == 0 else {
+            let stderr = result.stderrString.lowercased()
+            if stderr.contains("no pull requests found")
+                || stderr.contains("no open pull requests")
+                || stderr.contains("could not find")
+                || stderr.contains("not found") {
+                return nil
+            }
+            throw NSError(
+                domain: "AgentControlServer.PR",
+                code: Int(result.exitStatus),
+                userInfo: [NSLocalizedDescriptionKey: result.stderrString]
+            )
+        }
+        guard let obj = try JSONSerialization.jsonObject(with: result.stdout) as? [String: Any] else {
+            throw NSError(
+                domain: "AgentControlServer.PR",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "could not parse gh pr view JSON"]
+            )
+        }
+        let isDraft = obj["isDraft"] as? Bool ?? false
+        let state: PRStatus.State = {
+            if isDraft { return .draft }
+            switch (obj["state"] as? String ?? "").lowercased() {
+            case "open": return .open
+            case "merged": return .merged
+            case "closed": return .closed
+            default: return .open
+            }
+        }()
+        let checksRollup = Self.checksRollup(from: obj["statusCheckRollup"])
+        let mergeability: PRMergeability = {
+            if state == .closed { return .blocked }
+            if state == .merged { return .mergeable }
+            switch checksRollup {
+            case "failure", "pending": return .blocked
+            default: return .mergeable
+            }
+        }()
+        return PRStatus(
+            url: obj["url"] as? String ?? "",
+            number: obj["number"] as? Int ?? 0,
+            title: obj["title"] as? String ?? "",
+            body: obj["body"] as? String ?? "",
+            state: state,
+            additions: obj["additions"] as? Int ?? 0,
+            deletions: obj["deletions"] as? Int ?? 0,
+            changedFiles: obj["changedFiles"] as? Int ?? 0,
+            reviewDecision: obj["reviewDecision"] as? String,
+            checksRollup: checksRollup,
+            checks: Self.checkMirrors(from: obj["statusCheckRollup"]),
+            mergeability: mergeability,
+            lastCheckedAt: Date()
+        )
+    }
+
+    private static func checksRollup(from value: Any?) -> String? {
+        guard let checks = value as? [[String: Any]], !checks.isEmpty else { return nil }
+        var sawPending = false
+        for check in checks {
+            let status = ((check["status"] as? String) ?? "").lowercased()
+            let conclusion = ((check["conclusion"] as? String) ?? "").lowercased()
+            if ["failure", "failed", "timed_out", "cancelled", "action_required"].contains(conclusion) {
+                return "failure"
+            }
+            if conclusion.isEmpty || status == "queued" || status == "in_progress" || status == "pending" {
+                sawPending = true
+            }
+        }
+        return sawPending ? "pending" : "success"
+    }
+
+    private static func checkMirrors(from value: Any?) -> [PRCheckMirror] {
+        guard let checks = value as? [[String: Any]], !checks.isEmpty else { return [] }
+        let formatter = ISO8601DateFormatter()
+        return checks.enumerated().map { index, check in
+            let name = (check["name"] as? String)
+                ?? (check["workflowName"] as? String)
+                ?? (check["context"] as? String)
+                ?? "Check \(index + 1)"
+            let status = ((check["status"] as? String) ?? "").lowercased()
+            let conclusion = ((check["conclusion"] as? String) ?? "").lowercased()
+            let state: PRCheckState
+            if ["success", "passed"].contains(conclusion) {
+                state = .success
+            } else if ["failure", "failed", "timed_out", "cancelled", "action_required"].contains(conclusion) {
+                state = .failure
+            } else if ["skipped", "neutral"].contains(conclusion) {
+                state = .skipped
+            } else if conclusion.isEmpty || ["queued", "in_progress", "pending"].contains(status) {
+                state = .pending
+            } else {
+                state = .unknown
+            }
+            let completedAt = (check["completedAt"] as? String).flatMap { formatter.date(from: $0) }
+            let url = (check["detailsUrl"] as? String) ?? (check["targetUrl"] as? String)
+            return PRCheckMirror(name: name, state: state, url: url, completedAt: completedAt)
+        }
+    }
+
+    private func handleGetPR(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard ShellRunner.locateBinary("gh") != nil else {
+            sendJSON(["error": "gh CLI not found on Mac. Install: brew install gh"], on: connection, status: 503)
+            return
+        }
+        do {
+            guard let status = try await fetchPRStatus(cwd: session.effectiveCwd) else {
+                sendJSON(["pr": NSNull()], on: connection)
+                return
+            }
+            sendCodable(status, on: connection)
+        } catch {
+            sendJSON(["error": "gh pr view failed", "detail": "\(error)"], on: connection, status: 502)
+        }
+    }
+
+    private func handleCreatePR(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let req = (try? JSONDecoder().decode(CreatePRRequest.self, from: request.body)) ?? CreatePRRequest()
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
+        let cwd = session.effectiveCwd
+        guard let ghBin = ShellRunner.locateBinary("gh") else {
+            await sendCommandJSONError(
+                ["error": "gh CLI not found on Mac. Install: brew install gh"],
+                status: 503,
+                key: req.idempotencyKey,
+                kind: .createPR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
+            return
+        }
+        var args = ["pr", "create", "--fill"]
+        if let title = req.title, !title.isEmpty { args += ["--title", title] }
+        if let body = req.body, !body.isEmpty { args += ["--body", body] }
+        if let base = req.baseBranch, !base.isEmpty { args += ["--base", base] }
+        do {
+            let result = try await ShellRunner.shared.run(
+                executable: ghBin, arguments: args, cwd: cwd, timeout: 60
+            )
+            if result.exitStatus != 0 {
+                let payload: [String: Any] = ["error": "gh pr create failed", "stderr": result.stderrString]
+                await sendCommandJSONError(
+                    payload,
+                    status: 500,
+                    key: req.idempotencyKey,
+                    kind: .createPR,
+                    sessionId: uuid,
+                    payloadHash: payloadHash,
+                    on: connection
+                )
+                return
+            }
+            let prURL = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+            await sendCommandResponse(
+                body: ["url": prURL],
+                key: req.idempotencyKey,
+                kind: .createPR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
+        } catch {
+            await sendCommandJSONError(
+                ["error": "gh pr create failed", "detail": "\(error)"],
+                status: 500,
+                key: req.idempotencyKey,
+                kind: .createPR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
+        }
+    }
+
+    private func handleReviewPR(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let req = (try? JSONDecoder().decode(PRReviewRequest.self, from: request.body)) ?? PRReviewRequest()
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
+        guard let ghBin = ShellRunner.locateBinary("gh") else {
+            let receipt = req.idempotencyKey.map {
+                MobileCommandReceipt(
+                    idempotencyKey: $0,
+                    status: .failed,
+                    processedAt: Date(),
+                    error: "gh CLI not found on Mac. Install: brew install gh"
+                )
+            }
+            await sendCommandCodableResponse(
+                PRReviewResponse(ok: false, receipt: receipt, error: "gh CLI not found on Mac. Install: brew install gh"),
+                key: req.idempotencyKey,
+                kind: .reviewPR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                status: 503,
+                failed: true,
+                errorMessage: "gh CLI not found on Mac. Install: brew install gh",
+                on: connection
+            )
+            return
+        }
+        var args = ["pr", "review"]
+        switch req.action {
+        case .approve:
+            args.append("--approve")
+        case .comment:
+            args.append("--comment")
+        case .requestChanges:
+            args.append("--request-changes")
+        }
+        if let body = req.body?.trimmingCharacters(in: .whitespacesAndNewlines), !body.isEmpty {
+            args += ["--body", body]
+        }
+        do {
+            let result = try await ShellRunner.shared.run(
+                executable: ghBin,
+                arguments: args,
+                cwd: session.effectiveCwd,
+                timeout: 45
+            )
+            guard result.exitStatus == 0 else {
+                let receipt = req.idempotencyKey.map {
+                    MobileCommandReceipt(
+                        idempotencyKey: $0,
+                        status: .failed,
+                        processedAt: Date(),
+                        error: result.stderrString
+                    )
+                }
+                await sendCommandCodableResponse(
+                    PRReviewResponse(ok: false, receipt: receipt, error: result.stderrString),
+                    key: req.idempotencyKey,
+                    kind: .reviewPR,
+                    sessionId: uuid,
+                    payloadHash: payloadHash,
+                    failed: true,
+                    errorMessage: result.stderrString,
+                    on: connection
+                )
+                return
+            }
+            let refreshed = try? await fetchPRStatus(cwd: session.effectiveCwd)
+            let receipt = req.idempotencyKey.map {
+                MobileCommandReceipt(idempotencyKey: $0, status: .acknowledged, processedAt: Date())
+            }
+            await sendCommandCodableResponse(
+                PRReviewResponse(ok: true, pr: refreshed ?? nil, receipt: receipt),
+                key: req.idempotencyKey,
+                kind: .reviewPR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
+        } catch {
+            let errorText = "\(error)"
+            let receipt = req.idempotencyKey.map {
+                MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+            }
+            await sendCommandCodableResponse(
+                PRReviewResponse(ok: false, receipt: receipt, error: errorText),
+                key: req.idempotencyKey,
+                kind: .reviewPR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                failed: true,
+                errorMessage: errorText,
+                on: connection
+            )
+        }
+    }
+
+    private func handleMerge(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let mergeRequest = (try? JSONDecoder().decode(MergePRRequest.self, from: request.body)) ?? MergePRRequest()
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: mergeRequest.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = mergeRequest.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
+        let cwd = session.effectiveCwd
+        guard let ghBin = ShellRunner.locateBinary("gh") else {
+            let errorText = "gh CLI not found on Mac. Install: brew install gh"
+            let receipt = mergeRequest.idempotencyKey.map {
+                MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+            }
+            await sendCommandCodableResponse(
+                MergePRResponse(ok: false, merged: false, receipt: receipt, error: errorText),
+                key: mergeRequest.idempotencyKey,
+                kind: .mergePR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                status: 503,
+                failed: true,
+                errorMessage: errorText,
+                on: connection
+            )
+            return
+        }
+        let explicitOverride = mergeRequest.adminOverride || request.path.contains("override=true")
+        do {
+            guard let pr = try await fetchPRStatus(cwd: cwd) else {
+                let errorText = "No PR found for this branch"
+                let receipt = mergeRequest.idempotencyKey.map {
+                    MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+                }
+                await sendCommandCodableResponse(
+                    MergePRResponse(ok: false, merged: false, receipt: receipt, error: errorText),
+                    key: mergeRequest.idempotencyKey,
+                    kind: .mergePR,
+                    sessionId: uuid,
+                    payloadHash: payloadHash,
+                    status: 404,
+                    failed: true,
+                    errorMessage: errorText,
+                    on: connection
+                )
+                return
+            }
+            if pr.state == .merged {
+                let receipt = mergeRequest.idempotencyKey.map {
+                    MobileCommandReceipt(idempotencyKey: $0, status: .acknowledged, processedAt: Date())
+                }
+                await sendCommandCodableResponse(
+                    MergePRResponse(ok: true, merged: true, pr: pr, receipt: receipt),
+                    key: mergeRequest.idempotencyKey,
+                    kind: .mergePR,
+                    sessionId: uuid,
+                    payloadHash: payloadHash,
+                    on: connection
+                )
+                return
+            }
+            if !explicitOverride {
+                if pr.checksRollup == "failure" {
+                    let errorText = "Checks are failing"
+                    let receipt = mergeRequest.idempotencyKey.map {
+                        MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+                    }
+                    await sendCommandCodableResponse(
+                        MergePRResponse(ok: false, merged: false, pr: pr, receipt: receipt, error: errorText),
+                        key: mergeRequest.idempotencyKey,
+                        kind: .mergePR,
+                        sessionId: uuid,
+                        payloadHash: payloadHash,
+                        status: 409,
+                        failed: true,
+                        errorMessage: errorText,
+                        on: connection
+                    )
+                    return
+                }
+                if pr.checksRollup == "pending" {
+                    let errorText = "Checks are still pending"
+                    let receipt = mergeRequest.idempotencyKey.map {
+                        MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+                    }
+                    await sendCommandCodableResponse(
+                        MergePRResponse(ok: false, merged: false, pr: pr, receipt: receipt, error: errorText),
+                        key: mergeRequest.idempotencyKey,
+                        kind: .mergePR,
+                        sessionId: uuid,
+                        payloadHash: payloadHash,
+                        status: 409,
+                        failed: true,
+                        errorMessage: errorText,
+                        on: connection
+                    )
+                    return
+                }
+                if pr.state == .closed {
+                    let errorText = "PR is closed"
+                    let receipt = mergeRequest.idempotencyKey.map {
+                        MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+                    }
+                    await sendCommandCodableResponse(
+                        MergePRResponse(ok: false, merged: false, pr: pr, receipt: receipt, error: errorText),
+                        key: mergeRequest.idempotencyKey,
+                        kind: .mergePR,
+                        sessionId: uuid,
+                        payloadHash: payloadHash,
+                        status: 409,
+                        failed: true,
+                        errorMessage: errorText,
+                        on: connection
+                    )
+                    return
+                }
+            }
+            var args = ["pr", "merge", String(pr.number)]
+            switch mergeRequest.method {
+            case .merge: args.append("--merge")
+            case .squash: args.append("--squash")
+            case .rebase: args.append("--rebase")
+            }
+            if mergeRequest.deleteBranch { args.append("--delete-branch") }
+            if mergeRequest.auto { args.append("--auto") }
+            if explicitOverride { args.append("--admin") }
+            let result = try await ShellRunner.shared.run(
+                executable: ghBin,
+                arguments: args,
+                cwd: cwd,
+                timeout: 90
+            )
+            if result.exitStatus != 0 {
+                let errorText = "gh pr merge failed"
+                let receipt = mergeRequest.idempotencyKey.map {
+                    MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+                }
+                await sendCommandCodableResponse(
+                    MergePRResponse(ok: false, merged: false, pr: pr, receipt: receipt, error: "\(errorText): \(result.stderrString)"),
+                    key: mergeRequest.idempotencyKey,
+                    kind: .mergePR,
+                    sessionId: uuid,
+                    payloadHash: payloadHash,
+                    status: 409,
+                    failed: true,
+                    errorMessage: errorText,
+                    on: connection
+                )
+                return
+            }
+            let refreshed = try? await fetchPRStatus(cwd: cwd)
+            let receipt = mergeRequest.idempotencyKey.map {
+                MobileCommandReceipt(idempotencyKey: $0, status: .acknowledged, processedAt: Date())
+            }
+            await sendCommandCodableResponse(
+                MergePRResponse(ok: true, merged: true, pr: refreshed ?? pr, receipt: receipt),
+                key: mergeRequest.idempotencyKey,
+                kind: .mergePR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
+        } catch {
+            let errorText = "\(error)"
+            let receipt = mergeRequest.idempotencyKey.map {
+                MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+            }
+            await sendCommandCodableResponse(
+                MergePRResponse(ok: false, merged: false, receipt: receipt, error: errorText),
+                key: mergeRequest.idempotencyKey,
+                kind: .mergePR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                status: 500,
+                failed: true,
+                errorMessage: errorText,
+                on: connection
+            )
+        }
+    }
+
+    private func handleGetTerminals(sessionId: String, connection: NWConnection) {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil {
+            sendResponse(.legacySessionRetired, on: connection); return
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(session.terminalPanes) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// GET /sessions/:id/artifact?path=<relative-or-abs>
+    ///
+    /// Streams an artifact file (PDF, image, doc) the agent wrote to the
+    /// session's worktree. Path is path-component validated so callers
+    /// can only read inside the session's worktree or repo. Cap at 50MB
+    /// to keep the daemon responsive when an agent writes a giant file.
+    private func handleGetArtifact(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let comps = URLComponents(string: request.path),
+              let pathArg = comps.queryItems?.first(where: { $0.name == "path" })?.value,
+              !pathArg.isEmpty else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let repoCwd = session.effectiveCwd
+        // Defense-in-depth: refuse to anchor on an empty or non-absolute
+        // repoCwd. If the worktree/repo path is missing the prefix check
+        // below degenerates (`hasPrefix("/")` matches every absolute
+        // path) and the symlink resolve can't constrain anything either.
+        guard !repoCwd.isEmpty, repoCwd.hasPrefix("/") else {
+            sendResponse(.internalError, on: connection); return
+        }
+        let absolute: String = pathArg.hasPrefix("/")
+            ? pathArg
+            : (repoCwd as NSString).appendingPathComponent(pathArg)
+        // Two-stage path safety:
+        //   1. Canonicalize `..` / `~` / `//` via standardizingPath, then
+        //      require the result to live under the repo root. Blocks
+        //      `?path=../../../etc/passwd`.
+        //   2. Resolve symlinks via `resolvingSymlinksInPath` and re-check
+        //      the prefix. Blocks an agent (or anyone with worktree write
+        //      access) from planting a symlink inside the worktree that
+        //      points outside it. standardizingPath alone does NOT resolve
+        //      symlinks, so without step 2 the read would follow the link.
+        let repoStandard = (repoCwd as NSString).standardizingPath
+        let canonical = (absolute as NSString).standardizingPath
+        let resolved = (canonical as NSString).resolvingSymlinksInPath
+        let repoResolved = (repoStandard as NSString).resolvingSymlinksInPath
+        let underCanonicalRepo = canonical.hasPrefix(repoStandard + "/") || canonical == repoStandard
+        let underResolvedRepo = resolved.hasPrefix(repoResolved + "/") || resolved == repoResolved
+        guard underCanonicalRepo && underResolvedRepo else {
+            sendResponse(HTTPResponse(
+                status: 403, reason: "Forbidden",
+                contentType: "text/plain",
+                body: Data("path escapes session worktree\n".utf8)
+            ), on: connection)
+            return
+        }
+        let url = URL(fileURLWithPath: resolved)
+        // v0.7.4 TOCTOU fix: validate-then-read had a window where an
+        // agent with worktree write could swap the post-validate path
+        // for a symlink before `Data(contentsOf:)` followed it. Use
+        // POSIX `open(O_RDONLY | O_NOFOLLOW)` so any symlink at the
+        // final component fails immediately, then `fstat` the live fd
+        // to enforce the 50MB cap on the file we ACTUALLY have open.
+        // This means the size check + read both operate on the same
+        // inode — no race window.
+        let fd = open(resolved, O_RDONLY | O_NOFOLLOW)
+        guard fd >= 0 else {
+            // ELOOP (symlink at final component) → 403, anything else → 404.
+            let code = errno == ELOOP ? 403 : 404
+            let reason = errno == ELOOP ? "Forbidden" : "Not Found"
+            let body = errno == ELOOP
+                ? "symlink at artifact path is not allowed\n"
+                : "artifact not found\n"
+            sendResponse(HTTPResponse(
+                status: code, reason: reason,
+                contentType: "text/plain",
+                body: Data(body.utf8)
+            ), on: connection)
+            return
+        }
+        defer { close(fd) }
+        var st = stat()
+        guard fstat(fd, &st) == 0 else {
+            sendResponse(.internalError, on: connection); return
+        }
+        // Require a regular file. fstat after open(NOFOLLOW) means S_IFLNK
+        // never appears here, but reject anything that's not a regular file
+        // (dirs, fifos, devices) defensively.
+        guard (st.st_mode & S_IFMT) == S_IFREG else {
+            sendResponse(HTTPResponse(
+                status: 403, reason: "Forbidden",
+                contentType: "text/plain",
+                body: Data("artifact path is not a regular file\n".utf8)
+            ), on: connection)
+            return
+        }
+        let size = Int(st.st_size)
+        guard size <= 50_000_000 else {
+            sendResponse(.notFound, on: connection); return
+        }
+        // Read the open fd. FileHandle takes ownership of closing, so
+        // pass `closeOnDealloc: false` and let our `defer { close(fd) }`
+        // win — double-close on a Foundation FileHandle is undefined.
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+        guard let data = try? handle.readToEnd() else {
+            sendResponse(.internalError, on: connection); return
+        }
+        sendResponse(.ok(contentType: contentType(for: url), body: data), on: connection)
+    }
+
+    /// GET /sessions/:id/markdown-document?path=<relative-or-abs>
+    ///
+    /// Read-only Markdown document fetch for iOS Code document tabs. This is
+    /// intentionally separate from `/artifact`: artifact reads stay scoped to
+    /// the session worktree, while generated review/plan Markdown often lives
+    /// under `~/.gstack/projects/...` outside the workspace. The route still
+    /// keeps document-specific guardrails so it cannot serve large, binary, or
+    /// non-text files.
+    private func handleGetMarkdownDocument(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let comps = URLComponents(string: request.path),
+              let pathArg = comps.queryItems?.first(where: { $0.name == "path" })?.value,
+              !pathArg.isEmpty else {
+            sendResponse(.badRequest(detail: "missing document path"), on: connection); return
+        }
+        guard let path = Self.standardizedMarkdownDocumentPath(pathArg, relativeTo: session.effectiveCwd) else {
+            sendResponse(.badRequest(detail: "invalid document path"), on: connection); return
+        }
+        guard GeneratedArtifactDetector.isMarkdownPath(path) else {
+            sendResponse(HTTPResponse(
+                status: 415,
+                reason: "Unsupported Media Type",
+                contentType: "text/plain",
+                body: Data("document path is not Markdown\n".utf8)
+            ), on: connection)
+            return
+        }
+
+        let resolved = (path as NSString).resolvingSymlinksInPath
+        guard Self.isMarkdownDocumentPathAllowed(path, relativeTo: session.effectiveCwd) else {
+            sendResponse(HTTPResponse(
+                status: 403,
+                reason: "Forbidden",
+                contentType: "text/plain",
+                body: Data("document path escapes allowed roots\n".utf8)
+            ), on: connection)
+            return
+        }
+        let fd = open(resolved, O_RDONLY | O_NOFOLLOW)
+        guard fd >= 0 else {
+            let code: Int
+            let reason: String
+            let body: String
+            switch errno {
+            case EACCES, EPERM, ELOOP:
+                code = 403
+                reason = "Forbidden"
+                body = "document path is not readable\n"
+            default:
+                code = 404
+                reason = "Not Found"
+                body = "document not found\n"
+            }
+            sendResponse(HTTPResponse(
+                status: code,
+                reason: reason,
+                contentType: "text/plain",
+                body: Data(body.utf8)
+            ), on: connection)
+            return
+        }
+        defer { close(fd) }
+
+        var st = stat()
+        guard fstat(fd, &st) == 0 else {
+            sendResponse(.internalError, on: connection); return
+        }
+        guard (st.st_mode & S_IFMT) == S_IFREG else {
+            sendResponse(HTTPResponse(
+                status: 403,
+                reason: "Forbidden",
+                contentType: "text/plain",
+                body: Data("document path is not a regular file\n".utf8)
+            ), on: connection)
+            return
+        }
+        let size = Int(st.st_size)
+        guard size <= Self.markdownDocumentMaxBytes else {
+            sendResponse(HTTPResponse(
+                status: 413,
+                reason: "Payload Too Large",
+                contentType: "text/plain",
+                body: Data("document is larger than 2 MB\n".utf8)
+            ), on: connection)
+            return
+        }
+
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+        guard let data = try? handle.readToEnd() else {
+            sendResponse(.internalError, on: connection); return
+        }
+        guard !data.contains(0), String(data: data, encoding: .utf8) != nil else {
+            sendResponse(HTTPResponse(
+                status: 415,
+                reason: "Unsupported Media Type",
+                contentType: "text/plain",
+                body: Data("document is not readable UTF-8 Markdown text\n".utf8)
+            ), on: connection)
+            return
+        }
+        sendResponse(.ok(contentType: "text/markdown; charset=utf-8", body: data), on: connection)
+    }
+
+    private func contentType(for url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "pdf": return "application/pdf"
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "svg": return "image/svg+xml"
+        case "webp": return "image/webp"
+        case "heic": return "image/heic"
+        case "json": return "application/json"
+        case "txt", "log", "md": return "text/plain"
+        case "html": return "text/html"
+        case "csv": return "text/csv"
+        case "xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        case "pptx": return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        default: return "application/octet-stream"
+        }
+    }
+
+    private func handleAddTerminal(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil {
+            sendResponse(.legacySessionRetired, on: connection); return
+        }
+        if let binding = session.runtimeBinding,
+           !binding.capabilities.supportsTerminal {
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"terminal_not_supported"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
+            sendResponse(.tooManyRequestsSwap, on: connection); return
+        }
+        guard session.terminalPanes.count < 7 else {
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"terminal pane limit reached"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        struct AddTerminalRequest: Codable { let title: String? }
+        let req = (try? JSONDecoder().decode(AddTerminalRequest.self, from: request.body)) ?? AddTerminalRequest(title: nil)
+        do {
+            let host = try await terminalRegistry.spawnShell(cwd: session.effectiveCwd, title: req.title ?? "")
+            let pane = TerminalPaneRef(paneId: host.id.uuidString, title: req.title ?? "", isPrimary: false)
+            try await registry.addTerminalPane(sessionId: uuid, pane: pane)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(pane) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleDeleteTerminal(sessionId: String, paneId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil {
+            sendResponse(.legacySessionRetired, on: connection); return
+        }
+        guard let pane = session.terminalPanes.first(where: { $0.id.uuidString == paneId }) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        if pane.isPrimary {
+            sendResponse(.badRequest, on: connection); return
+        }
+        do {
+            await terminalRegistry.kill(id: pane.paneId)
+            try await registry.removeTerminalPane(sessionId: uuid, paneRefId: pane.id)
+            sendJSON(["ok": true], on: connection)
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleRenameTerminal(sessionId: String, paneId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let paneUUID = UUID(uuidString: paneId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil {
+            sendResponse(.legacySessionRetired, on: connection); return
+        }
+        struct RenameTerminalRequest: Codable { let title: String? }
+        guard let req = try? JSONDecoder().decode(RenameTerminalRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let title = (req.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            guard let pane = try await registry.renameTerminalPane(sessionId: uuid, paneRefId: paneUUID, title: title) else {
+                sendResponse(.notFound, on: connection); return
+            }
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(pane) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
     private func handleGetChatSnapshot(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
@@ -2228,7 +3573,7 @@ public final class AgentControlServer {
             snapshotItems = registryStore?.snapshot.items ?? []
             snapshotCounter = registryStore?.snapshot.updateCounter ?? 0
             snapshotLastEventAt = registryStore?.snapshot.lastEventAt ?? session.lastEventAt
-        } else if let store = registryStore, !store.snapshot.items.isEmpty {
+        } else if let store = registryStore, store.isSDKOnly || !store.snapshot.items.isEmpty {
             snapshotItems = store.snapshot.items
             // Phase 0a / Codex P0: this is the real chat cursor now.
             // Pre-v5, this field was populated from session.lastEventSeq
@@ -2375,9 +3720,8 @@ public final class AgentControlServer {
 
     // MARK: - PR #30: OpenCode session dispatch (wire v13)
 
-    /// Spawn an OpenCode-backed AgentSession. Diverges from the
-    /// tmux argv path because opencode sessions are SSE clients of the
-    /// shared `opencode serve` process (P1 singleton). Flow:
+    /// Spawn an OpenCode-backed AgentSession. OpenCode sessions are SSE clients
+    /// of the shared `opencode serve` process (P1 singleton). Flow:
     ///   1. Ensure `opencode serve` is running (boots on first request).
     ///   2. POST to the server's `/session` endpoint to mint an
     ///      opencode session id.
@@ -2542,8 +3886,7 @@ public final class AgentControlServer {
         }
 
         // Step 3: create the Clawdmeter-side AgentSession + register
-        // the bidirectional id mapping. opencode sessions don't carry
-        // a tmux pane, but every OpenCode HTTP call is scoped with the
+        // the bidirectional id mapping. OpenCode HTTP calls are scoped with the
         // same directory so code-mode sessions operate in the prepared cwd.
         let session: AgentSession
         do {
@@ -2603,7 +3946,7 @@ public final class AgentControlServer {
     }
 
     /// The single switch deciding which providers are driven over the native
-    /// ACP harness (vs tmux / SDK / serve). Returns the agent's spawn+auth
+    /// ACP harness (vs SDK / serve / direct PTY). Returns the agent's spawn+auth
     /// policy, or nil for non-ACP agents (Claude/Codex/Gemini/OpenCode).
     static func acpSupport(for agent: AgentKind) -> AcpAgentSupport? {
         switch agent {
@@ -2618,7 +3961,8 @@ public final class AgentControlServer {
     /// v27 Code-tab harness migration: true when a live harness bridge is
     /// driving this session (paneless codex/cursor/gemini/grok). The Code-tab
     /// chat-store routing + first-send readiness use this to treat the session
-    /// like the Chat tab's harness sessions instead of waiting on a tmux pane.
+    /// like the Chat tab's harness sessions instead of waiting on legacy pane
+    /// metadata.
     func isHarnessLive(_ id: UUID) -> Bool { harnessRegistry.contains(id) }
 
     /// v27: tear down a session's harness bridge (stdio child / gRPC channel)
@@ -2635,8 +3979,8 @@ public final class AgentControlServer {
     }
 
     /// Generic harness spawn (Grok/Cursor over ACP, Codex over app-server,
-    /// Antigravity over gRPC). Mirrors `handleSpawnOpencodeSession`: no tmux pane
-    /// — the daemon drives an `AgentDriver` via `AcpHarnessBridge` (built by
+    /// Antigravity over gRPC). Mirrors `handleSpawnOpencodeSession`: the daemon
+    /// drives an `AgentDriver` via `AcpHarnessBridge` (built by
     /// `makeBridge`), projecting its event stream into the session's
     /// `SessionChatStore`. Two-phase failure contract (A3): `bridge.start()`
     /// throws synchronously on spawn/handshake/auth failure, so a failed start
@@ -2654,7 +3998,7 @@ public final class AgentControlServer {
         connection: NWConnection,
         makeBridge: (UUID, SessionChatStore) -> AcpHarnessBridge
     ) async {
-        // Resolve the per-repo env set (same path as the tmux/opencode spawns).
+        // Resolve the per-repo env set used by provider spawns.
         let resolvedEnv: RepoEnvResolvedEnvironment?
         do {
             resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: cwd)
@@ -2680,7 +4024,7 @@ public final class AgentControlServer {
         var childEnv = ProcessInfo.processInfo.environment
         for (k, v) in (resolvedEnv?.environment ?? [:]) { childEnv[k] = v }
 
-        // Step 1: write-ahead the Clawdmeter session (no tmux pane). The
+        // Step 1: write-ahead the Clawdmeter session. The
         // runtime kind is inferred as `.acpGrok` from `agent: .grok`.
         let session: AgentSession
         if let pre = provisionalSessionId, let existing = registry.session(id: pre) {
@@ -2803,6 +4147,137 @@ public final class AgentControlServer {
         }
     }
 
+    // MARK: - D4: per-provider auto-revive RPC (wire v12)
+
+    /// POST body for `/providers/:id/auto-revive`. The `:id` path
+    /// component carries the AgentKind raw value (`claude`/`codex`/`gemini`);
+    /// body carries `{"enabled": Bool}`. Forward-compat: an unknown id
+    /// returns 400 (X3 unknown kinds aren't user-toggleable).
+    private struct SetAutoReviveBody: Codable {
+        let enabled: Bool
+    }
+
+    /// D4 (v0.17): handle `POST /providers/:id/auto-revive`. iOS Live tab
+    /// sends a per-provider toggle here; the daemon dispatches to the
+    /// matching AppModel.setAutoReviveEnabled via `setAutoReviveCallback`.
+    /// Returns 200 with `{"ok": true}` on success, 400 on unknown
+    /// provider, 503 if the callback isn't wired (test/Preview paths).
+    private func handleSetAutoRevive(
+        providerId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        // X3 / D4: only known AgentKind raws are accepted. `.unknown`
+        // sessions never reach here from the iOS UI (the toggle isn't
+        // rendered for unknown providers), and an arbitrary path id
+        // should 400 rather than silently fall through to `.unknown`.
+        guard let kind = AgentKind(rawValue: providerId),
+              kind != .unknown else {
+            sendResponse(
+                .badRequest,
+                on: connection
+            )
+            return
+        }
+        guard let body = try? JSONDecoder().decode(SetAutoReviveBody.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        guard let callback = setAutoReviveCallback else {
+            // No AppRuntime wired (test harness / Preview) — surface a
+            // 503 so the caller knows the daemon isn't ready instead of
+            // pretending success.
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        await MainActor.run {
+            callback(kind, body.enabled)
+        }
+        serverLogger.info("auto-revive toggle: \(providerId, privacy: .public) → \(body.enabled, privacy: .public)")
+        sendResponse(
+            .ok(contentType: "application/json", body: Data(#"{"ok":true}"#.utf8)),
+            on: connection
+        )
+    }
+
+    // MARK: - Phase 10: ActivityKit push-token registration
+
+    private struct RegisterPushTokenBody: Codable {
+        let token: String
+        let bundleId: String
+    }
+
+    private struct UnregisterPushTokenBody: Codable {
+        let token: String
+    }
+
+    private func handleRegisterPushToken(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(RegisterPushTokenBody.self, from: request.body),
+              !req.token.isEmpty, !req.bundleId.isEmpty else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        await MacAPNSPusher.shared.register(token: req.token, bundleId: req.bundleId)
+        sendJSON(["ok": true, "registered": true], on: connection)
+    }
+
+    private func handleUnregisterPushToken(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(UnregisterPushTokenBody.self, from: request.body),
+              !req.token.isEmpty else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        await MacAPNSPusher.shared.unregister(token: req.token)
+        sendJSON(["ok": true], on: connection)
+    }
+
+    // MARK: - E6: remote-push (gateway) device token
+
+    private struct RegisterAPNSDeviceTokenBody: Codable {
+        /// 64 hex chars (Apple's APNS token format).
+        let deviceToken: String
+        /// iPhone bundle id — used to derive the APNS topic.
+        let bundleId: String
+        /// The pairing session id the iPhone is reporting under. The Mac
+        /// uses this to scope the token under the current pairing.
+        let sessionId: String
+    }
+
+    private struct UnregisterAPNSDeviceTokenBody: Codable {
+        let sessionId: String
+    }
+
+    private func handleRegisterAPNSDeviceToken(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(RegisterAPNSDeviceTokenBody.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        // Basic schema validation — mirrors the Worker's `HEX_64` check
+        // (`infra/apns-gateway/src/schema.ts:49`).
+        let token = req.deviceToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard token.count == 64,
+              token.unicodeScalars.allSatisfy({ ($0.value >= 0x30 && $0.value <= 0x39)
+                                                || ($0.value >= 0x41 && $0.value <= 0x46)
+                                                || ($0.value >= 0x61 && $0.value <= 0x66) }) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        guard !req.bundleId.isEmpty, !req.sessionId.isEmpty else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        APNSPushDeviceTokenStore.shared.register(
+            sessionId: req.sessionId,
+            deviceToken: token,
+            bundleId: req.bundleId
+        )
+        sendJSON(["ok": true, "registered": true], on: connection)
+    }
+
+    private func handleUnregisterAPNSDeviceToken(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(UnregisterAPNSDeviceTokenBody.self, from: request.body),
+              !req.sessionId.isEmpty else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        APNSPushDeviceTokenStore.shared.purge(sessionId: req.sessionId)
+        sendJSON(["ok": true], on: connection)
+    }
+
     private func respondWithSession(uuid: UUID, connection: NWConnection) async {
         guard let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
@@ -2860,9 +4335,567 @@ public final class AgentControlServer {
         sendResponse(.ok(contentType: "application/json", body: bytes), on: connection)
     }
 
-    private func isSuccessfulSwap(_ result: SessionConfigChanger.SwapResult) -> Bool {
-        if case .swapped = result { return true }
-        return false
+    private func sendSwapFailureIfNeeded(_ result: SessionConfigChanger.SwapResult, on connection: NWConnection) -> Bool {
+        switch result {
+        case .swapped:
+            return true
+        case .spawnError(let message) where message == "legacy_session_retired":
+            sendResponse(.legacySessionRetired, on: connection)
+            return false
+        case .resumeFailed, .spawnError:
+            sendResponse(.internalError, on: connection)
+            return false
+        }
+    }
+
+    // MARK: - Usage / Analytics endpoints
+
+    /// Live UsageData snapshot for Claude + Codex, served from the
+    /// AppModels' last-poll state. Lets the iPhone show fresh gauges
+    /// over Tailscale without depending on iCloud KV sync (which
+    /// requires a paid Apple Developer entitlement). Wire shape:
+    /// `{claude: UsageData?, codex: UsageData?, lastChecked: Date}`.
+    private func handleGetUsage(connection: NWConnection) {
+        // Dual-shape envelope per E2/X1 contract: emit BOTH legacy
+        // `{claude, codex}` top-level fields AND new `usage` dict. v5
+        // clients read legacy; v6+ prefer dict with per-provider fallback
+        // to legacy. Servers always emit both while wireVersion == 6
+        // (legacy fields removed at v7, future v0.8).
+        var dict: [String: UsageData] = [:]
+        if let c = claudeModel?.usage { dict["claude"] = c }
+        if let x = codexModel?.usage  { dict["codex"]  = x }
+        if let g = geminiModel?.usage { dict["gemini"] = g }
+        if let cursor = cursorModel?.usage { dict["cursor"] = cursor }
+        if let grok = grokModel?.usage { dict["grok"] = grok }
+        let payload = UsageEnvelope(
+            claude: claudeModel?.usage,
+            codex: codexModel?.usage,
+            usage: dict,
+            lastChecked: Date()
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(payload) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// Historical analytics snapshot — same data the Mac dashboard's
+    /// Analytics view shows. Served verbatim so iPhone renders identical
+    /// totals + daily chart + by-repo split. Replaces iCloud KV sync
+    /// for users without a paid Apple Developer account.
+    private func handleGetAnalytics(connection: NWConnection) {
+        let snapshot = usageHistory?.snapshot ?? UsageHistorySnapshot.empty
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(snapshot) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    // v0.27.0: Design import-folder proxy (POST /design/import-folder)
+    // removed along with the Design tab + Open Design daemon +
+    // clawdmeter-bridge-host sidecar. `isSafeDesignImportBase(_:)` and
+    // `allowedDesignBaseDirs()` (the allow-list guard) were stripped too.
+
+    // MARK: - Transcript endpoint
+
+    /// Parse a JSONL on the Mac and return its chat messages as JSON so
+    /// the iPhone can render the actual conversation instead of just a
+    /// JSONL path + last-write timestamp. Security: the path must belong
+    /// to a Continuum-owned registry session or live session wiring.
+    private func handleGetTranscript(path queryPath: String, connection: NWConnection) {
+        guard let queryStart = queryPath.firstIndex(of: "?") else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let query = String(queryPath[queryPath.index(after: queryStart)...])
+        var jsonlPath: String?
+        var maxMessages = 200
+        // v0.23 (Chat V2 — T13): `beforeId` paginates older messages.
+        // The V2 transcript renders the most-recent 200 in memory;
+        // when the user scrolls past the top edge it calls
+        // `/transcript?path=&beforeId=<oldestRenderedId>&limit=200`
+        // and prepends the returned window. Older Macs that don't
+        // understand the param just return the tail as before — V2
+        // clients detect "no older content" by comparing the returned
+        // messages' ids to what they already hold.
+        var beforeId: String?
+        for pair in query.split(separator: "&") {
+            let kv = pair.split(separator: "=", maxSplits: 1).map(String.init)
+            guard kv.count == 2 else { continue }
+            let value = kv[1].removingPercentEncoding ?? kv[1]
+            switch kv[0] {
+            case "path": jsonlPath = value
+            case "limit": maxMessages = max(1, min(200, Int(value) ?? 200))
+            case "beforeId": beforeId = value.isEmpty ? nil : value
+            default: break
+            }
+        }
+        guard let jsonlPath else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let standardizedPath = URL(fileURLWithPath: jsonlPath).standardizedFileURL.path
+        let registryOwnedPaths = Set(registry.sessions.compactMap {
+            chatFileResolver.resolve(session: $0)?.standardizedFileURL.path
+        })
+        let liveOwnedPaths = Set(sessionWiring.values.map { $0.sessionFileURL.standardizedFileURL.path })
+        guard registryOwnedPaths.contains(standardizedPath) || liveOwnedPaths.contains(standardizedPath) else {
+            serverLogger.warning("transcript: refusing read outside allow-list — \(jsonlPath, privacy: .public)")
+            sendResponse(.unauthorized, on: connection)
+            return
+        }
+        let url = URL(fileURLWithPath: jsonlPath)
+        // v0.5.3: route through the daemon-owned chat-store registry so
+        // burst polling reuses the parsed state instead of reparsing
+        // 200 messages on every request. Cold miss falls back to the
+        // legacy synchronous TranscriptLoader.load path; the store
+        // warms up in the background and subsequent requests within
+        // the 5-minute idle window hit the cache.
+        let messages: [ChatMessage]
+        let truncated: Bool
+        if let beforeId {
+            // Pagination: return the maxMessages messages immediately
+            // before the client's oldest-rendered id. This is the only
+            // path that may scan the full file; first open stays bounded
+            // to the recent tail window.
+            let page = TranscriptLoader.loadWindowBefore(
+                from: url,
+                beforeId: beforeId,
+                limit: maxMessages
+            )
+            if page.cursorFound {
+                messages = page.messages
+                truncated = page.truncated
+            } else {
+                // beforeId not found — return empty (the cursor is from
+                // a different transcript or already at head). Honest.
+                messages = []
+                truncated = false
+            }
+        } else {
+            // Tail window — bounded to the same recent window the UI
+            // renders. Warm registry snapshots avoid disk parsing; cold
+            // fallback reverse-reads a tail chunk instead of loading the
+            // full transcript.
+            if let store = chatStoreRegistry.snapshotStore(forJSONLPath: url),
+               !store.snapshot.messages.isEmpty {
+                messages = store.snapshot.messages.suffix(maxMessages).map { $0 }
+                truncated = store.hasOlderHistory || store.snapshot.messages.count > maxMessages
+            } else {
+                let page = TranscriptLoader.loadRecent(from: url, maxMessages: maxMessages)
+                messages = page.messages
+                truncated = page.truncated
+            }
+        }
+        let envelope = TranscriptEnvelope(
+            path: jsonlPath,
+            messages: messages,
+            truncated: truncated
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(envelope) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    // MARK: - Session endpoints (Phase 2)
+
+    private func handleGetSessions(connection: NWConnection) {
+        let sessions = registry.sessions
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(sessions) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    // MARK: - v16 workspaces
+
+    /// `GET /workspaces` → `WorkspaceListResponse`. Wire v16+ only.
+    private func handleListWorkspaces(connection: NWConnection) {
+        let response = WorkspaceListResponse(workspaces: workspaceStore.all())
+        sendCodable(response, on: connection)
+    }
+
+    /// `PATCH /workspaces/:id` body `UpdateWorkspaceDefaultsRequest`.
+    /// Partial merge: omitted provider/file-copy fields are preserved.
+    /// Returns the updated `CodeWorkspaceRecord`. 404 when no workspace
+    /// matches the path id.
+    private func handleUpdateWorkspaceDefaults(
+        workspaceId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: workspaceId) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let req = try? decoder.decode(UpdateWorkspaceDefaultsRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        guard let updated = workspaceStore.updateDefaults(
+            id: uuid,
+            providerDefaults: req.providerDefaults,
+            filesToCopy: req.filesToCopy
+        ) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        // Inline the receipt into the response body so clients with a
+        // pending outbox entry can match by idempotencyKey.
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let recordData = try? encoder.encode(updated),
+              var dict = try? JSONSerialization.jsonObject(with: recordData) as? [String: Any]
+        else {
+            sendResponse(.internalError, on: connection); return
+        }
+        if let key = req.idempotencyKey {
+            let receipt = MobileCommandReceipt(
+                idempotencyKey: key,
+                status: .acknowledged,
+                processedAt: Date()
+            )
+            dict["receipt"] = receipt.jsonDictionary
+        }
+        sendJSON(dict, on: connection)
+    }
+
+    private func handleGetOneSession(sessionId: String, connection: NWConnection) {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(session) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleGetLifecycle(sessionId: String, connection: NWConnection) {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let snapshot = SessionLifecycleReducer.snapshot(
+            for: session,
+            checkpoints: storedCheckpoints(for: uuid).map(codeCheckpoint)
+        )
+        sendCodable(SessionLifecycleSnapshotResponse(snapshot: snapshot), on: connection)
+    }
+
+    // MARK: - v18 remote Code workbench
+
+    private func handleGetRunProfile(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let snapshot = await codeRunProfiles.snapshot(
+            session: session,
+            messages: chatMessages(for: session)
+        )
+        sendCodable(CodeRunProfileResponse(profile: snapshot), on: connection)
+    }
+
+    private func handleStartRunProfile(
+        sessionId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let body = request.body.isEmpty
+            ? CodeRunProfileStartRequest()
+            : (try? decoder.decode(CodeRunProfileStartRequest.self, from: request.body))
+        guard let body else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        let snapshot = await codeRunProfiles.start(
+            session: session,
+            command: body.command,
+            messages: chatMessages(for: session)
+        )
+        sendCodable(CodeRunProfileResponse(profile: snapshot), on: connection)
+    }
+
+    private func handleStopRunProfile(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let snapshot = await codeRunProfiles.stop(
+            session: session,
+            messages: chatMessages(for: session)
+        )
+        sendCodable(CodeRunProfileResponse(profile: snapshot), on: connection)
+    }
+
+    private func handleRunProfileProxy(
+        sessionId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let snapshot = await codeRunProfiles.snapshot(
+            session: session,
+            messages: chatMessages(for: session)
+        )
+        guard let target = proxiedRunProfileURL(
+            from: request.path,
+            sessionId: sessionId,
+            detectedURL: snapshot.detectedURL
+        ) else {
+            sendResponse(.badRequest(detail: "no detected preview URL for run-profile proxy"), on: connection)
+            return
+        }
+        do {
+            var upstream = URLRequest(url: target)
+            upstream.httpMethod = request.method
+            upstream.httpBody = request.body.isEmpty ? nil : request.body
+            if let accept = request.headers["accept"] {
+                upstream.setValue(accept, forHTTPHeaderField: "Accept")
+            }
+            if let contentType = request.headers["content-type"] {
+                upstream.setValue(contentType, forHTTPHeaderField: "Content-Type")
+            }
+            if let userAgent = request.headers["user-agent"] {
+                upstream.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+            }
+            let (data, response) = try await URLSession.shared.data(for: upstream)
+            let http = response as? HTTPURLResponse
+            let status = http?.statusCode ?? 200
+            let contentType = http?.value(forHTTPHeaderField: "Content-Type") ?? "application/octet-stream"
+            sendResponse(
+                HTTPResponse(
+                    status: status,
+                    reason: HTTPURLResponse.localizedString(forStatusCode: status),
+                    contentType: contentType,
+                    body: request.method.uppercased() == "HEAD" ? Data() : data
+                ),
+                on: connection
+            )
+        } catch {
+            sendJSON(["error": error.localizedDescription], on: connection, status: 502)
+        }
+    }
+
+    private func handleListCheckpoints(sessionId: String, connection: NWConnection) {
+        guard let uuid = UUID(uuidString: sessionId),
+              registry.session(id: uuid) != nil else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        sendCodable(
+            CodeCheckpointListResponse(checkpoints: storedCheckpoints(for: uuid).map(codeCheckpoint)),
+            on: connection
+        )
+    }
+
+    private func handleCreateCheckpoint(
+        sessionId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let body = request.body.isEmpty
+            ? CodeCheckpointCreateRequest()
+            : (try? decoder.decode(CodeCheckpointCreateRequest.self, from: request.body))
+        guard let body else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        do {
+            let trimmedSummary = body.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let checkpoint = try await CheckpointService().createCheckpoint(
+                session: session,
+                summary: (trimmedSummary?.isEmpty == false) ? trimmedSummary : "Manual checkpoint"
+            )
+            recordCheckpoint(checkpoint)
+            sendCodable(CodeCheckpointCreateResponse(checkpoint: codeCheckpoint(checkpoint)), on: connection)
+        } catch {
+            sendJSON(["error": error.localizedDescription], on: connection, status: 409)
+        }
+    }
+
+    private func handlePrepareCheckpointRestore(
+        sessionId: String,
+        checkpointId: String,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let checkpointUUID = UUID(uuidString: checkpointId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        guard let checkpoint = storedCheckpoint(sessionId: uuid, checkpointId: checkpointUUID) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        do {
+            let plan = try await CheckpointService().prepareRestore(checkpoint, session: session)
+            recordCheckpoint(plan.safety)
+            checkpointRestorePlans[plan.id] = plan
+            sendCodable(
+                CodeCheckpointRestorePreviewResponse(preview: codeRestorePreview(plan)),
+                on: connection
+            )
+        } catch {
+            sendJSON(["error": error.localizedDescription], on: connection, status: 409)
+        }
+    }
+
+    private func handleRestoreCheckpoint(
+        sessionId: String,
+        checkpointId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let checkpointUUID = UUID(uuidString: checkpointId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let body = try? decoder.decode(CodeCheckpointRestoreRequest.self, from: request.body),
+              let plan = checkpointRestorePlans[body.previewId],
+              plan.target.id == checkpointUUID,
+              plan.target.sessionId == uuid else {
+            sendResponse(.badRequest(detail: "restore requires a current previewId for this checkpoint"), on: connection)
+            return
+        }
+        do {
+            try await CheckpointService().restore(plan, in: session.effectiveCwd)
+            checkpointRestorePlans.removeValue(forKey: body.previewId)
+            sendCodable(
+                CodeCheckpointRestoreResponse(
+                    restored: true,
+                    checkpoint: codeCheckpoint(plan.target),
+                    safety: codeCheckpoint(plan.safety)
+                ),
+                on: connection
+            )
+        } catch {
+            sendJSON(["error": error.localizedDescription], on: connection, status: 409)
+        }
+    }
+
+    private func chatMessages(for session: AgentSession) -> [ChatMessage] {
+        chatStoreRegistry.snapshotStore(for: session)?.snapshot.messages ?? []
+    }
+
+    private func storedCheckpoints(for sessionId: UUID) -> [CheckpointStateSnapshot] {
+        WorkbenchStateStore().load().checkpoints[sessionId] ?? []
+    }
+
+    private func storedCheckpoint(sessionId: UUID, checkpointId: UUID) -> CheckpointStateSnapshot? {
+        storedCheckpoints(for: sessionId).first { $0.id == checkpointId }
+    }
+
+    private func recordCheckpoint(_ checkpoint: CheckpointStateSnapshot) {
+        let store = WorkbenchStateStore()
+        var snapshot = store.load()
+        var checkpoints = snapshot.checkpoints[checkpoint.sessionId] ?? []
+        checkpoints.removeAll { $0.id == checkpoint.id }
+        checkpoints.append(checkpoint)
+        snapshot.checkpoints[checkpoint.sessionId] = checkpoints
+        store.save(snapshot)
+        LifecycleWebSocketChannel.notifyCheckpointStateChanged(sessionId: checkpoint.sessionId)
+    }
+
+    private func codeCheckpoint(_ checkpoint: CheckpointStateSnapshot) -> CodeCheckpointSnapshot {
+        CodeCheckpointSnapshot(
+            id: checkpoint.id,
+            sessionId: checkpoint.sessionId,
+            refName: checkpoint.refName,
+            turnId: checkpoint.turnId,
+            createdAt: checkpoint.createdAt,
+            summary: checkpoint.summary
+        )
+    }
+
+    private func codeRestorePreview(_ plan: CheckpointRestorePlan) -> CodeCheckpointRestorePreview {
+        CodeCheckpointRestorePreview(
+            id: plan.id,
+            target: codeCheckpoint(plan.target),
+            safety: codeCheckpoint(plan.safety),
+            diffStat: plan.diffStat,
+            diffPatch: plan.diffPatch,
+            patchTruncated: plan.patchTruncated,
+            dirtyStatusLines: plan.dirtyStatusLines,
+            untrackedOverwritePaths: plan.untrackedOverwritePaths,
+            untrackedSnapshotPaths: plan.untrackedSnapshotPaths,
+            blockingReasons: plan.blockingReasons
+        )
+    }
+
+    private func proxiedRunProfileURL(
+        from requestPath: String,
+        sessionId: String,
+        detectedURL: String?
+    ) -> URL? {
+        guard let detectedURL,
+              var target = URLComponents(string: detectedURL) else {
+            return nil
+        }
+        let pieces = requestPath.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let pathOnly = pieces.first.map(String.init) ?? requestPath
+        let query = pieces.count > 1 ? String(pieces[1]) : nil
+        let prefix = "/sessions/\(sessionId)/run-profile/proxy"
+        guard pathOnly.hasPrefix(prefix) else { return target.url }
+        var suffix = String(pathOnly.dropFirst(prefix.count))
+        if suffix.isEmpty || suffix == "/" {
+            if target.percentEncodedPath.isEmpty {
+                target.percentEncodedPath = "/"
+            }
+            if query != nil {
+                target.percentEncodedQuery = query
+            }
+        } else {
+            if !suffix.hasPrefix("/") {
+                suffix = "/" + suffix
+            }
+            target.percentEncodedPath = suffix
+            target.percentEncodedQuery = query
+        }
+        return target.url
     }
 
     private func handlePostSession(request: HTTPRequest, connection: NWConnection) async {
@@ -2874,7 +4907,7 @@ public final class AgentControlServer {
         }
 
         // Audit P0 fix: validate `repoKey` BEFORE either dispatch path
-        // — the OpenCode branch and the worktree/tmux branch both use
+        // — the OpenCode branch and the worktree/direct-runtime branch both use
         // it as cwd / worktree-root / registry-state. Without this
         // guard, an authenticated paired client could POST a /tmp or
         // symlink-escaping path and the Mac would spawn the agent
@@ -2949,16 +4982,19 @@ public final class AgentControlServer {
         }
 
         let effectivePlanMode = req.agent == .cursor ? false : req.planMode
-        let transportPolicy = AgentTransportPolicy.codeSessionTransport(
-            for: req.agent,
-            acpSupported: Self.acpSupport(for: req.agent) != nil
-        )
-        // Managed harness/OpenCode transports do not have a tmux argv. Their
-        // binary/auth checks live in the provider-specific branches below, so
-        // this preflight only guards providers that genuinely spawn via argv.
-        let preflightArgv = transportPolicy.requiresArgvPreflight
-            ? AgentSpawner.argv(for: req, workspacePath: req.repoKey)
-            : [transportPolicy.managedPreflightToken]
+        // ACP harness agents (Grok, Cursor) and OpenCode spawn via their own
+        // managers, so `AgentSpawner.argv` returns [] for them. Use a
+        // non-empty sentinel so they pass the CLI-presence guard and reach their
+        // dedicated spawn branch below (binary presence is checked there, at
+        // launch, via the two-phase start contract / provider preflight).
+        let preflightArgv: [String]
+        if req.agent == .opencode {
+            preflightArgv = ["opencode-managed-session"]
+        } else if Self.acpSupport(for: req.agent) != nil {
+            preflightArgv = ["acp-managed-session"]
+        } else {
+            preflightArgv = AgentSpawner.argv(for: req, workspacePath: req.repoKey)
+        }
         guard !preflightArgv.isEmpty else {
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
@@ -3031,9 +5067,9 @@ public final class AgentControlServer {
             return
         }
 
-        // Harness-driven providers bypass tmux: the daemon drives an AgentDriver
+        // Harness-driven providers: the daemon drives an AgentDriver
         // and projects its events into the chat store. Each branch owns its own
-        // session-create + response, returning before the tmux argv/spawn below.
+        // session-create + response, returning before the direct PTY branch below.
         // (1) ACP stdio agents (Cursor — `cursor-agent acp`, verified live).
         // Grok is NOT ACP; it's handled by the headless branch (1c) below.
         if let support = Self.acpSupport(for: req.agent) {
@@ -3045,7 +5081,7 @@ public final class AgentControlServer {
             let trustGate = AutopilotState.shared.isRepoTrusted(req.repoKey)
                 ? RepoTrustGate(repoRoot: req.repoKey, sessionCwd: cwd)
                 : nil
-            let auditFs: (@Sendable (String, String, Bool) async -> Void)? = trustGate == nil ? nil : { op, path, allowed in
+            let auditFs: (@Sendable (String, String, Bool) async -> Void)? = trustGate == nil ? nil : { @Sendable op, path, allowed in
                 serverLogger.info("acp fs \(op, privacy: .public) allowed=\(allowed, privacy: .public) path=\(MobileCommandPayloadHasher.hex(Data(path.utf8)), privacy: .public)")
             }
             await handleSpawnHarnessSession(
@@ -3096,8 +5132,7 @@ public final class AgentControlServer {
                 })
             return
         }
-        // (2) Codex over `codex app-server` — the only Codex drive path for
-        // new Code sessions. Legacy tmux/SDK Codex routes remain decode-only.
+        // (2) Codex over `codex app-server` — the Codex drive path.
         if req.agent == .codex {
             let display = providerDisplayName(req.agent)
             await handleSpawnHarnessSession(
@@ -3176,80 +5211,38 @@ public final class AgentControlServer {
             return
         }
 
-        // Spawn into a new tmux window — OR, for Claude with the PTY flag on,
-        // a per-session PseudoTerminal (Track A). The two paths differ only in
-        // how the child is launched + whether the session carries a tmux pane;
-        // everything downstream (workspace record, JSONL wiring, response) is
-        // shared. Errors from either path land in the same catch below.
+        // Claude runs in a per-session direct PTY. Non-Claude providers should
+        // have returned through the harness/OpenCode branches above; do not
+        // fall back to any pane-backed runtime.
         do {
             let resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: cwd)
-            let usePty = claudePtyEnabled && req.agent == .claude
-            let session: AgentSession
-            if usePty {
-                // Create the session FIRST (no tmux pane), then single-flight
-                // spawn the PTY host keyed by its id. argv was already verified
-                // non-empty above, so the spawn plan is present.
-                session = try await registry.create(
-                    repoKey: req.repoKey,
-                    repoDisplayName: (req.repoKey as NSString).lastPathComponent,
-                    agent: req.agent,
-                    model: req.model,
-                    goal: req.goal,
-                    worktreePath: worktreePath,
-                    provisioning: provisioning,
-                    tmuxWindowId: nil,
-                    tmuxPaneId: nil,
-                    planMode: effectivePlanMode,
-                    mode: req.useWorktree ? .worktree : .local,
-                    effort: req.effort,
-                    ownsWorktree: worktreePath != nil,
-                    envSetId: resolvedEnv?.set?.id,
-                    envSetName: resolvedEnv?.set?.name,
-                    id: provisionalSessionId ?? UUID()
-                )
-                await ensureClaudePtyWiring()
-                let plan = claudeSpawnPlan(for: session)
-                do {
-                    let host = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { plan })
-                    // Code sessions can hit the first-run trust dialog in a fresh
-                    // worktree; dismiss it on the PTY (chat is pre-trusted).
-                    warmupClaudePtyHost(host)
-                } catch {
-                    // Unlike the tmux path (which spawns the window BEFORE create),
-                    // the PTY path persists the session first, so a spawn failure
-                    // would otherwise leave an orphan nil-pane record in
-                    // sessions.json. Delete it before rethrowing into the outer
-                    // catch (which does worktree/city cleanup).
-                    await claudePtyRegistry.suspend(session.id)
-                    try? await registry.delete(id: session.id)
-                    throw error
-                }
-            } else {
-                try await tmux.start()  // idempotent
-                let window = try await tmux.newWindow(
-                    cwd: cwd,
-                    child: argv,
-                    environment: resolvedEnv?.environment ?? [:]
-                )
-                // Phase 2 simplification: pane id = first pane of the new window.
-                session = try await registry.create(
-                    repoKey: req.repoKey,
-                    repoDisplayName: (req.repoKey as NSString).lastPathComponent,
-                    agent: req.agent,
-                    model: req.model,
-                    goal: req.goal,
-                    worktreePath: worktreePath,
-                    provisioning: provisioning,
-                    tmuxWindowId: window.windowId,
-                    tmuxPaneId: window.paneId,
-                    planMode: effectivePlanMode,
-                    mode: req.useWorktree ? .worktree : .local,
-                    effort: req.effort,
-                    ownsWorktree: worktreePath != nil,
-                    envSetId: resolvedEnv?.set?.id,
-                    envSetName: resolvedEnv?.set?.name,
-                    id: provisionalSessionId ?? UUID()
-                )
+            let session = try await registry.create(
+                repoKey: req.repoKey,
+                repoDisplayName: (req.repoKey as NSString).lastPathComponent,
+                agent: req.agent,
+                model: req.model,
+                goal: req.goal,
+                worktreePath: worktreePath,
+                provisioning: provisioning,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                planMode: effectivePlanMode,
+                mode: req.useWorktree ? .worktree : .local,
+                effort: req.effort,
+                ownsWorktree: worktreePath != nil,
+                envSetId: resolvedEnv?.set?.id,
+                envSetName: resolvedEnv?.set?.name,
+                id: provisionalSessionId ?? UUID()
+            )
+            await ensureClaudePtyWiring()
+            let plan = claudeSpawnPlan(for: session)
+            do {
+                let host = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { plan })
+                warmupClaudePtyHost(host)
+            } catch {
+                await claudePtyRegistry.suspend(session.id)
+                try? await registry.delete(id: session.id)
+                throw error
             }
             recordWorkspaceSession(repoRoot: req.repoKey, sessionId: session.id)
             // Wire up JSONL tail + done-detector + plan-watcher for this
@@ -3288,17 +5281,6 @@ public final class AgentControlServer {
             // prompt does fire (e.g. brand-new worktree), it surfaces
             // through the same PermissionPromptCard the chat workspace
             // renders.
-            // tmux warmup only — a PTY session has no pane (warmup port is T6).
-            if let warmupPane = session.tmuxPaneId {
-                let warmupSession = session
-                let warmupTask = Task { [weak self] in
-                    await self?.warmupCLIPane(session: warmupSession, paneId: warmupPane)
-                    await MainActor.run { [weak self] in
-                        self?.chatWarmupTasks[warmupSession.id] = nil
-                    }
-                }
-                chatWarmupTasks[session.id] = warmupTask
-            }
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             if let body = try? encoder.encode(session) {
@@ -3322,7 +5304,7 @@ public final class AgentControlServer {
                 worktreePath: worktreePath,
                 provisioning: provisioning,
                 provisionalSessionId: provisionalSessionId,
-                context: "spawn tmux failure"
+                context: "spawn PTY failure"
             )
             serverLogger.error("Failed to spawn session: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
@@ -3401,212 +5383,1612 @@ public final class AgentControlServer {
         workspaceStore.syncActiveSessions(repoRoot: repoRoot, sessionIds: ids)
     }
 
-    /// v0.8 QA: prepare a CLI pane (code or chat) for the user's first
-    /// prompt. Same flow either way:
-    /// - **Codex update prompt**: auto-update (per user spec — always
-    ///   take the latest, no question asked).
-    /// - **Codex trust prompt**: auto-accept only for verified
-    ///   Clawdmeter-owned worktrees; otherwise surface to the user.
-    /// - **Claude welcome**: just give the TUI time to render.
-    ///
-    /// Renamed from `warmupChatPane` — the flow works for both code and
-    /// chat sessions. Code sessions usually skip the trust prompt (they
-    /// run in trusted git repos) so the cycle is fast.
-    func warmupCLIPane(session: AgentSession, paneId: String) async {
-        switch session.agent {
-        case .codex:
-            // For code sessions, the embedded terminal IS the input path
-            // already — no backend gate. For chat sessions we restrict
-            // to CLI backend (SDK has no tmux pane).
-            if session.kind == .chat, session.codexChatBackend != .cli {
-                return
-            }
-            // First pane probe lets the CLI render its initial screen.
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            // Step 1: auto-update if the update prompt is showing. Per
-            // user spec we always take the latest version — no UI prompt.
-            var captured = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
-            if captured.contains("Update available") {
-                serverLogger.info("chat warmup: auto-updating Codex CLI for \(session.id.uuidString, privacy: .public)")
-                try? await tmux.sendKeys(paneId: paneId, bytes: Data([0x31, 0x0d]))
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                captured = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
-            }
-            // Step 2: surface the trust prompt to the user if shown. Only
-            // surfaces ONCE per warmup — the CLI flickers the trust screen
-            // briefly during MCP init even after dismissal, and the
-            // continuation already resolved so we don't double-prompt.
-            if captured.contains("Do you trust the contents") {
-                if await isVerifiedOwnedWorktree(session) {
-                    serverLogger.info("chat warmup: auto-trusting Codex owned worktree for \(session.id.uuidString, privacy: .public)")
-                    try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
-                    try? await Task.sleep(nanoseconds: 3_000_000_000)
-                    return
-                }
-                serverLogger.info("chat warmup: surfacing Codex trust prompt for \(session.id.uuidString, privacy: .public)")
-                let cwd = session.effectiveCwd
-                let prompt = PendingPermissionPrompt(
-                    id: "codex-trust-\(UUID().uuidString)",
-                    title: "Trust this directory?",
-                    detail: "Codex wants to run in \(cwd). Trusting it allows project-local config, hooks, and exec policies to load. Working with untrusted contents has higher risk of prompt injection.",
-                    header: "Codex CLI",
-                    options: [
-                        PermissionOption(
-                            id: "yes",
-                            label: "Yes, continue",
-                            description: "Trust this directory and allow Codex to run.",
-                            isRecommended: true
-                        ),
-                        PermissionOption(
-                            id: "no",
-                            label: "No, quit",
-                            description: "Quit the Codex CLI for this chat.",
-                            isDestructive: true
-                        ),
-                    ]
-                )
-                let dispatch: [String: [String]] = [
-                    // Down + Up refreshes selection back to option 1
-                    // ("Yes, continue") — the dialog ignores a bare
-                    // Enter until a nav key wakes its input handler.
-                    "yes": ["Down", "Up", "Enter"],
-                    // To select "No, quit" we go Down then Enter.
-                    "no": ["Down", "Enter"],
-                ]
-                let chosen = await surfacePermissionPrompt(
-                    session: session,
-                    prompt: prompt,
-                    dispatch: dispatch
-                )
-                // v0.8 QA F2: handleDeleteSession may wake us with the
-                // cancellation sentinel. Bail without dispatching keys —
-                // the session is being torn down anyway.
-                if chosen == Self.cancelledPermissionOptionId {
-                    return
-                }
-                if chosen == "no" {
-                    return
-                }
-                try? await tmux.command(["send-keys", "-t", paneId] + (dispatch[chosen] ?? ["Down", "Up", "Enter"]))
-                // Give the CLI 3s to finish dismissing + start MCP init.
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-            }
-            // Give the CLI another 3s to finish MCP setup + wire up its
-            // input handler before the first user prompt can paste.
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-        case .claude:
-            // Claude Code shows a one-time "Do you trust the files in this
-            // folder?" prompt on first launch in a directory. For a CHAT the cwd
-            // is a throwaway /tmp sandbox, so auto-accept it — otherwise the TUI
-            // sits at the prompt, the first /send pastes into the dialog instead
-            // of the composer, no reply ever streams, and the client times out.
-            // Claude Code's first-run dialog (verified live 2026-06-03):
-            //   "Quick safety check: Is this a project you created or one you
-            //    trust? ... ❯ 1. Yes, I trust this folder / 2. No, exit"
-            // It renders ~5-7s after launch (a single 1.5s capture missed it),
-            // so POLL for it, accept it (Down/Up wakes the handler + keeps the
-            // default "Yes" highlighted, Enter confirms — verified to reach the
-            // composer), then settle before the first paste. Without this the TUI
-            // sits at the prompt, /send pastes into the dialog, and the client
-            // times out.
-            func isClaudeTrustPrompt(_ s: String) -> Bool {
-                s.contains("Quick safety check")
-                    || s.localizedCaseInsensitiveContains("trust this folder")
-                    || s.localizedCaseInsensitiveContains("Is this a project you created")
-                    || s.contains("Do you trust")
-            }
-            var claudeAccepted = false
-            var claudeReady = false
-            // Poll fast (0.6s) so we detect the composer the moment it renders
-            // instead of waiting out a coarse interval — shaves seconds off the
-            // first send. ~28 × 0.6s ≈ 17s window covers a heavy MCP/plugin boot.
-            for _ in 0..<28 {
-                try? await Task.sleep(nanoseconds: 600_000_000)
-                let cap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
-                if isClaudeTrustPrompt(cap) {
-                    serverLogger.info("chat warmup: auto-accepting Claude trust prompt for \(session.id.uuidString, privacy: .public)")
-                    try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
-                    claudeAccepted = true
-                    // Don't break — keep polling for the composer so we settle on
-                    // real readiness, not a fixed guess after the keypress.
-                    continue
-                }
-                // Composer is up (pre-trusted boot, or post-accept) → ready.
-                if cap.contains("? for shortcuts")
-                    || cap.contains("Welcome back")
-                    || cap.contains("Remote Control active")
-                    || cap.contains("plan mode on") {
-                    claudeReady = true
-                    break
-                }
-            }
-            // Settle so the composer's input handler is wired before the paste.
-            // Short when we confirmed the composer; longer as a fallback when the
-            // boot outran the poll window (paste-into-not-quite-ready insurance).
-            let fallbackDelay: UInt64 = claudeAccepted ? 1_500_000_000 : 2_500_000_000
-            try? await Task.sleep(nanoseconds: claudeReady ? 800_000_000 : fallbackDelay)
-        case .gemini:
-            break
-        case .opencode:
-            // PR #29: opencode sessions never enter the tmux warmup
-            // choreography — they're SSE clients of `opencode serve`,
-            // which OpencodeProcessManager + OpencodeSSEAdapter handle
-            // out-of-band.
-            break
-        case .cursor, .grok:
-            // ACP agents (cursor-agent acp / grok headless) have no tmux pane —
-            // no warmup choreography.
-            break
-        case .unknown:
-            // X3: forward-compat unknown agent — no warmup choreography
-            // plumbed.
-            break
+    // MARK: - v0.8 Chat tab (wire v9)
+
+    private struct ResolvedChatRuntimeMetadata {
+        let vendor: ChatVendor
+        let billingProvider: String?
+        let codexBackend: CodexChatBackend?
+    }
+
+    private enum ChatRuntimeValidationError: Error {
+        case unknownProvider(AgentKind)
+        case vendorProviderMismatch(provider: AgentKind, vendor: ChatVendor)
+        case billingProviderMismatch(vendor: ChatVendor, expected: String?, actual: String)
+    }
+
+    private func resolveChatRuntimeMetadata(
+        provider: AgentKind,
+        requestedVendor: ChatVendor?,
+        requestedBillingProvider: String?,
+        requestedCodexBackend: CodexChatBackend?
+    ) throws -> ResolvedChatRuntimeMetadata {
+        guard let vendor = requestedVendor ?? ChatVendor.migrated(from: provider) else {
+            throw ChatRuntimeValidationError.unknownProvider(provider)
+        }
+        guard vendor.backingProvider == provider else {
+            throw ChatRuntimeValidationError.vendorProviderMismatch(provider: provider, vendor: vendor)
+        }
+
+        let normalizedBilling = requestedBillingProvider?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedBilling = (normalizedBilling?.isEmpty == false) ? normalizedBilling : nil
+        let expectedBilling = canonicalBillingProvider(for: vendor)
+        if let requestedBilling, requestedBilling != expectedBilling {
+            throw ChatRuntimeValidationError.billingProviderMismatch(
+                vendor: vendor,
+                expected: expectedBilling,
+                actual: requestedBilling
+            )
+        }
+
+        let codexBackend = provider == .codex
+            ? (requestedCodexBackend ?? vendor.codexBackend ?? .sdk)
+            : nil
+        return ResolvedChatRuntimeMetadata(
+            vendor: vendor,
+            billingProvider: expectedBilling,
+            codexBackend: codexBackend
+        )
+    }
+
+    private func canonicalBillingProvider(for vendor: ChatVendor) -> String? {
+        if let explicit = vendor.billingProvider {
+            return explicit
+        }
+        switch vendor.backingProvider {
+        case .claude: return "claude"
+        case .codex: return "codex"
+        case .gemini: return "antigravity"
+        case .cursor: return "cursor"
+        case .opencode: return "opencode"
+        case .grok: return "grok"
+        case .unknown: return nil
         }
     }
 
-    func dismissClaudeChatMCPPromptIfNeeded(paneId: String, sessionId: UUID) async {
-        for _ in 0..<60 {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            let cap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
-            guard cap.contains("New MCP server found")
-                || cap.contains("MCP servers may execute code")
-                || cap.contains("Continue without using this MCP server") else {
-                continue
+    private func sendChatRuntimeValidationError(
+        _ error: ChatRuntimeValidationError,
+        on connection: NWConnection
+    ) {
+        var body: [String: Any] = ["error": "invalid_chat_runtime_metadata"]
+        switch error {
+        case .unknownProvider(let provider):
+            body["provider"] = provider.rawValue
+            body["reason"] = "provider has no chat vendor mapping"
+        case .vendorProviderMismatch(let provider, let vendor):
+            body["provider"] = provider.rawValue
+            body["chatVendor"] = vendor.rawValue
+            body["expectedProvider"] = vendor.backingProvider.rawValue
+            body["reason"] = "chatVendor does not match provider"
+        case .billingProviderMismatch(let vendor, let expected, let actual):
+            body["chatVendor"] = vendor.rawValue
+            body["billingProvider"] = actual
+            if let expected {
+                body["expectedBillingProvider"] = expected
+            } else {
+                body["expectedBillingProvider"] = NSNull()
             }
-            serverLogger.info("claude chat: dismissing MCP server prompt for \(sessionId.uuidString, privacy: .public)")
-            try? await tmux.command(["send-keys", "-t", paneId, "Down", "Down", "Enter"])
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            body["reason"] = "billingProvider must be derived by the server for the selected chatVendor"
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+            sendResponse(.internalError, on: connection)
             return
         }
+        sendResponse(HTTPResponse(
+            status: 400,
+            reason: "Bad Request",
+            contentType: "application/json",
+            body: data
+        ), on: connection)
     }
 
-    func submitClaudeChatPromptWhenReady(paneId: String, text: String, sessionId: UUID) async throws {
-        var sawPromptText = false
-        for _ in 0..<20 {
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            let cap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
-            if cap.contains(text) {
-                sawPromptText = true
-                break
-            }
+    private func chatRuntimeValidationMessage(_ error: ChatRuntimeValidationError) -> String {
+        switch error {
+        case .unknownProvider(let provider):
+            return "invalid_chat_runtime_metadata: provider \(provider.rawValue) has no chat vendor mapping"
+        case .vendorProviderMismatch(let provider, let vendor):
+            return "invalid_chat_runtime_metadata: chatVendor \(vendor.rawValue) does not match provider \(provider.rawValue)"
+        case .billingProviderMismatch(let vendor, let expected, let actual):
+            let expectedText = expected ?? "nil"
+            return "invalid_chat_runtime_metadata: billingProvider \(actual) does not match \(expectedText) for \(vendor.rawValue)"
         }
-        if sawPromptText {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-        } else {
-            serverLogger.info("claude chat: submitting before text appeared in capture for \(sessionId.uuidString, privacy: .public)")
+    }
+
+    private func frontierProviderUnavailableReason(
+        provider: AgentKind,
+        codexBackend: CodexChatBackend?
+    ) async -> String? {
+        switch provider {
+        case .cursor, .opencode:
+            return await chatProviderUnavailableReason(provider: provider, codexBackend: codexBackend)
+        default:
+            return nil
         }
-        for attempt in 0..<3 {
-            try await tmux.sendKeyUsingFreshClient(paneId: paneId, key: "Enter")
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            let cap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
-            if !cap.contains(text)
-                || cap.contains("New MCP server found")
-                || cap.contains("MCP servers may execute code")
-                || cap.contains("esc to interrupt") {
+    }
+
+    /// `POST /chat-sessions`: spawn a new chat-kind AgentSession in an
+    /// empty per-session chat-cwd. Forces plan-mode. Branches on
+    /// (agent, codexChatBackend) per RE1. Gemini chat dispatches through
+    /// Antigravity 2 agentapi when the paired Mac supports wire v11+.
+    private func handlePostChatSession(request: HTTPRequest, connection: NWConnection) async {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let req = try? decoder.decode(CreateChatSessionRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        let metadata: ResolvedChatRuntimeMetadata
+        do {
+            metadata = try resolveChatRuntimeMetadata(
+                provider: req.provider,
+                requestedVendor: req.chatVendor,
+                requestedBillingProvider: req.billingProvider,
+                requestedCodexBackend: req.codexChatBackend
+            )
+        } catch let error as ChatRuntimeValidationError {
+            sendChatRuntimeValidationError(error, on: connection)
+            return
+        } catch {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        if let reason = providerDisabledReason(provider: req.provider, vendor: metadata.vendor) {
+            sendProviderDisabled(provider: req.provider, reason: reason, on: connection)
+            return
+        }
+        // Harness is the DEFAULT Chat drive path for non-Claude providers now:
+        // a chat session created here gets a live AcpHarnessBridge, and the
+        // send/interrupt/permission handlers already route to that bridge
+        // (SessionCommandRouter `.harnessBridge`). Codex routes through
+        // `codex app-server`; legacy SDK/agentapi chat paths are retired.
+        if req.provider == .codex {
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
+            return
+        }
+        if req.provider == .grok {
+            // Grok chat drives over ACP via the harness — Grok has no legacy chat
+            // path (it was Sessions/Code-only before), so it always uses the harness.
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
+            return
+        }
+        // v0.9: Gemini chat dispatches to Antigravity 2's agentapi via
+        // a new daemon-side handler. Chat has no repoKey, so the helper
+        // picks the first available Antigravity project as a scratch
+        // workspace. Surfaces 503 with structured CTA bodies when
+        // Antigravity isn't installed / signed in / running / has no
+        // projects open. agentapi-via-chat is live behind the wire v11 /
+        // antigravityChatMinimum=11 gate.
+        if req.provider == .gemini {
+            // Gemini chat always drives through the harness — the headless `agy`
+            // CLI. The legacy agentapi one-shot + Cascade gRPC chat paths are gone.
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
+            return
+        }
+        if req.provider == .opencode {
+            await handlePostOpencodeChatSession(request: req, metadata: metadata, connection: connection)
+            return
+        }
+        if req.provider == .cursor {
+            if let reason = await chatProviderUnavailableReason(provider: .cursor) {
+                sendChatProviderUnavailable(provider: .cursor, reason: reason, on: connection)
                 return
             }
-            serverLogger.info("claude chat: retrying Enter for staged prompt \(sessionId.uuidString, privacy: .public) attempt=\(attempt + 1, privacy: .public)")
+            // Cursor chat drives over ACP via the harness.
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
+            return
         }
+        // Determine the Codex backend choice for this session. For non-
+        // Codex providers, leave it nil. For Codex, honor the per-request
+        // override if present; otherwise fall back to the global default
+        // (RE1: ship .sdk as the v0.8 default).
+        let codexBackend = metadata.codexBackend
+        // Create the session record first (assigns a UUID we can use to
+        // name the chat-cwd). v0.23 (Chat V2): persist deepResearch on
+        // the session so respawn/restore preserves it (Codex outside-
+        // voice review P1 #6).
+        let session: AgentSession
+        do {
+            session = try await registry.createChat(
+                provider: req.provider,
+                model: req.model,
+                chatCwd: "",  // placeholder; we'll patch it post-cwd-creation
+                codexChatBackend: codexBackend,
+                effort: req.effort,
+                deepResearch: req.deepResearch,
+                chatVendor: metadata.vendor,
+                billingProvider: metadata.billingProvider
+            )
+        } catch {
+            serverLogger.error("createChat write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection); return
+        }
+        let chatCwd: String
+        do {
+            let url = try ChatCwdManager.ensure(for: session.id)
+            chatCwd = url.path
+        } catch {
+            serverLogger.error("chat-cwd create failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            try? await registry.delete(id: session.id)
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        // Patch the worktreePath on the created session so effectiveCwd
+        // resolves to the chat-cwd. The createChat helper stored it as
+        // empty-string; rewrite via the existing update pattern.
+        try? await registry.updateRuntime(
+            id: session.id,
+            worktreePath: chatCwd,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            mode: .local
+        )
+        // Spawn dispatch. Harness-eligible providers returned before this point;
+        // Claude chat spawns a direct PTY. Persisted Codex SDK-shaped sessions
+        // are decode-only and are retired by send/config routes.
+        let updatedSession = registry.session(id: session.id) ?? session
+        // Claude chat: pre-trust the throwaway chat-cwd so the CLI boots
+        // straight to the composer instead of blocking at the first-run trust
+        // dialog. Without this the warmup poll still dismisses the prompt, but
+        // the ~9s it takes exceeds the mobile send timeout. (No-op for other
+        // agents — they don't read ~/.claude.json.)
+        if updatedSession.agent == .claude {
+            ChatCwdManager.markTrustedForClaude(path: chatCwd)
+        }
+        let argv = AgentSpawner.argv(for: updatedSession)
+        let usesCodexSDK = updatedSession.agent == .codex && updatedSession.codexChatBackend == .sdk
+        if argv.isEmpty && !usesCodexSDK {
+            // No binary on PATH for this provider — clean up + surface 503.
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
+            ), on: connection)
+            return
+        } else if updatedSession.agent == .claude {
+            // Claude chat over a per-session direct PTY. chat-cwd is pre-trusted
+            // above, so no pane warmup is needed.
+            guard let host = await claudePtyHost(for: updatedSession) else {
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                sendResponse(HTTPResponse(
+                    status: 503, reason: "Service Unavailable",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
+                ), on: connection)
+                return
+            }
+            _ = host
+            try? await registry.updateRuntime(
+                id: session.id,
+                worktreePath: chatCwd,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                mode: .local
+            )
+        } else {
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            sendResponse(.legacySessionRetired, on: connection)
+            return
+        }
+        AgentEventStream.recordEvent(
+            sessionId: session.id, kind: .sessionCreated,
+            payload: ["chat": "true", "provider": req.provider.rawValue]
+        )
+        let finalSession = registry.session(id: session.id) ?? session
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(finalSession) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// Create a Chat session driven by the harness. The chat
+    /// send/interrupt/permission handlers already route to a live
+    /// `AcpHarnessBridge` (`SessionCommandRouter.harnessBridge`); this wires
+    /// chat-CREATE to build + register one for a non-Claude provider.
+    ///
+    /// CRUCIAL: the session is created WITHOUT the SDK/agentapi backend axes
+    /// (`codexChatBackend: nil`, no agentapi conversation), so the router falls
+    /// through past the codex-SDK / antigravity-agentapi branches to
+    /// `.harnessBridge` once the bridge is live. Mirrors `handleSpawnHarnessSession`
+    /// Steps 2-4 but over a chat session + sandbox cwd (no worktree).
+    /// Errors from the harness chat-session core. The Solo handler maps these to
+    /// HTTP responses; the Frontier per-child path maps them to a slot reason.
+    private enum HarnessChatSpawnError: Error {
+        case createFailed(String)
+        case cwdFailed(String)
+        case storeAcquireFailed
+        case noAntigravityProjects
+        case unsupportedProvider
+        case startFailed(String)
+
+        var slotReason: String {
+            switch self {
+            case .createFailed(let d): return "create_failed: \(d)"
+            case .cwdFailed(let d): return "chat_cwd_create_failed: \(d)"
+            case .storeAcquireFailed: return "chat_store_acquire_failed"
+            case .noAntigravityProjects: return "antigravity_no_projects"
+            case .unsupportedProvider: return "unsupported_provider"
+            case .startFailed(let d): return "acp_start_failed: \(d)"
+            }
+        }
+    }
+
+    /// Whether a provider's CHAT/FRONTIER child drives through the harness (vs a
+    /// legacy backend). grok/cursor always (ACP); gemini always (headless `agy`
+    /// via the harness); codex always through app-server; claude -> direct PTY,
+    /// opencode -> SSE.
+    private func isChatHarnessEligible(_ provider: AgentKind) -> Bool {
+        switch provider {
+        // Codex chat now ALWAYS drives over `codex app-server` (same engine as
+        // Code, readOnly+never posture) — the legacy SDK runtime is removed.
+        case .grok, .cursor, .gemini, .codex: return true
+        default: return false
+        }
+    }
+
+    /// Core harness chat-session creation — NO HTTP response. Builds + starts +
+    /// registers an AcpHarnessBridge for a non-Claude provider over a chat
+    /// session + sandbox cwd, returning the created AgentSession (throws
+    /// HarnessChatSpawnError on any failure, cleaning up partial state).
+    ///
+    /// Shared by the Solo Chat create handler AND the Frontier per-child spawn.
+    /// The session is created WITHOUT the SDK/agentapi backend axes
+    /// (codexChatBackend nil, no agentapi conversation) so SessionCommandRouter
+    /// resolves `.harnessBridge` once the bridge is live. frontierGroupId /
+    /// frontierChildIndex bind a broadcast child to its group (nil for Solo).
+    private func createHarnessChatSessionCore(
+        provider: AgentKind,
+        model: String?,
+        effort: ReasoningEffort?,
+        deepResearch: Bool?,
+        chatVendor: ChatVendor?,
+        billingProvider: String?,
+        frontierGroupId: UUID? = nil,
+        frontierChildIndex: Int? = nil
+    ) async throws -> AgentSession {
+        // Step 1: write-ahead the chat session. codexChatBackend stays nil
+        // because Codex chat is now driven by the app-server harness.
+        let session: AgentSession
+        do {
+            session = try await registry.createChat(
+                provider: provider,
+                model: model,
+                chatCwd: "",  // patched after cwd creation
+                codexChatBackend: nil,
+                effort: effort,
+                frontierGroupId: frontierGroupId,
+                frontierChildIndex: frontierChildIndex,
+                deepResearch: deepResearch ?? false,
+                chatVendor: chatVendor,
+                billingProvider: billingProvider
+            )
+        } catch {
+            throw HarnessChatSpawnError.createFailed(error.localizedDescription)
+        }
+        // Step 2: per-session sandbox cwd.
+        let chatCwd: String
+        do {
+            chatCwd = try ChatCwdManager.ensure(for: session.id).path
+        } catch {
+            try? await registry.delete(id: session.id)
+            throw HarnessChatSpawnError.cwdFailed(error.localizedDescription)
+        }
+        try? await registry.updateRuntime(
+            id: session.id, worktreePath: chatCwd,
+            tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
+        )
+        let staged = registry.session(id: session.id) ?? session
+        // Step 3: acquire the per-session chat store the bridge projects into
+        // (long-lived writer — pin against idle eviction; released on teardown).
+        guard let store = chatStoreRegistry.acquire(for: staged) else {
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            throw HarnessChatSpawnError.storeAcquireFailed
+        }
+        // Step 4: build the per-provider bridge.
+        let display = providerDisplayName(provider)
+        let binary: String?
+        let arguments: [String]
+        let bridge: AcpHarnessBridge
+        switch provider {
+        case .codex:
+            binary = ShellRunner.locateBinary("codex") ?? "codex"
+            arguments = ["app-server"]
+            bridge = .codexAppServer(
+                sessionId: session.id, store: store,
+                model: model, agentDisplayName: display
+            )
+        case .cursor:
+            // ACP stdio agent. Chat has no repoKey → no fs trust gate; the
+            // agent's fs/terminal caps stay unadvertised and it runs in the
+            // per-session sandbox cwd.
+            guard let support = Self.acpSupport(for: provider) else {
+                chatStoreRegistry.release(sessionId: session.id)
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw HarnessChatSpawnError.unsupportedProvider
+            }
+            binary = AgentSpawner.cursorBinaryPath() ?? support.binaryName
+            arguments = support.spawnArgv(model: nil, effort: nil, alwaysApprove: false)
+            bridge = .acp(
+                sessionId: session.id, support: support, store: store,
+                model: model, agentDisplayName: display,
+                trustGate: nil, onFileAccess: nil,
+                cursorUsageSurface: .chat,
+                cursorUsageRepo: nil
+            )
+        case .grok:
+            // Grok has no ACP server — it drives headless. Transport-owning: the
+            // GrokHeadlessDriver spawns `grok` per turn, so there's no persistent
+            // stdio child (binary stays nil).
+            guard let grokPath = ShellRunner.locateBinary("grok") else {
+                chatStoreRegistry.release(sessionId: session.id)
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw HarnessChatSpawnError.startFailed("grok binary not found on PATH")
+            }
+            binary = nil
+            arguments = []
+            bridge = .transportOwning(
+                sessionId: session.id, store: store,
+                model: model, agentDisplayName: display,
+                driver: GrokHeadlessDriver(binaryPath: grokPath),
+                usageProvider: .grok,
+                usageRepo: chatCwd
+            )
+        case .gemini:
+            // Antigravity 2.0: headless `agy` CLI (no app, no gRPC). The Cascade
+            // gRPC drive was removed once agy was live-verified. Transport-owning
+            // (no stdio child), so binary stays nil.
+            guard let agyPath = ShellRunner.locateBinary("agy") else {
+                chatStoreRegistry.release(sessionId: session.id)
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw HarnessChatSpawnError.startFailed("agy binary not found on PATH (install Antigravity 2)")
+            }
+            binary = nil
+            arguments = []
+            bridge = .transportOwning(
+                sessionId: session.id, store: store,
+                model: model, agentDisplayName: display,
+                driver: AntigravityHeadlessDriver(binaryPath: agyPath)
+            )
+        default:
+            chatStoreRegistry.release(sessionId: session.id)
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            throw HarnessChatSpawnError.unsupportedProvider
+        }
+        // Step 5: start the bridge. Chat inherits the daemon env (PATH/HOME) and
+        // runs in the sandbox cwd.
+        let childEnv = ProcessInfo.processInfo.environment
+        do {
+            try await bridge.start(
+                binary: binary, arguments: arguments,
+                cwd: chatCwd, env: childEnv, effort: nil, alwaysApprove: false
+            )
+        } catch {
+            await bridge.teardown()
+            chatStoreRegistry.release(sessionId: session.id)
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            throw HarnessChatSpawnError.startFailed(error.localizedDescription)
+        }
+        // Step 6: register the live bridge + return.
+        harnessRegistry.register(bridge, for: session.id)
+        AgentEventStream.recordEvent(
+            sessionId: session.id, kind: .sessionCreated,
+            payload: ["chat": "true", "provider": provider.rawValue, "harness": "true",
+                      "frontier": frontierGroupId != nil ? "true" : "false"]
+        )
+        return registry.session(id: session.id) ?? staged
+    }
+
+    /// Solo Chat-tab create over the harness — thin wrapper over the core that
+    /// maps spawn errors to HTTP responses.
+    private func handleCreateHarnessChatSession(
+        req: CreateChatSessionRequest,
+        metadata: ResolvedChatRuntimeMetadata,
+        connection: NWConnection
+    ) async {
+        do {
+            let session = try await createHarnessChatSessionCore(
+                provider: req.provider, model: req.model, effort: req.effort,
+                deepResearch: req.deepResearch, chatVendor: metadata.vendor,
+                billingProvider: metadata.billingProvider
+            )
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(session) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch HarnessChatSpawnError.noAntigravityProjects {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable", contentType: "application/json",
+                body: Data(#"{"error":"antigravity_no_projects","cta":"Open any repo in Antigravity 2 first."}"#.utf8)
+            ), on: connection)
+        } catch let HarnessChatSpawnError.startFailed(detail) {
+            let payload = ["error": "acp_start_failed", "detail": detail]
+            let body = (try? JSONSerialization.data(withJSONObject: payload))
+                ?? Data(#"{"error":"acp_start_failed"}"#.utf8)
+            sendResponse(HTTPResponse(status: 503, reason: "Service Unavailable",
+                                      contentType: "application/json", body: body), on: connection)
+        } catch {
+            serverLogger.error("harness chat create failed: \(String(describing: error), privacy: .public)")
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handlePostOpencodeChatSession(
+        request req: CreateChatSessionRequest,
+        metadata: ResolvedChatRuntimeMetadata,
+        connection: NWConnection
+    ) async {
+        if let reason = await chatProviderUnavailableReason(provider: .opencode) {
+            sendChatProviderUnavailable(provider: .opencode, reason: reason, on: connection)
+            return
+        }
+        guard let _ = await OpencodeProcessManager.shared.ensureRunning() else {
+            let body: String
+            switch OpencodeProcessManager.shared.state {
+            case .notInstalled:
+                body = #"{"error":"opencode_not_installed","hint":"Install OpenCode, then add an OpenRouter key in Settings."}"#
+            case .failed(let detail):
+                body = #"{"error":"opencode_serve_failed","detail":"\#(detail)"}"#
+            default:
+                body = #"{"error":"opencode_not_running"}"#
+            }
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(body.utf8)
+            ), on: connection)
+            return
+        }
+
+        OpencodeSSEAdapter.shared.start()
+        if OpencodeSSEAdapter.shared.chatStoreAccessor == nil {
+            let registry = self.registry
+            let chatStoreRegistry = self.chatStoreRegistry
+            OpencodeSSEAdapter.shared.chatStoreAccessor = { [weak registry, weak chatStoreRegistry] uuid in
+                guard let registry, let chatStoreRegistry else { return nil }
+                guard let session = registry.session(id: uuid) else { return nil }
+                return chatStoreRegistry.acquire(for: session)
+            }
+        }
+
+        let vendor = metadata.vendor
+        let session: AgentSession
+        do {
+            session = try await registry.createChat(
+                provider: .opencode,
+                model: req.model,
+                chatCwd: "",
+                effort: req.effort,
+                deepResearch: req.deepResearch,
+                chatVendor: vendor,
+                billingProvider: metadata.billingProvider
+            )
+        } catch {
+            serverLogger.error("createChat write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection); return
+        }
+        let chatCwd: String
+        do {
+            let url = try ChatCwdManager.ensure(for: session.id)
+            chatCwd = url.path
+        } catch {
+            try? await registry.delete(id: session.id)
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        try? await registry.updateRuntime(
+            id: session.id,
+            worktreePath: chatCwd,
+            runtimeCwd: .some(chatCwd),
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            mode: .local
+        )
+
+        guard var sessionReq = OpencodeProcessManager.shared.makeAuthorizedRequest(
+            path: "/session",
+            directory: chatCwd
+        ) else {
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        sessionReq.httpMethod = "POST"
+        sessionReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let title = req.model.map { "\(vendor.displayName) - \($0)" } ?? "Chat - \(vendor.displayName)"
+        sessionReq.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "title": String(title.prefix(60))
+        ])
+
+        let opencodeID: String
+        do {
+            let (data, response) = try await URLSession(configuration: .ephemeral).data(for: sessionReq)
+            guard let http = response as? HTTPURLResponse, http.statusCode < 400 else {
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                sendResponse(.internalError, on: connection)
+                return
+            }
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = obj["id"] as? String else {
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                sendResponse(.internalError, on: connection)
+                return
+            }
+            opencodeID = id
+        } catch {
+            serverLogger.error("opencode chat /session POST failed: \(error.localizedDescription, privacy: .public)")
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            sendResponse(.internalError, on: connection)
+            return
+        }
+
+        let updated = registry.session(id: session.id) ?? session
+        OpencodeSSEAdapter.shared.register(
+            clawdmeterID: updated.id,
+            opencodeID: opencodeID,
+            repo: chatCwd
+        )
+        _ = chatStoreRegistry.snapshotStore(for: updated)
+        AgentEventStream.recordEvent(
+            sessionId: updated.id,
+            kind: .sessionCreated,
+            payload: [
+                "chat": "true",
+                "provider": "opencode",
+                "chatVendor": vendor.rawValue,
+                "opencodeID": opencodeID
+            ]
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(updated) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func chatProviderUnavailableReason(
+        provider: AgentKind,
+        codexBackend: CodexChatBackend? = nil
+    ) async -> String? {
+        let response = await ChatProviderProbe.shared.currentProviders()
+        let row = response.providers.first {
+            guard $0.provider == provider else { return false }
+            guard let codexBackend else { return true }
+            return $0.codexBackend == codexBackend
+        }
+        guard let row else {
+            return "Provider probe did not return \(provider.rawValue)"
+        }
+        guard row.available, row.authenticated, row.capabilityProbePassed else {
+            return row.reason ?? "\(provider.rawValue) is unavailable"
+        }
+        return nil
+    }
+
+    private func providerDisabledReason(provider: AgentKind, vendor: ChatVendor? = nil) -> String? {
+        guard ProviderEnablement.isEnabled(provider) else {
+            return "Enable \(vendor?.displayName ?? providerDisplayName(provider)) in Settings → Providers."
+        }
+        return nil
+    }
+
+    private func providerDisplayName(_ provider: AgentKind) -> String {
+        switch provider {
+        case .claude: return "Claude"
+        case .codex: return "ChatGPT"
+        case .gemini: return "Antigravity"
+        case .cursor: return "Cursor"
+        case .opencode: return "OpenRouter"
+        case .grok: return "Grok"
+        case .unknown: return "this provider"
+        }
+    }
+
+    private func sendProviderDisabled(provider: AgentKind, reason: String, on connection: NWConnection) {
+        let body = [
+            "error": "provider_disabled",
+            "provider": provider.rawValue,
+            "reason": reason,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        sendResponse(HTTPResponse(
+            status: 403,
+            reason: "Forbidden",
+            contentType: "application/json",
+            body: data
+        ), on: connection)
+    }
+
+    private func sendChatProviderUnavailable(provider: AgentKind, reason: String, on connection: NWConnection) {
+        let body = [
+            "error": "chat_provider_unavailable",
+            "provider": provider.rawValue,
+            "reason": reason,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        sendResponse(HTTPResponse(
+            status: 503,
+            reason: "Service Unavailable",
+            contentType: "application/json",
+            body: data
+        ), on: connection)
+    }
+
+    /// `GET /chat-providers`: returns the per-provider availability +
+    /// auth + capability-probe state per DG4. v0.8 ships a minimal
+    /// implementation that checks binary-on-PATH; the full P1-actor
+    /// ChatProviderProbe + CM3 ChatProviderAuthObserver land in v0.8.x
+    /// polish phase. Gemini row is hardcoded `available: false, reason:
+    /// "v0.9"` until Antigravity (agy) replacement ships.
+    private func handleGetChatProviders(connection: NWConnection) async {
+        // v0.9.x: delegate to the ChatProviderProbe actor. Cache +
+        // in-flight de-dup live there now; the inline binary checks
+        // are gone. Auth state reflects ChatProviderAuthObserver
+        // overrides (Claude/Codex stderr + JSONL parsers, Antigravity
+        // agentapi 401 catch) when set.
+        let resp = await ChatProviderProbe.shared.currentProviders()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(resp) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleRefreshChatProviders(connection: NWConnection) async {
+        await ChatProviderProbe.shared.invalidate()
+        await OpenRouterModelProbe.shared.invalidate()
+        await CursorModelProbe.shared.invalidate()
+        await handleGetChatProviders(connection: connection)
+    }
+
+    /// Frontier handlers. These routes create live sibling chat sessions,
+    /// stream per-slot state, and persist winner choices for the comparison UI.
+    // MARK: - v0.9 Frontier handlers
+
+    /// POST /chat-sessions/frontier — spawn 2-3 sibling chat sessions
+    /// sharing a `frontierGroupId`, one per `FrontierModelSlot` in the
+    /// request. Returns per-slot results (E2): each spawn is independent
+    /// so a partial Frontier (e.g. Gemini fails because Antigravity isn't
+    /// running) still surfaces the live slots + the failure reason.
+    /// CM5: replays the cached response when `clientRequestId` repeats.
+    private func handlePostFrontier(request: HTTPRequest, connection: NWConnection) async {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let req = try? decoder.decode(CreateFrontierRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        // CM5 idempotency: if we've seen this clientRequestId before,
+        // return the cached response verbatim.
+        if let cached = frontierGroupIdempotency[req.clientRequestId] {
+            let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(cached.response) {
+                sendResponse(HTTPResponse(
+                    status: 200, reason: "OK (idempotent replay)",
+                    contentType: "application/json", body: body
+                ), on: connection)
+                return
+            }
+        }
+        // Slot count guard: 2-3 per v0.9 spec.
+        guard (2...3).contains(req.models.count) else {
+            sendResponse(HTTPResponse(
+                status: 400, reason: "Bad Request",
+                contentType: "application/json",
+                body: Data(#"{"error":"frontier_slot_count","reason":"frontier requires 2-3 slots"}"#.utf8)
+            ), on: connection)
+            return
+        }
+
+        let groupId = UUID()
+        var slotResults: [FrontierSlotResult] = []
+        for (idx, slot) in req.models.enumerated() {
+            // Per-child spawn timeout: a child that hangs must not hang the
+            // whole broadcast. Time the slot out so the other providers still
+            // come through.
+            let slotResult: FrontierSlotResult = await withCheckedContinuation { (cont: CheckedContinuation<FrontierSlotResult, Never>) in
+                let box = ResumeOnceBox()
+                // Hold the timeout task so the spawn path can cancel it — otherwise
+                // the 25s sleep lingers (and accumulates across broadcasts) even on
+                // the common success path where the spawn wins the race in ~2-5s.
+                let timeout = Task {
+                    try? await Task.sleep(nanoseconds: 25_000_000_000)
+                    if box.tryClaim() {
+                        cont.resume(returning: FrontierSlotResult(index: idx, sessionId: nil, reason: "spawn_timeout"))
+                    }
+                }
+                Task { @MainActor in
+                    let r: FrontierSlotResult
+                    do {
+                        let session = try await self.spawnFrontierChild(groupId: groupId, childIndex: idx, slot: slot)
+                        r = FrontierSlotResult(index: idx, sessionId: session.id, reason: nil)
+                    } catch let SpawnFailure.message(reason) {
+                        r = FrontierSlotResult(index: idx, sessionId: nil, reason: reason)
+                    } catch {
+                        r = FrontierSlotResult(index: idx, sessionId: nil, reason: error.localizedDescription)
+                    }
+                    if box.tryClaim() { cont.resume(returning: r) }
+                    timeout.cancel()   // spawn settled (or timeout already fired) — stop the sleep
+                }
+            }
+            slotResults.append(slotResult)
+        }
+        let response = CreateFrontierResponse(groupId: groupId, slots: slotResults)
+        // Cache for CM5 replay. Trim oldest entries when crossing 256.
+        frontierGroupIdempotency[req.clientRequestId] = (groupId, response, Date())
+        if frontierGroupIdempotency.count > 256 {
+            let cutoff = frontierGroupIdempotency.values
+                .sorted { $0.createdAt < $1.createdAt }
+                .prefix(64)
+                .map { $0.groupId }
+            frontierGroupIdempotency = frontierGroupIdempotency.filter {
+                !cutoff.contains($0.value.groupId)
+            }
+        }
+        frontierUpdateCounters[groupId] = 1
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(response) {
+            sendResponse(HTTPResponse(
+                status: 201, reason: "Created",
+                contentType: "application/json", body: body
+            ), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// POST /chat-sessions/frontier/:groupId/send — fan out the prompt
+    /// to every live (non-archived) child. Each child is a regular chat
+    /// session so we reuse the existing /sessions/:id/send semantics by
+    /// dispatching to the underlying send logic per child.
+    ///
+    /// v0.23.9: accepts both `FrontierSendRequest` (preferred — supports
+    /// per-child text overrides for broadcast attachments) and the
+    /// legacy `SendPromptRequest` shape for back-compat with the
+    /// smoke script + first iOS build.
+    private func handleFrontierSend(
+        request: HTTPRequest,
+        connection: NWConnection,
+        groupId: String
+    ) async {
+        guard let uuid = UUID(uuidString: groupId) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        // Frontier sends must only hit live children. Archived siblings
+        // (e.g. losers after a pick-winner) keep their JSONL for the
+        // history sidebar but should never receive new prompts.
+        let children = registry.frontierGroupChildren(groupId: uuid)
+        guard !children.isEmpty else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let decoder = JSONDecoder()
+        let frontierReq = try? decoder.decode(FrontierSendRequest.self, from: request.body)
+        let legacyReq = frontierReq == nil ? try? decoder.decode(SendPromptRequest.self, from: request.body) : nil
+        let sharedText: String
+        let perChild: [String: String]?
+        if let frontierReq {
+            sharedText = frontierReq.text
+            perChild = frontierReq.perChildText
+        } else if let legacyReq {
+            sharedText = legacyReq.text
+            perChild = nil
+        } else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        var results: [FrontierChildSendResult] = []
+        for child in children {
+            let text = perChild?[child.id.uuidString] ?? sharedText
+            results.append(await forwardFrontierChildSend(session: child, text: text))
+        }
+        let response = FrontierSendResponse(groupId: uuid, childCount: children.count, results: results)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let body = (try? encoder.encode(response)) ?? Data("{\"ok\":false}".utf8)
+        sendResponse(HTTPResponse(
+            status: 202, reason: "Accepted",
+            contentType: "application/json",
+            body: body
+        ), on: connection)
+        if let counter = frontierUpdateCounters[uuid] {
+            frontierUpdateCounters[uuid] = counter + 1
+        }
+    }
+
+    /// Best-effort send to one Frontier child. Mirrors the dispatch
+    /// inside handleSendPrompt (harness vs SDK vs direct PTY/SSE) but does NOT
+    /// touch the HTTP connection — Frontier fan-out caller already
+    /// returned a 202. Errors are logged + dropped.
+    private func forwardFrontierChildSend(session: AgentSession, text: String) async -> FrontierChildSendResult {
+        let bytes = Array(text.utf8)
+        guard !bytes.isEmpty, bytes.count <= 1_000_000 else {
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "invalid_prompt")
+        }
+        // v0.23.9 adversarial-review fix: handleFrontierSend snapshots
+        // the child list before iterating, then awaits per-child sends
+        // serially. While we're awaiting child[i]'s runtime send
+        // call, a concurrent /pick-winner can archive child[i+1] on
+        // the same @MainActor registry. Re-fetch the live session
+        // immediately before each send so a just-archived loser
+        // doesn't still receive the prompt.
+        let currentArchivedAt = registry.session(id: session.id)?.archivedAt
+        if currentArchivedAt != nil {
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "archived_mid_send")
+        }
+        guard RateLimiter.shared.tryAcquireSend(sessionId: session.id) else {
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "rate_limited")
+        }
+        // Harness-driven children (codex app-server / gemini gRPC / grok+cursor
+        // ACP) drive through their live bridge — not the legacy per-agent dispatch
+        // below. A registered bridge is authoritative (mirrors the Solo send path's
+        // SessionCommandRouter `.harnessBridge` route).
+        if let bridge = harnessRegistry.bridge(for: session.id) {
+            await bridge.prompt(text)
+            await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
+        }
+        // OpenCode sidecar
+        if session.kind == .chat && session.agent == .opencode {
+            do {
+                try await forwardOpencodePrompt(session: session, prompt: text)
+                await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
+                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
+            } catch {
+                serverLogger.warning("frontier child opencode send failed: \(error.localizedDescription, privacy: .public)")
+                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: error.localizedDescription)
+            }
+        }
+        // Track A: Claude PTY child (flag on) — submit via the host, no pane.
+        if SessionCommandRouter.resolve(routeContext(for: session)) == .claudePty {
+            guard let host = await claudePtyHost(for: session) else {
+                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "agent_cli_not_found")
+            }
+            guard await host.submitPrompt(text, isChat: session.kind == .chat, isFollowUp: true) else {
+                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "pty_write_failed")
+            }
+            await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
+        }
+        return FrontierChildSendResult(
+            childIndex: session.frontierChildIndex ?? 0,
+            sessionId: session.id,
+            ok: false,
+            reason: "legacy_session_retired"
+        )
+    }
+
+    /// POST /chat-sessions/frontier/:groupId/retry-slot — replace one
+    /// child session with a fresh spawn of the same provider/model.
+    /// Useful when one slot failed at create time (D10) and the user
+    /// wants to try again.
+    private func handleFrontierRetrySlot(
+        request: HTTPRequest,
+        connection: NWConnection,
+        groupId: String
+    ) async {
+        guard let uuid = UUID(uuidString: groupId),
+              let req = try? JSONDecoder().decode(RetryFrontierSlotRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let children = registry.frontierGroupChildren(groupId: uuid)
+        guard !children.isEmpty else {
+            sendResponse(.notFound, on: connection); return
+        }
+        // Find the existing child at this index (may exist with failed
+        // status, or may have been hard-deleted). Either way, look up
+        // the original slot spec from one of the surviving siblings'
+        // peer entries — we don't persist the slot spec separately, so
+        // we reconstruct it from the child's session record itself.
+        guard let existing = children.first(where: { $0.frontierChildIndex == req.index }) else {
+            sendResponse(HTTPResponse(
+                status: 404, reason: "Not Found",
+                contentType: "application/json",
+                body: Data(#"{"error":"slot_not_found","index":\#(req.index)}"#.utf8)
+            ), on: connection)
+            return
+        }
+        let slot = FrontierModelSlot(
+            provider: existing.agent,
+            model: existing.model,
+            effort: existing.effort,
+            codexChatBackend: existing.codexChatBackend,
+            deepResearch: existing.deepResearch,
+            chatVendor: existing.runtimeBinding?.metadata["chatVendor"].flatMap(ChatVendor.init(rawValue:)),
+            billingProvider: existing.runtimeBinding?.billingProvider
+        )
+        // Delete the old session (cleans up chat-cwd + chat store entry).
+        // Stop a harness child first (no-op for legacy children).
+        await harnessRegistry.remove(existing.id)
+        if let wiring = sessionWiring.removeValue(forKey: existing.id) {
+            wiring.stop()
+        }
+        chatStoreRegistry.evict(sessionId: existing.id)
+        if existing.kind == .chat {
+            try? ChatCwdManager.remove(for: existing.id)
+        }
+        try? await registry.delete(id: existing.id)
+        // Re-spawn with the same childIndex.
+        do {
+            let fresh = try await spawnFrontierChild(
+                groupId: uuid,
+                childIndex: req.index,
+                slot: slot
+            )
+            if let counter = frontierUpdateCounters[uuid] {
+                frontierUpdateCounters[uuid] = counter + 1
+            }
+            let result = FrontierSlotResult(index: req.index, sessionId: fresh.id, reason: nil)
+            let encoder = JSONEncoder()
+            if let body = try? encoder.encode(result) {
+                sendResponse(HTTPResponse(
+                    status: 200, reason: "OK",
+                    contentType: "application/json", body: body
+                ), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch let SpawnFailure.message(reason) {
+            let result = FrontierSlotResult(index: req.index, sessionId: nil, reason: reason)
+            let encoder = JSONEncoder()
+            if let body = try? encoder.encode(result) {
+                sendResponse(HTTPResponse(
+                    status: 200, reason: "OK (still failed)",
+                    contentType: "application/json", body: body
+                ), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// POST /chat-sessions/frontier/:groupId/pick-winner — archive the
+    /// non-winning children and promote the winner out of the broadcast
+    /// group so the sidebar/history treat it as a normal Solo chat.
+    /// Returns the promoted winner session (with `frontierGroupId` /
+    /// `frontierChildIndex` cleared).
+    ///
+    /// v0.23.9: previously the winner kept its `frontierGroupId`, which
+    /// meant follow-up sends still mapped back to the Frontier group
+    /// and the snapshot WS still considered the group "live". Both UIs
+    /// now also flip `openTarget` to `.solo(winner.id)` after this call
+    /// returns. Belt + suspenders: Frontier send / snapshot also filter
+    /// `archivedAt == nil` so even before the next refresh, the
+    /// archived losers cannot receive sends.
+    private func handlePickFrontierWinner(
+        request: HTTPRequest,
+        connection: NWConnection,
+        groupId: String
+    ) async {
+        guard let uuid = UUID(uuidString: groupId),
+              let req = try? JSONDecoder().decode(PickFrontierWinnerRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        // Enumerate everyone (including any already-archived siblings)
+        // so we cleanly archive the full loser set even if pick-winner
+        // is invoked a second time.
+        let allChildren = registry.frontierGroupChildren(groupId: uuid, includeArchived: true)
+        guard let winner = allChildren.first(where: { $0.frontierChildIndex == req.childIndex && $0.archivedAt == nil }) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        // Archive the losers. Existing archive path persists archivedAt
+        // and the sidebar's Show-Archived toggle keeps them reachable.
+        for child in allChildren where child.id != winner.id && child.archivedAt == nil {
+            // Stop the loser's harness child process (ACP/app-server/gRPC) so
+            // archiving doesn't leak a running agent, AND release the chat store
+            // the harness child acquired at create (createHarnessChatSessionCore)
+            // so it can idle-evict. Legacy children used snapshotStore (no
+            // acquire), so only release when this was actually a harness child.
+            let wasHarness = harnessRegistry.contains(child.id)
+            await harnessRegistry.remove(child.id)
+            if wasHarness {
+                chatStoreRegistry.release(sessionId: child.id)
+            }
+            try? await registry.archive(id: child.id)
+        }
+        // Promote the winner out of the Frontier group. From this point
+        // on, every history/search row, every Frontier send, and every
+        // FrontierWebSocket snapshot treats this session as a regular
+        // Solo chat.
+        try? await registry.clearFrontierGroupBinding(id: winner.id)
+        let promoted = registry.session(id: winner.id) ?? winner
+        if let counter = frontierUpdateCounters[uuid] {
+            frontierUpdateCounters[uuid] = counter + 1
+        }
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(promoted) {
+            sendResponse(HTTPResponse(
+                status: 200, reason: "OK",
+                contentType: "application/json", body: body
+            ), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleSetFrontierTurnWinner(
+        request: HTTPRequest,
+        connection: NWConnection,
+        groupId: String
+    ) async {
+        guard let uuid = UUID(uuidString: groupId),
+              let req = try? JSONDecoder().decode(SetFrontierTurnWinnerRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let children = registry.frontierGroupChildren(groupId: uuid)
+        guard children.contains(where: { $0.frontierChildIndex == req.childIndex }) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let winner = FrontierTurnWinner(groupId: uuid, turnId: req.turnId, childIndex: req.childIndex)
+        var group = frontierTurnWinners[uuid] ?? [:]
+        group[req.turnId] = winner
+        frontierTurnWinners[uuid] = group
+        saveFrontierTurnWinners()
+        if let counter = frontierUpdateCounters[uuid] {
+            frontierUpdateCounters[uuid] = counter + 1
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(winner) {
+            sendResponse(HTTPResponse(
+                status: 200, reason: "OK",
+                contentType: "application/json", body: body
+            ), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// Internal spawn dispatch shared by handlePostFrontier +
+    /// handleFrontierRetrySlot. Throws SpawnFailure.message on per-slot
+    /// failure so the caller can surface a per-slot reason string.
+    private enum SpawnFailure: Error {
+        case message(String)
+    }
+
+    private func spawnFrontierChild(
+        groupId: UUID,
+        childIndex: Int,
+        slot: FrontierModelSlot
+    ) async throws -> AgentSession {
+        let metadata: ResolvedChatRuntimeMetadata
+        do {
+            metadata = try resolveChatRuntimeMetadata(
+                provider: slot.provider,
+                requestedVendor: slot.chatVendor,
+                requestedBillingProvider: slot.billingProvider,
+                requestedCodexBackend: slot.codexChatBackend
+            )
+        } catch let error as ChatRuntimeValidationError {
+            throw SpawnFailure.message(chatRuntimeValidationMessage(error))
+        }
+
+        if let reason = providerDisabledReason(provider: slot.provider, vendor: metadata.vendor) {
+            throw SpawnFailure.message(reason)
+        }
+
+        if let reason = await frontierProviderUnavailableReason(
+            provider: slot.provider,
+            codexBackend: metadata.codexBackend
+        ) {
+            throw SpawnFailure.message(reason)
+        }
+
+        // Harness is the default drive path for non-Claude broadcast children
+        // (codex app-server / gemini headless agy / grok+cursor ACP), exactly as
+        // Solo chat. Reuse the shared core; map its errors to a slot failure reason.
+        // Claude -> direct PTY and opencode -> SSE fall through to the
+        // per-provider switch below. Gemini/Codex/Grok/Cursor are always
+        // harness-eligible and never reach their defensive cases below.
+        if isChatHarnessEligible(slot.provider) {
+            do {
+                return try await createHarnessChatSessionCore(
+                    provider: slot.provider, model: slot.model, effort: slot.effort,
+                    deepResearch: slot.deepResearch, chatVendor: metadata.vendor,
+                    billingProvider: metadata.billingProvider,
+                    frontierGroupId: groupId, frontierChildIndex: childIndex
+                )
+            } catch let harnessError as HarnessChatSpawnError {
+                throw SpawnFailure.message(harnessError.slotReason)
+            }
+        }
+
+        switch slot.provider {
+        case .claude:
+            // Reuse the same plumbing as Solo chat: createChat -> chat-cwd ->
+            // spawn direct PTY -> warm chat store. We don't need the full HTTP
+            // wrapper since we already have all the data.
+            let session = try await registry.createChat(
+                provider: slot.provider,
+                model: slot.model,
+                chatCwd: "",
+                codexChatBackend: metadata.codexBackend,
+                effort: slot.effort,
+                frontierGroupId: groupId,
+                frontierChildIndex: childIndex,
+                deepResearch: slot.deepResearch,
+                chatVendor: metadata.vendor,
+                billingProvider: metadata.billingProvider
+            )
+            let chatCwd: String
+            do {
+                let url = try ChatCwdManager.ensure(for: session.id)
+                chatCwd = url.path
+            } catch {
+                try? await registry.delete(id: session.id)
+                throw SpawnFailure.message("chat_cwd_create_failed: \(error.localizedDescription)")
+            }
+            try? await registry.updateRuntime(
+                id: session.id, worktreePath: chatCwd,
+                tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
+            )
+            if slot.provider == .claude {
+                ChatCwdManager.markTrustedForClaude(path: chatCwd)
+            }
+            let updated = registry.session(id: session.id) ?? session
+            let argv = AgentSpawner.argv(for: updated)
+            if argv.isEmpty {
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw SpawnFailure.message("agent_cli_not_found")
+            }
+            do {
+                await ensureClaudePtyWiring()
+                let env = AgentSpawner.claudePtyEnv()
+                let plan = ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: chatCwd, env: env)
+                _ = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { plan })
+                try? await registry.updateRuntime(
+                    id: session.id, worktreePath: chatCwd,
+                    tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
+                )
+                _ = chatStoreRegistry.snapshotStore(for: registry.session(id: session.id) ?? updated)
+                return registry.session(id: session.id) ?? updated
+            } catch {
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw SpawnFailure.message("claude_pty_spawn_failed: \(error.localizedDescription)")
+            }
+        case .gemini:
+            // Unreachable: gemini is always harness-eligible (isChatHarnessEligible),
+            // so a broadcast gemini child spawns via createHarnessChatSessionCore
+            // above — the headless `agy` driver (Antigravity 2.0), bound to this
+            // frontier group exactly like the grok/cursor/codex children. The legacy
+            // agentapi one-shot frontier path has been retired.
+            throw SpawnFailure.message("gemini_unexpected_legacy_frontier_path")
+        case .opencode:
+            guard let _ = await OpencodeProcessManager.shared.ensureRunning() else {
+                switch OpencodeProcessManager.shared.state {
+                case .notInstalled:
+                    throw SpawnFailure.message("opencode_not_installed")
+                case .failed(let detail):
+                    throw SpawnFailure.message("opencode_serve_failed: \(detail)")
+                default:
+                    throw SpawnFailure.message("opencode_not_running")
+                }
+            }
+            OpencodeSSEAdapter.shared.start()
+            if OpencodeSSEAdapter.shared.chatStoreAccessor == nil {
+                let registry = self.registry
+                let chatStoreRegistry = self.chatStoreRegistry
+                OpencodeSSEAdapter.shared.chatStoreAccessor = { [weak registry, weak chatStoreRegistry] uuid in
+                    guard let registry, let chatStoreRegistry else { return nil }
+                    guard let session = registry.session(id: uuid) else { return nil }
+                    return chatStoreRegistry.acquire(for: session)
+                }
+            }
+            let session = try await registry.createChat(
+                provider: .opencode,
+                model: slot.model,
+                chatCwd: "",
+                effort: slot.effort,
+                frontierGroupId: groupId,
+                frontierChildIndex: childIndex,
+                deepResearch: slot.deepResearch,
+                chatVendor: metadata.vendor,
+                billingProvider: metadata.billingProvider
+            )
+            let chatCwd: String
+            do {
+                let url = try ChatCwdManager.ensure(for: session.id)
+                chatCwd = url.path
+            } catch {
+                try? await registry.delete(id: session.id)
+                throw SpawnFailure.message("chat_cwd_create_failed: \(error.localizedDescription)")
+            }
+            try? await registry.updateRuntime(
+                id: session.id,
+                worktreePath: chatCwd,
+                runtimeCwd: .some(chatCwd),
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                mode: .local
+            )
+            guard var request = OpencodeProcessManager.shared.makeAuthorizedRequest(
+                path: "/session",
+                directory: chatCwd
+            ) else {
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw SpawnFailure.message("opencode_not_running")
+            }
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: [
+                "title": "Frontier #\(childIndex + 1) - OpenCode"
+            ])
+            let opencodeID: String
+            do {
+                let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode < 400 else {
+                    try? await registry.delete(id: session.id)
+                    try? ChatCwdManager.remove(for: session.id)
+                    throw SpawnFailure.message("opencode_session_create_failed")
+                }
+                guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let id = obj["id"] as? String else {
+                    try? await registry.delete(id: session.id)
+                    try? ChatCwdManager.remove(for: session.id)
+                    throw SpawnFailure.message("opencode_bad_session_response")
+                }
+                opencodeID = id
+            } catch let failure as SpawnFailure {
+                throw failure
+            } catch {
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw SpawnFailure.message("opencode_session_create_failed: \(error.localizedDescription)")
+            }
+            let updated = registry.session(id: session.id) ?? session
+            OpencodeSSEAdapter.shared.register(
+                clawdmeterID: updated.id, opencodeID: opencodeID, repo: chatCwd
+            )
+            _ = chatStoreRegistry.snapshotStore(for: updated)
+            AgentEventStream.recordEvent(
+                sessionId: updated.id,
+                kind: .sessionCreated,
+                payload: ["repo": chatCwd, "agent": "opencode", "opencodeID": opencodeID]
+            )
+            return updated
+        case .unknown, .codex, .grok, .cursor:
+            // Unreachable for codex/cursor/grok: they are harness-eligible
+            // (isChatHarnessEligible) and return via createHarnessChatSessionCore
+            // above, so they never reach this legacy switch. .unknown is the
+            // forward-compat catch-all. Defensive: surface a slot failure.
+            throw SpawnFailure.message("unknown_agent_kind")
+        }
+    }
+
+    /// v0.23.2 P1-04: send a prompt into an OpenCode session.
+    ///
+    /// Flow:
+    ///   1. Echo the user prompt into the SessionChatStore so the
+    ///      composer clears the "sending…" state and the user bubble
+    ///      renders immediately (mirrors how sendChatSDKPrompt does it).
+    ///   2. Resolve the opencode session id (registered when the
+    ///      AgentSession was spawned via `handleSpawnOpencodeSession`).
+    ///   3. POST to `opencode serve`'s `/session/<oc-id>/message` with
+    ///      a minimal `parts: [{type: "text", text: <prompt>}]` body.
+    ///      opencode picks the user's default provider+model — we
+    ///      don't override unless a session-specific override is set.
+    ///   4. Return 200; the reply streams back asynchronously via
+    ///      `message.added` SSE events that OpencodeSSEAdapter routes
+    ///      into the same SessionChatStore.
+    ///
+    /// Error surfaces:
+    ///   - opencode serve down → 503 `opencode_server_unreachable`
+    ///   - no opencode session-id registered → 503 `opencode_session_not_registered`
+    ///     (caller should retry after a brief delay; the SSE
+    ///     `session.created` event populates the map asynchronously)
+    ///   - opencode returns non-2xx → 502 `opencode_send_failed` w/
+    ///     the upstream status code
+    private func sendOpencodePrompt(
+        session: AgentSession,
+        prompt: String,
+        idempotencyKey: String? = nil,
+        payloadHash: String = "",
+        connection: NWConnection
+    ) async {
+        // First-prompt naming, same convention as sendChatSDKPrompt.
+        if (session.customName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+            let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                let cap = 40
+                let truncated = trimmed.count <= cap
+                    ? trimmed
+                    : String(trimmed[..<trimmed.index(trimmed.startIndex, offsetBy: cap - 1)]) + "…"
+                try? await registry.rename(id: session.id, name: truncated)
+            }
+        }
+        // Echo the user prompt into the chat store so the UI clears
+        // its "sending…" state and the user bubble renders without
+        // waiting on the SSE round-trip.
+        if let store = chatStoreRegistry.snapshotStore(for: session) {
+            let userMsgId = "opencode-user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))"
+            store.appendSDKMessages([
+                ChatMessage(
+                    id: userMsgId,
+                    kind: .userText,
+                    title: "You",
+                    body: prompt,
+                    at: Date()
+                )
+            ])
+        }
+        // Resolve the opencode session id.
+        guard let opencodeID = OpencodeSSEAdapter.shared.opencodeSessionId(for: session.id) else {
+            serverLogger.warning("opencode send: no session-id mapping for \(session.id.uuidString, privacy: .public)")
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"opencode_session_not_registered","detail":"Opencode session has not been registered yet — retry in a moment."}"#.utf8)
+            ), on: connection)
+            return
+        }
+        // Build the upstream POST.
+        guard var req = OpencodeProcessManager.shared.makeAuthorizedRequest(
+            path: "/session/\(opencodeID)/message",
+            directory: session.effectiveCwd
+        ) else {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"opencode_server_unreachable","detail":"opencode serve is not running"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // OpenCode's local OpenAPI expects a single text part plus an
+        // optional `model` object (`providerID`/`modelID`) and `variant`.
+        // Keep the body inside that schema so current and older serve
+        // builds reject neither unknown top-level provider fields nor
+        // missing default-model state.
+        let body = opencodeMessageBody(session: session, prompt: prompt)
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        req.timeoutInterval = 20
+
+        do {
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse else {
+                throw URLError(.badServerResponse)
+            }
+            if !(200..<300).contains(http.statusCode) {
+                serverLogger.warning("opencode send: upstream returned \(http.statusCode, privacy: .public)")
+                let detailBody = #"{"error":"opencode_send_failed","upstreamStatus":\#(http.statusCode)}"#
+                sendResponse(HTTPResponse(
+                    status: 502, reason: "Bad Gateway",
+                    contentType: "application/json",
+                    body: Data(detailBody.utf8)
+                ), on: connection)
+                return
+            }
+            // v16 outbox: idempotency receipt + cache. Routing through
+            // sendCommandResponse so a retried request with the same key
+            // returns the cached ok-response without re-posting to the
+            // OpenCode sidecar (which would double-send the user's prompt).
+            await sendCommandResponse(
+                body: ["ok": true],
+                key: idempotencyKey,
+                kind: .send,
+                sessionId: session.id,
+                payloadHash: payloadHash,
+                on: connection
+            )
+        } catch {
+            serverLogger.warning("opencode send: \(error.localizedDescription, privacy: .public)")
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"opencode_server_unreachable","detail":"\#(error.localizedDescription)"}"#.utf8)
+            ), on: connection)
+        }
+    }
+
+    private func forwardOpencodePrompt(session: AgentSession, prompt: String) async throws {
+        if let store = chatStoreRegistry.snapshotStore(for: session) {
+            let userMsgId = "opencode-user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))"
+            store.appendSDKMessages([
+                ChatMessage(
+                    id: userMsgId,
+                    kind: .userText,
+                    title: "You",
+                    body: prompt,
+                    at: Date()
+                )
+            ])
+        }
+        guard let opencodeID = OpencodeSSEAdapter.shared.opencodeSessionId(for: session.id) else {
+            throw NSError(
+                domain: "AgentControlServer.OpenCode",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "opencode_session_not_registered"]
+            )
+        }
+        guard var req = OpencodeProcessManager.shared.makeAuthorizedRequest(
+            path: "/session/\(opencodeID)/message",
+            directory: session.effectiveCwd
+        ) else {
+            throw NSError(
+                domain: "AgentControlServer.OpenCode",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "opencode_server_unreachable"]
+            )
+        }
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: opencodeMessageBody(session: session, prompt: prompt))
+        req.timeoutInterval = 20
+        let (_, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw NSError(
+                domain: "AgentControlServer.OpenCode",
+                code: status,
+                userInfo: [NSLocalizedDescriptionKey: "opencode_send_failed: \(status)"]
+            )
+        }
+    }
+
+    /// Body posted to `opencode serve`'s `/session/<id>/message`
+    /// endpoint. v0.29.9: stripped of the `model`/`variant` override —
+    /// auth and model selection now flow entirely from the user's
+    /// `opencode` CLI configuration (`opencode auth login` + the CLI's
+    /// own default-model state). The serve daemon picks the upstream
+    /// provider and model from its own state; Clawdmeter no longer
+    /// second-guesses that selection.
+    private func opencodeMessageBody(session: AgentSession, prompt: String) -> [String: Any] {
+        var body: [String: Any] = [
+            "parts": [
+                ["type": "text", "text": prompt]
+            ]
+        ]
+        // Honor the picked model. registry.create stored the OpenRouter slug
+        // on session.model, but until now it was dropped here and OpenCode
+        // silently ran its own opencode.json default — so the 320-model picker
+        // was cosmetic. OpenCode's /session/:id/message takes an optional
+        // `model:{providerID,modelID}`; the OpenRouter-backed vendor always
+        // routes via providerID "openrouter" with the full slug as modelID.
+        if let model = Self.opencodeModelObject(forModelId: session.model) {
+            body["model"] = model
+        }
+        return body
+    }
+
+    /// Maps a session's selected OpenRouter model id to OpenCode's message
+    /// `{providerID, modelID}` object. Returns nil for the "opencode-default"
+    /// sentinel (or no selection) so OpenCode keeps its own default model.
+    nonisolated static func opencodeModelObject(forModelId raw: String?) -> [String: String]? {
+        guard let id = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !id.isEmpty, id != "opencode-default" else { return nil }
+        return ["providerID": "openrouter", "modelID": id]
     }
 
     private func isVerifiedOwnedWorktree(_ session: AgentSession) async -> Bool {
@@ -3647,7 +7029,7 @@ public final class AgentControlServer {
         // doesn't block the user clicking on the Mac.
         let captureSessionId = session.id
         let captureTitle = prompt.title
-        let captureHeader = prompt.header ?? "Permission required"
+        let captureHeader = prompt.header
         Task.detached {
             let body = APNSPushBody(
                 kind: "permissionPrompt",
@@ -3698,8 +7080,7 @@ public final class AgentControlServer {
         // no bridge and use the continuation path. The bridge answers the
         // agent's `session/request_permission` and clears the store's prompt; a
         // non-match means a stale / already-answered click.
-        let route = registry.session(id: uuid).map { commandRoute(for: $0).route }
-        if route == .harnessBridge, let bridge = harnessRegistry.bridge(for: uuid) {
+        if let bridge = harnessRegistry.bridge(for: uuid) {
             let matched = await bridge.respondToPermission(promptId: req.promptId, optionId: req.optionId)
             if matched {
                 serverLogger.info("acp permission respond session=\(uuid.uuidString, privacy: .public) option=\(req.optionId, privacy: .public)")
@@ -3773,13 +7154,13 @@ public final class AgentControlServer {
     }
 
     /// One-shot guard for a CheckedContinuation race. Used by
-    /// handlePostChatSession's tmux-timeout path: two Tasks (spawn +
+    /// handlePostChatSession's spawn-timeout path: two Tasks (spawn +
     /// 10s sleep) race to resume the continuation; only the first
     /// claim wins. The other resume call is silently dropped, which
     /// also prevents Swift's runtime trap on double-resume.
     /// `final class` + atomic-style flag keeps the Sendable story
     /// simple — the box is captured by both racing Tasks.
-    final class ResumeOnceBox: @unchecked Sendable {
+    fileprivate final class ResumeOnceBox: @unchecked Sendable {
         private let lock = NSLock()
         private var claimed = false
         func tryClaim() -> Bool {
@@ -3839,16 +7220,9 @@ public final class AgentControlServer {
             sendResponse(.notFound, on: connection)
             return
         }
-        // Track A: a Claude PTY session has NO tmux window, so the old
-        // `let windowId = session.tmuxWindowId else notFound` guard 404'd every
-        // PTY chat (chat sessions always run plan-mode → the Approve button was
-        // dead). For a PTY session, approve-plan is a swap to acceptEdits on the
-        // host (handled below). For non-PTY sessions a missing window is still a
-        // genuine notFound.
-        let route = commandRoute(for: session).route
-        let isClaudePtyApprove = session.tmuxWindowId == nil && route == .claudePty
-        if !isClaudePtyApprove && session.tmuxWindowId == nil {
-            sendResponse(.notFound, on: connection)
+        let route = SessionCommandRouter.resolve(routeContext(for: session))
+        guard route == .claudePty else {
+            sendResponse(.legacySessionRetired, on: connection)
             return
         }
         // v16 outbox: approve-plan is a fire-and-forget POST with no
@@ -3875,147 +7249,39 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        // Per D13: kill the plan-mode pane, spawn a fresh execution pane
-        // in the same window. Overlay covers the swap UI-side.
-        //
-        // Agent-specific replacement argv:
-        //   Claude → `claude --permission-mode acceptEdits` (the
-        //            user has approved the plan; switch to "agent can
-        //            edit without asking"). Resume via `--resume <id>`
-        //            isn't reliable on plan-mode → acceptEdits swaps
-        //            because Claude rotates the session id when plan
-        //            mode exits, so we spawn fresh.
-        //   Codex  → `codex -s workspace-write` (spawn fresh in the
-        //            same cwd; we don't track the Codex rollout id in
-        //            the registry yet, so resume isn't an option. The
-        //            new rollout writes its own JSONL alongside the
-        //            plan-mode one in `~/.codex/sessions/`; the
-        //            user-facing chat picks up the newest file).
-        let argv: [String]?
-        switch session.agent {
-        case .claude:
-            argv = AgentSpawner.claudeArgv(
-                model: session.model,
-                planMode: false,
-                effort: session.effort,
-                autopilot: false
-            )
-        case .codex, .gemini, .grok:
-            // v27: codex/gemini/grok are harness-driven; approve-plan flows
-            // through the bridge (permission response / set_mode), not a tmux
-            // respawn. Surfaces as 500 below for any legacy tmux codex session.
-            argv = nil
-        case .opencode:
-            // PR #29: opencode has no plan-mode → respawn-with-write
-            // flow; OpenCode handles its own tool-call approval inside
-            // `opencode serve`. Surfaces as 500 here so a misrouted
-            // approve-plan from a stale UI doesn't pretend to succeed.
-            argv = nil
-        case .cursor:
-            // v27: cursor is harness-driven; approve-plan flows through the ACP
-            // session (set_mode / permission), not a tmux respawn. Surfaces as
-            // 500 below for any legacy tmux cursor session.
-            argv = nil
-        case .unknown:
-            // X3: forward-compat unknown agent — no respawn path.
-            // Surfaces as 500 below.
-            argv = nil
-        }
-        guard let replacementArgv = argv else {
+        guard let replacementArgv = AgentSpawner.claudeArgv(
+            model: session.model,
+            planMode: false,
+            effort: session.effort,
+            autopilot: false
+        ) else {
             serverLogger.error("approve-plan: missing CLI binary for \(session.agent.rawValue, privacy: .public)")
             sendResponse(.internalError, on: connection)
             return
         }
-        // Track A: PTY Claude approve = swap to acceptEdits on the host. No tmux
-        // window to kill; suspend the plan-mode host + resume-or-spawn fresh with
-        // the post-approval argv. Spawn fresh (not --resume): Claude rotates its
-        // session id on plan-exit, same rationale as the tmux path above.
-        if isClaudePtyApprove {
-            let cwd = session.effectiveCwd
-            let repoEnv = (try? resolveRepoEnv(session: session, cwd: cwd))?.environment
-            let env = AgentSpawner.claudePtyEnv(extra: repoEnv)
-            await claudePtyRegistry.suspend(uuid)
-            let approveSpawn = ClaudePtyRegistry.SpawnPlan(argv: replacementArgv, cwd: cwd, env: env)
-            guard (try? await claudePtyRegistry.resumeOrSpawn(id: uuid, plan: { approveSpawn })) != nil else {
-                sendResponse(.internalError, on: connection)
-                return
-            }
-            try? await registry.updateStatus(id: uuid, status: .running)
-            try? await registry.markPlanApproved(id: uuid)
-            AgentEventStream.recordEvent(
-                sessionId: uuid, kind: .statusChanged, payload: ["status": "running"]
-            )
-            let peer = Self.endpointString(connection.endpoint)
-            await AuditLog.shared.recordPlanApprove(
-                sessionId: uuid, sourcePeer: peer, agent: session.agent.rawValue
-            )
-            chatFileResolver.invalidate(sessionId: uuid)
-            await sendCommandResponse(
-                body: ["ok": true], key: req.idempotencyKey, kind: .approve,
-                sessionId: uuid, payloadHash: payloadHash, on: connection
-            )
+        let cwd = session.effectiveCwd
+        let repoEnv = (try? resolveRepoEnv(session: session, cwd: cwd))?.environment
+        let env = AgentSpawner.claudePtyEnv(extra: repoEnv)
+        await claudePtyRegistry.suspend(uuid)
+        let approveSpawn = ClaudePtyRegistry.SpawnPlan(argv: replacementArgv, cwd: cwd, env: env)
+        guard (try? await claudePtyRegistry.resumeOrSpawn(id: uuid, plan: { approveSpawn })) != nil else {
+            sendResponse(.internalError, on: connection)
             return
         }
-        do {
-            // Non-PTY path: a tmux window is guaranteed here (the head guard
-            // returned notFound otherwise).
-            guard let windowId = session.tmuxWindowId else {
-                sendResponse(.internalError, on: connection); return
-            }
-            let cwd = session.effectiveCwd
-            let resolvedEnv = try resolveRepoEnv(session: session, cwd: cwd)
-            try await tmux.killWindow(windowId)
-            let newWindow = try await tmux.newWindow(
-                cwd: cwd,
-                child: replacementArgv,
-                environment: resolvedEnv?.environment ?? [:]
-            )
-            try await registry.updateRuntime(
-                id: uuid,
-                worktreePath: session.worktreePath,
-                tmuxWindowId: newWindow.windowId,
-                tmuxPaneId: newWindow.paneId,
-                mode: session.mode
-            )
-            // Clear the plan card and flip status to running so the
-            // approve button disappears from the chat UI.
-            try await registry.updateStatus(id: uuid, status: .running)
-            try await registry.markPlanApproved(id: uuid)
-            AgentEventStream.recordEvent(
-                sessionId: uuid,
-                kind: .statusChanged,
-                payload: ["status": "running", "newWindowId": newWindow.windowId]
-            )
-            // T13: plan approval is a mid-session respawn that exits plan
-            // mode and gives the agent edit permission. Recorded AFTER the
-            // respawn succeeds — a failed approval shouldn't leave an
-            // audit entry implying it landed.
-            let peer = Self.endpointString(connection.endpoint)
-            await AuditLog.shared.recordPlanApprove(
-                sessionId: uuid, sourcePeer: peer,
-                agent: session.agent.rawValue
-            )
-            // Phase 0b: Codex respawn-lineage. approve-plan kills the
-            // plan-mode pane and spawns a fresh rollout (new JSONL file
-            // with a new Codex session id). Invalidate the resolver's
-            // cached link so the next chat-snapshot request rescans for
-            // the new file. Claude's resume path keeps the same JSONL so
-            // invalidation there is a cheap no-op. Belt to the suspenders
-            // anyway: invalidate both paths.
-            chatFileResolver.invalidate(sessionId: uuid)
-            await sendCommandResponse(
-                body: ["ok": true],
-                key: req.idempotencyKey,
-                kind: .approve,
-                sessionId: uuid,
-                payloadHash: payloadHash,
-                on: connection
-            )
-        } catch {
-            if sendRepoEnvConflict(error, on: connection) { return }
-            serverLogger.error("approve-plan failed: \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection)
-        }
+        try? await registry.updateStatus(id: uuid, status: .running)
+        try? await registry.markPlanApproved(id: uuid)
+        AgentEventStream.recordEvent(
+            sessionId: uuid, kind: .statusChanged, payload: ["status": "running"]
+        )
+        let peer = Self.endpointString(connection.endpoint)
+        await AuditLog.shared.recordPlanApprove(
+            sessionId: uuid, sourcePeer: peer, agent: session.agent.rawValue
+        )
+        chatFileResolver.invalidate(sessionId: uuid)
+        await sendCommandResponse(
+            body: ["ok": true], key: req.idempotencyKey, kind: .approve,
+            sessionId: uuid, payloadHash: payloadHash, on: connection
+        )
     }
 
     /// Archive / unarchive a session (G7). Hides it from the default
@@ -4079,10 +7345,9 @@ public final class AgentControlServer {
         }
     }
 
-    /// v0.5.10 — `POST /jsonl-aliases/rename` with body `{path, name}`.
-    /// Rename a Recent JSONL row (not a Clawdmeter-owned session). Persists
-    /// to `~/.clawdmeter/jsonl-aliases.json` keyed by path. Empty/whitespace
-    /// `name` clears the alias.
+    /// Legacy endpoint kept for older paired clients. External JSONL aliases
+    /// are no longer surfaced in Code, so this route validates shape only and
+    /// intentionally performs no mutation.
     private func handleRenameJSONLAlias(
         request: HTTPRequest,
         connection: NWConnection
@@ -4092,30 +7357,14 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection)
             return
         }
-        // Match the session-rename cap so a malicious paired peer can't
-        // wedge a multi-MB string into the on-disk store.
         if let n = body.name, n.count > 200 {
             sendResponse(.badRequest, on: connection)
             return
         }
-        // Belt-and-braces: insist the path is absolute and lives under one
-        // of the two well-known JSONL roots. Prevents a paired peer from
-        // wedging arbitrary keys into the alias file.
-        let home = ClawdmeterRealHome.path()
-        let allowedRoots = [
-            home + "/.claude/projects/",
-            home + "/.codex/sessions/"
-        ]
-        guard body.path.hasPrefix("/"),
-              allowedRoots.contains(where: { body.path.hasPrefix($0) })
-        else {
+        guard body.path.hasPrefix("/") else {
             sendResponse(.badRequest, on: connection)
             return
         }
-        JSONLAliasStore.shared.setAlias(path: body.path, name: body.name)
-        // Refresh the RepoIndex snapshot so the new name shows in the
-        // sidebar without waiting for the 60s tick.
-        Task { [repoIndex] in await repoIndex.refresh() }
         sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
     }
 
@@ -4145,13 +7394,8 @@ public final class AgentControlServer {
         // Track A: tear down the Claude PTY host (no-op if this session never
         // had one). Done unconditionally so a flag flip mid-session still cleans up.
         await claudePtyRegistry.suspend(uuid)
-        // Kill the tmux window.
-        if let windowId = session.tmuxWindowId {
-            do {
-                try await tmux.killWindow(windowId)
-            } catch {
-                serverLogger.warning("kill-window \(windowId, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
-            }
+        for pane in session.terminalPanes {
+            await terminalRegistry.kill(id: pane.paneId)
         }
         // v0.8 REV-DELETE: chat sessions clean up via FileManager
         // (chat-cwd is a plain dir under chat-sessions/, not a git
@@ -4200,7 +7444,7 @@ public final class AgentControlServer {
         sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
     }
 
-    func isLoopback(_ endpoint: NWEndpoint) -> Bool {
+    private func isLoopback(_ endpoint: NWEndpoint) -> Bool {
         guard case .hostPort(let host, _) = endpoint else { return false }
         if case .ipv4(let addr) = host, addr.rawValue.first == 127 { return true }
         if case .ipv6(let addr) = host {
@@ -4208,11 +7452,6 @@ public final class AgentControlServer {
             return bytes.count == 16 && bytes.prefix(15).allSatisfy { $0 == 0 } && bytes.last == 1
         }
         return false
-    }
-
-    static func isValidTmuxPaneId(_ paneId: String) -> Bool {
-        guard paneId.first == "%", paneId.count > 1 else { return false }
-        return paneId.dropFirst().allSatisfy { $0.isNumber }
     }
 
     static func endpointString(_ endpoint: NWEndpoint) -> String {
@@ -4227,4 +7466,860 @@ public final class AgentControlServer {
         }
     }
 
+    // MARK: - Endpoint handlers
+
+    private func handleGetRepos(connection: NWConnection) async {
+        let repos = await repoIndex.snapshot()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(repos) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleGetNeedsAttention(connection: NWConnection) async {
+        let response = NeedsAttentionResponse(events: await notifications.snapshotEvents(), serverTime: Date())
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(response) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleAckNotifications(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(AckNotificationsRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        await notifications.ack(through: req.ackId)
+        sendResponse(.ok(contentType: "application/json", body: Data(#"{"ok":true}"#.utf8)), on: connection)
+    }
+
+    // MARK: - Response sending
+
+    /// HTTP responses used by daemon handlers. Sessions v2 promoted the
+    /// enum to a struct so endpoints can emit arbitrary statuses (409
+    /// Conflict, 426 Upgrade Required, 503 Service Unavailable) with a
+    /// structured JSON body. Common cases stay reachable via static
+    /// constants / factories so existing call sites don't change.
+    struct HTTPResponse {
+        let status: Int
+        let reason: String
+        let contentType: String
+        let body: Data
+        /// Extra response headers (e.g. `Retry-After`). Emitted verbatim
+        /// after the standard headers in `httpResponseBytes`. Empty for
+        /// most responses; the static `tooManyRequests` factories set it.
+        let extraHeaders: [(String, String)]
+
+        init(status: Int, reason: String, contentType: String, body: Data, extraHeaders: [(String, String)] = []) {
+            self.status = status
+            self.reason = reason
+            self.contentType = contentType
+            self.body = body
+            self.extraHeaders = extraHeaders
+        }
+
+        static func ok(contentType: String, body: Data) -> HTTPResponse {
+            HTTPResponse(status: 200, reason: "OK", contentType: contentType, body: body)
+        }
+        static let badRequest = HTTPResponse(
+            status: 400, reason: "Bad Request",
+            contentType: "text/plain", body: Data("Bad Request\n".utf8)
+        )
+        static func badRequest(detail: String) -> HTTPResponse {
+            HTTPResponse(
+                status: 400, reason: "Bad Request",
+                contentType: "text/plain",
+                body: Data("Bad Request: \(detail)\n".utf8)
+            )
+        }
+        static let notFound = HTTPResponse(
+            status: 404, reason: "Not Found",
+            contentType: "text/plain", body: Data("Not Found\n".utf8)
+        )
+        static let unauthorized = HTTPResponse(
+            status: 401, reason: "Unauthorized",
+            contentType: "text/plain", body: Data("Unauthorized\n".utf8)
+        )
+        static let internalError = HTTPResponse(
+            status: 500, reason: "Internal Server Error",
+            contentType: "text/plain", body: Data("Internal Server Error\n".utf8)
+        )
+        static let legacySessionRetired = HTTPResponse(
+            status: 410, reason: "Gone",
+            contentType: "application/json",
+            body: Data(#"{"error":"legacy_session_retired","cta":"Start a new session from this repo or worktree."}"#.utf8)
+        )
+        /// 403 Forbidden with a JSON body for policy denials (e.g. autopilot
+        /// enable on an untrusted repo — review §3 finding 2026-05-18).
+        static func forbidden(body: Data) -> HTTPResponse {
+            HTTPResponse(
+                status: 403, reason: "Forbidden",
+                contentType: "application/json", body: body
+            )
+        }
+        /// Generic 429 (kept for the dispatch-time auth/peer rejection
+        /// path). Prefer `tooManyRequestsSend` / `tooManyRequestsSwap` from
+        /// the per-handler call sites — those set a real `Retry-After`.
+        static let tooManyRequests = tooManyRequestsSwap
+
+        static let tooManyRequestsSend = HTTPResponse(
+            status: 429, reason: "Too Many Requests",
+            contentType: "application/json",
+            body: Data(#"{"error":"rate_limited","retryAfterSeconds":1}"#.utf8),
+            extraHeaders: [("Retry-After", "1")]
+        )
+        static let tooManyRequestsSwap = HTTPResponse(
+            status: 429, reason: "Too Many Requests",
+            contentType: "application/json",
+            body: Data(#"{"error":"rate_limited","retryAfterSeconds":5}"#.utf8),
+            extraHeaders: [("Retry-After", "5")]
+        )
+    }
+
+    /// P1-Mac-7: validate untrusted repoKey before launching local agent work. The
+    /// path must be absolute, contain no `..` segments, hold no CR/LF or
+    /// control bytes, and resolve under the user's home directory.
+    ///
+    /// Codex follow-up: also resolve symlinks before the home-prefix
+    /// check. The earlier patch only standardized (collapses `..` /
+    /// `./`); a symlink at `/Users/me/link → /etc` would pass the
+    /// hasPrefix test and let a child process escape the home sandbox. Resolve the
+    /// real path and re-check.
+    static func isValidRepoKey(_ key: String) -> Bool {
+        // v0.7.7: delegated to the shared PathValidator helper that
+        // consolidates the three near-clone validators that used to
+        // live across this file + iOSArtifactsPane.
+        PathValidator.isValidRepoKey(key)
+    }
+
+    /// Legacy JSONL path validation helper retained for compatibility tests.
+    /// Restrict jsonlPath to live under known provider project directories and
+    /// reject traversal / control-byte / symlink-escape shapes
+    /// covered by isValidRepoKey.
+    static func isValidJsonlPath(_ path: String) -> Bool {
+        // v0.7.7: delegated to PathValidator. Allowlist of agent project
+        // directories lives in the shared helper now.
+        PathValidator.isValidJsonlPath(path, homeDirectory: ClawdmeterRealHome.path())
+    }
+
+    static let markdownDocumentMaxBytes = 2 * 1024 * 1024
+
+    static func standardizedMarkdownDocumentPath(_ rawPath: String, relativeTo cwd: String) -> String? {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !PathValidator.isEmpty(trimmed),
+              !PathValidator.containsControlBytes(trimmed),
+              !PathValidator.containsTraversal(trimmed)
+        else { return nil }
+        let expanded = NSString(string: trimmed).expandingTildeInPath
+        let absolute: String
+        if expanded.hasPrefix("/") {
+            absolute = expanded
+        } else {
+            guard !cwd.isEmpty,
+                  cwd.hasPrefix("/"),
+                  !PathValidator.containsControlBytes(cwd),
+                  !PathValidator.containsTraversal(cwd)
+            else { return nil }
+            absolute = (cwd as NSString).appendingPathComponent(expanded)
+        }
+        return (absolute as NSString).standardizingPath
+    }
+
+    static func markdownDocumentAllowedRoots(
+        relativeTo cwd: String,
+        homeDirectory: String = ClawdmeterRealHome.path()
+    ) -> [String] {
+        var roots: [String] = []
+        if let cwdRoot = standardizedMarkdownDocumentRoot(cwd) {
+            roots.append(cwdRoot)
+        }
+        let generatedDocsRoot = (homeDirectory as NSString)
+            .appendingPathComponent(".gstack/projects")
+        if let gstackRoot = standardizedMarkdownDocumentRoot(generatedDocsRoot) {
+            roots.append(gstackRoot)
+        }
+        var seen = Set<String>()
+        return roots.filter { seen.insert($0).inserted }
+    }
+
+    static func isMarkdownDocumentPathAllowed(
+        _ path: String,
+        relativeTo cwd: String,
+        homeDirectory: String = ClawdmeterRealHome.path()
+    ) -> Bool {
+        let canonical = (path as NSString).standardizingPath
+        let resolved = (canonical as NSString).resolvingSymlinksInPath
+        for root in markdownDocumentAllowedRoots(relativeTo: cwd, homeDirectory: homeDirectory) {
+            let rootStandard = (root as NSString).standardizingPath
+            let rootResolved = (rootStandard as NSString).resolvingSymlinksInPath
+            if pathIsInside(canonical, root: rootStandard)
+                && pathIsInside(resolved, root: rootResolved) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func standardizedMarkdownDocumentRoot(_ rawRoot: String) -> String? {
+        let trimmed = rawRoot.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !PathValidator.isEmpty(trimmed),
+              trimmed.hasPrefix("/"),
+              !PathValidator.containsControlBytes(trimmed),
+              !PathValidator.containsTraversal(trimmed)
+        else { return nil }
+        return (trimmed as NSString).standardizingPath
+    }
+
+    private static func pathIsInside(_ path: String, root: String) -> Bool {
+        path == root || path.hasPrefix(root + "/")
+    }
+
+    // v0.27.0: isSafeDesignImportBase(_:) removed along with the Design
+    // tab + Open Design /design/import-folder route.
+
+    func sendResponse(_ response: HTTPResponse, on connection: NWConnection) {
+        let bytes = httpResponseBytes(
+            status: response.status,
+            statusText: response.reason,
+            contentType: response.contentType,
+            body: response.body,
+            extraHeaders: response.extraHeaders
+        )
+        // T18 Wire Inspector: record outgoing response on a best-effort
+        // Task; bypassing the actor would let the inspector skew under
+        // load. Read the request context stashed in dispatch() so the
+        // outbound row carries the original method+path (without this,
+        // every response showed `— —`, useless for request/response
+        // correlation).
+        //
+        // Hot-path gate: only build the closure + retain the body when
+        // the inspector is on. For the /artifact endpoint (up to 50MB)
+        // this avoids pinning the full Data behind a detached Task that
+        // the actor would just drop inside.
+        if WireInspector.isEnabledFast {
+            let peerString = Self.endpointString(connection.endpoint)
+            let ctx = pendingRequests.removeValue(forKey: ObjectIdentifier(connection))
+            let method = ctx?.method ?? "—"
+            let path = ctx?.path ?? "—"
+            let status = response.status
+            let contentType = response.contentType
+            let body = response.body
+            Task.detached { @Sendable in
+                await WireInspector.shared.recordResponse(
+                    method: method, path: path, peer: peerString,
+                    status: status, body: body.isEmpty ? nil : body,
+                    contentType: contentType
+                )
+            }
+        } else {
+            // Still drop the per-connection map entry so it can't leak
+            // if the inspector flips on between request and response.
+            pendingRequests.removeValue(forKey: ObjectIdentifier(connection))
+        }
+        connection.send(content: bytes, completion: .contentProcessed { _ in
+            connection.cancel()  // HTTP/1.1 keep-alive is not implemented; close after each response
+        })
+    }
+
+    private func sendJSON(_ object: [String: Any], on connection: NWConnection) {
+        guard let body = try? JSONSerialization.data(withJSONObject: object) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+    }
+
+    // MARK: - v16 idempotency helpers
+
+    /// Atomically starts an idempotent command. Returns false after writing a
+    /// replay or in-flight response; returns true when the caller may execute.
+    @discardableResult
+    func beginIdempotentCommand(
+        key: String?,
+        on connection: NWConnection,
+        payloadHash: String? = nil
+    ) async -> Bool {
+        switch await mobileCommandOutbox.entryOrReserve(key: key) {
+        case .noKey, .reserved:
+            return true
+        case .cached(let cached):
+            sendCachedIdempotentResponse(cached, key: key ?? "", on: connection, payloadHash: payloadHash)
+            return false
+        case .inFlight:
+            let body = Data(#"{"error":"another-request-with-same-idempotency-key-is-in-flight"}"#.utf8)
+            sendResponse(
+                HTTPResponse(
+                    status: 409,
+                    reason: "Conflict",
+                    contentType: "application/json",
+                    body: body
+                ),
+                on: connection
+            )
+            return false
+        }
+    }
+
+    /// Returns true after writing a cached response to `connection`.
+    /// The caller short-circuits its handler logic in that case so the
+    /// side effect (send, swap model, merge PR) doesn't repeat.
+    /// `kind` is recorded into the audit log but is not strictly required
+    /// for the lookup itself — keys are globally unique by construction.
+    ///
+    /// `payloadHash` (optional) enables the payload-mismatch gate. When
+    /// supplied AND the cached entry has a stored hash that DIFFERS, the
+    /// daemon sends `422 Unprocessable` instead of replaying — protects
+    /// against an iOS retry that reused the persisted key but edited
+    /// the request body (e.g. user edited the GitHub spec between
+    /// taps). Callers without a hash skip the check (back-compat).
+    @discardableResult
+    func tryReplayIdempotent(
+        key: String?,
+        on connection: NWConnection,
+        payloadHash: String? = nil
+    ) async -> Bool {
+        guard let key, !key.isEmpty else { return false }
+        guard let cached = await mobileCommandOutbox.entry(forKey: key) else { return false }
+        sendCachedIdempotentResponse(cached, key: key, on: connection, payloadHash: payloadHash)
+        return true
+    }
+
+    private func sendCachedIdempotentResponse(
+        _ cached: MobileCommandOutbox.CachedEntry,
+        key: String,
+        on connection: NWConnection,
+        payloadHash: String? = nil
+    ) {
+        // Payload-mismatch gate. Cached entries without a stored hash
+        // (audit-log replay seeds, old entries from before this field)
+        // skip the check — we can't distinguish a real mismatch from a
+        // missing-record without the hash, and we'd rather replay than
+        // surface a spurious 422.
+        if let incoming = payloadHash,
+           let stored = cached.payloadHash,
+           !stored.isEmpty,
+           incoming != stored {
+            let body = Data(#"{"error":"idempotency-key-reused-with-different-payload"}"#.utf8)
+            sendResponse(
+                HTTPResponse(
+                    status: 422,
+                    reason: "Unprocessable",
+                    contentType: "application/json",
+                    body: body
+                ),
+                on: connection
+            )
+            serverLogger.warning("idempotent payload mismatch (key=\(key.prefix(8), privacy: .public)…)")
+            return
+        }
+        // Re-emit the cached response bytes. When the cache only carried
+        // the receipt (audit-log replay path, no body), synthesize a
+        // minimal JSON body that still carries the receipt so iOS can
+        // mark the outbox entry done.
+        let body: Data
+        let contentType: String
+        if let cachedBody = cached.responseBody {
+            body = cachedBody
+            contentType = cached.responseContentType
+        } else {
+            let payload: [String: Any] = ["receipt": cached.receipt.jsonDictionary, "replay": true]
+            body = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+            contentType = "application/json"
+        }
+        let response: HTTPResponse
+        if cached.responseStatus == 200 {
+            response = .ok(contentType: contentType, body: body)
+        } else {
+            // Non-200 cached responses (failed commands) replay with
+            // the original status code so iOS preserves the original
+            // error treatment.
+            response = HTTPResponse(
+                status: cached.responseStatus,
+                reason: "Cached Response",
+                contentType: contentType,
+                body: body
+            )
+        }
+        sendResponse(response, on: connection)
+        serverLogger.info("idempotent replay (key=\(key.prefix(8), privacy: .public)…, kind=\(cached.kind.rawValue, privacy: .public))")
+    }
+
+    /// Cache a freshly-processed command's response under `key` so the
+    /// next retry with the same key replays. Also writes a hashed audit
+    /// row to `~/.clawdmeter/audit/mobile-commands.jsonl`.
+    private func recordIdempotent(
+        key: String?,
+        kind: MobileCommandKind,
+        sessionId: UUID?,
+        connection: NWConnection,
+        payloadHash: String,
+        responseBody: Data?,
+        responseContentType: String = "application/json",
+        responseStatus: Int = 200,
+        failed: Bool = false,
+        errorMessage: String? = nil
+    ) async {
+        guard let key, !key.isEmpty else { return }
+        let entry: MobileCommandOutbox.CachedEntry
+        if failed {
+            entry = await mobileCommandOutbox.recordFailure(
+                key: key,
+                kind: kind,
+                error: errorMessage ?? "unknown",
+                responseStatus: responseStatus,
+                responseBody: responseBody,
+                payloadHash: payloadHash
+            )
+        } else {
+            entry = await mobileCommandOutbox.record(
+                key: key,
+                kind: kind,
+                responseBody: responseBody,
+                responseContentType: responseContentType,
+                responseStatus: responseStatus,
+                payloadHash: payloadHash
+            )
+        }
+        await AuditLog.shared.recordMobileCommand(
+            idempotencyKey: key,
+            kind: kind.rawValue,
+            sessionId: sessionId,
+            sourcePeer: Self.endpointString(connection.endpoint),
+            status: entry.receipt.status.rawValue,
+            payloadHash: payloadHash,
+            serverReceiptId: entry.receipt.serverReceiptId
+        )
+    }
+
+    /// One-shot helper for idempotent JSON success responses. Inlines the
+    /// receipt into the body dict so iOS can match by idempotencyKey,
+    /// caches the bytes for replay, and writes the audit row. Equivalent
+    /// to `sendJSON(body)` when `key` is nil (legacy clients).
+    func sendCommandResponse(
+        body: [String: Any],
+        key: String?,
+        kind: MobileCommandKind,
+        sessionId: UUID?,
+        payloadHash: String,
+        on connection: NWConnection
+    ) async {
+        var body = body
+        if let key, !key.isEmpty {
+            let receipt = MobileCommandReceipt(
+                idempotencyKey: key,
+                status: .acknowledged,
+                processedAt: Date()
+            )
+            body["receipt"] = receipt.jsonDictionary
+        }
+        guard let bytes = try? JSONSerialization.data(withJSONObject: body) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        if key != nil {
+            await recordIdempotent(
+                key: key,
+                kind: kind,
+                sessionId: sessionId,
+                connection: connection,
+                payloadHash: payloadHash,
+                responseBody: bytes,
+                responseStatus: 200
+            )
+        }
+        sendResponse(.ok(contentType: "application/json", body: bytes), on: connection)
+    }
+
+    func sendCommandJSONError(
+        _ body: [String: Any],
+        status: Int,
+        key: String?,
+        kind: MobileCommandKind,
+        sessionId: UUID?,
+        payloadHash: String,
+        on connection: NWConnection
+    ) async {
+        var body = body
+        let errorMessage = (body["error"] as? String) ?? "command_failed"
+        if let key, !key.isEmpty {
+            let receipt = MobileCommandReceipt(
+                idempotencyKey: key,
+                status: .failed,
+                processedAt: Date(),
+                error: errorMessage
+            )
+            body["receipt"] = receipt.jsonDictionary
+        }
+        guard let bytes = try? JSONSerialization.data(withJSONObject: body) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        if key != nil {
+            await recordIdempotent(
+                key: key,
+                kind: kind,
+                sessionId: sessionId,
+                connection: connection,
+                payloadHash: payloadHash,
+                responseBody: bytes,
+                responseStatus: status,
+                failed: true,
+                errorMessage: errorMessage
+            )
+        }
+        sendResponse(
+            HTTPResponse(
+                status: status,
+                reason: Self.reasonPhrase(forStatus: status),
+                contentType: "application/json",
+                body: bytes
+            ),
+            on: connection
+        )
+    }
+
+    func sendCommandCodableResponse<T: Encodable>(
+        _ value: T,
+        key: String?,
+        kind: MobileCommandKind,
+        sessionId: UUID?,
+        payloadHash: String,
+        status: Int = 200,
+        failed: Bool = false,
+        errorMessage: String? = nil,
+        on connection: NWConnection
+    ) async {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(value) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        if key != nil {
+            await recordIdempotent(
+                key: key,
+                kind: kind,
+                sessionId: sessionId,
+                connection: connection,
+                payloadHash: payloadHash,
+                responseBody: body,
+                responseStatus: status,
+                failed: failed,
+                errorMessage: errorMessage
+            )
+        }
+        sendResponse(
+            HTTPResponse(
+                status: status,
+                reason: Self.reasonPhrase(forStatus: status),
+                contentType: "application/json",
+                body: body
+            ),
+            on: connection
+        )
+    }
+
+    private static func reasonPhrase(forStatus status: Int) -> String {
+        switch status {
+        case 200: return "OK"
+        case 400: return "Bad Request"
+        case 403: return "Forbidden"
+        case 404: return "Not Found"
+        case 409: return "Conflict"
+        case 422: return "Unprocessable"
+        case 500: return "Internal Server Error"
+        case 503: return "Service Unavailable"
+        default: return "Status"
+        }
+    }
+
+    private func sendCodable<T: Encodable>(_ value: T, on connection: NWConnection) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(value) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+    }
+
+    /// v0.14.0: sendJSON with arbitrary HTTP status (used by T20 design
+    /// bridge proxy to surface 503/400/502 with structured error JSON).
+    private func sendJSON(_ object: [String: Any], on connection: NWConnection, status: Int) {
+        let body = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
+        let reason: String
+        switch status {
+        case 200: reason = "OK"
+        case 400: reason = "Bad Request"
+        case 401: reason = "Unauthorized"
+        case 403: reason = "Forbidden"
+        case 404: reason = "Not Found"
+        case 500: reason = "Internal Server Error"
+        case 501: reason = "Not Implemented"
+        case 502: reason = "Bad Gateway"
+        case 503: reason = "Service Unavailable"
+        default:  reason = "Status"
+        }
+        sendResponse(
+            HTTPResponse(status: status, reason: reason, contentType: "application/json", body: body),
+            on: connection
+        )
+    }
+
+    private func httpResponseBytes(
+        status: Int,
+        statusText: String,
+        contentType: String,
+        body: Data,
+        extraHeaders: [(String, String)] = []
+    ) -> Data {
+        var out = Data()
+        out.append(Data("HTTP/1.1 \(status) \(statusText)\r\n".utf8))
+        out.append(Data("Content-Type: \(contentType)\r\n".utf8))
+        out.append(Data("Content-Length: \(body.count)\r\n".utf8))
+        out.append(Data("Connection: close\r\n".utf8))
+        for (name, value) in extraHeaders {
+            out.append(Data("\(name): \(value)\r\n".utf8))
+        }
+        out.append(Data("\r\n".utf8))
+        out.append(body)
+        return out
+    }
+}
+
+// MARK: - Antigravity Plan endpoint (wire v7)
+
+extension AgentControlServer {
+    /// `GET /sessions/:id/antigravity-plan` — returns the parsed Plan
+    /// snapshot for a Gemini session. Works in Disk mode (default);
+    /// SDK mode (Commit 10) extends the data source via the sidecar.
+    ///
+    /// Brain resolution strategy:
+    ///   1. Look up `~/.gemini/antigravity/agyhub_summaries_proto.pb` for
+    ///      brain UUIDs whose cwd matches the session's repoKey.
+    ///   2. If multiple, pick the brain dir with the newest mtime.
+    ///   3. Parse the brain dir via BrainPlanParser.
+    ///   4. Encode as AntigravityPlanSnapshot and send.
+    func handleGetAntigravityPlan(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        // REV-Antigravity-polling (v0.8): chat sessions never have an
+        // Antigravity brain — short-circuit before touching session.repoKey
+        // (which is nil for chat sessions, would crash the URL constructor).
+        guard session.kind == .code else {
+            sendResponse(.notFound, on: connection); return
+        }
+        // Only respond for Gemini sessions. Claude/Codex sessions don't
+        // have an Antigravity brain — return 404 with a clear shape so
+        // iOS can fall back to "Plan tab not applicable for this agent".
+        guard session.agent == .gemini else {
+            sendResponse(.notFound, on: connection); return
+        }
+
+        let home = ClawdmeterRealHome.url()
+        let antigravityDir = home.appendingPathComponent(".gemini/antigravity", isDirectory: true)
+        let indexURL = antigravityDir.appendingPathComponent("agyhub_summaries_proto.pb", isDirectory: false)
+        let stateURL = antigravityDir.appendingPathComponent("antigravity_state.pbtxt", isDirectory: false)
+
+        let index = BrainSummaryIndexer.read(at: indexURL)
+        // session.repoKey is non-nil here because the kind-guard above
+        // short-circuits chat sessions; force-unwrap is safe.
+        let cwdURL = URL(fileURLWithPath: session.repoKey!)
+        var candidateUUIDs = BrainSummaryIndexer.lookup(cwd: cwdURL, in: index)
+        if candidateUUIDs.isEmpty {
+            // Fallback: glob all brain dirs and let mtime drive the pick.
+            let brainsDir = antigravityDir.appendingPathComponent("brain", isDirectory: true)
+            if let entries = try? FileManager.default.contentsOfDirectory(at: brainsDir, includingPropertiesForKeys: nil) {
+                candidateUUIDs = entries.map { $0.lastPathComponent }
+            }
+        }
+
+        let brainsDir = antigravityDir.appendingPathComponent("brain", isDirectory: true)
+        let bestBrain = candidateUUIDs
+            .map { brainsDir.appendingPathComponent($0, isDirectory: true) }
+            .max(by: { lhs, rhs in
+                let l = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let r = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return l < r
+            })
+
+        let state = try? AntigravityStateReader.read(at: stateURL)
+        let sdkModeActive = UserDefaults.standard.bool(forKey: "clawdmeter.antigravity.sdkMode")
+        let modelName = state?.displayModelName
+
+        let snapshot: AntigravityPlanSnapshot
+        if let brain = bestBrain {
+            let planState = BrainPlanParser.parse(brainURL: brain)
+            switch planState {
+            case .ready(let plan):
+                let convURL = antigravityDir
+                    .appendingPathComponent("conversations", isDirectory: true)
+                    .appendingPathComponent("\(plan.brainUUID).pb", isDirectory: false)
+                let probe = ConversationProtoParser.probe(conversationURL: convURL, brainURL: brain)
+                let totalUsage = WireTokenUsage(
+                    total: probe.estimatedTokens,
+                    prompt: nil, candidate: nil, thoughts: nil, cached: nil,
+                    isEstimate: true
+                )
+                snapshot = AntigravityPlanSnapshot(
+                    sessionId: session.id,
+                    brainUUID: plan.brainUUID,
+                    taskHeadline: plan.taskHeadline,
+                    taskBody: plan.taskBody,
+                    planSteps: Self.flatten(steps: plan.steps),
+                    annotations: plan.annotations.map { WireBrainArtifact(id: $0.id, filename: $0.filename, body: $0.body) },
+                    totalUsage: totalUsage,
+                    lastUpdated: plan.lastUpdated,
+                    model: modelName,
+                    sdkModeActive: sdkModeActive,
+                    awaitingFirstTurn: false
+                )
+            case .awaitingFirstTurn, .absent:
+                snapshot = AntigravityPlanSnapshot(
+                    sessionId: session.id,
+                    brainUUID: brain.lastPathComponent,
+                    taskHeadline: "",
+                    taskBody: "",
+                    planSteps: [],
+                    annotations: [],
+                    totalUsage: nil,
+                    lastUpdated: Date(),
+                    model: modelName,
+                    sdkModeActive: sdkModeActive,
+                    awaitingFirstTurn: true
+                )
+            }
+        } else {
+            // No brain dir at all — same shape as awaiting first turn,
+            // empty brainUUID so iOS doesn't pretend it has a real id.
+            snapshot = AntigravityPlanSnapshot(
+                sessionId: session.id,
+                brainUUID: "",
+                taskHeadline: "",
+                taskBody: "",
+                planSteps: [],
+                annotations: [],
+                totalUsage: nil,
+                lastUpdated: Date(),
+                model: modelName,
+                sdkModeActive: sdkModeActive,
+                awaitingFirstTurn: true
+            )
+        }
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(snapshot) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// Flattens a nested tree of `BrainPlanStep` into a depth-indexed
+    /// list of `WirePlanStep`. iOS renders the flat list with
+    /// `.padding(.leading, CGFloat(step.depth) * 16)`.
+    private static func flatten(steps: [BrainPlanStep]) -> [WirePlanStep] {
+        var out: [WirePlanStep] = []
+        for step in steps {
+            out.append(WirePlanStep(id: step.id, label: step.label, isComplete: step.isComplete, depth: step.depth))
+            out.append(contentsOf: flatten(steps: step.children))
+        }
+        return out
+    }
+}
+
+// MARK: - HTTP request parsing helpers
+
+struct HTTPRequest {
+    let method: String
+    let path: String
+    let headers: [String: String]  // lower-cased header names
+    let body: Data
+}
+
+/// Streaming HTTP/1.1 request buffer. Accumulates bytes until a complete
+/// request (headers + Content-Length body) is available, then returns it
+/// from `tryParse()`. Reuses the same buffer across multiple `receive`
+/// callbacks until parse succeeds.
+///
+/// @unchecked Sendable: this buffer is only ever mutated from within a
+/// single NWConnection.receive callback chain; the callback shape isn't
+/// quite Sendable-checkable but the runtime invariant holds.
+private final class HTTPRequestBuffer: @unchecked Sendable {
+    enum ParseError: Error {
+        case badRequest
+        case payloadTooLarge
+    }
+
+    private static let maxHeaderBytes = 32 * 1024
+    /// Raised from 1MB → 50MB in v0.4.8 so iOS can POST raw image
+    /// bytes to `/sessions/:id/attachments`. Tailscale ACL + bearer
+    /// auth still gate who can reach the daemon, so the worst case is
+    /// a paired peer wasting Mac memory on one malformed upload — and
+    /// per-endpoint handlers still enforce their own caps (the send
+    /// path stays at 1MB, the artifact endpoint at 50MB, attachment
+    /// uploads at 50MB).
+    private static let maxBodyBytes = 50 * 1024 * 1024
+
+    var data = Data()
+
+    func append(_ chunk: Data) {
+        data.append(chunk)
+    }
+
+    /// Attempt to extract a complete HTTP request. Returns nil if more bytes
+    /// are needed.
+    func tryParse() throws -> HTTPRequest? {
+        guard data.count <= Self.maxHeaderBytes + Self.maxBodyBytes else {
+            throw ParseError.payloadTooLarge
+        }
+        // Find headers/body boundary.
+        guard let headerEndRange = data.range(of: Data("\r\n\r\n".utf8)) else {
+            if data.count > Self.maxHeaderBytes { throw ParseError.payloadTooLarge }
+            return nil
+        }
+        guard headerEndRange.lowerBound <= Self.maxHeaderBytes else {
+            throw ParseError.payloadTooLarge
+        }
+        let headerBytes = data[..<headerEndRange.lowerBound]
+        let headerText = String(decoding: headerBytes, as: UTF8.self)
+        let lines = headerText.split(separator: "\r\n", omittingEmptySubsequences: false).map(String.init)
+        guard let requestLine = lines.first else { throw ParseError.badRequest }
+        let parts = requestLine.split(separator: " ").map(String.init)
+        guard parts.count >= 3 else { throw ParseError.badRequest }
+        let method = parts[0]
+        let path = parts[1]
+
+        var headers: [String: String] = [:]
+        for line in lines.dropFirst() {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let name = String(line[..<colon]).lowercased()
+            let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+            headers[name] = value
+        }
+
+        let contentLengthRaw = headers["content-length"] ?? "0"
+        guard let contentLength = Int(contentLengthRaw),
+              contentLength >= 0 else {
+            throw ParseError.badRequest
+        }
+        guard contentLength <= Self.maxBodyBytes else {
+            throw ParseError.payloadTooLarge
+        }
+        let bodyStart = headerEndRange.upperBound
+        let availableBody = data.count - bodyStart
+        if availableBody < contentLength {
+            return nil  // need more bytes
+        }
+
+        let body = data[bodyStart..<(bodyStart + contentLength)]
+        return HTTPRequest(method: method, path: path, headers: headers, body: Data(body))
+    }
 }

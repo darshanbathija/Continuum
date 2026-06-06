@@ -145,13 +145,15 @@ struct WorkspaceReviewPane: View {
         }
     }
 
-    /// Live tmux terminal in the review pane. Reuses the same
+    /// Live direct PTY terminal in the review pane. Reuses the same
     /// `TerminalTabContainer` that the Cmd+T overlay shows, but inline
     /// so the user can keep the chat and the raw shell side-by-side
     /// without juggling a sheet.
     @ViewBuilder
     private var terminalTab: some View {
-        if let runtime = AppDelegate.runtime,
+        if !model.canOpenWorkspaceTerminalTab(from: session) {
+            placeholder(text: "Terminal unavailable for this runtime.")
+        } else if let runtime = AppDelegate.runtime,
            let port = runtime.agentControlServer.boundWsPort {
             TerminalTabContainer(
                 session: session,

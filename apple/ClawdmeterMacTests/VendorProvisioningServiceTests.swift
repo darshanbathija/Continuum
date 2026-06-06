@@ -59,6 +59,36 @@ final class VendorProvisioningServiceTests: XCTestCase {
         }
     }
 
+    func testDefaultActionLauncherUsesDirectPtyAndReturnsTerminalId() async throws {
+        let temp = try makeTempDirectory()
+        let vendor = VendorProvisioningVendor(
+            id: "pty-vendor",
+            displayName: "PTY Vendor",
+            category: .computeHosting,
+            cliNames: ["pty-vendor"],
+            mcpAliases: [],
+            actions: [
+                .init(id: "install", kind: .install, label: "Install CLI", command: "printf 'VENDOR_READY\\n'")
+            ],
+            envTemplates: [.init(key: "PTY_VENDOR_TOKEN", label: "Token")]
+        )
+        let service = makeService(temp: temp, catalog: [vendor])
+
+        let response = try await service.performAction(vendorId: vendor.id, actionId: "install")
+
+        XCTAssertTrue(response.launched)
+        XCTAssertEqual(response.message, "Started a direct terminal for this command.")
+        XCTAssertNil(response.terminalWindowId)
+        let paneId = try XCTUnwrap(response.terminalPaneId)
+        addTeardownBlock {
+            Task { await TerminalPtyRegistry.shared.kill(id: paneId) }
+        }
+        let maybeHost = await waitForTerminalHost(id: paneId)
+        let host = try XCTUnwrap(maybeHost)
+        let sawReady = await waitForOutput(host, contains: "VENDOR_READY")
+        XCTAssertTrue(sawReady)
+    }
+
     func testCheckDeviceIncludesMCPMatchesFromFakeAgentConfigs() async throws {
         let temp = try makeTempDirectory()
         let vendor = VendorProvisioningVendor(
@@ -276,5 +306,33 @@ final class VendorProvisioningServiceTests: XCTestCase {
             pluginDiscovery: pluginDiscovery,
             deviceProbe: deviceProbe
         )
+    }
+
+    private func waitForTerminalHost(id: String, timeout: TimeInterval = 4) async -> TerminalPtyHost? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let host = await TerminalPtyRegistry.shared.host(id: id) {
+                return host
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return await TerminalPtyRegistry.shared.host(id: id)
+    }
+
+    private func waitForOutput(
+        _ host: TerminalPtyHost,
+        contains needle: String,
+        timeout: TimeInterval = 4
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let output = String(data: await host.snapshot(), encoding: .utf8) ?? ""
+            if output.contains(needle) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let output = String(data: await host.snapshot(), encoding: .utf8) ?? ""
+        return output.contains(needle)
     }
 }

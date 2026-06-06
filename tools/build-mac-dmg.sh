@@ -7,7 +7,7 @@
 #
 #   1. Developer ID + notarized (PREFERRED — Gatekeeper opens it with no
 #      warning). Triggered when a "Developer ID Application" identity is in the
-#      keychain. The app + every bundled helper (opencode, uv, tmux + dylibs)
+#      keychain. The app + every bundled helper (opencode, uv)
 #      is signed with the Developer ID cert + hardened runtime + a secure
 #      timestamp, then the DMG is submitted to Apple's notary service and the
 #      ticket is stapled. App Groups force a provisioning profile even for
@@ -126,14 +126,8 @@ rm -rf "$ARCHIVE_PATH" "$EXPORT_DIR" "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 
 # ────────────────────────────────────────────────────────────────────────
-# 2. Bundled tmux
+# 2. Bundled helpers
 # ────────────────────────────────────────────────────────────────────────
-
-if [[ "${CLAWDMETER_SKIP_BUNDLED_TMUX:-0}" != "1" ]]; then
-  ./tools/download-bundled-tmux.sh
-else
-  echo "⚠ Skipping bundled tmux download (CLAWDMETER_SKIP_BUNDLED_TMUX=1)"
-fi
 
 if [[ "${CLAWDMETER_SKIP_BUNDLED_OPENCODE:-0}" != "1" ]]; then
   ./tools/download-bundled-opencode.sh
@@ -227,7 +221,6 @@ echo "✓ App exported: $APP_PATH"
 
 REQUIRED_VENDOR_BINS=(
   "$APP_PATH/Contents/Resources/Vendor/opencode/opencode"
-  "$APP_PATH/Contents/Resources/Vendor/tmux/bin/tmux"
   "$APP_PATH/Contents/Resources/Vendor/uv/uv"
 )
 for BIN in "${REQUIRED_VENDOR_BINS[@]}"; do
@@ -241,8 +234,7 @@ done
 # ────────────────────────────────────────────────────────────────────────
 # 6. Re-sign the bundled helper binaries.
 #
-# opencode + uv ship ad-hoc (TeamIdentifier=not set); tmux + its dylibs are
-# ad-hoc from the Homebrew bottle; node is already Developer-ID-signed by the
+# opencode + uv ship ad-hoc (TeamIdentifier=not set); node is already Developer-ID-signed by the
 # Node.js Foundation (left as-is — third-party Developer-ID binaries pass
 # notarization). For notarization every Mach-O must carry hardened runtime +
 # a secure timestamp, so we re-sign the ad-hoc ones with our identity.
@@ -275,15 +267,6 @@ fi
 
 if [[ -n "$SIGN_ID" ]]; then
   echo "▸ Re-signing bundled helpers with: $SIGN_ID"
-  # tmux dylibs (glob — versions drift) + tmux binary: runtime, no entitlements.
-  shopt -s nullglob
-  for DYLIB in "$V/tmux/lib/"*.dylib; do
-    codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" "$TS_FLAG" "$DYLIB" 2>&1 | sed 's/^/    /'
-  done
-  shopt -u nullglob
-  for BIN in "$V/tmux/bin/tmux"; do
-    [[ -f "$BIN" ]] && codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" "$TS_FLAG" "$BIN" 2>&1 | sed 's/^/    /'
-  done
   # opencode + uv: runtime + disable-library-validation.
   for BIN in "$V/opencode/opencode" "$V/uv/uv"; do
     if [[ -f "$BIN" && -f "$HELPER_ENT" ]]; then

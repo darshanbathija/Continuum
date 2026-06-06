@@ -3,13 +3,12 @@ import ClawdmeterShared
 
 /// `@`-triggered popover. Scope-cut per Codex P1 finding:
 /// shows (a) other open sessions, (b) files the agent has already cited
-/// in this session (`SourceEntry`s), (c) recent JSONLs across sessions.
+/// in this session (`SourceEntry`s).
 /// A full repo-file walker is deferred to a follow-up TODO.
 struct MentionPicker: View {
 
     let openSessions: [AgentSession]
     let sourceEntries: [SourceEntry]
-    let recentJSONLs: [RecentSession]
     @Binding var query: String
     let onSelect: (Suggestion) -> Void
     let onDismiss: () -> Void
@@ -19,34 +18,29 @@ struct MentionPicker: View {
     enum Suggestion: Identifiable, Hashable {
         case session(AgentSession)
         case file(path: String, label: String)
-        case recent(RecentSession)
 
         var id: String {
             switch self {
             case .session(let s): return "s:\(s.id.uuidString)"
             case .file(let path, _): return "f:\(path)"
-            case .recent(let r): return "r:\(r.path)"
             }
         }
         var label: String {
             switch self {
             case .session(let s): return s.goal ?? s.repoDisplayName
             case .file(_, let label): return label
-            case .recent(let r): return r.firstPrompt ?? r.path
             }
         }
         var sublabel: String {
             switch self {
             case .session(let s): return "\(s.agent.rawValue.capitalized) · session"
             case .file(let path, _): return path
-            case .recent(let r): return "Recent JSONL · \(r.provider.rawValue.capitalized)"
             }
         }
         var icon: String {
             switch self {
             case .session: return "bubble.left.and.bubble.right"
             case .file: return "doc"
-            case .recent: return "clock.arrow.circlepath"
             }
         }
     }
@@ -56,7 +50,6 @@ struct MentionPicker: View {
         var all: [Suggestion] = []
         all.append(contentsOf: openSessions.map { .session($0) })
         all.append(contentsOf: sourceEntries.map { .file(path: $0.payload, label: $0.label) })
-        all.append(contentsOf: recentJSONLs.map { .recent($0) })
         guard !q.isEmpty else { return all }
         return all.filter {
             $0.label.lowercased().contains(q) || $0.sublabel.lowercased().contains(q)
@@ -81,7 +74,7 @@ struct MentionPicker: View {
             .padding(.vertical, 6)
             Divider()
             if filtered.isEmpty {
-                Text("No matches in open sessions, agent-cited files, or recent JSONLs. Full repo file walker is in TODOS.md.")
+                Text("No matches in open sessions or agent-cited files. Full repo file walker is in TODOS.md.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)

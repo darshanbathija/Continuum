@@ -1,4 +1,7 @@
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import ClawdmeterShared
 
 /// PR #24a Step 1 regression tests: AgentControlClient now lives in

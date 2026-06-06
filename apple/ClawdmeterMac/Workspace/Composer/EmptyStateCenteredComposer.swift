@@ -273,10 +273,10 @@ struct EmptyStateCenteredComposer: View {
         do {
             let selectedSourceIds = revalidatedInheritedSourceIds()
             let unavailableSourceIds = unavailableInheritedSourceIds(validSourceIds: selectedSourceIds)
-            // Stage attachments before spawn so managed adapters receive the
-            // user's actual full prompt (including attachment refs), not the
-            // 80-char `goal` slice. tmux-based sessions restage below into the
-            // final per-session/worktree directory before /send.
+            // Stage attachments before spawn so managed/direct runtimes receive
+            // the user's actual full prompt (including attachment refs), not
+            // the 80-char `goal` slice. Sessions restage below into the final
+            // per-session/worktree directory before /send.
             var stagedPaths: [URL] = []
             var pendingStagingDir: URL?
             defer {
@@ -308,7 +308,6 @@ struct EmptyStateCenteredComposer: View {
                     planMode: store.permissionMode == .plan,
                     goal: goal,
                     mode: workspaceDraft.mode,
-                    tmux: runtime.tmuxClient,
                     model: store.modelId,
                     effort: launcher.supportsEffort(modelId: store.modelId) ? store.effort : nil,
                     acceptEdits: store.permissionMode == .acceptEdits,
@@ -323,7 +322,6 @@ struct EmptyStateCenteredComposer: View {
                     planMode: store.permissionMode == .plan,
                     goal: goal,
                     mode: store.mode,
-                    tmux: runtime.tmuxClient,
                     model: store.modelId,
                     effort: launcher.supportsEffort(modelId: store.modelId) ? store.effort : nil,
                     acceptEdits: store.permissionMode == .acceptEdits,

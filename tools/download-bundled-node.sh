@@ -57,7 +57,7 @@ fi
 ARM_TARBALL="node-${VERSION}-darwin-arm64.tar.gz"
 BASE_URL="https://nodejs.org/dist/${VERSION}"
 
-# Pick a shasum frontend. macOS ships `shasum`, Linux usually `sha256sum`.
+# Pick a shasum frontend. Prefer `shasum`, then fall back to `sha256sum`.
 if command -v shasum >/dev/null 2>&1; then
   SHASUM_CHECK=(shasum -a 256 -c -)
 else

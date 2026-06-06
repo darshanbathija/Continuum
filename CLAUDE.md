@@ -35,40 +35,21 @@ This codebase has TWO upstream sources you must credit and respect:
 Clawdmeter/
 ├── README.md                          download + install + build instructions
 ├── CLAUDE.md                          this file
-├── VERSION                            single source-of-truth: Mac DMG + Linux AppImage + .deb
+├── VERSION                            marketing version mirror
 ├── tools/
 │   ├── build-mac-dmg.sh               idempotent DMG packager — runs xcodegen
 │   │                                   + xcodebuild archive + hdiutil
-│   ├── build-linux-appimage.sh        AppImage packager — linuxdeploy + appimagetool
-│   ├── build-linux-deb.sh             .deb packager — dpkg-deb
 │   └── refresh-pricing.sh             curls LiteLLM pricing, filters to
 │                                       claude-* / gpt-* / o[0-9]+*, writes
 │                                       Analytics/pricing.json
 ├── docs/
-│   └── linux/                         Linux-specific docs: INSTALL, PAIRING,
-│                                       TROUBLESHOOTING, QA-CHECKLIST (release gate)
-├── linux/                             Linux desktop port (new — branch `linux-app`)
-│   ├── Package.swift                  swift-tools-version 6.0; deps on Hummingbird (Phase 3)
-│   │                                   + SwiftCrossUI (Phase 3.5) + shared via path
-│   ├── Sources/
-│   │   ├── ClawdmeterDaemon/          @main headless daemon binary
-│   │   ├── ClawdmeterLinux/           desktop app (tray + UI + storage)
-│   │   │   ├── Transport/             Hummingbird transport + peer-filter + bearer-auth
-│   │   │   ├── Storage/               XDG paths + libsecret + LinuxUsageStore
-│   │   │   ├── Tray/                  AppIndicator + Cairo gauge + SNI detector
-│   │   │   └── UI/                    SwiftCrossUI primary + direct CGtk4 (Sessions IDE)
-│   │   └── C*/                        9 C shim module maps (pkg-config-resolved)
-│   ├── Tests/ClawdmeterLinuxTests/    34 tests (security + storage + UI + visual)
-│   ├── scripts/configure-c-shims.sh   pkg-config validation
-│   └── resources/                     .desktop + .appdata.xml + systemd unit +
-│                                       packaging/appimage/ + packaging/deb/
-├── .github/workflows/linux.yml        Linux CI matrix + AppImage/.deb build + install tests
-├── .github/PULL_REQUEST_TEMPLATE.md   Manual VM gate sign-off checklist
+│   └── designs/                       Sessions/control-plane docs
+├── .github/PULL_REQUEST_TEMPLATE.md   Review/test checklist
 └── apple/                             Xcode workspace + Swift package
     ├── project.yml                    xcodegen spec — regenerates .xcodeproj
     ├── README.md                      apps engineering doc (architecture,
     │                                   target layout, build matrix)
-    ├── ClawdmeterShared/              cross-platform Swift Package
+    ├── ClawdmeterShared/              Apple-platform Swift Package
     │   ├── Package.swift
     │   ├── Sources/ClawdmeterShared/
     │   │   ├── Analytics/             ccusage-in-Swift
@@ -435,9 +416,9 @@ Tests at v2.0 ship: 153/153 (was 133) in `ClawdmeterShared` after adding
 `SessionsV2Tests` covering schema v3 round-trip + back-compat,
 `ReasoningEffort` flag mapping, `ModelCatalog.bundled` consistency,
 mid-session change DTOs, `HealthResponse`, `WireChatSnapshot`, `CityPool`,
-`WatchSessionSummary`. 19/19 in `tools/tmux-cc-probe`. All three
-platform schemes build clean. (Subsequent polish + the v0.3.0 chat-IDE
-rewrite carry the suite to 250 — see CHANGELOG.md.)
+`WatchSessionSummary`. All three platform schemes build clean. (Subsequent
+polish + the v0.3.0 chat-IDE rewrite carry the suite to 250 — see
+CHANGELOG.md.)
 
 ## Sessions v2.0.1 polish (2026-05-17 same-day follow-up)
 
@@ -536,28 +517,28 @@ source of truth for what's in the DMG.
 
 Five-wave rewrite of the Sessions tab into a chat workbench. The tab is
 no longer a session manager that hosts a `[Chat | Terminal]` segmented
-picker; chat is the only mode and raw tmux is demoted to a `Cmd+T` overlay
+picker; chat is the only mode and raw terminal is demoted to a `Cmd+T` overlay
 reusing `TerminalTabContainer`. The composer is the surface that took the
 biggest jump.
 
 - **Wave A — Continuable sessions.** Right-click a recent JSONL row → "Continue here"
   parses the CLI's own session id from the file header via the new
   `JSONLSessionId` helper (Claude `sessionId` / Codex `payload.id`) and
-  spawns a tmux pane with `--resume <id>` / `resume <id>`. The new
+  spawns a direct runtime with `--resume <id>` / `resume <id>`. The new
   session pins to the same JSONL so chat history is continuous.
   `SessionsModel.spawnSession` gains `resumeSessionId`, `model`,
   `effort`, and `pinnedJSONLURL` parameters.
-- **Wave B — Tmux-as-chat first-class.** Mac send path moves from
-  direct `tmuxClient.pasteBytes` to the daemon's `POST /sessions/:id/send`
-  via the new `MacComposerSender` loopback HTTP client, so the daemon's
-  audit + rate-limit + `sendKeys`/`paste-buffer` heuristics apply
+- **Wave B — Runtime-as-chat first-class.** Mac send path moves to the
+  daemon's `POST /sessions/:id/send` via the new `MacComposerSender`
+  loopback HTTP client, so the daemon's audit + rate-limit + PTY/harness send
+  heuristics apply
   uniformly across Mac and iOS. Send button transforms into a stop
   button (`/sessions/:id/interrupt`) when the session is running.
 - **Wave C — Powerful composer.** New shared `ComposerStore`
   (`ClawdmeterShared/Composer/`) owns text/attachments/chip state with
   a `SendError` enum and locked semantics: text preserved on error,
   attachments preserved on error, trailing-newline always appended for
-  tmux `paste-buffer`. `ComposerInputCore` SwiftUI view binds it.
+  PTY submission. `ComposerInputCore` SwiftUI view binds it.
   Paperclip is wired to `.fileImporter` + `.onDrop` + `NSPasteboard`
   clipboard image paste. Image-paste-as-PNG, drag-drop from Finder, and
   the file picker all route through `AttachmentStaging` which writes
@@ -634,13 +615,13 @@ behavior). `SessionsV2Tests` wire-version assertion bumped 3 → 4.
 Read-write control plane for Claude Code + Codex CLI agent sessions, on top
 of the existing read-only analytics. Mac runs a SwiftNIO-free
 Network.framework HTTP+WS daemon (port 21731 / 21732) inside `ClawdmeterMac`;
-iPhone + Watch consume it over Tailscale. tmux `-CC` is the PTY layer.
+iPhone + Watch consume it over Tailscale. Claude and terminal surfaces use
+direct PTY hosts; Codex, Cursor, Gemini, and Grok use harness providers.
 
 ### Daemon + data layer — `apple/ClawdmeterMac/AgentControl/`
-- `TmuxControlClient` (actor) + `ControlModeParser` + `PseudoTerminal` —
-  the parser was Phase 0-validated against tmux 3.6a; see
-  `tools/tmux-cc-probe/` for the unit + integration tests. Owns
-  `splitWindow` (G12 multi-terminal) and `killPane`.
+- `ClaudePtyRegistry` + `TerminalPtyRegistry` + `PseudoTerminal` —
+  direct PTY hosts for Claude sessions and terminal panes. Owns terminal
+  spawn, input, resize, output streaming, and process-group teardown.
 - `AgentControlServer` + `WSChannel` protocol + `TerminalWebSocketChannel`
   + `AgentEventStream` — dual-port listener (HTTP + WS) with
   accept-handler peer filter to `127/8`, `::1`, `100.64/10` CGNAT, and
@@ -662,13 +643,11 @@ iPhone + Watch consume it over Tailscale. tmux `-CC` is the PTY layer.
 - `JSONLTail` + `DoneDetector` + `PlanModeWatcher` + `SessionEventWiring`
   — per-session JSONL watch fires plan-ready / done-detected events into
   the registry, which the AgentEventStream fans out to subscribed clients.
-- `TmuxSupervisor` — auto-restart on `%exit` with exponential backoff;
-  marks sessions degraded; banner in Mac Settings → Sessions tab.
 - `ShellRunner` — argv-only subprocess wrapper. NEVER concat into shell
   strings (the repo path has a space; concat breaks).
 - `SessionScheduler` (G15) — single re-armable `DispatchSourceTimer`
-  observing `registry.$sessions`; fires scheduled follow-ups by pasting
-  the prompt into the session's tmux pane via `paste-buffer`.
+  observing `registry.$sessions`; fires scheduled follow-ups through the
+  session runtime.
 - `PRMirror` (G16) — auto-detects a GitHub PR URL in chat (regex over
   assistant text + tool_result bodies), polls `gh pr view --json` every
   30s, exposes title / state / additions / deletions / review state +
@@ -703,7 +682,7 @@ back-button bug on macOS NavSplitView). `HSplitView` with sidebar | thread
   PDF/image/doc artifacts the agent wrote (G10).
 - `InAppBrowser.swift` — `WKWebView` + nav chrome + Cmd-click element
   comment overlay that injects `[BROWSER COMMENT @ <selector>] <text>`
-  into the agent's tmux pane (G13).
+  into the agent runtime (G13).
 - `PRReviewPane.swift` — G16 PR card with state badge + body + Approve.
 - `MarkdownRenderer.swift` (under `AgentControl/`) — native
   `AttributedString(markdown:)` for assistant bubbles + fenced code
@@ -754,7 +733,7 @@ back-button bug on macOS NavSplitView). `HSplitView` with sidebar | thread
 ### State + tests
 Build matrix: Mac, iOS, and Watch all build clean. Tests: 79/79 in
 ClawdmeterShared (Protocol round-trip + back-compat for SessionMode,
-G2 schema fields, RecentSession), 19/19 in tools/tmux-cc-probe.
+G2 schema fields, RecentSession).
 Implementation status doc at `docs/designs/sessions-IMPLEMENTATION-STATUS.md`;
 full CEO plan at `docs/designs/sessions-control-plane.md`.
 
@@ -772,7 +751,7 @@ the parent's encoded name. A naive `/`→`-` encoder misses both cases.
 ## Chat tab (v0.23.6 Chat V2 → v0.24.0 Chat V3 broadcast)
 
 The Chat tab is a separate surface from the Sessions / Code tab
-described above. Sessions/Code is a tmux-backed agent workbench;
+described above. Sessions/Code is a direct runtime / harness agent workbench;
 Chat is the function-first conversational surface. They share the
 same `AgentSessionRegistry`, `DaemonChatStoreRegistry`, and
 `/sessions` daemon, but the UI and ingestion paths diverge.
@@ -785,8 +764,8 @@ same `AgentSessionRegistry`, `DaemonChatStoreRegistry`, and
   `CreateChatSessionRequest.deepResearch`. Per-turn lifecycle is
   authoritative now — the previous "no new event in 2s = done"
   heuristic is the fallback for wire v13- daemons only.
-- Per-backend Stop: tmux `ESC` for Claude, Codex SDK
-  `AbortController.abort()`, Antigravity `agentapi /cancel` POST.
+- Per-backend Stop: PTY `ESC` for Claude, harness cancellation for Codex,
+  Cursor, Gemini, and Grok, and OpenCode HTTP cancel where available.
 - Honest Deep Research across Claude, Codex, and Antigravity; gated
   by `tools/verify-deep-research.sh`.
 - `PermissionPromptCard` lifted into `ClawdmeterShared` with a

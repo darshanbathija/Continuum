@@ -8,7 +8,7 @@ User-dir shim: `~/.gemini/antigravity/bin/agentapi` (100-byte POSIX shell script
 
 Phase 0 contradicts the originally-planned spawn/relay architecture in several material ways. The carveout in the plan's Execution Discipline triggers: *"Phase 0 spike outputs that materially contradict locked decisions — surface findings + propose adjustment + halt."*
 
-**The actual agentapi shape is much closer to HTTP-RPC than to "spawn a CLI in tmux":**
+**The actual agentapi shape is much closer to HTTP-RPC than to "spawn a long-lived terminal CLI":**
 
 - `new-conversation` and `send-message` are **fire-and-forget one-shot CLI calls** that return immediately with just an ID. Agent work happens asynchronously inside the running language_server process. No streamed stdout.
 - Conversations are now stored as **SQLite databases** (`<id>.db` + `.db-wal` + `.db-shm` in WAL mode), NOT protobuf `.pb` files. v0.7's `ConversationProtoParser` does NOT handle the new format.
@@ -58,7 +58,7 @@ The CSRF token + LS address combo is the SAME state-machine `LanguageServerClien
 - Each Gemini session = a long-lived process spawned via `language_server agentapi new-conversation …`
 - Process streams events via stdout JSON-lines (Codex SDK pattern)
 - `AntigravitySubscriptionRelay` manages per-session process lifecycle
-- Tmux pane shows the agent's live output
+- A terminal pane shows the agent's live output
 
 ### What's actually true
 - `new-conversation` is **synchronous over HTTP** — completes in ~70ms returning just `{conversationId, prompt}`. The agent's actual turn happens server-side inside Antigravity's language_server.
@@ -72,7 +72,7 @@ The CSRF token + LS address combo is the SAME state-machine `LanguageServerClien
 
 | Decision | Status | Revision |
 |---|---|---|
-| **D3 process lifetime fork** | Resolved → one-shot | No tmux pane needed. agentapi is HTTP-RPC. Spawn is sub-second; no process to manage per session. |
+| **D3 process lifetime fork** | Resolved → one-shot | No terminal pane needed. agentapi is HTTP-RPC. Spawn is sub-second; no process to manage per session. |
 | **D9 SDKSubscriptionRelay protocol** | OBSOLETE for agentapi | Codex pattern doesn't apply. Antigravity needs `AntigravitySnapshotPoller` (SQLite WAL reader) instead of `AntigravitySubscriptionRelay` (stdout streamer). |
 | **D12 single shared language_server** | Resolved → use Antigravity.app's LS | Continuum's daemon does NOT spawn its own LS for the primary path. We attach to the existing Antigravity.app LS via probe-and-defer (D4). Spawn-our-own-LS is a fallback for when the app is closed. |
 | **D7 event catalog** | Pending → SQLite schema, not stdout | Need a `ConversationDBReader` that opens the SQLite, queries `steps` table, maps `step_type` integers to ChatItems. SQLite schema captured in `docs/agentapi-event-catalog.md`. |

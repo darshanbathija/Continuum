@@ -219,7 +219,6 @@ private enum GeminiBrand {
 private struct ClaudeSection: View {
     @ObservedObject var model: UsageModel
     @AppStorage("clawdmeter.claude.advancedExpanded") private var advancedExpanded: Bool = false
-    @AppStorage("clawdmeter.claude.autoRevive") private var autoReviveEnabled: Bool = false
 
     var body: some View {
         VStack(spacing: 14) {
@@ -241,11 +240,8 @@ private struct ClaudeSection: View {
                 LoadingCard()
             }
         }
-        .onChange(of: autoReviveEnabled) { _, newValue in
-            model.setAutoReviveEnabled(newValue)
-        }
         .onAppear {
-            model.setAutoReviveEnabled(autoReviveEnabled)
+            model.setAutoReviveEnabled(false)
         }
     }
 
@@ -268,28 +264,13 @@ private struct ClaudeSection: View {
             if advancedExpanded {
                 VStack(alignment: .leading, spacing: 14) {
                     Divider()
-                    Toggle(isOn: $autoReviveEnabled) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Keep 5h timer ticking")
-                                .font(.system(size: 14, weight: .medium))
-                            Text("When the 5-hour window ends, send a 1-token 'Hi' to Claude Haiku 4.5 so a new window starts immediately.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .toggleStyle(.switch)
-
-                    HStack(spacing: 8) {
-                        autoReviveStatusView
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Auto-revive paused")
+                            .font(.system(size: 14, weight: .medium))
+                        Text("Quota keepalive is unavailable until Claude exposes a non-consuming endpoint.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                        Spacer()
-                        Button("Revive now") { model.reviveNow() }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(!autoReviveEnabled)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -298,32 +279,6 @@ private struct ClaudeSection: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 6))
-    }
-
-    @ViewBuilder
-    private var autoReviveStatusView: some View {
-        if !autoReviveEnabled {
-            Text("Off — toggle on to keep the 5h window perpetual.")
-        } else if let last = model.autoReviver.lastResult {
-            switch last.outcome {
-            case .fired:
-                Text("Last revived ")
-                    + Text(last.at, style: .relative)
-                    + Text(" ago · \(model.autoReviver.fireCount) total")
-            case .throttled:
-                Text("Throttled ") + Text(last.at, style: .relative) + Text(" ago")
-            case .noToken:
-                Text("Skipped (no token) ") + Text(last.at, style: .relative) + Text(" ago")
-            case .httpError(let code):
-                Text("API error \(code) ") + Text(last.at, style: .relative) + Text(" ago")
-            case .networkError:
-                Text("Network error ") + Text(last.at, style: .relative) + Text(" ago")
-            case .disabled:
-                Text("Disabled")
-            }
-        } else {
-            Text("Armed. Will fire when the next 5h window ends.")
-        }
     }
 }
 
@@ -348,7 +303,7 @@ private struct CodexSection: View {
                     resetDate: Date(timeIntervalSince1970: TimeInterval(usage.weeklyEpoch))
                 )
                 HStack(spacing: 4) {
-                    (Text("Synced from Mac ") + Text(snap.writtenAt, style: .relative) + Text(" ago"))
+                    Text("Synced from Mac \(snap.writtenAt, style: .relative) ago")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -389,7 +344,7 @@ private struct GeminiSection: View {
                     tint: GeminiBrand.color
                 )
                 HStack {
-                    (Text("Synced from Mac ") + Text(snap.writtenAt, style: .relative) + Text(" ago"))
+                    Text("Synced from Mac \(snap.writtenAt, style: .relative) ago")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -435,7 +390,7 @@ private struct SessionCard: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    (Text("Resets ") + Text(resetDate, style: .relative))
+                    Text("Resets \(resetDate, style: .relative)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -465,7 +420,7 @@ private struct WeeklyCard: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
-                (Text("Resets ") + Text(resetDate, style: .relative))
+                Text("Resets \(resetDate, style: .relative)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -483,7 +438,7 @@ private struct FooterRow: View {
 
     var body: some View {
         HStack {
-            (Text("Last updated ") + Text(updatedAt, style: .relative) + Text(" ago"))
+            Text("Last updated \(updatedAt, style: .relative) ago")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()

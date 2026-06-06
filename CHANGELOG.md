@@ -4,6 +4,52 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.6 build 206] - 2026-06-06 - Remove tmux runtime (`darshanbathija/remove-tmux`)
+
+### Removed
+
+- Removes tmux runtime code, control-mode parsing, bundled tmux provisioning, the tmux control-mode probe tool, and tmux-specific tests from active Mac/shared build paths.
+- Retires old tmux pane-backed sessions instead of reconnecting them, while preserving legacy `tmuxWindowId` and `tmuxPaneId` decoding compatibility.
+
+### Fixed
+
+- Live provider drive tests now require both `CLAWDMETER_LIVE_VERIFY=1` and `~/.continuum-live-verify`, so a stale marker file alone cannot burn Codex or other provider usage with PONG probes.
+
+### Changed
+
+- Claude Code and chat sessions now always use the direct Claude PTY registry for sends, interrupts, deletes, approval, revive, scheduler, and config-swap flows.
+- Codex, Cursor, Gemini, and Grok stay on ACP/app-server/headless harnesses; missing live harnesses now surface stale-session responses instead of tmux fallbacks.
+- Terminal, vendor provisioning, and OpenCode setup surfaces now use direct PTY hosts while keeping the existing terminal WebSocket frame shape.
+- Bumps `VERSION` 0.31.5 -> 0.31.6, `MARKETING_VERSION` 0.31.5 -> 0.31.6, and `CURRENT_PROJECT_VERSION` 205 -> 206.
+
+## [0.31.5 build 205] - 2026-06-06 - Strip external session noise from Code (`darshanbathija/session-noise`)
+
+### Removed
+
+- Code sidebar session discovery no longer scans Claude/Codex external CLI roots or configured scan roots for recent JSONLs.
+- Removes visible outside-session surfaces from the Mac Code tab, including Active outside sections, collapsed History rows, Discover parallel sessions copy, read-only outside JSONL opening, Continue here, and external JSONL rename affordances.
+- Removes external recent JSONL mention suggestions from the composer while keeping open Continuum sessions and cited files.
+- Removes iOS continuation entry points that were only reachable through repo recent sessions.
+
+### Changed
+
+- Repo snapshots are now produced from `WorkspaceStore` and Continuum-owned session state, with `recentSessions: []` kept for wire compatibility.
+- Backward-compatible endpoints for read-only continuation and JSONL alias rename remain inert without visible UI entry points.
+- Live Cursor drive tests now skip cleanly when the local Cursor account reports agent usage exhaustion.
+
+## [0.31.4 build 204] - 2026-06-06 - Stop Claude background prompt polling (`darshanbathija/stop-claude-hi-spam`)
+
+### Fixed
+
+- Claude usage polling now reads the non-generative OAuth usage endpoint instead of creating throwaway `hi` conversations through `/v1/messages`.
+- Claude auto-revive is paused across Mac and iOS until a non-consuming keepalive endpoint exists, so stale toggles or RPC calls cannot spend quota in the background.
+- The Auto-revive settings surfaces now show the feature as unavailable instead of offering controls that can create hidden Claude prompts.
+- Focused regression coverage now asserts Claude polling sends no prompt body and auto-revive sends no network request.
+
+### Changed
+
+- Bumps `VERSION` 0.31.3 -> 0.31.4, `MARKETING_VERSION` 0.31.3 -> 0.31.4, and `CURRENT_PROJECT_VERSION` 203 -> 204.
+
 ## [0.31.3 build 203] - 2026-06-06 - Relay/APNS hardening, chat launch, and updater fixes (`darshanbathija/security-fixes`, `darshanbathija/fix-bugs`)
 
 ### Fixed

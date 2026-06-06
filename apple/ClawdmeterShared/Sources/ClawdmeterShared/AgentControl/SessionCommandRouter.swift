@@ -6,7 +6,7 @@ import Foundation
 // Why this exists: AgentControlServer's write handlers (handleSendPrompt,
 // handleInterrupt, handlePermissionRespond) each re-derive "which backend owns
 // this session" inline, in a fixed branch order. The branch order is load-
-// bearing — e.g. a *live ACP bridge* must win over the legacy tmux path even
+// bearing — e.g. a live ACP bridge must win over stale persisted pane metadata
 // for an old session that predates the harness. Spreading that
 // precedence across three handlers makes it easy for a future edit to reorder
 // one and not the others. This type captures the precedence in one pure,
@@ -20,7 +20,7 @@ import Foundation
 // folds into their existing non-bridge path). See SessionCommandRouterTests.
 //
 // Lives in ClawdmeterShared (not the Mac target) so it is swift-testable
-// without the daemon's Network.framework / tmux dependencies. It references
+// without the daemon's Network.framework / PTY dependencies. It references
 // only the shared wire enums (AgentKind, SessionRuntimeKind, SessionKind,
 // CodexChatBackend, GeminiBackend) — never a Mac-only type. The caller passes
 // the live-bridge fact in as a `Bool` because the bridge registry is Mac-only.
@@ -34,26 +34,23 @@ public enum SessionCommandRoute: String, Hashable, Sendable, CaseIterable {
     /// Native ACP harness driver (Grok, Cursor) via a *live* `AcpHarnessBridge`.
     /// Sends/interrupts/permissions drive the bridge directly.
     case harnessBridge
-    /// The kept Claude / Codex-CLI tmux path. Sends paste into the tmux pane;
-    /// interrupt sends ESC via SessionInterruptDispatcher; permissions resolve
-    /// the daemon's pending continuation.
-    case tmux
+    /// A persisted pane/window-backed session from the retired runtime. These
+    /// sessions are intentionally not reconnected or migrated; callers surface
+    /// a 410 `legacy_session_retired` response.
+    case legacyRetired
 
-    /// Track A: per-session direct PTY for Claude (`ClaudePtyHost`). Replaces
-    /// Claude's slice of the shared tmux server when the
-    /// `clawdmeter.claude.ptyHost.enabled` flag is on. No tmux pane — sends/
-    /// interrupts/kills go through `ClaudePtyRegistry`. tmux STAYS for the
-    /// Terminal tab + non-Claude providers; only Claude session-drive moves.
+    /// Per-session direct PTY for Claude (`ClaudePtyHost`). No terminal pane:
+    /// sends/interrupts/kills go through `ClaudePtyRegistry`.
     case claudePty
 
-    /// True for routes whose live session has no tmux pane. Surfaced for the
+    /// True for routes whose live session has no terminal pane. Surfaced for the
     /// caller's diagnostics / parity assertions; the daemon already special-
-    /// cases each of these before the tmux paneId guard.
+    /// cases each of these before the legacy pane metadata guard.
     public var isPaneless: Bool {
         switch self {
         case .opencodeServe, .harnessBridge, .claudePty:
             return true
-        case .tmux:
+        case .legacyRetired:
             return false
         }
     }
@@ -77,26 +74,20 @@ public struct SessionCommandRouter: Sendable {
         /// `session.runtimeBinding?.runtimeKind.isACPDriven == true`. Marks a
         /// session that *should* be ACP-driven even when no live bridge exists
         /// (e.g. after a daemon restart killed the in-memory bridge). Used only
-        /// for the diagnostic `acpExpectedButNoBridge` flag below — it does NOT
-        /// change the resolved route (a paneless ACP session with a dead bridge
-        /// still resolves `.tmux`, exactly as the daemon does today, because
-        /// the 503-no-live-bridge branch is an error path, not a route).
+        /// for the diagnostic `acpExpectedButNoBridge` flag below.
         public let runtimeIsACPDriven: Bool
         /// `harnessRegistry.bridge(for: id) != nil` on the daemon. A live ACP
-        /// bridge wins over the legacy tmux path for the same session.
+        /// bridge wins over retired legacy pane metadata for the same session.
         public let hasLiveBridge: Bool
-        /// Track A flag (`clawdmeter.claude.ptyHost.enabled`). When true, a
-        /// Claude chat/code session resolves to `.claudePty` instead of `.tmux`.
-        /// Defaults false so the legacy tmux path is byte-identical until cutover.
+        /// Kept for source compatibility with PR #248 tests/callers. The legacy
+        /// fallback flag is retired; Claude now resolves to `.claudePty` when it
+        /// has no legacy pane metadata regardless of this value.
         public let claudePtyEnabled: Bool
-        /// `session.tmuxPaneId != nil || session.tmuxWindowId != nil`. A session
-        /// that ALREADY owns a tmux pane (it was born under the flag-off path)
-        /// must keep using that pane even after the flag flips on mid-session —
-        /// otherwise it would resolve `.claudePty` and `resumeOrSpawn` a SECOND
-        /// live `claude` while the tmux one keeps running (double subscription
-        /// drive + a JSONL two processes corrupt). Only paneless Claude sessions
-        /// (PTY-native, or created while the flag was on) take the PTY route.
-        public let hasTmuxPane: Bool
+        /// True when the decoded session still carries old pane/window
+        /// metadata. Those persisted fields are compatibility-only now;
+        /// pane-bearing sessions resolve `.legacyRetired` and are not
+        /// reconnected.
+        public let hasLegacyPaneMetadata: Bool
 
         public init(
             agent: AgentKind,
@@ -105,7 +96,7 @@ public struct SessionCommandRouter: Sendable {
             runtimeIsACPDriven: Bool = false,
             hasLiveBridge: Bool = false,
             claudePtyEnabled: Bool = false,
-            hasTmuxPane: Bool = false
+            hasLegacyPaneMetadata: Bool = false
         ) {
             self.agent = agent
             self.kind = kind
@@ -113,47 +104,39 @@ public struct SessionCommandRouter: Sendable {
             self.runtimeIsACPDriven = runtimeIsACPDriven
             self.hasLiveBridge = hasLiveBridge
             self.claudePtyEnabled = claudePtyEnabled
-            self.hasTmuxPane = hasTmuxPane
+            self.hasLegacyPaneMetadata = hasLegacyPaneMetadata
         }
     }
 
     /// Resolve the owning backend for a send-style command. The branch ORDER
     /// below is identical to `handleSendPrompt`'s; do not reorder without
     /// re-checking that handler:
-    ///   1. OpenCode               (agent == .opencode)
-    ///   2. Live ACP/headless bridge (hasLiveBridge — Grok/Cursor/Codex-app-server/Gemini-agy)
-    ///   3. tmux                    (fall-through; also where a dead-bridge ACP
-    ///                               session lands today before its 503 error
-    ///                               path fires — see `acpExpectedButNoBridge`)
+    ///   1. Live ACP/headless bridge (Grok/Cursor/Codex-app-server/Gemini-agy)
+    ///   2. Legacy retired           (old pane/window-backed sessions)
+    ///   3. OpenCode                 (`opencode serve`)
+    ///   4. Claude PTY               (paneless Claude chat/code)
+    ///   5. Legacy retired           (unsupported old paneless sessions)
     public static func resolve(_ ctx: SessionContext) -> SessionCommandRoute {
-        // 1. OpenCode. Agent-kind alone — opencode always routes to serve.
-        if ctx.agent == .opencode {
-            return .opencodeServe
-        }
-        // 2. Live ACP harness bridge (Grok, Cursor). Keyed off the bridge
-        //    registry, agent-agnostic: a session with a live bridge wins over
-        //    tmux even if it predates the harness. A dead bridge does NOT match
-        //    here (the daemon returns 503 separately) — see the instance method.
+        // 1. Live ACP harness bridge. Keyed off the bridge registry,
+        //    agent-agnostic: a live bridge wins over stale pane metadata.
         if ctx.hasLiveBridge {
             return .harnessBridge
         }
-        // 2.5 Track A: Claude session-drive over a per-session PTY, gated by
-        //     the flag. Sits just above the tmux fall-through so Claude leaves
-        //     tmux ONLY when enabled; everything else (Codex-CLI, dead-bridge
-        //     ACP back-compat) still falls through to tmux unchanged.
-        //     `!hasTmuxPane` is load-bearing: a session that already owns a tmux
-        //     pane (born flag-off) stays on tmux even after a mid-session flag
-        //     flip, so we never spawn a 2nd `claude` alongside the running one.
-        if ctx.claudePtyEnabled
-            && ctx.agent == .claude
+        if isLegacyCodexSDKChat(ctx) {
+            return .legacyRetired
+        }
+        if ctx.hasLegacyPaneMetadata {
+            return .legacyRetired
+        }
+        if ctx.agent == .opencode {
+            return .opencodeServe
+        }
+        if ctx.agent == .claude
             && (ctx.kind == .chat || ctx.kind == .code)
-            && !ctx.hasTmuxPane {
+        {
             return .claudePty
         }
-        // 3. Fall-through: the kept Claude / Codex-CLI tmux path. Back-compat —
-        //    an old cursor_cli session with no live bridge lands here, matching
-        //    the daemon's behavior before the harness shipped.
-        return .tmux
+        return .legacyRetired
     }
 
     /// Instance convenience mirroring the static resolver.
@@ -162,14 +145,21 @@ public struct SessionCommandRouter: Sendable {
     }
 
     /// Diagnostic: true when the session is *expected* to be ACP-driven
-    /// (`runtimeIsACPDriven`) but has no live bridge, so it resolved `.tmux`.
-    /// The daemon's handleSendPrompt intercepts exactly this case with an
-    /// explicit 503 ("acp_session_not_live") instead of pasting into a
-    /// non-existent tmux pane. This is NOT a route — it's the signal the caller
-    /// uses to choose the 503 error response over the tmux path. Keeping it
+    /// (`runtimeIsACPDriven`) but has no live bridge. The daemon's
+    /// handleSendPrompt intercepts exactly this case with an
+    /// explicit 503 ("acp_session_not_live") instead of treating the session as
+    /// reconnectable. This is NOT a route — it's the signal the caller
+    /// uses to choose the 503 error response. Keeping it
     /// here (rather than re-deriving in the handler) keeps the whole routing
     /// decision in one place and preserves the daemon's exact behavior.
     public static func acpExpectedButNoBridge(_ ctx: SessionContext) -> Bool {
-        resolve(ctx) == .tmux && ctx.runtimeIsACPDriven && !ctx.hasLiveBridge
+        resolve(ctx) == .legacyRetired
+            && ctx.runtimeIsACPDriven
+            && !ctx.hasLiveBridge
+            && !isLegacyCodexSDKChat(ctx)
+    }
+
+    private static func isLegacyCodexSDKChat(_ ctx: SessionContext) -> Bool {
+        ctx.agent == .codex && ctx.kind == .chat && ctx.codexChatBackend == .sdk
     }
 }

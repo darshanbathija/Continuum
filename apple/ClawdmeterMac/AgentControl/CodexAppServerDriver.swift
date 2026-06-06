@@ -1,4 +1,4 @@
-#if os(macOS) || os(Linux)
+#if os(macOS)
 import Foundation
 import ClawdmeterShared
 
@@ -126,7 +126,7 @@ public actor CodexAppServerDriver: AgentDriver {
             do {
                 let raw = try await connection.request(CodexAppServerMethod.turnStart, params: params)
                 if let turnId = raw["turn"]?["id"]?.stringValue {
-                    await self.setCurrentTurnId(turnId)
+                    self.setCurrentTurnId(turnId)
                 }
             } catch let ACPError.processExited(code) {
                 eventCont.yield(.error(code: "process_exited", message: "codex exited (code \(code.map(String.init) ?? "?"))"))

@@ -394,9 +394,9 @@ struct iOSRunPreviewPane: View {
     }
 
     private var hasTerminalTunnel: Bool {
-        if !(session.tmuxPaneId?.isEmpty ?? true) { return true }
-        if !(session.tmuxWindowId?.isEmpty ?? true) { return true }
-        return !session.terminalPanes.isEmpty
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil { return false }
+        if let binding = session.runtimeBinding, !binding.capabilities.supportsTerminal { return false }
+        return true
     }
 
     private var statusLabel: String {

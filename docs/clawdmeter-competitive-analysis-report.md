@@ -18,7 +18,7 @@ The Mac daemon is the source of truth for spawning, observing, and steering sess
 - **Multi-runtime support + worktree safety** — explicit Conductor-style isolation with strong privacy posture
 - **High design fidelity** — excellent shared Tahoe liquid-glass system (92/100 visual score)
 
-**Overall Polish Score:** 82/100 (Visuals and core reliability are strong; mobile delight and Linux parity are the main drags).
+**Overall Polish Score:** 82/100 (Visuals and core reliability are strong; mobile delight and Apple target reliability are the main drags).
 
 ---
 
@@ -43,10 +43,10 @@ The Mac daemon (`AgentControlServer`) is the undisputed source of truth.
 
 | Provider          | Maturity       | Key Strengths                              | Limitations                          |
 |-------------------|----------------|--------------------------------------------|--------------------------------------|
-| Claude Code       | Most Mature    | Native plan mode, full effort control, rich JSONL | tmux dependency                     |
+| Claude Code       | Most Mature    | Native plan mode, full effort control, rich JSONL | Direct PTY path needs broader mobile E2E |
 | Codex             | Very Strong    | Dual CLI + SDK, excellent lineage resolver | Plan UX synthetic on SDK path       |
 | Antigravity/Gemini| Good + Improving | Real token extraction from .db protobuf + LSP | Reverse-engineered proto stability  |
-| OpenCode          | Solid Hybrid   | Clean serve + SSE architecture             | No direct tmux/terminal control     |
+| OpenCode          | Solid Hybrid   | Clean serve + SSE architecture             | Terminal visibility depends on serve/SSE path |
 | Cursor            | Quota-focused  | Discovery + period usage                   | Weakest transcript richness         |
 
 Extensibility scaffolding is solid (AgentKind + adapter pattern). New agents are feasible but require per-provider boilerplate today.
@@ -106,13 +106,12 @@ The shared Tahoe layer (glass primitives, provider glyphs, exact chart conventio
 **Top Issues:**
 1. Chat transcript performance debt on remaining LazyVStack surfaces
 2. Mobile outbox is functional but not yet "buttery invisible"
-3. Linux port is real but missing the Tahoe layer
-4. Thin mobile + E2E test coverage on high-value flows
-5. Large state management surface area
+3. Thin mobile + E2E test coverage on high-value flows
+4. Large state management surface area
+5. Release/build reliability across Apple targets
 
 **Quick Polish Wins:**
 - Finish List migration on all long transcripts
-- Port Tahoe glass/glyphs/theme to Linux
 - Add spring + halo bloom on plan approval transitions
 - Global isolated find bar
 - Hoist more projections for true offline mobile experience
@@ -157,17 +156,15 @@ Explicitly complementary to both Cursor (editor loop) and Conductor (desktop fle
 12. Voice steering (iPhone + Watch crown)
 13. Glanceable real-time cost burn + contextual nudges
 14. Buttery plan approval transitions + composer lifecycle
-15. Cross-platform Tahoe layer on Linux
-16. Global offline-first search + local drafts
+15. Global offline-first search + local drafts
 
 ---
 
 ## Critical Gates Before Broad Claims
 
-- Finish E3/E4 relay clients + resolve XChaCha20 crypto gap
+- Finish E3/E4 relay clients and keep XChaCha20 vectors green
 - Deliver Conductor setup scripts
 - Ship APNS push for plan approvals (currently the largest gap in the mobile wedge)
-- Add Linux Tahoe layer for credible cross-platform story
 
 ---
 

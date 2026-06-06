@@ -6,9 +6,9 @@ import SwiftUI
 /// Replaces the generic "Ran 1 command" disclosure for AskUserQuestion
 /// tool calls. Each parsed `Question` renders as a card with its options
 /// as tappable rows; tapping an option fires `onAnswer(question, option)`
-/// which the host wires to `sendPrompt` so the answer routes back to the
-/// agent's tmux pane (the daemon's existing send path appends a trailing
-/// newline, which acts as Enter in Claude Code's interactive picker).
+    /// which the host wires to `sendPrompt` so the answer routes back through
+    /// the session runtime (the daemon's send path appends a trailing newline,
+    /// which acts as Enter in Claude Code's interactive picker).
 ///
 /// Once the tool_result lands (the agent has consumed the answer), the
 /// host passes `answered=true` to gray out the tray so the user knows
@@ -20,8 +20,8 @@ public struct AskUserQuestionTray: View {
     /// checkmark on the row + tells the host which option fired the
     /// answer. multiSelect questions accumulate; single-select replaces.
     @Binding public var selections: [String: Set<String>]
-    /// Called when the user taps Send on a question. The host pastes the
-    /// joined labels into the session's tmux pane.
+    /// Called when the user taps Send on a question. The host submits the
+    /// joined labels through the session runtime.
     public let onSend: (AskUserQuestion.Question, [AskUserQuestion.Option]) -> Void
 
     public init(

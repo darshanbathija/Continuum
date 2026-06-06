@@ -1,5 +1,5 @@
 import Foundation
-import ClawdmeterShared
+@preconcurrency import ClawdmeterShared
 
 /// iOS-side `PermissionResponder` that reaches the paired Mac over
 /// Tailscale via the existing `AgentControlClient`. The client already

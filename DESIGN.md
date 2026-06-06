@@ -3,7 +3,7 @@
 **Direction: "Quiet Black Workbench."**
 
 This is the design source of truth for all Continuum UI work (macOS, iPhone,
-watchOS, and the Linux port). It replaces the previous Tahoe liquid-glass
+and watchOS). It replaces the previous Tahoe liquid-glass
 system, which is preserved at
 `docs/designs/DESIGN-tahoe-glass-archived-2026-05-27.md` for reference.
 

@@ -1,13 +1,10 @@
 import XCTest
 @testable import ClawdmeterShared
 
-/// Behavior-identity tests for `SessionCommandRouter`. The router is a pure
-/// extraction of the per-backend precedence that `AgentControlServer`'s
-/// handleSendPrompt / handleInterrupt / handlePermissionRespond inline. Each
-/// test pins one branch of the daemon's existing `if` ladder, and the
-/// precedence tests prove the ORDER is preserved (a live ACP bridge must win
-/// over the legacy tmux path; an old cursor_cli session with NO bridge must
-/// still reach tmux — back-compat).
+/// Behavior tests for `SessionCommandRouter`. The router pins the current
+/// command transport contract: live ACP bridges win, Claude uses a direct PTY,
+/// OpenCode uses `serve`, and old pane/window-backed
+/// sessions are retired instead of reconnected.
 final class SessionCommandRouterTests: XCTestCase {
 
     // Convenience builder so each test reads as just the axes that matter.
@@ -29,30 +26,30 @@ final class SessionCommandRouterTests: XCTestCase {
 
     // MARK: one case per backend
 
-    func testClaudeCodeResolvesTmux() {
-        XCTAssertEqual(SessionCommandRouter.resolve(ctx(agent: .claude)), .tmux)
+    func testClaudeCodeResolvesClaudePty() {
+        XCTAssertEqual(SessionCommandRouter.resolve(ctx(agent: .claude)), .claudePty)
     }
 
-    // MARK: Track A — .claudePty flag (default OFF keeps tmux byte-identical)
+    // MARK: Track A — Claude PTY is always on
 
     private func claudeCtx(kind: SessionKind, ptyEnabled: Bool) -> SessionCommandRouter.SessionContext {
         SessionCommandRouter.SessionContext(agent: .claude, kind: kind, claudePtyEnabled: ptyEnabled)
     }
 
-    func testClaudeFlagOffStaysTmux() {
-        XCTAssertEqual(SessionCommandRouter.resolve(claudeCtx(kind: .code, ptyEnabled: false)), .tmux)
-        XCTAssertEqual(SessionCommandRouter.resolve(claudeCtx(kind: .chat, ptyEnabled: false)), .tmux)
-    }
-
-    func testClaudeFlagOnResolvesClaudePty() {
+    func testClaudeFlagIsIgnoredAndAlwaysResolvesClaudePty() {
+        XCTAssertEqual(SessionCommandRouter.resolve(claudeCtx(kind: .code, ptyEnabled: false)), .claudePty)
+        XCTAssertEqual(SessionCommandRouter.resolve(claudeCtx(kind: .chat, ptyEnabled: false)), .claudePty)
         XCTAssertEqual(SessionCommandRouter.resolve(claudeCtx(kind: .code, ptyEnabled: true)), .claudePty)
         XCTAssertEqual(SessionCommandRouter.resolve(claudeCtx(kind: .chat, ptyEnabled: true)), .claudePty)
     }
 
     func testFlagDoesNotDivertNonClaude() {
-        // The flag only moves Claude. Codex CLI / opencode are untouched.
+        // The compatibility flag only exists for old callers. It does not
+        // route other agents into Claude's PTY path.
         XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
-            agent: .codex, kind: .chat, codexChatBackend: .cli, claudePtyEnabled: true)), .tmux)
+            agent: .codex, kind: .chat, codexChatBackend: .cli, claudePtyEnabled: true)), .legacyRetired)
+        XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
+            agent: .codex, kind: .chat, codexChatBackend: .sdk, claudePtyEnabled: true)), .legacyRetired)
         XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
             agent: .opencode, kind: .code, claudePtyEnabled: true)), .opencodeServe)
     }
@@ -67,29 +64,30 @@ final class SessionCommandRouterTests: XCTestCase {
         XCTAssertTrue(SessionCommandRoute.claudePty.isPaneless)
     }
 
-    // Review fix (CL2): a Claude session that ALREADY owns a tmux pane must stay
-    // on .tmux even when the flag is flipped on mid-session — otherwise the send
-    // path would resumeOrSpawn a SECOND `claude` alongside the running tmux one
-    // (double subscription drive + JSONL corruption). Only paneless Claude
-    // sessions take the PTY route.
-    func testFlagOnButHasTmuxPaneStaysTmux() {
+    func testFlagOnButHasLegacyPaneRetires() {
         XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
-            agent: .claude, kind: .code, claudePtyEnabled: true, hasTmuxPane: true)), .tmux)
+            agent: .claude, kind: .code, claudePtyEnabled: true, hasLegacyPaneMetadata: true)), .legacyRetired)
         XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
-            agent: .claude, kind: .chat, claudePtyEnabled: true, hasTmuxPane: true)), .tmux)
+            agent: .claude, kind: .chat, claudePtyEnabled: true, hasLegacyPaneMetadata: true)), .legacyRetired)
     }
 
     func testFlagOnPanelessClaudeStillResolvesClaudePty() {
-        // The default (paneless) case is unchanged — a PTY-native session routes.
+        // The default paneless case is a PTY-native session.
         XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
-            agent: .claude, kind: .chat, claudePtyEnabled: true, hasTmuxPane: false)), .claudePty)
+            agent: .claude, kind: .chat, claudePtyEnabled: true, hasLegacyPaneMetadata: false)), .claudePty)
     }
 
-    func testCodexCLIChatResolvesTmux() {
-        // Codex CLI (not SDK) chat has a real tmux pane → tmux, not codexSDK.
+    func testCodexCLIChatWithoutBridgeRetires() {
         XCTAssertEqual(
             SessionCommandRouter.resolve(ctx(agent: .codex, kind: .chat, codexChatBackend: .cli)),
-            .tmux
+            .legacyRetired
+        )
+    }
+
+    func testCodexSDKChatWithoutHarnessRetires() {
+        XCTAssertEqual(
+            SessionCommandRouter.resolve(ctx(agent: .codex, kind: .chat, codexChatBackend: .sdk)),
+            .legacyRetired
         )
     }
 
@@ -124,9 +122,35 @@ final class SessionCommandRouterTests: XCTestCase {
 
     // MARK: precedence (order is load-bearing)
 
-    func testLiveBridgeBeatsTmuxForAcpSession() {
+    func testCodexSDKChatNoLongerBeatsRetiredFallback() {
+        let route = SessionCommandRouter.resolve(ctx(agent: .codex, kind: .chat, codexChatBackend: .sdk))
+        XCTAssertEqual(route, .legacyRetired)
+    }
+
+    func testCodexSDKChatWithHarnessRuntimeStillRetiresWithoutAcpStaleFlag() {
+        let context = ctx(
+            agent: .codex,
+            kind: .chat,
+            codexChatBackend: .sdk,
+            runtimeIsACPDriven: true
+        )
+
+        XCTAssertEqual(SessionCommandRouter.resolve(context), .legacyRetired)
+        XCTAssertFalse(SessionCommandRouter.acpExpectedButNoBridge(context))
+    }
+
+    func testOpenCodeWithLegacyPaneRetiresBeforeServeRoute() {
+        let route = SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
+            agent: .opencode,
+            kind: .chat,
+            hasLegacyPaneMetadata: true
+        ))
+        XCTAssertEqual(route, .legacyRetired)
+    }
+
+    func testLiveBridgeBeatsRetiredFallbackForAcpSession() {
         // A cursor session driven over ACP with a live bridge → harnessBridge,
-        // not tmux.
+        // not retired.
         let route = SessionCommandRouter.resolve(ctx(
             agent: .cursor,
             runtimeIsACPDriven: true,
@@ -135,27 +159,23 @@ final class SessionCommandRouterTests: XCTestCase {
         XCTAssertEqual(route, .harnessBridge)
     }
 
-    func testOldCursorCLISessionWithoutBridgeResolvesTmux_backCompat() {
-        // Back-compat: a legacy cursor_cli session created before the harness
-        // shipped has no live bridge. It must still reach the tmux path — the
-        // daemon's fall-through — not silently break.
+    func testOldCursorCLISessionWithoutBridgeRetires() {
         let route = SessionCommandRouter.resolve(ctx(
             agent: .cursor,
             runtimeIsACPDriven: false,   // legacy cursor_cli, not acp_cursor
             hasLiveBridge: false
         ))
-        XCTAssertEqual(route, .tmux)
+        XCTAssertEqual(route, .legacyRetired)
     }
 
     // MARK: dead-bridge ACP diagnostic (the 503 signal, not a route)
 
-    func testAcpExpectedButDeadBridgeStillResolvesTmux() {
+    func testAcpExpectedButDeadBridgeResolvesRetiredAndIsFlagged() {
         // After a daemon restart an ACP-driven session can have NO live bridge.
-        // The route is tmux (the fall-through), but the daemon intercepts with
-        // an explicit 503 instead of pasting into a dead pane. The router
-        // resolves tmux AND flags the case so the caller can pick the 503.
+        // The route is retired, but the daemon intercepts with an explicit 503
+        // stale-harness response before returning the generic 410 retired path.
         let c = ctx(agent: .grok, runtimeIsACPDriven: true, hasLiveBridge: false)
-        XCTAssertEqual(SessionCommandRouter.resolve(c), .tmux)
+        XCTAssertEqual(SessionCommandRouter.resolve(c), .legacyRetired)
         XCTAssertTrue(SessionCommandRouter.acpExpectedButNoBridge(c))
     }
 
@@ -165,11 +185,9 @@ final class SessionCommandRouterTests: XCTestCase {
         XCTAssertFalse(SessionCommandRouter.acpExpectedButNoBridge(c))
     }
 
-    func testPlainTmuxSessionIsNotFlaggedAsDeadBridge() {
-        // A normal Claude session is not ACP-expected, so the 503 signal stays
-        // false even though it resolves tmux.
+    func testPlainClaudePtySessionIsNotFlaggedAsDeadBridge() {
         let c = ctx(agent: .claude)
-        XCTAssertEqual(SessionCommandRouter.resolve(c), .tmux)
+        XCTAssertEqual(SessionCommandRouter.resolve(c), .claudePty)
         XCTAssertFalse(SessionCommandRouter.acpExpectedButNoBridge(c))
     }
 
@@ -184,9 +202,9 @@ final class SessionCommandRouterTests: XCTestCase {
     }
 
     func testPanelessFlagMatchesDaemonPaneExpectations() {
-        // The short-circuit backends have no tmux pane; only .tmux does.
         XCTAssertTrue(SessionCommandRoute.opencodeServe.isPaneless)
         XCTAssertTrue(SessionCommandRoute.harnessBridge.isPaneless)
-        XCTAssertFalse(SessionCommandRoute.tmux.isPaneless)
+        XCTAssertTrue(SessionCommandRoute.claudePty.isPaneless)
+        XCTAssertFalse(SessionCommandRoute.legacyRetired.isPaneless)
     }
 }

@@ -216,7 +216,7 @@ final class SessionFileResolverTests: XCTestCase {
 
         // Delete the cached file. Should fall back to scan, find nothing
         // in the activity window (window-eligible files don't exist anymore),
-        // and return nil rather than guessing from unrelated rollouts.
+        // and fall through to the newest-in-dir fallback (also nothing).
         try FileManager.default.removeItem(at: rolloutA)
         XCTAssertNil(resolver.resolve(session: session))
 
@@ -225,13 +225,12 @@ final class SessionFileResolverTests: XCTestCase {
         assertSameFile(resolver.resolve(session: session), rolloutB)
     }
 
-    func testNoGlobalNewestFallbackForSyntheticPreview() throws {
-        // Synthetic preview sessions whose identity cannot be tied to a
-        // rollout should not display the newest rollout on the machine.
-        // That older fallback could leak an unrelated Codex session into
-        // this chat surface.
-        _ = try writeRollout(name: "rollout-older.jsonl", mtime: Date().addingTimeInterval(-3600))
-        _ = try writeRollout(name: "rollout-newest.jsonl", mtime: Date().addingTimeInterval(-1800))
+    func testUnlinkedCodexRolloutDoesNotFallBackToNewestExternalJSONL() throws {
+        // When a Codex session has no recorded or in-window rollout link,
+        // the resolver must fail closed. A global newest-file fallback can
+        // pick up a Terminal-launched or otherwise external Codex session.
+        let _ = try writeRollout(name: "rollout-older.jsonl", mtime: Date().addingTimeInterval(-3600))
+        let _ = try writeRollout(name: "rollout-newest.jsonl", mtime: Date().addingTimeInterval(-1800))
 
         let session = makeSession(
             agent: .codex,

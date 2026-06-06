@@ -1,12 +1,11 @@
 import Foundation
 import ClawdmeterShared
 
-/// Builds the child-process argv that runs inside a tmux pane for a given
-/// (agent, cwd, options) tuple.
+/// Builds the child-process argv for providers that still launch an external
+/// CLI directly, currently Claude via a per-session PTY.
 ///
 /// Per E4: returns argv arrays, NEVER `cd && exec` shell strings. The
-/// caller (`TmuxControlClient.newWindow`) passes the cwd separately via
-/// tmux's `-c` flag.
+/// caller passes the cwd separately in the runtime launch plan.
 ///
 /// Sessions v2 changes (T1 + T2 + T3 + Phase 0):
 /// - Uses `ShellRunner.locateBinary` instead of hardcoded user-specific paths.
@@ -16,11 +15,9 @@ import ClawdmeterShared
 ///   `codex --help` 2026-05). Codex does NOT have a `--reasoning-effort` flag.
 public enum AgentSpawner {
 
-    /// The child environment for a Claude PTY spawn, at PARITY with a tmux pane.
+    /// The child environment for a Claude PTY spawn.
     ///
-    /// A tmux pane inherits the tmux server's env, which `TmuxControlClient`
-    /// starts with `SpawnPathResolver.merged(...)` — the enriched login PATH.
-    /// Without that, a PTY `claude` runs under launchd's thin GUI PATH
+    /// Without this, a PTY `claude` runs under launchd's thin GUI PATH
     /// (`/usr/bin:/bin:…`) and can't find node/rg/hooks. `extra` carries managed
     /// repo env (only the daemon's repo-env resolver can compute it; callers
     /// without one pass nil). Sanitized LAST so the subscription-billing rail

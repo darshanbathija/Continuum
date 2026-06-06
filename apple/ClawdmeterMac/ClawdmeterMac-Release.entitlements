@@ -23,11 +23,11 @@
 	  The pasted-token flow keeps working in the sandboxed build via
 	  the keychain-access-groups entry below.
 	-->
-	<!-- v0.29.35: App Sandbox DISABLED (was ON). The sandbox denied every
-	     git / tmux / agent-CLI subprocess access to the user's repos AND to
-	     the worktree storage root (~/Clawdmeter/workspaces), so Sessions/Code
-	     and real-agent Chat could not run at all: git died with "getcwd:
-	     Operation not permitted", tmux exited non-zero (ShellError 2), and
+		<!-- v0.29.35: App Sandbox DISABLED (was ON). The sandbox denied every
+		     git / agent-CLI subprocess access to the user's repos AND to
+		     the worktree storage root (~/Clawdmeter/workspaces), so Sessions/Code
+		     and real-agent Chat could not run at all: git died with "getcwd:
+		     Operation not permitted", agent subprocesses exited non-zero, and
 	     Chat broadcast reported "only 1 provider spawned". Making it work
 	     under the sandbox would require security-scoped bookmarks on every
 	     repo + worktree root + read-write exceptions for ~/.claude and

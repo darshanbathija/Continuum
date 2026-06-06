@@ -217,7 +217,6 @@ final class AgentControlProtocolTests: XCTestCase {
         XCTAssertEqual(AgentEventKind.sessionCreated.rawValue, "sessionCreated")
         XCTAssertEqual(AgentEventKind.planReady.rawValue, "planReady")
         XCTAssertEqual(AgentEventKind.doneDetected.rawValue, "doneDetected")
-        XCTAssertEqual(AgentEventKind.tmuxServerLost.rawValue, "tmuxServerLost")
         XCTAssertEqual(AgentEventKind.snapshot.rawValue, "snapshot")
         XCTAssertEqual(AgentEventKind.unknown.rawValue, "unknown")
     }

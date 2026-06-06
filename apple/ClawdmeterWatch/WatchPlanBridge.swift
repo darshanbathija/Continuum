@@ -160,7 +160,7 @@ public final class WatchPlanBridge: NSObject, ObservableObject, WCSessionDelegat
         reloadPlanWaitingComplication()
     }
 
-    /// Sessions v2 Phase 6: send ESC to the session's tmux pane.
+    /// Sessions v2 Phase 6: send ESC to the session runtime.
     public func interrupt(sessionId: UUID) {
         sendOrQueue([
             "op": "interrupt",

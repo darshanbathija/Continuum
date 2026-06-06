@@ -89,6 +89,10 @@ public final class CursorTokenProvider: TokenProvider, @unchecked Sendable {
 
     @discardableResult
     public func refreshIfNeeded() async throws -> Bool {
+        try refreshCachedToken()
+    }
+
+    private func refreshCachedToken() throws -> Bool {
         // We don't call Cursor's refresh endpoint here — cursor-agent's
         // own background loop rotates the on-disk keychain entry every
         // ~hour. Our refresh path just drops the in-memory cache and

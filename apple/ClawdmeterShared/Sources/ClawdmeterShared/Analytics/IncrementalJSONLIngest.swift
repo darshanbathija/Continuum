@@ -1,9 +1,5 @@
 import Foundation
-#if canImport(Darwin)
 import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 #if canImport(OSLog)
 import OSLog
 #endif
@@ -262,7 +258,7 @@ public actor IncrementalJSONLIngest {
                   currentSize >= prior.prefixByteCount,
                   comparisonPrefixHash != 0,
                   prior.prefixHash != comparisonPrefixHash {
-            // Linux filesystems can reuse an inode after delete/recreate in
+            // Some filesystems can reuse an inode after delete/recreate in
             // small temp dirs. A changed prefix while the cursor expects the
             // old prefix means the path no longer represents the same stream.
             resetReason = .inodeChanged
@@ -481,17 +477,10 @@ public actor IncrementalJSONLIngest {
     }
 
     private static func inode(path: String, attrs: [FileAttributeKey: Any]) -> UInt64 {
-        #if canImport(Glibc)
         var statBuffer = stat()
         if stat(path, &statBuffer) == 0 {
             return UInt64(statBuffer.st_ino)
         }
-        #elseif canImport(Darwin)
-        var statBuffer = stat()
-        if stat(path, &statBuffer) == 0 {
-            return UInt64(statBuffer.st_ino)
-        }
-        #endif
 
         if let inode = (attrs[.systemFileNumber] as? NSNumber)?.uint64Value, inode != 0 {
             return inode

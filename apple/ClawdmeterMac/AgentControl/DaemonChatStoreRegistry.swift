@@ -342,12 +342,21 @@ public final class DaemonChatStoreRegistry {
     private func createStore(for session: AgentSession) -> SessionChatStore? {
         // v0.8 chat sessions: route by backend.
         //
+        // - Legacy Codex SDK chat -> sdkOnly store for persisted transcript
+        //   compatibility. Send/config routes retire these sessions instead of
+        //   starting the removed SDK runtime.
         // - Claude chat (CLI) → JSONLTail at exact encoded chat-cwd path. The
         //   chat-cwd is `<AppSupport>/chat-sessions/<sessionUUID>/`, unique per
         //   session, so the encoded `~/.claude/projects/-Users-..-chat-sessions-<UUID>/`
         //   directory contains only this chat's JSONLs — no fuzzy parent walk
         //   needed and no risk of surfacing unrelated transcripts.
         if session.kind == .chat {
+            if session.agent == .codex && session.codexChatBackend == .sdk {
+                let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
+                store.start()
+                SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
+                return store
+            }
             // Claude chat (CLI): point JSONLTail at the encoded chat-cwd dir.
             // The dir-name encoding mirrors Claude's `/` → `-`, `_` → `-`,
             // ` ` → `-` rule (see SessionChatStore.encodeCwd). Picking the
@@ -411,16 +420,12 @@ public final class DaemonChatStoreRegistry {
             SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
             return store
         }
-        // v27 Code-tab harness migration: paneless harness-driven Code sessions
-        // (cursor/grok always; gemini always via headless `agy`; codex always
-        // via app-server)
-        // are fed by the AcpHarnessBridge through `appendSDKMessages` — there is
-        // NO JSONL to tail. Use an sdkOnly store. Distinguished from a LEGACY tmux
-        // Code session (real pane + JSONL) by the absence of a tmux pane, so old
-        // tmux codex/cursor sessions keep resolving their JSONL below. Gemini has
-        // no tmux spawn path at all, so paneless gemini is always harness-driven.
+        // Harness-driven Code sessions are fed by AcpHarnessBridge through
+        // `appendSDKMessages`; there is no JSONL to tail. Claude direct PTY
+        // sessions skip this branch and resolve their JSONL below.
         if session.tmuxPaneId == nil,
-           session.agent == .cursor
+           session.runtimeBinding?.runtimeKind.isACPDriven == true
+             || session.agent == .cursor
              || session.agent == .grok
              || session.agent == .gemini
              || session.agent == .codex {

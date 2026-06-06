@@ -54,7 +54,7 @@ fi
 ZIPFILE="opencode-darwin-arm64.zip"
 URL="https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/${ZIPFILE}"
 
-# Pick a shasum frontend. macOS ships `shasum`, Linux usually `sha256sum`.
+# Pick a shasum frontend. Prefer `shasum`, then fall back to `sha256sum`.
 if command -v shasum >/dev/null 2>&1; then
   SHASUM_CMD=(shasum -a 256)
 else

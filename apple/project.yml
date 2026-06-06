@@ -19,15 +19,15 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.31.3"
-    CURRENT_PROJECT_VERSION: "203"
+    MARKETING_VERSION: "0.31.6"
+    CURRENT_PROJECT_VERSION: "206"
 
 packages:
   ClawdmeterShared:
     path: ClawdmeterShared
   # SwiftTerm — Miguel de Icaza's pure-Swift xterm-compatible terminal
   # emulator. Used in both the Mac and iOS Sessions tabs to render the
-  # tmux pane bytes streamed over WebSocket.
+  # direct PTY bytes streamed over WebSocket.
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     from: "1.2.0"
@@ -58,10 +58,6 @@ targets:
           # v0.7.15: same exclusion for the bundled uv binary used by
           # the Antigravity SDK toggle's Python venv provisioning.
           - "Resources/Vendor/uv/**"
-          # v0.29.12: bundled tmux is app infrastructure for Sessions.
-          # Keep it out of source scanning; the folder reference below
-          # copies it into Contents/Resources/Vendor/tmux/.
-          - "Resources/Vendor/tmux/**"
           # v0.30.0: bundled OpenCode is app infrastructure for the
           # OpenCode provider. Keep it out of source scanning; the
           # Vendor folder reference copies it into Contents/Resources.
@@ -140,22 +136,6 @@ targets:
           fi
         outputFiles:
           - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/uv/uv
-      - name: Download bundled tmux (if missing)
-        # v0.29.12: Sessions uses tmux as internal infrastructure. Ship
-        # a known-good tmux + dylibs inside the app instead of requiring
-        # users to install Homebrew packages manually. Skip only for devs
-        # deliberately testing against a system tmux.
-        script: |
-          if [ "${CLAWDMETER_SKIP_BUNDLED_TMUX:-0}" = "1" ]; then
-            echo "Skipping bundled tmux download (CLAWDMETER_SKIP_BUNDLED_TMUX=1)"
-            exit 0
-          fi
-          REPO_ROOT="$(cd "$SRCROOT/.." && pwd)"
-          if [ ! -x "$REPO_ROOT/apple/ClawdmeterMac/Resources/Vendor/tmux/bin/tmux" ]; then
-            "$REPO_ROOT/tools/download-bundled-tmux.sh"
-          fi
-        outputFiles:
-          - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/tmux/bin/tmux
       - name: Download bundled OpenCode (if missing)
         # v0.30.0: ensure the bundled opencode binary exists before the
         # resources phase runs. The DMG release script also verifies this
@@ -368,8 +348,8 @@ targets:
   # ───────────────────────────────────────────────────────────────
   # Mac XCTest target — v0.7.7. Exercises the Mac-only helpers that
   # can't be reached from ClawdmeterShared's SwiftPM test target:
-  # PathValidator delegation, TailscaleWhois.ipOnly, TmuxControlClient
-  # argv validation, SidecarAskCoordinator first-wins semantics.
+  # PathValidator delegation, TailscaleWhois.ipOnly, and
+  # SidecarAskCoordinator first-wins semantics.
   #
   # Hosted by the ClawdmeterMac application target; `@testable import
   # ClawdmeterMac` works because xcodegen emits the test-host

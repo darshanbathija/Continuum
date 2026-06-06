@@ -33,8 +33,6 @@
 - [ ] **P2-19** archive() leaves the surviving A/B sibling pointing at an archived session (asymmetric link) — `apple/ClawdmeterMac/AgentControl/AgentSessionRegistry.swift:613-624`
 - [ ] **P2-20** Replayed `.failed` receipts lose their original HTTP status and error message and get a synthetic 500, masking the original 4xx — `apple/ClawdmeterMac/AgentControl/MobileCommandOutbox.swift:255-262`
 - [ ] **P2-21** iOS outbox `dispatch` treats undecodable persisted payloads as retryable, not terminal — a malformed envelope burns the full retry schedule before parking — `apple/ClawdmeteriOS/AgentControl/MobileCommandOutbox.swift:300-364`
-- [ ] **P2-22** `command()` timeout tears down the entire shared tmux control client, collapsing every live pane — `apple/ClawdmeterMac/AgentControl/TmuxControlClient.swift:667-679`
-- [ ] **P2-23** Control-mode line buffer is unbounded — a newline-free `%output` burst grows memory without limit — `apple/ClawdmeterMac/AgentControl/ControlModeParser.swift:37-63`
 - [ ] **P2-24** `HarnessProcessReaper.liveComm` blocks the main actor with a synchronous `ps` + `waitUntilExit()` per orphan at startup — `apple/ClawdmeterMac/AgentControl/HarnessProcessReaper.swift:54-85,117-130`
 - [ ] **P2-25** CodexAppServerDriver never clears currentTurnId after a turn completes — `apple/ClawdmeterMac/AgentControl/CodexAppServerDriver.swift:42`
 - [ ] **P2-26** CodexAppServerDriver leaks pendingApprovals entries; never cleared on close() — `apple/ClawdmeterMac/AgentControl/CodexAppServerDriver.swift:45`
@@ -60,7 +58,7 @@
 - [ ] **P2-46** `Decimal(Double)` conversion of OpenCode embedded cost reintroduces binary-float drift the Decimal design exists to avoid — `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/OpencodeUsageParser.swift:184`
 - [ ] **P2-47** `tokensByModel(in:)` window has an upper `day <= today` bound the dollar-chart windows lack, so future-dated records diverge between the two surfaces — `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/UsageHistorySnapshot.swift:102`
 - [ ] **P2-48** Antigravity per-file cache keys on the conversation file's mtime/size but the legacy `.pb` token estimate comes from the separate brain dir, risking stale cached tokens — `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/UsageHistoryLoader.swift:748-757`
-- [ ] **P2-49** AutoReviver sets `lastFireAt` before the no-token guard, poisoning the cool-off on a no-op attempt — `apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/AutoReviver.swift:86-95`
+- [x] **P2-49** AutoReviver sets `lastFireAt` before the no-token guard, poisoning the cool-off on a no-op attempt — completed in v0.31.4 by disabling prompt-based auto-revive until a non-consuming keepalive exists.
 - [ ] **P2-50** `ComposerStore.attach` 50MB cap is bypassed when the caller can't read the file size (`?? 0`) — `apple/ClawdmeterShared/Sources/ClawdmeterShared/Composer/ComposerStore.swift:118-131`
 - [ ] **P2-51** `ChatV2Store.toggleVendor` comment claims "no upper cap" but silently caps broadcast selection at 3 — `apple/ClawdmeterShared/Sources/ClawdmeterShared/Chat/ChatV2Store.swift:264-275`
 - [ ] **P2-52** `ComposerSendController.sendCustomOptimistic` silently loses a failed message if the user starts typing during the in-flight window — `apple/ClawdmeterShared/Sources/ClawdmeterShared/Composer/ComposerSendController.swift:155-167`
@@ -75,18 +73,11 @@
 - [ ] **P2-61** Watch plan goal can linger after a session swap because `apply()` never clears `latestGoal` when the key is absent — `apple/ClawdmeterWatch/WatchPlanBridge.swift:68-79`
 - [ ] **P2-62** iOS→Watch context push bypasses the built-and-tested `SendGate` diff-guard and pushes unconditionally — `apple/ClawdmeteriOS/WatchPlanBridgeIOS.swift:54-91`
 - [ ] **P2-63** Reauth state is masked by a stale `usage` on the watch — `apple/ClawdmeterWatch/WatchUsageModel.swift:95-112`
-- [ ] **P2-64** Runtime-dir parent under world-writable `/tmp` is never ownership-validated; symlink redirection survives the leaf-only check — `linux/Sources/ClawdmeterLinux/Storage/LinuxConfigPaths.swift:82-105`
-- [ ] **P2-65** Bearer-token file fallback is written through the process-umask temp file during the atomic-rename window (TOCTOU on 0600) — `linux/Sources/ClawdmeterLinux/Storage/PairingTokenStore+SecretService.swift:92-107`
-- [ ] **P2-66** IPv6 Tailscale-ULA allowlist uses textual prefix match, not byte-range — diverges from the byte-accurate /48 the file claims parity with — `linux/Sources/ClawdmeterLinux/Transport/HummingbirdPeerFilter.swift:55-57`
-- [ ] **P2-67** `VisualTestHelper.pixelDiffPercent` indexes `Data` by zero-based offset; would crash on a sliced `Data` — `linux/Tests/ClawdmeterLinuxTests/Visual/AssertImageEqual.swift:83-94`
-- [ ] **P2-68** Linux peer filter omits the Tailscale-whois identity check the Mac filter requires for non-loopback peers — `linux/Sources/ClawdmeterLinux/Transport/HummingbirdPeerFilter.swift:30-60`
-- [ ] **P2-69** Empty-`Data` gauge PNG is written and reported as success on Linux (invalid icon file handed to AppIndicator) — `linux/Sources/ClawdmeterLinux/Tray/CairoGaugeRenderer.swift:43-76`
 - [ ] **P2-70** No CI builds or tests the Mac daemon, iOS, or watchOS apps — the core product ships untested — `.github/workflows/`
-- [ ] **P2-71** VERSION file is not the single source of truth it claims to be — Mac DMG and Linux artifacts can drift — `VERSION:1`
+- [ ] **P2-71** VERSION file is not the single source of truth it claims to be — Mac DMG artifacts can drift — `VERSION:1`
 - [ ] **P2-72** build-mac-dmg.sh version fallback yields a literal `$(MARKETING_VERSION)` in the DMG name, not 0.1.0 — `tools/build-mac-dmg.sh:68-78`
-- [ ] **P2-73** Linux release-upload runs only the linux-pkg gate, not the ClawdmeterShared Swift tests, before publishing artifacts — `.github/workflows/linux.yml:84-92,156-210`
 
-## B. From the prior audit (14) — release / identity / Linux / infra
+## B. From the prior audit (14) — release / identity / infra
 
 - [ ] **P2-001** Worktree provisioning can hang forever in raw git helper
 - [ ] **P2-002** Per-session rate-limit maps are never released
@@ -99,8 +90,6 @@
 - [ ] **P2-009** iOS relay requests hang until timeout when the socket drops
 - [ ] **P2-010** Legacy LAN pairing token is stored in plain UserDefaults
 - [ ] **P2-011** Settings "Files to copy" rows synchronously read repo files during SwiftUI body build
-- [ ] **P2-012** Linux config path hardening accepts non-directories and group/world-readable secret dirs
-- [ ] **P2-013** Linux tray support detection and dialog cannot produce correct runtime state
 - [ ] **P2-014** Codex SDK sidecar validates `workingDirectory` but passes `additionalDirectories` unchecked
 
 ## C. Net-new, verified from external AI audits (18)
@@ -137,7 +126,3 @@
   - Real availability defect — a transient `tailscale whois` error (e.g
 - [ ] **EXT D-6** Pairing token not bound to Tailscale node identity — `apple/ClawdmeterMac/AgentControl/AgentControlServer.swift:136-139`
   - Real defense-in-depth gap (token isn't bound to a node/user identity), but exploiting it needs token theft AND tailnet membership, and tailnets are ACL-controlled — P2 hardening, not P0
-- [ ] **EXT L-3** Linux OAuth secret token never persisted (writeFallbackFile never invoked) — `linux/Sources/ClawdmeterLinux/Storage/LinuxSecretServiceTokenProvider.swift:115-141` _(partial/narrower than claimed)_
-  - Real but narrower than "token lost on exit" — the OAuth provider is read-only by design (it reads tokens the Mac mirrors / Phase-3 libsecret), so there is no write path to lose; our v2 audit already f…
-- [ ] **EXT L-5** Empty bearer token accepted on Linux — `linux/Sources/ClawdmeterLinux/Transport/HummingbirdBearerAuth.swift:31-38` _(partial/narrower than claimed)_
-  - Real defensive gap (the auth predicate should reject empty expected/presented), but NOT an exploitable bypass against the real Linux store, which never yields an empty token — and the transport that w…

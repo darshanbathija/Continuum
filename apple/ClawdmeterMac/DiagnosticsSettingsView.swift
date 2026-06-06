@@ -248,7 +248,6 @@ enum SupportBundleWriter {
         try redactAuditText(wireEntries.joined(separator: "\n")).write(to: bundle.appendingPathComponent("visible-diagnostics.jsonl"), atomically: true, encoding: .utf8)
         try systemSnapshot().write(to: bundle.appendingPathComponent("system.txt"), atomically: true, encoding: .utf8)
         try providerSnapshot().write(to: bundle.appendingPathComponent("provider-binaries.txt"), atomically: true, encoding: .utf8)
-        try redact(run("/bin/zsh", ["-lc", "tmux list-sessions 2>&1 || true"])).write(to: bundle.appendingPathComponent("tmux.txt"), atomically: true, encoding: .utf8)
         try redact(run("/bin/zsh", ["-lc", "tailscale status --json 2>&1 || tailscale status 2>&1 || true"])).write(to: bundle.appendingPathComponent("tailscale.txt"), atomically: true, encoding: .utf8)
         try redact(run("/bin/zsh", ["-lc", "lsof -nP -iTCP -sTCP:LISTEN 2>&1 | head -200 || true"])).write(to: bundle.appendingPathComponent("listening-ports.txt"), atomically: true, encoding: .utf8)
         try "App logs are omitted from the default support bundle because they can contain prompt and transcript text. Use visible-diagnostics.jsonl and audit-redacted for sanitized event context.\n"
@@ -290,7 +289,7 @@ enum SupportBundleWriter {
     }
 
     private static func providerSnapshot() -> String {
-        let providers = ["claude", "codex", "gemini", "opencode", "cursor", "tmux", "tailscale", "gh", "git"]
+        let providers = ["claude", "codex", "gemini", "opencode", "cursor", "tailscale", "gh", "git"]
         return providers.map { name in
             let resolvedPath = ShellRunner.locateBinary(name)
             let path = redact(resolvedPath ?? run("/bin/zsh", ["-lc", "command -v \(name) 2>/dev/null || true"]))
