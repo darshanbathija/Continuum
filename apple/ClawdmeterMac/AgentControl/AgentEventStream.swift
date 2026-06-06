@@ -39,6 +39,7 @@ public final class AgentEventStream: WSChannel {
     private static var nextGlobalSeq: UInt64 = 1
     private static let maxRetention = 1024
     private static let retentionWindow: TimeInterval = 3_600
+    private static var lastSyntheticSnapshot: [UUID: AgentSession] = [:]
 
     /// P2-Mac-1: `recordEvent` was only delivered to subscribers when a
     /// later `registry.$sessions` mutation triggered `emitDiff`. Plan-mode
@@ -136,10 +137,14 @@ public final class AgentEventStream: WSChannel {
     /// Detect changes since the last emit and synthesize `statusChanged`
     /// events. Phase 4 will replace this with explicit `recordEvent(_)` calls
     /// from PlanModeWatcher / DoneDetector / etc.
-    private var lastSnapshot: [UUID: AgentSession] = [:]
     private func emitDiff(currentSessions: [AgentSession]) async {
+        Self.recordSyntheticDiffEventsIfNeeded(currentSessions: currentSessions)
+        await flushPending()
+    }
+
+    private static func recordSyntheticDiffEventsIfNeeded(currentSessions: [AgentSession]) {
         for session in currentSessions {
-            let prev = lastSnapshot[session.id]
+            let prev = lastSyntheticSnapshot[session.id]
             if prev?.status != session.status || prev?.planText != session.planText {
                 let kind: AgentEventKind = session.planText != prev?.planText && session.planText != nil
                     ? .planReady
@@ -153,15 +158,25 @@ public final class AgentEventStream: WSChannel {
                 )
             }
         }
-        for (oldId, _) in lastSnapshot where !currentSessions.contains(where: { $0.id == oldId }) {
+        for (oldId, _) in lastSyntheticSnapshot where !currentSessions.contains(where: { $0.id == oldId }) {
             AgentEventStream.recordEvent(sessionId: oldId, kind: .sessionDeleted, payload: [:])
         }
-        lastSnapshot = Dictionary(uniqueKeysWithValues: currentSessions.map { ($0.id, $0) })
-        // Flush any new events to this connection.
-        let toSend = Self.globalEventLog.filter { $0.eventSeq > lastSentSeq }
-        for event in toSend {
-            await sendEvent(event)
-        }
+        lastSyntheticSnapshot = Dictionary(uniqueKeysWithValues: currentSessions.map { ($0.id, $0) })
+    }
+
+    internal static func resetEventLogForTesting() {
+        globalEventLog.removeAll()
+        nextGlobalSeq = 1
+        lastSyntheticSnapshot.removeAll()
+        lastStatusPushAt.removeAll()
+    }
+
+    internal static var eventLogCountForTesting: Int {
+        globalEventLog.count
+    }
+
+    internal static func recordSyntheticDiffEventsForTesting(currentSessions: [AgentSession]) {
+        recordSyntheticDiffEventsIfNeeded(currentSessions: currentSessions)
     }
 
     private func sendEvent(_ event: AgentEvent) async {

@@ -75,6 +75,21 @@ final class SessionChatStorePendingTests: XCTestCase {
         XCTAssertNil(store.pendingMessage)
     }
 
+    func test_perLineIngestTasksAreRemovedAfterCompletion() async {
+        let store = SessionChatStore(sessionId: UUID(), sdkOnly: true)
+        let task = Task<Void, Never> {}
+
+        store.trackPerLineIngestTaskForTesting(task)
+        XCTAssertEqual(store.perLineIngestTaskCountForTesting, 1)
+        await task.value
+
+        for _ in 0..<20 where store.perLineIngestTaskCountForTesting > 0 {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertEqual(store.perLineIngestTaskCountForTesting, 0)
+    }
+
     /// Offline queue accumulates pendings while the daemon is unreachable
     /// and drains FIFO on the next successful send.
     func test_offlineQueue_capturesPendingsForReplay() {

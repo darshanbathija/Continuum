@@ -41,8 +41,7 @@ public final class WatchPlanBridge: NSObject, ObservableObject, WCSessionDelegat
         loadFromDefaults()
         if WCSession.isSupported() {
             let session = WCSession.default
-            session.delegate = self
-            session.activate()
+            WatchSessionDelegateMultiplexer.shared.register(self)
             // Process whatever context is already there.
             apply(context: session.receivedApplicationContext)
         }
@@ -151,6 +150,7 @@ public final class WatchPlanBridge: NSObject, ObservableObject, WCSessionDelegat
         let message: [String: Any] = [
             "op": "approvePlan",
             "sessionId": sessionIdString,
+            "idempotencyKey": "watch-approvePlan-\(sessionIdString)-\(UUID().uuidString)",
         ]
         sendOrQueue(message)
         planWaitingCount = max(0, planWaitingCount - 1)

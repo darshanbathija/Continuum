@@ -123,7 +123,7 @@ final class APNSGatewayIntegrationTests: XCTestCase {
         let input = APNSGatewayClient.PushInput(
             body: body,
             deviceToken: deviceToken,
-            topic: "com.clawdmeter.iphone",
+            topic: "ai.continuum.ios",
             sessionId: sessionId,
             senderMacFingerprint: String(repeating: "cd", count: 32),
             signingKey: signingKey,
@@ -171,7 +171,7 @@ final class APNSGatewayIntegrationTests: XCTestCase {
         let input = APNSGatewayClient.PushInput(
             body: APNSPushBody(kind: "planApproval", sessionId: "x", title: "x", body: "x", triggerAt: 1),
             deviceToken: String(repeating: "ee", count: 32),
-            topic: "com.clawdmeter.iphone",
+            topic: "ai.continuum.ios",
             sessionId: "slow-gateway-test-001-aaaaaa",
             senderMacFingerprint: String(repeating: "11", count: 32),
             signingKey: Data(repeating: 0x5A, count: 32),
@@ -214,7 +214,7 @@ final class APNSGatewayIntegrationTests: XCTestCase {
         let input = APNSGatewayClient.PushInput(
             body: body,
             deviceToken: String(repeating: "22", count: 32),
-            topic: "com.clawdmeter.iphone",
+            topic: "ai.continuum.ios",
             sessionId: "decrypt-test-001-aaaaaabbbb",
             senderMacFingerprint: String(repeating: "33", count: 32),
             signingKey: Data(repeating: 0x99, count: 32),
@@ -286,7 +286,7 @@ final class APNSGatewayIntegrationTests: XCTestCase {
         tokenStore.register(
             sessionId: sid,
             deviceToken: String(repeating: "ab", count: 32),
-            bundleId: "com.clawdmeter.iphone"
+            bundleId: "ai.continuum.ios"
         )
 
         let signingKeyProvider = APNSGatewaySigningKeyProvider()

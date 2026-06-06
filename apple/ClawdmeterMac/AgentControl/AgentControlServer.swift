@@ -452,30 +452,34 @@ public final class AgentControlServer {
                 let expired = await MainActor.run { AutopilotState.shared.expiredSessions() }
                 guard !expired.isEmpty else { continue }
                 for id in expired {
-                    await MainActor.run {
-                        AutopilotState.shared.setEnabled(false, sessionId: id)
-                    }
-                    // `AgentEventStream.recordEvent` expects
-                    // `payload: [String: String]`; the original `false`
-                    // Bool literal made the dictionary infer to
-                    // `[String: any Sendable]` and the call site
-                    // refused to type-check. Stringify so the autopilot
-                    // sweep ships at all.
-                    AgentEventStream.recordEvent(
-                        sessionId: id,
-                        kind: .statusChanged,
-                        payload: ["autopilot": "false", "reason": "inactivity_timeout"]
-                    )
-                    // `serverLogger` is a module-level `private let`
-                    // (top of this file), not an instance member —
-                    // `self?.serverLogger` doesn't resolve. Reference
-                    // the global directly; the weak self capture
-                    // covers the actor isolation around AutopilotState.
-                    serverLogger.info(
-                        "autopilot disabled by 15-min inactivity sweep: session=\(id.uuidString, privacy: .public)"
-                    )
+                    await self?.expireAutopilotSession(id)
                 }
             }
+        }
+    }
+
+    private func expireAutopilotSession(_ id: UUID) async {
+        AutopilotState.shared.setEnabled(false, sessionId: id)
+        AgentEventStream.recordEvent(
+            sessionId: id,
+            kind: .statusChanged,
+            payload: ["autopilot": "false", "reason": "inactivity_timeout"]
+        )
+        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
+        let result = await changer.swap(sessionId: id)
+        switch result {
+        case .swapped:
+            serverLogger.info(
+                "autopilot disabled and session respawned after inactivity: session=\(id.uuidString, privacy: .public)"
+            )
+        case .resumeFailed(let restoredOriginal):
+            serverLogger.error(
+                "autopilot expiry respawn failed for \(id.uuidString, privacy: .public); restoredOriginal=\(restoredOriginal, privacy: .public)"
+            )
+        case .spawnError(let message):
+            serverLogger.error(
+                "autopilot expiry could not respawn \(id.uuidString, privacy: .public): \(message, privacy: .public)"
+            )
         }
     }
 
@@ -1466,8 +1470,11 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(ChangeModelRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
         let liveCatalog = await providerEnabledModelCatalog()
         guard !req.model.isEmpty, liveCatalog.entry(forId: req.model) != nil else {
             sendResponse(.badRequest, on: connection); return
@@ -1506,8 +1513,11 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(ChangeEffortRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
@@ -1537,8 +1547,11 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(ChangeModeRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
         if req.mode == .cloud {
             sendResponse(.badRequest, on: connection); return
         }
@@ -1577,8 +1590,11 @@ public final class AgentControlServer {
         }
         // Body is optional: an empty POST (no idempotency key) is valid.
         let req = (try? JSONDecoder().decode(ReviveRequest.self, from: request.body)) ?? ReviveRequest()
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
@@ -1714,8 +1730,11 @@ public final class AgentControlServer {
         // effect. If we've already processed this idempotency key, replay
         // the cached response. The caller (iOS outbox) will mark the
         // outbox entry as `.acknowledged` and stop retrying.
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
         let bytes = Array(req.text.utf8)
         guard !bytes.isEmpty, bytes.count <= 1_000_000 else {
             sendResponse(.badRequest, on: connection); return
@@ -2240,8 +2259,11 @@ public final class AgentControlServer {
         // defaults to nil and the wrapper is a no-op.
         let req = (try? JSONDecoder().decode(InterruptRequest.self, from: request.body))
             ?? InterruptRequest(idempotencyKey: nil)
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
         // ACP harness interrupt (Grok, Cursor): the SessionInterruptDispatcher
         // has no handle on the harness registry, so cancel the live bridge here
         // first. Keyed off the bridge registry (agent-agnostic); legacy tmux
@@ -2374,8 +2396,11 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(AutopilotRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
         // Autopilot crosses a real security boundary (per-repo trust list).
         // Throttle the toggle so a misbehaving client can't flap it.
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
@@ -2424,8 +2449,11 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(PickWinnerRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
         let result: AgentSessionRegistry.PickPairResult?
         do {
             result = try await registry.pickPairWinner(sessionId: uuid, winner: req.winnerSessionId)
@@ -3010,13 +3038,23 @@ public final class AgentControlServer {
             sendResponse(.notFound, on: connection); return
         }
         let req = (try? JSONDecoder().decode(CreatePRRequest.self, from: request.body)) ?? CreatePRRequest()
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
         let cwd = session.effectiveCwd
         guard let ghBin = ShellRunner.locateBinary("gh") else {
-            sendResponse(HTTPResponse(
-                status: 503, reason: "Service Unavailable",
-                contentType: "application/json",
-                body: Data(#"{"error":"gh CLI not found on Mac. Install: brew install gh"}"#.utf8)
-            ), on: connection); return
+            await sendCommandJSONError(
+                ["error": "gh CLI not found on Mac. Install: brew install gh"],
+                status: 503,
+                key: req.idempotencyKey,
+                kind: .createPR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
+            return
         }
         var args = ["pr", "create", "--fill"]
         if let title = req.title, !title.isEmpty { args += ["--title", title] }
@@ -3028,24 +3066,36 @@ public final class AgentControlServer {
             )
             if result.exitStatus != 0 {
                 let payload: [String: Any] = ["error": "gh pr create failed", "stderr": result.stderrString]
-                let body = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
-                sendResponse(HTTPResponse(status: 500, reason: "Internal Server Error",
-                                          contentType: "application/json", body: body), on: connection)
+                await sendCommandJSONError(
+                    payload,
+                    status: 500,
+                    key: req.idempotencyKey,
+                    kind: .createPR,
+                    sessionId: uuid,
+                    payloadHash: payloadHash,
+                    on: connection
+                )
                 return
             }
             let prURL = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-            var payload: [String: Any] = ["url": prURL]
-            if let key = req.idempotencyKey {
-                payload["receipt"] = [
-                    "idempotencyKey": key,
-                    "status": MobileCommandStatus.acknowledged.rawValue,
-                    "receivedAt": ISO8601DateFormatter().string(from: Date()),
-                    "serverReceiptId": UUID().uuidString,
-                ]
-            }
-            sendJSON(payload, on: connection)
+            await sendCommandResponse(
+                body: ["url": prURL],
+                key: req.idempotencyKey,
+                kind: .createPR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
         } catch {
-            sendResponse(.internalError, on: connection)
+            await sendCommandJSONError(
+                ["error": "gh pr create failed", "detail": "\(error)"],
+                status: 500,
+                key: req.idempotencyKey,
+                kind: .createPR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
         }
     }
 
@@ -3053,11 +3103,34 @@ public final class AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
+        let req = (try? JSONDecoder().decode(PRReviewRequest.self, from: request.body)) ?? PRReviewRequest()
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
         guard let ghBin = ShellRunner.locateBinary("gh") else {
-            sendJSON(["error": "gh CLI not found on Mac. Install: brew install gh"], on: connection, status: 503)
+            let receipt = req.idempotencyKey.map {
+                MobileCommandReceipt(
+                    idempotencyKey: $0,
+                    status: .failed,
+                    processedAt: Date(),
+                    error: "gh CLI not found on Mac. Install: brew install gh"
+                )
+            }
+            await sendCommandCodableResponse(
+                PRReviewResponse(ok: false, receipt: receipt, error: "gh CLI not found on Mac. Install: brew install gh"),
+                key: req.idempotencyKey,
+                kind: .reviewPR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                status: 503,
+                failed: true,
+                errorMessage: "gh CLI not found on Mac. Install: brew install gh",
+                on: connection
+            )
             return
         }
-        let req = (try? JSONDecoder().decode(PRReviewRequest.self, from: request.body)) ?? PRReviewRequest()
         var args = ["pr", "review"]
         switch req.action {
         case .approve:
@@ -3078,16 +3151,53 @@ public final class AgentControlServer {
                 timeout: 45
             )
             guard result.exitStatus == 0 else {
-                sendCodable(PRReviewResponse(ok: false, error: result.stderrString), on: connection)
+                let receipt = req.idempotencyKey.map {
+                    MobileCommandReceipt(
+                        idempotencyKey: $0,
+                        status: .failed,
+                        processedAt: Date(),
+                        error: result.stderrString
+                    )
+                }
+                await sendCommandCodableResponse(
+                    PRReviewResponse(ok: false, receipt: receipt, error: result.stderrString),
+                    key: req.idempotencyKey,
+                    kind: .reviewPR,
+                    sessionId: uuid,
+                    payloadHash: payloadHash,
+                    failed: true,
+                    errorMessage: result.stderrString,
+                    on: connection
+                )
                 return
             }
             let refreshed = try? await fetchPRStatus(cwd: session.effectiveCwd)
             let receipt = req.idempotencyKey.map {
                 MobileCommandReceipt(idempotencyKey: $0, status: .acknowledged, processedAt: Date())
             }
-            sendCodable(PRReviewResponse(ok: true, pr: refreshed ?? nil, receipt: receipt), on: connection)
+            await sendCommandCodableResponse(
+                PRReviewResponse(ok: true, pr: refreshed ?? nil, receipt: receipt),
+                key: req.idempotencyKey,
+                kind: .reviewPR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
         } catch {
-            sendCodable(PRReviewResponse(ok: false, error: "\(error)"), on: connection)
+            let errorText = "\(error)"
+            let receipt = req.idempotencyKey.map {
+                MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+            }
+            await sendCommandCodableResponse(
+                PRReviewResponse(ok: false, receipt: receipt, error: errorText),
+                key: req.idempotencyKey,
+                kind: .reviewPR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                failed: true,
+                errorMessage: errorText,
+                on: connection
+            )
         }
     }
 
@@ -3095,36 +3205,118 @@ public final class AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
+        let mergeRequest = (try? JSONDecoder().decode(MergePRRequest.self, from: request.body)) ?? MergePRRequest()
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: mergeRequest.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = mergeRequest.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
         let cwd = session.effectiveCwd
         guard let ghBin = ShellRunner.locateBinary("gh") else {
-            sendJSON(["error": "gh CLI not found on Mac. Install: brew install gh"], on: connection, status: 503)
+            let errorText = "gh CLI not found on Mac. Install: brew install gh"
+            let receipt = mergeRequest.idempotencyKey.map {
+                MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+            }
+            await sendCommandCodableResponse(
+                MergePRResponse(ok: false, merged: false, receipt: receipt, error: errorText),
+                key: mergeRequest.idempotencyKey,
+                kind: .mergePR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                status: 503,
+                failed: true,
+                errorMessage: errorText,
+                on: connection
+            )
             return
         }
-        let mergeRequest = (try? JSONDecoder().decode(MergePRRequest.self, from: request.body)) ?? MergePRRequest()
         let explicitOverride = mergeRequest.adminOverride || request.path.contains("override=true")
         do {
             guard let pr = try await fetchPRStatus(cwd: cwd) else {
-                sendJSON(["error": "No PR found for this branch"], on: connection, status: 404)
+                let errorText = "No PR found for this branch"
+                let receipt = mergeRequest.idempotencyKey.map {
+                    MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+                }
+                await sendCommandCodableResponse(
+                    MergePRResponse(ok: false, merged: false, receipt: receipt, error: errorText),
+                    key: mergeRequest.idempotencyKey,
+                    kind: .mergePR,
+                    sessionId: uuid,
+                    payloadHash: payloadHash,
+                    status: 404,
+                    failed: true,
+                    errorMessage: errorText,
+                    on: connection
+                )
+                return
+            }
+            if pr.state == .merged {
+                let receipt = mergeRequest.idempotencyKey.map {
+                    MobileCommandReceipt(idempotencyKey: $0, status: .acknowledged, processedAt: Date())
+                }
+                await sendCommandCodableResponse(
+                    MergePRResponse(ok: true, merged: true, pr: pr, receipt: receipt),
+                    key: mergeRequest.idempotencyKey,
+                    kind: .mergePR,
+                    sessionId: uuid,
+                    payloadHash: payloadHash,
+                    on: connection
+                )
                 return
             }
             if !explicitOverride {
                 if pr.checksRollup == "failure" {
-                    sendJSON(["error": "Checks are failing", "requireExplicitOverride": true], on: connection, status: 409)
+                    let errorText = "Checks are failing"
+                    let receipt = mergeRequest.idempotencyKey.map {
+                        MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+                    }
+                    await sendCommandCodableResponse(
+                        MergePRResponse(ok: false, merged: false, pr: pr, receipt: receipt, error: errorText),
+                        key: mergeRequest.idempotencyKey,
+                        kind: .mergePR,
+                        sessionId: uuid,
+                        payloadHash: payloadHash,
+                        status: 409,
+                        failed: true,
+                        errorMessage: errorText,
+                        on: connection
+                    )
                     return
                 }
                 if pr.checksRollup == "pending" {
-                    sendJSON(["error": "Checks are still pending", "requireExplicitOverride": true], on: connection, status: 409)
+                    let errorText = "Checks are still pending"
+                    let receipt = mergeRequest.idempotencyKey.map {
+                        MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+                    }
+                    await sendCommandCodableResponse(
+                        MergePRResponse(ok: false, merged: false, pr: pr, receipt: receipt, error: errorText),
+                        key: mergeRequest.idempotencyKey,
+                        kind: .mergePR,
+                        sessionId: uuid,
+                        payloadHash: payloadHash,
+                        status: 409,
+                        failed: true,
+                        errorMessage: errorText,
+                        on: connection
+                    )
                     return
                 }
                 if pr.state == .closed {
-                    sendJSON(["error": "PR is closed"], on: connection, status: 409)
-                    return
-                }
-                if pr.state == .merged {
+                    let errorText = "PR is closed"
                     let receipt = mergeRequest.idempotencyKey.map {
-                        MobileCommandReceipt(idempotencyKey: $0, status: .acknowledged, processedAt: Date())
+                        MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
                     }
-                    sendCodable(MergePRResponse(ok: true, merged: true, pr: pr, receipt: receipt), on: connection)
+                    await sendCommandCodableResponse(
+                        MergePRResponse(ok: false, merged: false, pr: pr, receipt: receipt, error: errorText),
+                        key: mergeRequest.idempotencyKey,
+                        kind: .mergePR,
+                        sessionId: uuid,
+                        payloadHash: payloadHash,
+                        status: 409,
+                        failed: true,
+                        errorMessage: errorText,
+                        on: connection
+                    )
                     return
                 }
             }
@@ -3144,21 +3336,51 @@ public final class AgentControlServer {
                 timeout: 90
             )
             if result.exitStatus != 0 {
-                sendJSON([
-                    "ok": false,
-                    "merged": false,
-                    "error": "gh pr merge failed",
-                    "stderr": result.stderrString,
-                ], on: connection, status: 409)
+                let errorText = "gh pr merge failed"
+                let receipt = mergeRequest.idempotencyKey.map {
+                    MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+                }
+                await sendCommandCodableResponse(
+                    MergePRResponse(ok: false, merged: false, pr: pr, receipt: receipt, error: "\(errorText): \(result.stderrString)"),
+                    key: mergeRequest.idempotencyKey,
+                    kind: .mergePR,
+                    sessionId: uuid,
+                    payloadHash: payloadHash,
+                    status: 409,
+                    failed: true,
+                    errorMessage: errorText,
+                    on: connection
+                )
                 return
             }
             let refreshed = try? await fetchPRStatus(cwd: cwd)
             let receipt = mergeRequest.idempotencyKey.map {
                 MobileCommandReceipt(idempotencyKey: $0, status: .acknowledged, processedAt: Date())
             }
-            sendCodable(MergePRResponse(ok: true, merged: true, pr: refreshed ?? pr, receipt: receipt), on: connection)
+            await sendCommandCodableResponse(
+                MergePRResponse(ok: true, merged: true, pr: refreshed ?? pr, receipt: receipt),
+                key: mergeRequest.idempotencyKey,
+                kind: .mergePR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
         } catch {
-            sendJSON(["ok": false, "merged": false, "error": "\(error)"], on: connection, status: 500)
+            let errorText = "\(error)"
+            let receipt = mergeRequest.idempotencyKey.map {
+                MobileCommandReceipt(idempotencyKey: $0, status: .failed, processedAt: Date(), error: errorText)
+            }
+            await sendCommandCodableResponse(
+                MergePRResponse(ok: false, merged: false, receipt: receipt, error: errorText),
+                key: mergeRequest.idempotencyKey,
+                kind: .mergePR,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                status: 500,
+                failed: true,
+                errorMessage: errorText,
+                on: connection
+            )
         }
     }
 
@@ -3298,8 +3520,7 @@ public final class AgentControlServer {
         guard let path = Self.standardizedMarkdownDocumentPath(pathArg, relativeTo: session.effectiveCwd) else {
             sendResponse(.badRequest(detail: "invalid document path"), on: connection); return
         }
-        let ext = (path as NSString).pathExtension
-        guard ext.isEmpty || GeneratedArtifactDetector.isMarkdownPath(path) else {
+        guard GeneratedArtifactDetector.isMarkdownPath(path) else {
             sendResponse(HTTPResponse(
                 status: 415,
                 reason: "Unsupported Media Type",
@@ -3310,6 +3531,15 @@ public final class AgentControlServer {
         }
 
         let resolved = (path as NSString).resolvingSymlinksInPath
+        guard Self.isMarkdownDocumentPathAllowed(path, relativeTo: session.effectiveCwd) else {
+            sendResponse(HTTPResponse(
+                status: 403,
+                reason: "Forbidden",
+                contentType: "text/plain",
+                body: Data("document path escapes allowed roots\n".utf8)
+            ), on: connection)
+            return
+        }
         let fd = open(resolved, O_RDONLY | O_NOFOLLOW)
         guard fd >= 0 else {
             let code: Int
@@ -7474,8 +7704,11 @@ public final class AgentControlServer {
         // the idempotency key; missing body keeps the legacy path.
         let req = (try? JSONDecoder().decode(InterruptRequest.self, from: request.body))
             ?? InterruptRequest(idempotencyKey: nil)
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
         guard session.status == .planning,
               session.planText?.isEmpty == false || session.agent == .codex || session.agent == .cursor else {
             sendResponse(HTTPResponse(
@@ -7833,6 +8066,9 @@ public final class AgentControlServer {
     static func endpointString(_ endpoint: NWEndpoint) -> String {
         switch endpoint {
         case .hostPort(let host, let port):
+            if case .ipv6 = host {
+                return "[\(host)]:\(port.rawValue)"
+            }
             return "\(host):\(port.rawValue)"
         default:
             return "\(endpoint)"
@@ -8002,6 +8238,55 @@ public final class AgentControlServer {
         return (absolute as NSString).standardizingPath
     }
 
+    static func markdownDocumentAllowedRoots(
+        relativeTo cwd: String,
+        homeDirectory: String = ClawdmeterRealHome.path()
+    ) -> [String] {
+        var roots: [String] = []
+        if let cwdRoot = standardizedMarkdownDocumentRoot(cwd) {
+            roots.append(cwdRoot)
+        }
+        let generatedDocsRoot = (homeDirectory as NSString)
+            .appendingPathComponent(".gstack/projects")
+        if let gstackRoot = standardizedMarkdownDocumentRoot(generatedDocsRoot) {
+            roots.append(gstackRoot)
+        }
+        var seen = Set<String>()
+        return roots.filter { seen.insert($0).inserted }
+    }
+
+    static func isMarkdownDocumentPathAllowed(
+        _ path: String,
+        relativeTo cwd: String,
+        homeDirectory: String = ClawdmeterRealHome.path()
+    ) -> Bool {
+        let canonical = (path as NSString).standardizingPath
+        let resolved = (canonical as NSString).resolvingSymlinksInPath
+        for root in markdownDocumentAllowedRoots(relativeTo: cwd, homeDirectory: homeDirectory) {
+            let rootStandard = (root as NSString).standardizingPath
+            let rootResolved = (rootStandard as NSString).resolvingSymlinksInPath
+            if pathIsInside(canonical, root: rootStandard)
+                && pathIsInside(resolved, root: rootResolved) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func standardizedMarkdownDocumentRoot(_ rawRoot: String) -> String? {
+        let trimmed = rawRoot.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !PathValidator.isEmpty(trimmed),
+              trimmed.hasPrefix("/"),
+              !PathValidator.containsControlBytes(trimmed),
+              !PathValidator.containsTraversal(trimmed)
+        else { return nil }
+        return (trimmed as NSString).standardizingPath
+    }
+
+    private static func pathIsInside(_ path: String, root: String) -> Bool {
+        path == root || path.hasPrefix(root + "/")
+    }
+
     // v0.27.0: isSafeDesignImportBase(_:) removed along with the Design
     // tab + Open Design /design/import-folder route.
 
@@ -8059,6 +8344,35 @@ public final class AgentControlServer {
 
     // MARK: - v16 idempotency helpers
 
+    /// Atomically starts an idempotent command. Returns false after writing a
+    /// replay or in-flight response; returns true when the caller may execute.
+    @discardableResult
+    func beginIdempotentCommand(
+        key: String?,
+        on connection: NWConnection,
+        payloadHash: String? = nil
+    ) async -> Bool {
+        switch await mobileCommandOutbox.entryOrReserve(key: key) {
+        case .noKey, .reserved:
+            return true
+        case .cached(let cached):
+            sendCachedIdempotentResponse(cached, key: key ?? "", on: connection, payloadHash: payloadHash)
+            return false
+        case .inFlight:
+            let body = Data(#"{"error":"another-request-with-same-idempotency-key-is-in-flight"}"#.utf8)
+            sendResponse(
+                HTTPResponse(
+                    status: 409,
+                    reason: "Conflict",
+                    contentType: "application/json",
+                    body: body
+                ),
+                on: connection
+            )
+            return false
+        }
+    }
+
     /// Returns true after writing a cached response to `connection`.
     /// The caller short-circuits its handler logic in that case so the
     /// side effect (send to tmux, swap model, merge PR) doesn't repeat.
@@ -8079,6 +8393,16 @@ public final class AgentControlServer {
     ) async -> Bool {
         guard let key, !key.isEmpty else { return false }
         guard let cached = await mobileCommandOutbox.entry(forKey: key) else { return false }
+        sendCachedIdempotentResponse(cached, key: key, on: connection, payloadHash: payloadHash)
+        return true
+    }
+
+    private func sendCachedIdempotentResponse(
+        _ cached: MobileCommandOutbox.CachedEntry,
+        key: String,
+        on connection: NWConnection,
+        payloadHash: String? = nil
+    ) {
         // Payload-mismatch gate. Cached entries without a stored hash
         // (audit-log replay seeds, old entries from before this field)
         // skip the check — we can't distinguish a real mismatch from a
@@ -8099,7 +8423,7 @@ public final class AgentControlServer {
                 on: connection
             )
             serverLogger.warning("idempotent payload mismatch (key=\(key.prefix(8), privacy: .public)…)")
-            return true
+            return
         }
         // Re-emit the cached response bytes. When the cache only carried
         // the receipt (audit-log replay path, no body), synthesize a
@@ -8131,7 +8455,6 @@ public final class AgentControlServer {
         }
         sendResponse(response, on: connection)
         serverLogger.info("idempotent replay (key=\(key.prefix(8), privacy: .public)…, kind=\(cached.kind.rawValue, privacy: .public))")
-        return true
     }
 
     /// Cache a freshly-processed command's response under `key` so the
@@ -8218,6 +8541,109 @@ public final class AgentControlServer {
             )
         }
         sendResponse(.ok(contentType: "application/json", body: bytes), on: connection)
+    }
+
+    func sendCommandJSONError(
+        _ body: [String: Any],
+        status: Int,
+        key: String?,
+        kind: MobileCommandKind,
+        sessionId: UUID?,
+        payloadHash: String,
+        on connection: NWConnection
+    ) async {
+        var body = body
+        let errorMessage = (body["error"] as? String) ?? "command_failed"
+        if let key, !key.isEmpty {
+            let receipt = MobileCommandReceipt(
+                idempotencyKey: key,
+                status: .failed,
+                processedAt: Date(),
+                error: errorMessage
+            )
+            body["receipt"] = receipt.jsonDictionary
+        }
+        guard let bytes = try? JSONSerialization.data(withJSONObject: body) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        if key != nil {
+            await recordIdempotent(
+                key: key,
+                kind: kind,
+                sessionId: sessionId,
+                connection: connection,
+                payloadHash: payloadHash,
+                responseBody: bytes,
+                responseStatus: status,
+                failed: true,
+                errorMessage: errorMessage
+            )
+        }
+        sendResponse(
+            HTTPResponse(
+                status: status,
+                reason: Self.reasonPhrase(forStatus: status),
+                contentType: "application/json",
+                body: bytes
+            ),
+            on: connection
+        )
+    }
+
+    func sendCommandCodableResponse<T: Encodable>(
+        _ value: T,
+        key: String?,
+        kind: MobileCommandKind,
+        sessionId: UUID?,
+        payloadHash: String,
+        status: Int = 200,
+        failed: Bool = false,
+        errorMessage: String? = nil,
+        on connection: NWConnection
+    ) async {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(value) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        if key != nil {
+            await recordIdempotent(
+                key: key,
+                kind: kind,
+                sessionId: sessionId,
+                connection: connection,
+                payloadHash: payloadHash,
+                responseBody: body,
+                responseStatus: status,
+                failed: failed,
+                errorMessage: errorMessage
+            )
+        }
+        sendResponse(
+            HTTPResponse(
+                status: status,
+                reason: Self.reasonPhrase(forStatus: status),
+                contentType: "application/json",
+                body: body
+            ),
+            on: connection
+        )
+    }
+
+    private static func reasonPhrase(forStatus status: Int) -> String {
+        switch status {
+        case 200: return "OK"
+        case 400: return "Bad Request"
+        case 403: return "Forbidden"
+        case 404: return "Not Found"
+        case 409: return "Conflict"
+        case 422: return "Unprocessable"
+        case 500: return "Internal Server Error"
+        case 503: return "Service Unavailable"
+        default: return "Status"
+        }
     }
 
     private func sendCodable<T: Encodable>(_ value: T, on connection: NWConnection) {

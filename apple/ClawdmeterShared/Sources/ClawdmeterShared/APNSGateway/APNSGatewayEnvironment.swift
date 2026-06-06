@@ -84,11 +84,11 @@ public enum APNSGatewayTopics {
     /// Production iPhone bundle id. Mirrors the operator's `APNS_TOPIC_PRODUCTION`
     /// secret (E5 ROTATION.md). The default here matches what the Worker
     /// validates against in `infra/apns-gateway/src/schema.ts:115`.
-    public static let iPhoneProduction = "com.clawdmeter.iphone"
+    public static let iPhoneProduction = "ai.continuum.ios"
 
     /// Sandbox iPhone bundle id. APNS sandbox accepts this against the
     /// `api.sandbox.push.apple.com` endpoint.
-    public static let iPhoneSandbox = "com.clawdmeter.iphone"
+    public static let iPhoneSandbox = "ai.continuum.ios"
 
     /// Resolve the topic for a given gateway environment. iPhone-only for
     /// now; Watch is on the roadmap.

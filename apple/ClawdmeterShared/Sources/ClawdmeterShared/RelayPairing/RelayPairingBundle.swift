@@ -33,6 +33,21 @@ import Foundation
 
 // MARK: - Wire-format types
 
+/// Operator-issued grant authorizing the first peer to initialize a relay
+/// Durable Object session. This is embedded in the QR bundle so the installed
+/// Mac app does not need the relay operator signing key.
+public struct RelaySessionCreationProof: Codable, Sendable, Equatable {
+    public let issuedAtSeconds: UInt64
+    public let nonce: String
+    public let signature: String
+
+    public init(issuedAtSeconds: UInt64, nonce: String, signature: String) {
+        self.issuedAtSeconds = issuedAtSeconds
+        self.nonce = nonce
+        self.signature = signature
+    }
+}
+
 /// QR-encoded pairing bundle that Mac displays + iPhone scans.
 ///
 /// Field names mirror docs/design/secure-relay-apns-2026-05-26.md §4.1.
@@ -56,8 +71,9 @@ public struct RelayPairingBundle: Codable, Sendable, Equatable {
     public let macTok: String
 
     /// iOS peer's bearer token. Mac at QR time generates BOTH tokens and
-    /// uploads them to the relay as a `?bundle=` blob; the iPhone never
-    /// uploads its own token — it only presents whatever it scanned.
+    /// uploads their hashes to the relay as a signed `?bundle=` blob; the
+    /// iPhone never uploads its own token hash — it only presents whatever it
+    /// scanned.
     public let iosTok: String
 
     /// Mac's X25519 public key, base64url. iPhone uses this + its own
@@ -65,8 +81,7 @@ public struct RelayPairingBundle: Codable, Sendable, Equatable {
     public let ecdhPub: String
 
     /// Absolute Unix seconds at which the relay rejects further connects.
-    /// Default 15 min from issuance per §5b. Mac's `RelayPairingService`
-    /// sets this to `now + 900`.
+    /// Mac's `RelayPairingService` currently sets this to `now + 30 days`.
     public let ttl: UInt64
 
     /// Base URL of the relay Worker — e.g. `wss://relay-staging.clawdmeter.dev`
@@ -76,6 +91,16 @@ public struct RelayPairingBundle: Codable, Sendable, Equatable {
     /// without an iOS rebuild.
     public let relayUrl: String
 
+    /// Relay Worker-signed proof for first-connect session creation. Optional
+    /// for wire compatibility with old test vectors; current Mac pairing code
+    /// populates it before displaying the QR.
+    public let creationProof: RelaySessionCreationProof?
+
+    /// Per-session APNS gateway bearer signing key, base64url encoded. The
+    /// relay grants a key scoped to `(sid, Mac fingerprint)` during pairing so
+    /// the Mac can sign gateway requests without a preseeded operator secret.
+    public let apnsSigningKey: String?
+
     public init(
         v: Int = RelayPairingBundle.currentWireVersion,
         sid: String,
@@ -83,7 +108,9 @@ public struct RelayPairingBundle: Codable, Sendable, Equatable {
         iosTok: String,
         ecdhPub: String,
         ttl: UInt64,
-        relayUrl: String
+        relayUrl: String,
+        creationProof: RelaySessionCreationProof? = nil,
+        apnsSigningKey: String? = nil
     ) {
         self.v = v
         self.sid = sid
@@ -92,6 +119,8 @@ public struct RelayPairingBundle: Codable, Sendable, Equatable {
         self.ecdhPub = ecdhPub
         self.ttl = ttl
         self.relayUrl = relayUrl
+        self.creationProof = creationProof
+        self.apnsSigningKey = apnsSigningKey
     }
 
     /// Bumped on any wire-incompatible change. v1 = JSON-over-base64url.
@@ -168,6 +197,12 @@ public struct RelayPairingBundle: Codable, Sendable, Equatable {
         guard Self.isValidECDHPublicKey(ecdhPub) else { return nil }
         guard Self.isValidTTL(ttl) else { return nil }
         guard Self.isValidRelayURL(relayUrl) else { return nil }
+        if let creationProof {
+            guard Self.isValidCreationProof(creationProof) else { return nil }
+        }
+        if let apnsSigningKey {
+            guard Self.isValidAPNSSigningKey(apnsSigningKey) else { return nil }
+        }
         return self
     }
 
@@ -240,6 +275,22 @@ public struct RelayPairingBundle: Codable, Sendable, Equatable {
         default:
             return false
         }
+    }
+
+    static func isValidCreationProof(_ proof: RelaySessionCreationProof) -> Bool {
+        guard proof.issuedAtSeconds > 0 else { return false }
+        guard proof.nonce.count >= 16, proof.nonce.count <= 128 else { return false }
+        guard isBase64URLCharset(proof.nonce) else { return false }
+        guard proof.signature.count >= 16, proof.signature.count <= 256 else { return false }
+        return isBase64URLCharset(proof.signature)
+    }
+
+    static func isValidAPNSSigningKey(_ key: String) -> Bool {
+        guard isBase64URLCharset(key),
+              let decoded = RelayPairingBase64URL.decode(key) else {
+            return false
+        }
+        return decoded.count >= 32
     }
 
     private static func isBase64URLCharset(_ s: String) -> Bool {

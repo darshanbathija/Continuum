@@ -1,7 +1,8 @@
 // E6: bearer-issuer parity tests.
 //
 // The Mac signs:
-//   token = base64( HMAC-SHA256(KEY, "apns:" + sid + ":" + fingerprint) )
+//   token = "v1." + issuedAt + "." + nonce + "." +
+//           base64( HMAC-SHA256(KEY, "apns:" + sid + ":" + fingerprint + ":" + issuedAt + ":" + nonce) )
 // The E5 Worker `verifyBearer` accepts that exact string. These tests
 // pin the byte format with a deterministic key + claim tuple so any
 // future refactor that drifts from the Worker contract fails loud.
@@ -27,22 +28,26 @@ final class APNSGatewayBearerTests: XCTestCase {
         let sid = "test-session-1234567890ab"
         let fingerprint = String(repeating: "ab", count: 32)  // 64 hex chars
 
+        let issuedAt: UInt64 = 1_700_000_000
+        let nonce = "nonce_nonce_1234"
         let token = APNSGatewayBearer.issueBearer(
             signingKey: key,
             sessionId: sid,
-            senderMacFingerprint: fingerprint
+            senderMacFingerprint: fingerprint,
+            issuedAtSeconds: issuedAt,
+            nonce: nonce
         )
 
         // Manually compute the expected token to pin the algorithm. If this
         // test fails, either the algorithm or the message format drifted.
-        let message = "apns:\(sid):\(fingerprint)"
+        let message = "apns:\(sid):\(fingerprint):\(issuedAt):\(nonce)"
         let symKey = SymmetricKey(data: key)
         let tag = HMAC<SHA256>.authenticationCode(
             for: Data(message.utf8), using: symKey
         )
-        let expected = Data(tag).base64EncodedString()
+        let expected = "v1.\(issuedAt).\(nonce).\(Data(tag).base64EncodedString())"
 
-        XCTAssertEqual(token, expected, "Bearer must be base64(HMAC-SHA256(key, 'apns:' + sid + ':' + fingerprint))")
+        XCTAssertEqual(token, expected)
     }
 
     /// Symmetric — the verifier must accept what the issuer just produced.
@@ -53,13 +58,16 @@ final class APNSGatewayBearerTests: XCTestCase {
         let token = APNSGatewayBearer.issueBearer(
             signingKey: key,
             sessionId: sid,
-            senderMacFingerprint: fingerprint
+            senderMacFingerprint: fingerprint,
+            issuedAtSeconds: 1_700_000_000,
+            nonce: "roundtrip_nonce_1"
         )
         XCTAssertTrue(APNSGatewayBearer.verifyBearer(
             signingKey: key,
             sessionId: sid,
             senderMacFingerprint: fingerprint,
-            presented: token
+            presented: token,
+            nowSeconds: 1_700_000_010
         ))
     }
 
@@ -69,10 +77,12 @@ final class APNSGatewayBearerTests: XCTestCase {
         let key = Data(repeating: 0x11, count: 32)
         let fingerprint = String(repeating: "ef", count: 32)
         let tA = APNSGatewayBearer.issueBearer(
-            signingKey: key, sessionId: "sidA", senderMacFingerprint: fingerprint
+            signingKey: key, sessionId: "sidA", senderMacFingerprint: fingerprint,
+            issuedAtSeconds: 1_700_000_000, nonce: "sid_nonce_123456"
         )
         let tB = APNSGatewayBearer.issueBearer(
-            signingKey: key, sessionId: "sidB", senderMacFingerprint: fingerprint
+            signingKey: key, sessionId: "sidB", senderMacFingerprint: fingerprint,
+            issuedAtSeconds: 1_700_000_000, nonce: "sid_nonce_123456"
         )
         XCTAssertNotEqual(tA, tB)
     }
@@ -86,12 +96,16 @@ final class APNSGatewayBearerTests: XCTestCase {
         let tA = APNSGatewayBearer.issueBearer(
             signingKey: key,
             sessionId: sid,
-            senderMacFingerprint: String(repeating: "aa", count: 32)
+            senderMacFingerprint: String(repeating: "aa", count: 32),
+            issuedAtSeconds: 1_700_000_000,
+            nonce: "fingerprint_nonce"
         )
         let tB = APNSGatewayBearer.issueBearer(
             signingKey: key,
             sessionId: sid,
-            senderMacFingerprint: String(repeating: "bb", count: 32)
+            senderMacFingerprint: String(repeating: "bb", count: 32),
+            issuedAtSeconds: 1_700_000_000,
+            nonce: "fingerprint_nonce"
         )
         XCTAssertNotEqual(tA, tB)
     }
@@ -104,14 +118,37 @@ final class APNSGatewayBearerTests: XCTestCase {
         let tA = APNSGatewayBearer.issueBearer(
             signingKey: Data(repeating: 0x01, count: 32),
             sessionId: sid,
-            senderMacFingerprint: fingerprint
+            senderMacFingerprint: fingerprint,
+            issuedAtSeconds: 1_700_000_000,
+            nonce: "key_nonce_123456"
         )
         let tB = APNSGatewayBearer.issueBearer(
             signingKey: Data(repeating: 0x02, count: 32),
             sessionId: sid,
-            senderMacFingerprint: fingerprint
+            senderMacFingerprint: fingerprint,
+            issuedAtSeconds: 1_700_000_000,
+            nonce: "key_nonce_123456"
         )
         XCTAssertNotEqual(tA, tB)
+    }
+
+    func testExpiredBearerFailsVerification() {
+        let key = Data(repeating: 0x44, count: 32)
+        let token = APNSGatewayBearer.issueBearer(
+            signingKey: key,
+            sessionId: "session-expired",
+            senderMacFingerprint: String(repeating: "44", count: 32),
+            issuedAtSeconds: 1_700_000_000,
+            nonce: "expired_nonce_12"
+        )
+        XCTAssertFalse(APNSGatewayBearer.verifyBearer(
+            signingKey: key,
+            sessionId: "session-expired",
+            senderMacFingerprint: String(repeating: "44", count: 32),
+            presented: token,
+            nowSeconds: 1_700_000_301,
+            ttlSeconds: 300
+        ))
     }
 
     // MARK: - Constant-time compare

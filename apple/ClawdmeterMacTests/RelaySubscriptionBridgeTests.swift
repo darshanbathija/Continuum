@@ -157,6 +157,20 @@ final class RelaySubscriptionBridgeTests: XCTestCase {
         bridge.shutdownAll()
     }
 
+    func test_reopenLiveSubscriptions_reopensActiveStreamsOnMacReconnect() async throws {
+        let (bridge, _, lastConn, _) = makeBridge()
+        try await bridge.handle(subscribeFrame(opId: "t1", op: "terminal", sessionId: "s"))
+        let first = try XCTUnwrap(lastConn())
+
+        await bridge.reopenLiveSubscriptions()
+
+        let second = try XCTUnwrap(lastConn())
+        XCTAssertFalse(first === second, "Mac reconnect repair must open a fresh loopback WS")
+        XCTAssertTrue(first.closed, "the stale loopback WS must close during reconnect repair")
+        XCTAssertEqual(bridge.liveCount, 1, "reconnect repair must keep one live stream per opId")
+        bridge.shutdownAll()
+    }
+
     // MARK: - snapshot coalescing (CB-P1d): LWW keeps the latest
 
     func test_snapshotStream_coalescesToLatest() async throws {

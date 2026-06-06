@@ -140,12 +140,12 @@ describe("D21 invariants", () => {
   it("rate limit triggers at the configured threshold (60 default — using 3 for speed)", async () => {
     const env = await makeEnv({ ratePerHour: 3 });
     const body = makePushBody({ deviceToken: makeDeviceToken(99) });
-    const auth = await authHeaderFor(env, body);
 
     await withMockedApnsFetch(
       Array.from({ length: 3 }, () => ({ status: 200 })),
       async () => {
         for (let i = 0; i < 3; i++) {
+          const auth = await authHeaderFor(env, body);
           const resp = await worker.fetch(makePushRequest(body, auth), env, makeCtx());
           expect(resp.status).toBe(200);
         }
@@ -153,10 +153,42 @@ describe("D21 invariants", () => {
     );
 
     // 4th call should be 429 — no APNS fetch needed.
+    const auth = await authHeaderFor(env, body);
     const blocked = await worker.fetch(makePushRequest(body, auth), env, makeCtx());
     expect(blocked.status).toBe(429);
     expect(blocked.headers.get("retry-after")).toBeTruthy();
     expect(getLoggedAuditOutcomes()).toContain("rejected-rate-limit");
+  });
+
+  it("rate limit is bound to verified identity, not rotatable device tokens", async () => {
+    const env = await makeEnv({ ratePerHour: 2 });
+    const sessionId = makeSessionId("same-identity");
+    const senderMacFingerprint = "a".repeat(64);
+
+    await withMockedApnsFetch(
+      [{ status: 200 }, { status: 200 }],
+      async () => {
+        for (let i = 0; i < 2; i++) {
+          const body = makePushBody({
+            sessionId,
+            senderMacFingerprint,
+            deviceToken: makeDeviceToken(i),
+          });
+          const auth = await authHeaderFor(env, body);
+          const resp = await worker.fetch(makePushRequest(body, auth), env, makeCtx());
+          expect(resp.status).toBe(200);
+        }
+      },
+    );
+
+    const rotated = makePushBody({
+      sessionId,
+      senderMacFingerprint,
+      deviceToken: makeDeviceToken(99),
+    });
+    const rotatedAuth = await authHeaderFor(env, rotated);
+    const blocked = await worker.fetch(makePushRequest(rotated, rotatedAuth), env, makeCtx());
+    expect(blocked.status).toBe(429);
   });
 });
 
@@ -177,6 +209,21 @@ describe("Auth invariants", () => {
     const attackerBody = makePushBody({ sessionId: makeSessionId("attacker") });
     const resp = await worker.fetch(makePushRequest(attackerBody, realAuth), env, makeCtx());
     expect(resp.status).toBe(401);
+  });
+
+  it("rejects replaying a previously accepted bearer", async () => {
+    const env = await makeEnv();
+    const body = makePushBody();
+    const auth = await authHeaderFor(env, body);
+    await withMockedApnsFetch([{ status: 200 }], async () => {
+      const ok = await worker.fetch(makePushRequest(body, auth), env, makeCtx());
+      expect(ok.status).toBe(200);
+    });
+
+    const replay = await worker.fetch(makePushRequest(body, auth), env, makeCtx());
+    expect(replay.status).toBe(401);
+    const json = (await replay.json()) as { reason: string };
+    expect(json.reason).toContain("nonce replay");
   });
 });
 
@@ -347,6 +394,20 @@ describe("Routing", () => {
     expect(resp.status).toBe(503);
     const json = (await resp.json()) as { p8Stale: boolean };
     expect(json.p8Stale).toBe(true);
+  });
+
+  it("GET /health returns 503 when APNS_P8_ISSUED_AT is missing", async () => {
+    const env = await makeEnv({ p8IssuedAt: null });
+    const resp = await worker.fetch(
+      new Request("https://apns-gateway.test/health"),
+      env,
+      makeCtx(),
+    );
+    expect(resp.status).toBe(503);
+    const json = (await resp.json()) as { ok: boolean; p8IssuedAtValid: boolean; p8AgeSeconds: number | null };
+    expect(json.ok).toBe(false);
+    expect(json.p8IssuedAtValid).toBe(false);
+    expect(json.p8AgeSeconds).toBeNull();
   });
 
   it("unknown route returns 404", async () => {

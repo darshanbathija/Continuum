@@ -143,6 +143,53 @@ final class AgentSessionRegistryFrontierTests: XCTestCase {
         XCTAssertEqual(updated?.worktreePath, "/tmp/source-repo-worktree")
     }
 
+    func test_pickPairWinnerRetryReturnsStoredWinner() async throws {
+        let reg = registry()
+        let first = try await reg.create(
+            repoKey: "/tmp/pair",
+            repoDisplayName: "pair",
+            agent: .claude,
+            model: "sonnet",
+            goal: nil,
+            worktreePath: nil,
+            tmuxWindowId: "@1",
+            tmuxPaneId: "%1",
+            planMode: false,
+            mode: .local
+        )
+        let second = try await reg.create(
+            repoKey: "/tmp/pair",
+            repoDisplayName: "pair",
+            agent: .codex,
+            model: "gpt",
+            goal: nil,
+            worktreePath: nil,
+            tmuxWindowId: "@2",
+            tmuxPaneId: "%2",
+            planMode: false,
+            mode: .local
+        )
+        try await reg.linkABPair(first.id, second.id)
+
+        let decided = try await reg.pickPairWinner(sessionId: first.id, winner: second.id)
+        switch decided {
+        case .decided(let winner, _):
+            XCTAssertEqual(winner, second.id)
+        default:
+            XCTFail("first pick should decide the requested winner")
+        }
+
+        let retry = try await reg.pickPairWinner(sessionId: first.id, winner: first.id)
+        switch retry {
+        case .alreadyDecided(let winner, _):
+            XCTAssertEqual(winner, second.id)
+        default:
+            XCTFail("retry should return the stored winner, not the new claim")
+        }
+        XCTAssertEqual(reg.session(id: first.id)?.abPairWinnerSessionId, second.id)
+        XCTAssertEqual(reg.session(id: second.id)?.abPairWinnerSessionId, second.id)
+    }
+
     // MARK: - clearFrontierGroupBinding
 
     /// After continue-from-winner, the winner's frontierGroupId and

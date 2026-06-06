@@ -18,30 +18,35 @@ public final class WatchPlanBridgeIOS: NSObject, WCSessionDelegate {
     public private(set) static var shared = WatchPlanBridgeIOS()
 
     public let client: AgentControlClient
+    public let outbox: MobileCommandOutbox?
+    private var handledWatchCommandKeys: Set<String> = []
+    private var cachedAntigravityHeadline: (sessionId: UUID, headline: String)?
+    private var antigravityHeadlineTask: Task<Void, Never>?
+    private var lastContextInputs: (count: Int, latestGoal: String?, latestPlanSummary: String?, latestSessionId: UUID?)?
 
     @discardableResult
-    public static func configure(client: AgentControlClient) -> WatchPlanBridgeIOS {
-        if shared.client !== client {
-            shared = WatchPlanBridgeIOS(client: client)
+    public static func configure(client: AgentControlClient, outbox: MobileCommandOutbox? = nil) -> WatchPlanBridgeIOS {
+        if shared.client !== client || shared.outbox !== outbox {
+            shared = WatchPlanBridgeIOS(client: client, outbox: outbox)
         }
         return shared
     }
 
     public override init() {
         self.client = AgentControlClient()
+        self.outbox = nil
         super.init()
         if WCSession.isSupported() {
-            WCSession.default.delegate = self
-            WCSession.default.activate()
+            WatchSessionDelegateMultiplexer.shared.register(self)
         }
     }
 
-    public init(client: AgentControlClient) {
+    public init(client: AgentControlClient, outbox: MobileCommandOutbox? = nil) {
         self.client = client
+        self.outbox = outbox
         super.init()
         if WCSession.isSupported() {
-            WCSession.default.delegate = self
-            WCSession.default.activate()
+            WatchSessionDelegateMultiplexer.shared.register(self)
         }
     }
 
@@ -52,6 +57,7 @@ public final class WatchPlanBridgeIOS: NSObject, WCSessionDelegate {
     /// this annotation Swift 6 concurrency rejects the call.
     @MainActor
     public func updateContext(count: Int, latestGoal: String?, latestPlanSummary: String?, latestSessionId: UUID?) {
+        lastContextInputs = (count, latestGoal, latestPlanSummary, latestSessionId)
         // P1-Watch-4: merge into the existing applicationContext instead of
         // overwriting it. WatchTokenBridge writes `token` / `usage` /
         // `usageByProvider` into the same context dictionary, and the
@@ -81,6 +87,11 @@ public final class WatchPlanBridgeIOS: NSObject, WCSessionDelegate {
         } else {
             context["codexCurrentTodo"] = nil
         }
+        if let headline = activeAntigravityTaskHeadline(latestSessionId: latestSessionId) {
+            context["currentTaskHeadline"] = headline
+        } else {
+            context["currentTaskHeadline"] = nil
+        }
         // Drop nil-typed values WCSession refuses to encode.
         context = context.compactMapValues { $0 is NSNull ? nil : $0 }
         do {
@@ -88,6 +99,75 @@ public final class WatchPlanBridgeIOS: NSObject, WCSessionDelegate {
         } catch {
             bridgeLogger.debug("updateApplicationContext failed: \(error.localizedDescription)")
         }
+    }
+
+    @MainActor
+    private func activeAntigravityTaskHeadline(latestSessionId: UUID?) -> String? {
+        guard client.supportsAntigravityPlan,
+              let sessionId = activeAntigravitySessionId(latestSessionId: latestSessionId)
+        else {
+            cachedAntigravityHeadline = nil
+            return nil
+        }
+        if cachedAntigravityHeadline?.sessionId == sessionId {
+            return cachedAntigravityHeadline?.headline
+        }
+        scheduleAntigravityHeadlineRefresh(sessionId: sessionId)
+        return nil
+    }
+
+    @MainActor
+    private func activeAntigravitySessionId(latestSessionId: UUID?) -> UUID? {
+        if let latestSessionId,
+           let latest = client.sessions.first(where: { $0.id == latestSessionId }),
+           latest.agent == .gemini,
+           latest.archivedAt == nil {
+            return latestSessionId
+        }
+        return client.sessions
+            .filter { $0.agent == .gemini && $0.archivedAt == nil }
+            .sorted { $0.lastEventAt > $1.lastEventAt }
+            .first?
+            .id
+    }
+
+    @MainActor
+    private func scheduleAntigravityHeadlineRefresh(sessionId: UUID) {
+        guard antigravityHeadlineTask == nil else { return }
+        antigravityHeadlineTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let snapshot = try await self.client.fetchAntigravityPlan(sessionId: sessionId)
+                let headline = Self.watchHeadline(snapshot.taskHeadline)
+                await MainActor.run {
+                    if let headline {
+                        self.cachedAntigravityHeadline = (sessionId: sessionId, headline: headline)
+                    } else {
+                        self.cachedAntigravityHeadline = nil
+                    }
+                    self.antigravityHeadlineTask = nil
+                    if let inputs = self.lastContextInputs {
+                        self.updateContext(
+                            count: inputs.count,
+                            latestGoal: inputs.latestGoal,
+                            latestPlanSummary: inputs.latestPlanSummary,
+                            latestSessionId: inputs.latestSessionId
+                        )
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.cachedAntigravityHeadline = nil
+                    self.antigravityHeadlineTask = nil
+                }
+            }
+        }
+    }
+
+    private static func watchHeadline(_ headline: String) -> String? {
+        let text = headline.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        return text.count > 18 ? String(text.prefix(18)) : text
     }
 
     /// Pulls the in-progress (or first pending) todo from the most
@@ -157,8 +237,17 @@ public final class WatchPlanBridgeIOS: NSObject, WCSessionDelegate {
         switch op {
         case "approvePlan":
             if let raw = message["sessionId"] as? String, let id = UUID(uuidString: raw) {
-                await client.approvePlan(sessionId: id)
-                bridgeLogger.info("Approved plan from Watch for session \(id.uuidString, privacy: .public)")
+                let key = watchIdempotencyKey(op: op, sessionId: id, message: message)
+                guard handledWatchCommandKeys.insert(key).inserted else {
+                    bridgeLogger.info("Ignoring duplicate Watch approve-plan command \(key, privacy: .public)")
+                    return
+                }
+                guard let outbox else {
+                    bridgeLogger.error("Watch approve-plan dropped because mobile outbox is not configured")
+                    return
+                }
+                outbox.enqueueApprovePlan(sessionId: id, idempotencyKey: key)
+                bridgeLogger.info("Queued plan approval from Watch for session \(id.uuidString, privacy: .public)")
             }
         case "interrupt":
             // Sessions v2 Phase 6: ESC into the agent pane.
@@ -176,5 +265,13 @@ public final class WatchPlanBridgeIOS: NSObject, WCSessionDelegate {
         default:
             bridgeLogger.debug("Unknown WCSession op: \(op, privacy: .public)")
         }
+    }
+
+    private func watchIdempotencyKey(op: String, sessionId: UUID, message: [String: Any]) -> String {
+        if let key = message["idempotencyKey"] as? String,
+           !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return key
+        }
+        return "watch-\(op)-\(sessionId.uuidString)-\(UUID().uuidString)"
     }
 }

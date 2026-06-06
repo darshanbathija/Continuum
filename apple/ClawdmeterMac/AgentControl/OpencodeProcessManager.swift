@@ -91,6 +91,8 @@ public final class OpencodeProcessManager {
     /// Resets on a clean shutdown via `stop()`.
     private var restartCount: Int = 0
     private static let maxRestarts = 5
+    private var lastStartedAt: Date?
+    private static let crashLoopResetUptime: TimeInterval = 120
 
     /// Supervisor task — monitors serveProcess.isRunning + restarts on
     /// unexpected exit. nil when manager is stopped.
@@ -201,7 +203,7 @@ public final class OpencodeProcessManager {
         // Step 5: kick off the supervisor + best-effort auth probe.
         cleanRuntimeTempQuarantine()
         state = .running(port: port)
-        restartCount = 0
+        lastStartedAt = Date()
         startSupervisor()
         Task { await refreshAuthStatus() }
         return port
@@ -221,6 +223,7 @@ public final class OpencodeProcessManager {
         serveProcess = nil
         serverPort = nil
         serverPassword = nil
+        lastStartedAt = nil
         restartCount = 0
         state = .stopped
         logger.info("opencode serve stopped")
@@ -663,12 +666,24 @@ public final class OpencodeProcessManager {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1s tick
                 guard let self else { return }
                 let stillRunning = await MainActor.run { self.serveProcess?.isRunning ?? false }
-                guard !stillRunning else { continue }
+                guard !stillRunning else {
+                    await MainActor.run { self.resetRestartCountAfterHealthyUptimeIfNeeded() }
+                    continue
+                }
                 // Process exited. Decide whether to restart.
                 await self.handleUnexpectedExit()
                 return  // either restarted (a fresh supervisor took over) or gave up
             }
         }
+    }
+
+    private func resetRestartCountAfterHealthyUptimeIfNeeded(now: Date = Date()) {
+        guard restartCount > 0,
+              let lastStartedAt,
+              now.timeIntervalSince(lastStartedAt) >= Self.crashLoopResetUptime
+        else { return }
+        restartCount = 0
+        logger.info("opencode serve stayed healthy; crash-loop counter reset")
     }
 
     @MainActor
@@ -677,6 +692,7 @@ public final class OpencodeProcessManager {
             serveProcess = nil
             serverPort = nil
             serverPassword = nil
+            lastStartedAt = nil
             restartCount = 0
             state = .stopped
             logger.info("opencode serve exited after intentional stop")
@@ -690,6 +706,7 @@ public final class OpencodeProcessManager {
         serveProcess = nil
         serverPort = nil
         serverPassword = nil
+        lastStartedAt = nil
         state = .stopped
         restartCount += 1
         if restartCount > Self.maxRestarts {

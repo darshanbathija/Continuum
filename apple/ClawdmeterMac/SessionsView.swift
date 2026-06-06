@@ -536,6 +536,10 @@ public final class SessionsModel: ObservableObject {
     }
 
     public func prepareNewSession(in repoKey: String?) {
+        selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = nil
+        openOutsideJSONLPath = nil
+        openSessionId = nil
         selectedRepoKey = repoKey
         showingNewSessionSheet = true
     }
@@ -849,6 +853,7 @@ public final class SessionsModel: ObservableObject {
     /// its id to the tail of the array.
     private var chatStores: [UUID: SessionChatStore] = [:]
     private var chatStoreLRU: [UUID] = []
+    private var daemonOwnedChatStoreIds: Set<UUID> = []
     private static let maxResidentChatStores = 3
     /// Per-session cached `ComposerStore` (tab-switch perf). Built once on
     /// first open and reused, so switching Code tabs no longer rebuilds the
@@ -946,6 +951,7 @@ public final class SessionsModel: ObservableObject {
         // so the LRU/eviction machinery still applies.
         if session.kind == .chat {
             if let existing = chatStores[session.id] {
+                daemonOwnedChatStoreIds.insert(session.id)
                 touchLRU(session.id)
                 return existing
             }
@@ -953,6 +959,7 @@ public final class SessionsModel: ObservableObject {
                 return nil
             }
             chatStores[session.id] = daemonStore
+            daemonOwnedChatStoreIds.insert(session.id)
             chatStoreLRU.append(session.id)
             evictExcessChatStores()
             return daemonStore
@@ -970,6 +977,7 @@ public final class SessionsModel: ObservableObject {
         // of resolving + tailing a JSONL. Mirror the `.chat` branch above.
         if AppDelegate.runtime?.agentControlServer.isHarnessLive(session.id) == true {
             if let existing = chatStores[session.id] {
+                daemonOwnedChatStoreIds.insert(session.id)
                 touchLRU(session.id)
                 return existing
             }
@@ -977,6 +985,7 @@ public final class SessionsModel: ObservableObject {
                 return nil
             }
             chatStores[session.id] = daemonStore
+            daemonOwnedChatStoreIds.insert(session.id)
             chatStoreLRU.append(session.id)
             lastResolvedPaneId[session.id] = session.tmuxPaneId ?? ""
             evictExcessChatStores()
@@ -1013,6 +1022,7 @@ public final class SessionsModel: ObservableObject {
         let store = SessionChatStore(sessionId: session.id, sessionFileURL: url)
         store.start()
         chatStores[session.id] = store
+        daemonOwnedChatStoreIds.remove(session.id)
         chatStoreLRU.append(session.id)
         // Record the pane the store was just resolved against so the next warm
         // hit doesn't redundantly re-scan (see lastResolvedPaneId).
@@ -1073,8 +1083,11 @@ public final class SessionsModel: ObservableObject {
             guard let evictIdx = chatStoreLRU.firstIndex(where: { !protected.contains($0) })
             else { break }
             let evictId = chatStoreLRU.remove(at: evictIdx)
-            chatStores[evictId]?.stop()
+            if !daemonOwnedChatStoreIds.contains(evictId) {
+                chatStores[evictId]?.stop()
+            }
             chatStores.removeValue(forKey: evictId)
+            daemonOwnedChatStoreIds.remove(evictId)
             composerStores.removeValue(forKey: evictId)
             lastResolvedPaneId.removeValue(forKey: evictId)
             needsURLRevalidation.remove(evictId)
@@ -1086,8 +1099,11 @@ public final class SessionsModel: ObservableObject {
     }
 
     public func closeChatStore(for sessionId: UUID) {
-        chatStores[sessionId]?.stop()
+        if !daemonOwnedChatStoreIds.contains(sessionId) {
+            chatStores[sessionId]?.stop()
+        }
         chatStores.removeValue(forKey: sessionId)
+        daemonOwnedChatStoreIds.remove(sessionId)
         chatStoreLRU.removeAll { $0 == sessionId }
         composerStores.removeValue(forKey: sessionId)
         lastResolvedPaneId.removeValue(forKey: sessionId)

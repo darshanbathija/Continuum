@@ -19,8 +19,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.31.2"
-    CURRENT_PROJECT_VERSION: "202"
+    MARKETING_VERSION: "0.31.3"
+    CURRENT_PROJECT_VERSION: "203"
 
 packages:
   ClawdmeterShared:
@@ -60,6 +60,10 @@ targets:
           # Keep it out of source scanning; the folder reference below
           # copies it into Contents/Resources/Vendor/tmux/.
           - "Resources/Vendor/tmux/**"
+          # v0.30.0: bundled OpenCode is app infrastructure for the
+          # OpenCode provider. Keep it out of source scanning; the
+          # Vendor folder reference copies it into Contents/Resources.
+          - "Resources/Vendor/opencode/**"
       # v0.27.0: Resources/Vendor/open-design/** exclusion removed —
       # the bundled Open Design daemon was stripped along with the
       # Design tab.
@@ -148,6 +152,22 @@ targets:
           fi
         outputFiles:
           - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/tmux/bin/tmux
+      - name: Download bundled OpenCode (if missing)
+        # v0.30.0: ensure the bundled opencode binary exists before the
+        # resources phase runs. The DMG release script also verifies this
+        # after archive export so OpenCode cannot be advertised without a
+        # bundled runtime in the artifact.
+        script: |
+          if [ "${CLAWDMETER_SKIP_BUNDLED_OPENCODE:-0}" = "1" ]; then
+            echo "Skipping bundled OpenCode download (CLAWDMETER_SKIP_BUNDLED_OPENCODE=1)"
+            exit 0
+          fi
+          REPO_ROOT="$(cd "$SRCROOT/.." && pwd)"
+          if [ ! -x "$REPO_ROOT/apple/ClawdmeterMac/Resources/Vendor/opencode/opencode" ]; then
+            "$REPO_ROOT/tools/download-bundled-opencode.sh"
+          fi
+        outputFiles:
+          - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/opencode/opencode
       # v0.27.0: "Build bundled Open Design" preBuildScript removed —
       # the bundled Open Design daemon was stripped along with the
       # Design tab.

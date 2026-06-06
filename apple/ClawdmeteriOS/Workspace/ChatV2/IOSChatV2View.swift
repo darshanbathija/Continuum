@@ -5,13 +5,15 @@ import ClawdmeterShared
 
 public struct IOSChatV2View: View {
     @ObservedObject var client: AgentControlClient
+    @ObservedObject var outbox: MobileCommandOutbox
     @StateObject private var chatStore: ChatV2Store
     @StateObject private var sendCtl: ComposerSendController
     @State private var openTarget: ChatOpenTarget?
     @State private var historyPresented = false
 
-    public init(agentClient: AgentControlClient) {
+    public init(agentClient: AgentControlClient, outbox: MobileCommandOutbox) {
         self._client = ObservedObject(wrappedValue: agentClient)
+        self._outbox = ObservedObject(wrappedValue: outbox)
         _chatStore = StateObject(wrappedValue: ChatV2Store())
         _sendCtl = StateObject(wrappedValue: ComposerSendController(client: agentClient))
     }
@@ -21,6 +23,7 @@ public struct IOSChatV2View: View {
             client: client,
             chatStore: chatStore,
             sendCtl: sendCtl,
+            outbox: outbox,
             openTarget: $openTarget,
             historyPresented: $historyPresented
         )
@@ -33,6 +36,7 @@ private struct ChatBody: View {
     @ObservedObject var client: AgentControlClient
     @ObservedObject var chatStore: ChatV2Store
     @ObservedObject var sendCtl: ComposerSendController
+    @ObservedObject var outbox: MobileCommandOutbox
     @Binding var openTarget: ChatOpenTarget?
     @Binding var historyPresented: Bool
     @State private var providerMatrix: ChatProvidersResponse?
@@ -55,6 +59,7 @@ private struct ChatBody: View {
                     sendCtl: sendCtl,
                     openTarget: $openTarget,
                     client: client,
+                    outbox: outbox,
                     providerMatrix: providerMatrix
                 )
                 .padding(.horizontal, 14)
@@ -724,6 +729,7 @@ private struct Composer: View {
     @ObservedObject var sendCtl: ComposerSendController
     @Binding var openTarget: ChatOpenTarget?
     @ObservedObject var client: AgentControlClient
+    @ObservedObject var outbox: MobileCommandOutbox
     let providerMatrix: ChatProvidersResponse?
     @State private var fileImporterPresented = false
     @State private var modelPickerPresented = false
@@ -913,9 +919,9 @@ private struct Composer: View {
             switch openTarget {
             case .solo(let sessionId):
                 let prompt = await uploadAndBuildPrompt(base: trimmed, sessionId: sessionId)
-                let ok = await client.sendPrompt(sessionId: sessionId, text: prompt, asFollowUp: true)
-                if ok { store.clearAttachments() }
-                return ok ? nil : (client.lastError ?? "Couldn't send prompt.")
+                outbox.enqueueSend(sessionId: sessionId, text: prompt, asFollowUp: true)
+                store.clearAttachments()
+                return nil
             case .frontier(let groupId):
                 let children = client.frontierChildren(groupId: groupId)
                 guard children.count >= 2 else {
@@ -989,9 +995,9 @@ private struct Composer: View {
                     }
                     openTarget = .solo(session.id)
                     let prompt = await uploadAndBuildPrompt(base: trimmed, sessionId: session.id)
-                    let ok = await client.sendPrompt(sessionId: session.id, text: prompt, asFollowUp: false)
-                    if ok { store.clearAttachments() }
-                    return ok ? nil : (client.lastError ?? "Couldn't send prompt.")
+                    outbox.enqueueSend(sessionId: session.id, text: prompt, asFollowUp: false)
+                    store.clearAttachments()
+                    return nil
                 }
             }
         }

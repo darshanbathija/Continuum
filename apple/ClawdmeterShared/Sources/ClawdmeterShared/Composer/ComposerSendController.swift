@@ -49,25 +49,23 @@ public final class ComposerSendController: ObservableObject {
         defer { sending = false }
         lastError = nil
 
-        let preSendClientError = client.lastError
-
         switch kind {
         case .solo(let sessionId):
-            await client.sendPrompt(sessionId: sessionId, text: trimmed, asFollowUp: true)
-            if !errorChanged(from: preSendClientError) {
+            let ok = await client.sendPrompt(sessionId: sessionId, text: trimmed, asFollowUp: true)
+            if ok {
                 text = ""
             } else {
-                lastError = client.lastError
+                lastError = client.lastError ?? "Couldn't send prompt."
             }
 
         case .refine(let sessionId):
             // Refine is semantically identical to a follow-up message
             // (A3: Edit plan = Refine via the same `sendPrompt`).
-            await client.sendPrompt(sessionId: sessionId, text: trimmed, asFollowUp: true)
-            if !errorChanged(from: preSendClientError) {
+            let ok = await client.sendPrompt(sessionId: sessionId, text: trimmed, asFollowUp: true)
+            if ok {
                 text = ""
             } else {
-                lastError = client.lastError
+                lastError = client.lastError ?? "Couldn't send prompt."
             }
 
         case .broadcast(let groupId):
@@ -86,11 +84,11 @@ public final class ComposerSendController: ObservableObject {
                     // First send: append the prompt to the freshly-created
                     // session. createChatSession spawned the session;
                     // sendPrompt fires the first turn.
-                    await client.sendPrompt(sessionId: session.id, text: trimmed, asFollowUp: false)
-                    if !errorChanged(from: preSendClientError) {
+                    let ok = await client.sendPrompt(sessionId: session.id, text: trimmed, asFollowUp: false)
+                    if ok {
                         text = ""
                     } else {
-                        lastError = client.lastError
+                        lastError = client.lastError ?? "Couldn't send prompt."
                     }
                 } else {
                     lastError = client.lastError ?? "Couldn't create chat session."
@@ -117,11 +115,11 @@ public final class ComposerSendController: ObservableObject {
                 deepResearch: deepResearch
             )
             if let session {
-                await client.sendPrompt(sessionId: session.id, text: trimmed, asFollowUp: false)
-                if !errorChanged(from: preSendClientError) {
+                let ok = await client.sendPrompt(sessionId: session.id, text: trimmed, asFollowUp: false)
+                if ok {
                     text = ""
                 } else {
-                    lastError = client.lastError
+                    lastError = client.lastError ?? "Couldn't send prompt."
                 }
             } else {
                 lastError = client.lastError ?? "Couldn't create chat session."
@@ -174,9 +172,6 @@ public final class ComposerSendController: ObservableObject {
         lastError = nil
     }
 
-    private func errorChanged(from baseline: String?) -> Bool {
-        client.lastError != baseline && client.lastError != nil
-    }
 }
 
 /// What kind of send to dispatch. Picked at the call site.

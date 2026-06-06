@@ -22,6 +22,7 @@ import {
   waitFor,
   makeHeader,
   makeOpaqueBody,
+  TEST_RELAY_CREATION_GRANT_TOKEN,
 } from "./helpers";
 
 describe("HTTP routes", () => {
@@ -43,6 +44,95 @@ describe("HTTP routes", () => {
   it("unknown paths return 404", async () => {
     const res = await SELF.fetch("https://relay.invalid/nope");
     expect(res.status).toBe(404);
+  });
+
+  it("POST /creation-grant rejects missing or wrong grant authorization", async () => {
+    const p = await newPairing();
+    const body = JSON.stringify({
+      macTokenHash: p.macTokHash,
+      iosTokenHash: p.iosTokHash,
+      ttlSeconds: p.ttlSeconds,
+      senderMacFingerprint: "mac_fingerprint_123",
+    });
+    const missing = await SELF.fetch(
+      `https://relay.invalid/v1/relay/sessions/${p.sid}/creation-grant`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      }
+    );
+    expect(missing.status).toBe(401);
+
+    const wrong = await SELF.fetch(
+      `https://relay.invalid/v1/relay/sessions/${p.sid}/creation-grant`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer wrong-token",
+        },
+        body,
+      }
+    );
+    expect(wrong.status).toBe(403);
+  });
+
+  it("POST /creation-grant returns a proof usable for first connect when authorized", async () => {
+    const p = await newPairing();
+    const res = await SELF.fetch(
+      `https://relay.invalid/v1/relay/sessions/${p.sid}/creation-grant`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${TEST_RELAY_CREATION_GRANT_TOKEN}`,
+        },
+        body: JSON.stringify({
+          macTokenHash: p.macTokHash,
+          iosTokenHash: p.iosTokHash,
+          ttlSeconds: p.ttlSeconds,
+          senderMacFingerprint: "mac_fingerprint_123",
+        }),
+      }
+    );
+    expect(res.status).toBe(201);
+    const grant = (await res.json()) as {
+      creation: { issuedAtSeconds: number; nonce: string; signature: string };
+      apnsSigningKey?: string;
+    };
+    expect(grant.creation.signature.length).toBeGreaterThan(16);
+    expect(grant.apnsSigningKey?.length).toBeGreaterThan(16);
+
+    const bundle = btoa(JSON.stringify({
+      macTokenHash: p.macTokHash,
+      iosTokenHash: p.iosTokHash,
+      ttlSeconds: p.ttlSeconds,
+      creation: grant.creation,
+    }));
+    const mac = await connectPeer({ sid: p.sid, token: p.macTok, bundleParam: bundle });
+    expect(mac.response.status).toBe(101);
+    mac.socket.close();
+  });
+
+  it("POST /creation-grant rejects impossible TTLs", async () => {
+    const p = await newPairing();
+    const res = await SELF.fetch(
+      `https://relay.invalid/v1/relay/sessions/${p.sid}/creation-grant`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${TEST_RELAY_CREATION_GRANT_TOKEN}`,
+        },
+        body: JSON.stringify({
+          macTokenHash: p.macTokHash,
+          iosTokenHash: p.iosTokHash,
+          ttlSeconds: Math.floor(Date.now() / 1000) + 32 * 24 * 60 * 60,
+        }),
+      }
+    );
+    expect(res.status).toBe(400);
   });
 });
 
@@ -269,7 +359,9 @@ describe("stats endpoint — counts only, no body content", () => {
 
     await waitFor(() => (iosInbox.received.filter((m) => m !== "__keepalive__").length >= 2 ? true : undefined));
 
-    const statsRes = await SELF.fetch(`https://relay.invalid/v1/relay/sessions/${p.sid}/stats`);
+    const statsRes = await SELF.fetch(`https://relay.invalid/v1/relay/sessions/${p.sid}/stats`, {
+      headers: { authorization: `Bearer ${p.macTok}` },
+    });
     expect(statsRes.status).toBe(200);
     const stats = (await statsRes.json()) as {
       initialized: boolean;
@@ -290,6 +382,22 @@ describe("stats endpoint — counts only, no body content", () => {
 
     mac.socket.close();
     ios.socket.close();
+  });
+
+  it("requires a valid session bearer for stats metadata", async () => {
+    const p = await newPairing();
+    const mac = await connectPeer({ sid: p.sid, token: p.macTok, bundleParam: p.bundleParam });
+    expect(mac.socket).toBeTruthy();
+
+    const missing = await SELF.fetch(`https://relay.invalid/v1/relay/sessions/${p.sid}/stats`);
+    expect(missing.status).toBe(401);
+
+    const wrong = await SELF.fetch(`https://relay.invalid/v1/relay/sessions/${p.sid}/stats`, {
+      headers: { authorization: "Bearer totally-bogus-token" },
+    });
+    expect(wrong.status).toBe(403);
+
+    mac.socket.close();
   });
 });
 

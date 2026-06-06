@@ -79,15 +79,21 @@ public final class RelayMuxRequestClient {
 
     /// Send a request and await its response. Throws `RequestError` on timeout /
     /// disconnect / malformed reply.
-    public func request(method: String, path: String, body: Data?) async throws -> RelayMuxResponse {
+    public func request(
+        method: String,
+        path: String,
+        body: Data?,
+        timeout: TimeInterval? = nil
+    ) async throws -> RelayMuxResponse {
         let opId = makeOpId()
         let payload = try RelayMuxRequest(method: method, path: path, body: body).encoded()
         let messageId = makeMessageId()
+        let timeoutSeconds = timeout ?? self.timeout
         return try await withCheckedThrowingContinuation { cont in
             continuations[opId] = cont
             reassemblers[opId] = RelayChunkReassembler()
             timeoutTasks[opId] = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: UInt64((self?.timeout ?? 30) * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
                 if !Task.isCancelled { self?.resolve(opId, .failure(RequestError.timeout)) }
             }
             // Ship the (possibly chunked) request frames.

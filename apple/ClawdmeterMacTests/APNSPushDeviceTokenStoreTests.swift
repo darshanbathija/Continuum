@@ -15,19 +15,19 @@ final class APNSPushDeviceTokenStoreTests: XCTestCase {
         let (store, file) = makeStore()
         defer { try? FileManager.default.removeItem(at: file) }
         let token = String(repeating: "ab", count: 32)
-        store.register(sessionId: "sid-A", deviceToken: token, bundleId: "com.clawdmeter.iphone")
+        store.register(sessionId: "sid-A", deviceToken: token, bundleId: "ai.continuum.ios")
         XCTAssertEqual(store.count, 1)
         let entry = store.entry(forSessionId: "sid-A")
         XCTAssertEqual(entry?.deviceToken, token)
-        XCTAssertEqual(entry?.bundleId, "com.clawdmeter.iphone")
+        XCTAssertEqual(entry?.bundleId, "ai.continuum.ios")
     }
 
     func testRegisterIsIdempotent() {
         let (store, file) = makeStore()
         defer { try? FileManager.default.removeItem(at: file) }
         let token = String(repeating: "cd", count: 32)
-        store.register(sessionId: "sid-B", deviceToken: token, bundleId: "com.clawdmeter.iphone")
-        store.register(sessionId: "sid-B", deviceToken: token, bundleId: "com.clawdmeter.iphone")
+        store.register(sessionId: "sid-B", deviceToken: token, bundleId: "ai.continuum.ios")
+        store.register(sessionId: "sid-B", deviceToken: token, bundleId: "ai.continuum.ios")
         XCTAssertEqual(store.count, 1, "Repeated register MUST be idempotent")
     }
 
@@ -59,7 +59,7 @@ final class APNSPushDeviceTokenStoreTests: XCTestCase {
 
         let storeA = APNSPushDeviceTokenStore(fileURL: tmp)
         let token = String(repeating: "22", count: 32)
-        storeA.register(sessionId: "sid-persist", deviceToken: token, bundleId: "com.clawdmeter.iphone")
+        storeA.register(sessionId: "sid-persist", deviceToken: token, bundleId: "ai.continuum.ios")
 
         let storeB = APNSPushDeviceTokenStore(fileURL: tmp)
         XCTAssertEqual(storeB.count, 1)

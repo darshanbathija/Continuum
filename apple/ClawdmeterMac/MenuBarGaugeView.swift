@@ -38,6 +38,8 @@ struct MenuBarGaugeView {
         let hasWeekly: Bool
     }
     nonisolated(unsafe) private static var labelCache: [LabelKey: NSImage] = [:]
+    nonisolated(unsafe) private static var labelCacheOrder: [LabelKey] = []
+    private static let maxLabelCacheEntries = 240
 
     /// Render "{pct}% {compact}  [badge]  {pct}% {compact}" as one NSImage.
     ///
@@ -66,6 +68,7 @@ struct MenuBarGaugeView {
         )
         cacheLock.lock()
         if let cached = labelCache[key] {
+            touchLabelCacheKeyLocked(key)
             cacheLock.unlock()
             return cached
         }
@@ -121,7 +124,7 @@ struct MenuBarGaugeView {
 
         let image = imageFromAttributedString(composite)
         cacheLock.lock()
-        labelCache[key] = image
+        storeLabelCacheValueLocked(image, for: key)
         cacheLock.unlock()
         return image
     }
@@ -132,6 +135,7 @@ struct MenuBarGaugeView {
         let cacheKey = "empty-\(assetName)-\(template ? "t" : "c")"
         cacheLock.lock()
         if let cached = cache[cacheKey] {
+            touchImageCacheKeyLocked(cacheKey)
             cacheLock.unlock()
             return cached
         }
@@ -157,7 +161,7 @@ struct MenuBarGaugeView {
         composite.append(NSAttributedString(string: "  —", attributes: attrs))
         let image = imageFromAttributedString(composite)
         cacheLock.lock()
-        cache[cacheKey] = image
+        storeImageCacheValueLocked(image, for: cacheKey)
         cacheLock.unlock()
         return image
     }
@@ -226,18 +230,23 @@ struct MenuBarGaugeView {
 
     private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var cache: [String: NSImage] = [:]
+    nonisolated(unsafe) private static var cacheOrder: [String] = []
+    private static let maxImageCacheEntries = 160
 
     /// Plain burst, used for in-text inline rendering only (no background).
     static func burstNSImage(tint: NSColor, size: CGFloat = 14) -> NSImage {
         let key = "burst-\(tint.cgColor.components ?? [])-\(size)"
         cacheLock.lock(); defer { cacheLock.unlock() }
-        if let cached = cache[key] { return cached }
+        if let cached = cache[key] {
+            touchImageCacheKeyLocked(key)
+            return cached
+        }
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
             Self.drawBurst(tint: tint, in: rect)
             return true
         }
         image.isTemplate = false
-        cache[key] = image
+        storeImageCacheValueLocked(image, for: key)
         return image
     }
 
@@ -250,12 +259,15 @@ struct MenuBarGaugeView {
     static func providerBadgeImage(assetName: String, size: CGFloat = 18, template: Bool = false) -> NSImage {
         let key = "\(assetName)-\(size)-\(template ? "t" : "c")"
         cacheLock.lock(); defer { cacheLock.unlock() }
-        if let cached = cache[key] { return cached }
+        if let cached = cache[key] {
+            touchImageCacheKeyLocked(key)
+            return cached
+        }
 
         guard let source = NSImage(named: assetName) else {
             let fallback = NSImage(size: NSSize(width: size, height: size))
             fallback.isTemplate = template
-            cache[key] = fallback
+            storeImageCacheValueLocked(fallback, for: key)
             return fallback
         }
         // Copy so isTemplate/size tweaks don't poison the shared bundle image.
@@ -267,8 +279,54 @@ struct MenuBarGaugeView {
         let copy: NSImage = (source.copy() as? NSImage) ?? source
         copy.size = NSSize(width: size, height: size)
         copy.isTemplate = template
-        cache[key] = copy
+        storeImageCacheValueLocked(copy, for: key)
         return copy
+    }
+
+    private static func touchLabelCacheKeyLocked(_ key: LabelKey) {
+        labelCacheOrder.removeAll { $0 == key }
+        labelCacheOrder.append(key)
+    }
+
+    private static func storeLabelCacheValueLocked(_ image: NSImage, for key: LabelKey) {
+        labelCache[key] = image
+        touchLabelCacheKeyLocked(key)
+        while labelCacheOrder.count > maxLabelCacheEntries, let oldest = labelCacheOrder.first {
+            labelCacheOrder.removeFirst()
+            labelCache.removeValue(forKey: oldest)
+        }
+    }
+
+    private static func touchImageCacheKeyLocked(_ key: String) {
+        cacheOrder.removeAll { $0 == key }
+        cacheOrder.append(key)
+    }
+
+    private static func storeImageCacheValueLocked(_ image: NSImage, for key: String) {
+        cache[key] = image
+        touchImageCacheKeyLocked(key)
+        while cacheOrder.count > maxImageCacheEntries, let oldest = cacheOrder.first {
+            cacheOrder.removeFirst()
+            cache.removeValue(forKey: oldest)
+        }
+    }
+
+    internal static var labelCacheCountForTesting: Int {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        return labelCache.count
+    }
+
+    internal static var imageCacheCountForTesting: Int {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        return cache.count
+    }
+
+    internal static func resetCachesForTesting() {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        labelCache.removeAll()
+        labelCacheOrder.removeAll()
+        cache.removeAll()
+        cacheOrder.removeAll()
     }
 
     /// Whether to render this provider's badge in monochrome template mode.

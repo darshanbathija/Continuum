@@ -9,8 +9,8 @@ app_identifier([
   "ai.continuum.mac",
   "ai.continuum.ios",
   "ai.continuum.ios.widgets",
-  "ai.continuum.watch",
-  "ai.continuum.watch.widgets",
+  "ai.continuum.ios.watchkitapp",
+  "ai.continuum.ios.watchkitapp.widgets",
   "ai.continuum.mac.widgets",
 ])
 

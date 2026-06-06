@@ -5,11 +5,12 @@
 //
 //   Authorization: Bearer <token>
 //
-// where `<token>` is the base64-encoded HMAC-SHA256 of a domain-separated
-// message keyed by the operator's shared signing key:
+// where `<token>` is a versioned, one-use HMAC bearer:
 //
-//   token = base64( HMAC-SHA256(RELAY_BEARER_SIGNING_KEY,
-//                               "apns:" + sessionId + ":" + macFingerprint) )
+//   token = "v1." + issuedAtSeconds + "." + nonce + "." +
+//           base64( HMAC-SHA256(RELAY_BEARER_SIGNING_KEY,
+//                               "apns:" + sessionId + ":" + macFingerprint
+//                               + ":" + issuedAtSeconds + ":" + nonce) )
 //
 // The shared key is the SAME byte string the relay Worker uses. Only the
 // `"apns:"` vs `"relay:"` prefix differs — that domain separation prevents
@@ -45,9 +46,12 @@ public enum APNSGatewayBearer {
     /// `optout:` prefix in `infra/apns-gateway/src/index.ts:353`.
     public static let optOutMessagePrefix = "optout:"
 
+    public static let bearerVersion = "v1"
+
     /// Issue a bearer for `(sessionId, senderMacFingerprint)`. The token is
-    /// the base64-encoded HMAC-SHA256 — the Worker compares this directly
-    /// after stripping the `Bearer ` prefix.
+    /// versioned and carries an issued-at timestamp plus nonce. The Worker
+    /// verifies the signature, expiry, and nonce freshness after stripping the
+    /// `Bearer ` prefix.
     ///
     /// `signingKey` is the operator's `RELAY_BEARER_SIGNING_KEY` raw bytes.
     /// The Mac obtains this at pairing time (it lives in the Worker secret
@@ -57,10 +61,19 @@ public enum APNSGatewayBearer {
     public static func issueBearer(
         signingKey: Data,
         sessionId: String,
-        senderMacFingerprint: String
+        senderMacFingerprint: String,
+        issuedAtSeconds: UInt64 = UInt64(Date().timeIntervalSince1970),
+        nonce: String? = nil
     ) -> String {
-        let message = bearerMessagePrefix + sessionId + ":" + senderMacFingerprint
-        return base64HMAC(signingKey: signingKey, message: message)
+        let nonceValue = nonce ?? randomNonce()
+        let message = bearerMessage(
+            sessionId: sessionId,
+            senderMacFingerprint: senderMacFingerprint,
+            issuedAtSeconds: issuedAtSeconds,
+            nonce: nonceValue
+        )
+        let signature = base64HMAC(signingKey: signingKey, message: message)
+        return "\(bearerVersion).\(issuedAtSeconds).\(nonceValue).\(signature)"
     }
 
     /// Verify a token presented by some caller against `(sessionId, fingerprint)`.
@@ -73,14 +86,21 @@ public enum APNSGatewayBearer {
         signingKey: Data,
         sessionId: String,
         senderMacFingerprint: String,
-        presented: String
+        presented: String,
+        nowSeconds: UInt64 = UInt64(Date().timeIntervalSince1970),
+        ttlSeconds: UInt64 = 300
     ) -> Bool {
-        let expected = issueBearer(
-            signingKey: signingKey,
+        guard let parsed = parseBearer(presented) else { return false }
+        if parsed.issuedAtSeconds > nowSeconds + 60 { return false }
+        if nowSeconds > parsed.issuedAtSeconds + ttlSeconds { return false }
+        let message = bearerMessage(
             sessionId: sessionId,
-            senderMacFingerprint: senderMacFingerprint
+            senderMacFingerprint: senderMacFingerprint,
+            issuedAtSeconds: parsed.issuedAtSeconds,
+            nonce: parsed.nonce
         )
-        return constantTimeEquals(expected, presented)
+        let expected = base64HMAC(signingKey: signingKey, message: message)
+        return constantTimeEquals(normalizeBase64(expected), normalizeBase64(parsed.signature))
     }
 
     /// Issue an opt-out signature for `DELETE /device-token`. The Worker
@@ -98,6 +118,21 @@ public enum APNSGatewayBearer {
 
     // MARK: - HMAC + constant-time compare
 
+    private struct ParsedBearer {
+        let issuedAtSeconds: UInt64
+        let nonce: String
+        let signature: String
+    }
+
+    private static func bearerMessage(
+        sessionId: String,
+        senderMacFingerprint: String,
+        issuedAtSeconds: UInt64,
+        nonce: String
+    ) -> String {
+        bearerMessagePrefix + sessionId + ":" + senderMacFingerprint + ":\(issuedAtSeconds):" + nonce
+    }
+
     private static func base64HMAC(signingKey: Data, message: String) -> String {
         let key = SymmetricKey(data: signingKey)
         let tag = HMAC<SHA256>.authenticationCode(
@@ -105,6 +140,32 @@ public enum APNSGatewayBearer {
             using: key
         )
         return Data(tag).base64EncodedString()
+    }
+
+    private static func randomNonce() -> String {
+        UUID().uuidString.replacingOccurrences(of: "-", with: "")
+    }
+
+    private static func parseBearer(_ token: String) -> ParsedBearer? {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4, String(parts[0]) == bearerVersion else { return nil }
+        guard let issuedAt = UInt64(parts[1]) else { return nil }
+        let nonce = String(parts[2])
+        let signature = String(parts[3])
+        guard nonce.range(of: #"^[A-Za-z0-9_-]{16,128}$"#, options: .regularExpression) != nil else {
+            return nil
+        }
+        guard signature.range(of: #"^[A-Za-z0-9+/=_-]{16,}$"#, options: .regularExpression) != nil else {
+            return nil
+        }
+        return ParsedBearer(issuedAtSeconds: issuedAt, nonce: nonce, signature: signature)
+    }
+
+    private static func normalizeBase64(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 
     /// Length-independent constant-time string compare. Mirrors the

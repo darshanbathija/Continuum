@@ -100,7 +100,7 @@ final class APNSGatewayClientTests: XCTestCase {
         return APNSGatewayClient.PushInput(
             body: body,
             deviceToken: deviceToken,
-            topic: "com.clawdmeter.iphone",
+            topic: "ai.continuum.ios",
             sessionId: sessionId,
             senderMacFingerprint: fingerprint,
             signingKey: signingKey,
@@ -162,7 +162,7 @@ final class APNSGatewayClientTests: XCTestCase {
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         let parsed = try XCTUnwrap(json)
         XCTAssertEqual(parsed["deviceToken"] as? String, input.deviceToken)
-        XCTAssertEqual(parsed["topic"] as? String, "com.clawdmeter.iphone")
+        XCTAssertEqual(parsed["topic"] as? String, "ai.continuum.ios")
         XCTAssertEqual(parsed["sessionId"] as? String, input.sessionId)
         XCTAssertEqual(parsed["senderMacFingerprint"] as? String, input.senderMacFingerprint)
         XCTAssertEqual(parsed["pushType"] as? String, "alert")
@@ -173,8 +173,8 @@ final class APNSGatewayClientTests: XCTestCase {
         XCTAssertNotNil(Data(base64Encoded: wire))
     }
 
-    /// The bearer the daemon sends must equal what `APNSGatewayBearer.issueBearer`
-    /// produces — anything else gets rejected by the Worker as 401.
+    /// The bearer the daemon sends must verify for the request identity —
+    /// anything else gets rejected by the Worker as 401.
     func testBearerSignsCorrectly() async throws {
         let client = await makeClient()
         MockProtocol.handler = { _ in
@@ -194,12 +194,25 @@ final class APNSGatewayClientTests: XCTestCase {
         let authHeader = try XCTUnwrap(req.value(forHTTPHeaderField: "Authorization"))
         XCTAssertTrue(authHeader.hasPrefix("Bearer "))
         let token = String(authHeader.dropFirst("Bearer ".count))
-        let expected = APNSGatewayBearer.issueBearer(
+        XCTAssertTrue(APNSGatewayBearer.verifyBearer(
             signingKey: signingKey,
             sessionId: input.sessionId,
-            senderMacFingerprint: input.senderMacFingerprint
-        )
-        XCTAssertEqual(token, expected)
+            senderMacFingerprint: input.senderMacFingerprint,
+            presented: token
+        ))
+    }
+
+    func testSigningKeyProviderPersistsProductionKey() throws {
+        let service = "ai.continuum.test.apns.gateway.signing-key-\(UUID().uuidString)"
+        let key = Data(repeating: 0x42, count: 32)
+        let writer = APNSGatewaySigningKeyProvider(keychainService: service, processEnv: [:])
+        defer { writer.clear() }
+
+        try writer.saveFromPairing(key)
+
+        let reader = APNSGatewaySigningKeyProvider(keychainService: service, processEnv: [:])
+        defer { reader.clear() }
+        XCTAssertEqual(reader.signingKey(), key)
     }
 
     /// The plaintext push body bytes must NEVER appear on the wire — the
@@ -224,7 +237,7 @@ final class APNSGatewayClientTests: XCTestCase {
         let input = APNSGatewayClient.PushInput(
             body: body,
             deviceToken: String(repeating: "ee", count: 32),
-            topic: "com.clawdmeter.iphone",
+            topic: "ai.continuum.ios",
             sessionId: "test-session-123456789012",
             senderMacFingerprint: String(repeating: "11", count: 32),
             signingKey: Data(repeating: 0x55, count: 32),
@@ -256,14 +269,14 @@ final class APNSGatewayClientTests: XCTestCase {
             .appendingPathComponent("e6-token-store-\(UUID()).json")
         let store = APNSPushDeviceTokenStore(fileURL: tmp)
         let token = String(repeating: "ff", count: 32)
-        store.register(sessionId: "session-410", deviceToken: token, bundleId: "com.clawdmeter.iphone")
+        store.register(sessionId: "session-410", deviceToken: token, bundleId: "ai.continuum.ios")
         XCTAssertEqual(store.count, 1)
         // Use the shared singleton for the actual purge — the client code
         // resolves via `APNSPushDeviceTokenStore.shared`. To make this
         // test deterministic we substitute the entry on the shared store
         // for the duration of the test.
         APNSPushDeviceTokenStore.shared.register(
-            sessionId: "session-410", deviceToken: token, bundleId: "com.clawdmeter.iphone"
+            sessionId: "session-410", deviceToken: token, bundleId: "ai.continuum.ios"
         )
         defer {
             APNSPushDeviceTokenStore.shared.purgeByDeviceToken(token)
@@ -273,7 +286,7 @@ final class APNSGatewayClientTests: XCTestCase {
         let input = APNSGatewayClient.PushInput(
             body: APNSPushBody(kind: "planApproval", sessionId: "session-410", title: "x", body: "y", triggerAt: 1),
             deviceToken: token,
-            topic: "com.clawdmeter.iphone",
+            topic: "ai.continuum.ios",
             sessionId: "session-410",
             senderMacFingerprint: String(repeating: "00", count: 32),
             signingKey: Data(repeating: 0xAA, count: 32),

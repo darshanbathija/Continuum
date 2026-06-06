@@ -2,6 +2,14 @@
 // drives WebSocket clients against SELF (the main Worker).
 
 import { SELF } from "cloudflare:test";
+import {
+  issueSessionCreationSignature,
+  type SessionAuthBundle,
+} from "../src/auth";
+
+export const TEST_RELAY_OPERATOR_SIGNING_KEY =
+  "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+export const TEST_RELAY_CREATION_GRANT_TOKEN = "test-relay-grant-token";
 
 /** A fresh, throwaway session id (suitable for the URL path). */
 export function newSessionId(): string {
@@ -22,6 +30,17 @@ export async function sha256Hex(input: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function base64UrlEncode(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
+  return btoa(bin).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+function newNonce(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return base64UrlEncode(bytes);
+}
+
 export interface PairingTokens {
   sid: string;
   macTok: string;
@@ -40,7 +59,23 @@ export async function newPairing(ttlSecondsFromNow = 3600): Promise<PairingToken
   const macTokHash = await sha256Hex(macTok);
   const iosTokHash = await sha256Hex(iosTok);
   const ttlSeconds = Math.floor(Date.now() / 1000) + ttlSecondsFromNow;
-  const bundle = JSON.stringify({ macTokenHash: macTokHash, iosTokenHash: iosTokHash, ttlSeconds });
+  const creation = {
+    issuedAtSeconds: Math.floor(Date.now() / 1000),
+    nonce: newNonce(),
+    signature: "placeholder",
+  };
+  const bundleObject: SessionAuthBundle = {
+    macTokenHash: macTokHash,
+    iosTokenHash: iosTokHash,
+    ttlSeconds,
+    creation,
+  };
+  bundleObject.creation.signature = await issueSessionCreationSignature(
+    TEST_RELAY_OPERATOR_SIGNING_KEY,
+    sid,
+    bundleObject
+  );
+  const bundle = JSON.stringify(bundleObject);
   return {
     sid,
     macTok,

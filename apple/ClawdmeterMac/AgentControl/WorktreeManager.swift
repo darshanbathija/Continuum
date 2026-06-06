@@ -641,10 +641,13 @@ public actor WorktreeManager {
             return .skipped(reason: "Worktree is the cwd of an attached tmux pane")
         }
         // All gates passed: actually delete.
-        _ = try await runGit(
+        let removeResult = try await runGit(
             args: ["worktree", "remove", worktreePath],
             cwd: repoRoot
         )
+        if let reason = Self.worktreeRemoveFailureReason(removeResult) {
+            return .skipped(reason: reason)
+        }
         removeBranchAliasIfOwned(marker: marker, worktreePath: worktreePath)
         worktreeLogger.info("Removed worktree \(worktreePath, privacy: .public)")
         return .deleted
@@ -690,6 +693,17 @@ public actor WorktreeManager {
         return try await ShellRunner.shared.run(
             executable: git, arguments: args, cwd: cwd, timeout: 30
         )
+    }
+
+    internal nonisolated static func worktreeRemoveFailureReason(_ result: ShellRunner.Result) -> String? {
+        guard result.exitStatus != 0 else { return nil }
+        let detail = result.stderrString
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(300)
+        if detail.isEmpty {
+            return "git worktree remove failed with exit status \(result.exitStatus)"
+        }
+        return "git worktree remove failed: \(detail)"
     }
 
     private func currentBranch(cwd: String) async throws -> String? {

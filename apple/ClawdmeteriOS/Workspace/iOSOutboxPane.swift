@@ -112,6 +112,7 @@ private extension MobileCommandKind {
         case .permissionResponse: return "Permission response"
         case .terminalInput: return "Terminal input"
         case .createPR: return "Create PR"
+        case .reviewPR: return "Review PR"
         case .mergePR: return "Merge PR"
         case .changeModel: return "Change model"
         case .changeEffort: return "Change effort"

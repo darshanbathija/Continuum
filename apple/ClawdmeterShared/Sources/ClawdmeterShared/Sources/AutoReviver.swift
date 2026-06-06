@@ -41,6 +41,7 @@ public final class AutoReviver: ObservableObject {
     private let session: URLSession
     private let logger: Logger
     private var lastFireAt: Date?
+    private var lastAutoReviveSessionEpoch: Int?
     /// Don't fire more than once per cool-off window (defends against bursty ticks).
     private let cooloffSeconds: TimeInterval = 120
     private var inFlight: Bool = false
@@ -72,8 +73,14 @@ public final class AutoReviver: ObservableObject {
         let resetDate = Date(timeIntervalSince1970: TimeInterval(usage.sessionEpoch))
         // Fire as soon as `now` is at or past the reset moment.
         guard now >= resetDate.addingTimeInterval(-1) else { return }
+        guard lastAutoReviveSessionEpoch != usage.sessionEpoch else { return }
         if let last = lastFireAt, now.timeIntervalSince(last) < cooloffSeconds { return }
         if inFlight { return }
+        guard tokenProvider.currentAccessToken != nil else {
+            await fire(at: now)
+            return
+        }
+        lastAutoReviveSessionEpoch = usage.sessionEpoch
         await fire(at: now)
     }
 

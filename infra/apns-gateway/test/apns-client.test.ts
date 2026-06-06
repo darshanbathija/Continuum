@@ -73,7 +73,7 @@ describe("sendApnsPush", () => {
       endpoint: "https://api.sandbox.push.apple.com",
       jwt: "j",
       deviceToken: "abc",
-      topic: "com.clawdmeter.mac",
+      topic: "ai.continuum.ios",
       encryptedPayload: "payload",
       fetchImpl,
     });
@@ -87,7 +87,7 @@ describe("sendApnsPush", () => {
       endpoint: "https://api.sandbox.push.apple.com",
       jwt: "j",
       deviceToken: "abc",
-      topic: "com.clawdmeter.mac",
+      topic: "ai.continuum.ios",
       encryptedPayload: "payload",
       fetchImpl,
     });
@@ -146,7 +146,7 @@ describe("sendApnsPush", () => {
       endpoint: "https://api.sandbox.push.apple.com",
       jwt: "JWT",
       deviceToken: "ab12",
-      topic: "com.clawdmeter.mac",
+      topic: "ai.continuum.ios",
       encryptedPayload: "payload",
       priority: 10,
       pushType: "alert",
@@ -158,11 +158,15 @@ describe("sendApnsPush", () => {
     expect(captured[0]!.url).toContain("/3/device/ab12");
     const headers = captured[0]!.init.headers as Record<string, string>;
     expect(headers["authorization"]).toBe("bearer JWT");
-    expect(headers["apns-topic"]).toBe("com.clawdmeter.mac");
+    expect(headers["apns-topic"]).toBe("ai.continuum.ios");
     expect(headers["apns-push-type"]).toBe("alert");
     expect(headers["apns-priority"]).toBe("10");
     expect(headers["apns-collapse-id"]).toBe("c-1");
     expect(headers["apns-expiration"]).toBe("12345");
+    const body = JSON.parse(captured[0]!.init.body as string);
+    expect(body.aps["content-available"]).toBe(1);
+    expect(body.aps["mutable-content"]).toBe(1);
+    expect(body.cmEncrypted).toBe("payload");
   });
 
   it("background push omits the alert dict", async () => {

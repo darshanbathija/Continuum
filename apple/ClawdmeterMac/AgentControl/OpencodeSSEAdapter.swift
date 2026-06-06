@@ -144,22 +144,50 @@ public final class OpencodeSSEAdapter {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 continue
             }
+            let backoffAttempt: Int
             do {
                 try await consumeStream(request: request)
                 // consumeStream returns when the server closes the
                 // connection cleanly — drop into reconnect with backoff.
+                resetReconnectFailuresAfterCleanClose()
+                backoffAttempt = 1
             } catch {
                 logger.warning("opencode SSE error: \(error.localizedDescription, privacy: .public)")
+                guard !recordReconnectFailureAndShouldStop() else { return }
+                backoffAttempt = reconnectCount
             }
             // Backoff before reconnecting.
-            reconnectCount += 1
-            if reconnectCount > Self.maxReconnects {
-                logger.error("opencode SSE: exhausted \(Self.maxReconnects) reconnect attempts; stopping")
-                return
-            }
-            let backoffNs = UInt64(500_000_000) * UInt64(1 << min(reconnectCount, 6))
+            let clampedAttempt = max(1, backoffAttempt)
+            let backoffNs = UInt64(500_000_000) * UInt64(1 << min(clampedAttempt, 6))
             try? await Task.sleep(nanoseconds: backoffNs)
         }
+    }
+
+    private func resetReconnectFailuresAfterCleanClose() {
+        reconnectCount = 0
+    }
+
+    @discardableResult
+    private func recordReconnectFailureAndShouldStop() -> Bool {
+        reconnectCount += 1
+        if reconnectCount > Self.maxReconnects {
+            logger.error("opencode SSE: exhausted \(Self.maxReconnects) reconnect attempts; stopping")
+            return true
+        }
+        return false
+    }
+
+    internal var reconnectCountForTesting: Int {
+        reconnectCount
+    }
+
+    internal func recordCleanStreamCompletionForTesting() {
+        resetReconnectFailuresAfterCleanClose()
+    }
+
+    @discardableResult
+    internal func recordStreamFailureForTesting() -> Bool {
+        recordReconnectFailureAndShouldStop()
     }
 
     private func makeStreamRequest() -> URLRequest? {

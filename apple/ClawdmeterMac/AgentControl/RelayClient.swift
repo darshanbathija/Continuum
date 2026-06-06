@@ -70,6 +70,7 @@
 import Foundation
 import OSLog
 import Combine
+import Security
 import ClawdmeterShared
 #if canImport(CryptoKit)
 import CryptoKit
@@ -124,6 +125,57 @@ public struct MacRelayInboundMessage: Sendable, Equatable {
 
 // MARK: - Configuration
 
+public extension RelaySessionCreationProof {
+
+    static func issue(
+        signingKey: Data,
+        sessionId: String,
+        macTokenHash: String,
+        iosTokenHash: String,
+        ttlSeconds: UInt64,
+        issuedAtSeconds: UInt64 = UInt64(Date().timeIntervalSince1970),
+        nonce: String? = nil
+    ) -> RelaySessionCreationProof {
+        let nonceValue = nonce ?? randomNonce()
+        let message = [
+            "relay-create",
+            sessionId,
+            macTokenHash,
+            iosTokenHash,
+            String(ttlSeconds),
+            String(issuedAtSeconds),
+            nonceValue,
+        ].joined(separator: ":")
+        let mac = HMAC<SHA256>.authenticationCode(
+            for: Data(message.utf8),
+            using: SymmetricKey(data: signingKey)
+        )
+        return RelaySessionCreationProof(
+            issuedAtSeconds: issuedAtSeconds,
+            nonce: nonceValue,
+            signature: base64URLEncode(Data(mac))
+        )
+    }
+
+    private static func randomNonce() -> String {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if status != errSecSuccess {
+            for idx in bytes.indices {
+                bytes[idx] = UInt8.random(in: 0...UInt8.max)
+            }
+        }
+        return base64URLEncode(Data(bytes))
+    }
+
+    private static func base64URLEncode(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+}
+
 /// Snapshot of the pairing record fields the client needs. Decoupled
 /// from `RelayPairingBundle` / `RelayPairingRecord` so tests can
 /// fabricate a context without touching either.
@@ -150,6 +202,10 @@ public struct MacRelayClientConfig: Sendable, Equatable {
     /// envelope on every connect so the iPhone can verify against
     /// what it scanned.
     public let ourPublicKeyBytes: Data
+    /// Operator-signed grant authorizing first-peer relay session creation.
+    /// The Worker refuses unsigned bundles so arbitrary clients cannot create
+    /// Durable Object sessions with attacker-chosen bearer hashes.
+    public let creationProof: RelaySessionCreationProof?
 
     public init(
         sid: String,
@@ -158,7 +214,8 @@ public struct MacRelayClientConfig: Sendable, Equatable {
         iosTokHashHex: String,
         relayUrl: String,
         ttl: UInt64,
-        ourPublicKeyBytes: Data
+        ourPublicKeyBytes: Data,
+        creationProof: RelaySessionCreationProof? = nil
     ) {
         self.sid = sid
         self.macTok = macTok
@@ -167,6 +224,7 @@ public struct MacRelayClientConfig: Sendable, Equatable {
         self.relayUrl = relayUrl
         self.ttl = ttl
         self.ourPublicKeyBytes = ourPublicKeyBytes
+        self.creationProof = creationProof
     }
 
     /// SHA-256 hex of a string. Public so callers (AppRuntime,
@@ -713,22 +771,32 @@ public final class MacRelayClient: ObservableObject {
             URLQueryItem(name: "token", value: config.macTok),
         ]
         if includeBundle {
-            // E2's first-peer bootstrap shape — `{ macTokenHash,
-            // iosTokenHash, ttlSeconds }`, base64-of-JSON. Both hashes
-            // are 64-char hex (SHA-256 of the bearer token). See
-            // `infra/relay/src/auth.ts#isValidAuthBundle` for the
-            // server-side validator.
-            let bundle: [String: Any] = [
-                "macTokenHash": config.macTokHashHex,
-                "iosTokenHash": config.iosTokHashHex,
-                "ttlSeconds": config.ttl,
-            ]
-            if let data = try? JSONSerialization.data(
-                withJSONObject: bundle,
-                options: [.sortedKeys]
-            ) {
-                queryItems.append(
-                    URLQueryItem(name: "bundle", value: data.base64EncodedString())
+            if let proof = config.creationProof {
+                // E2's first-peer bootstrap shape — bearer hashes + absolute TTL
+                // + operator-signed creation proof, base64-of-JSON. See
+                // `infra/relay/src/auth.ts#isValidAuthBundle` and
+                // `#validateSessionCreationProof` for the server-side contract.
+                let bundle: [String: Any] = [
+                    "creation": [
+                        "issuedAtSeconds": proof.issuedAtSeconds,
+                        "nonce": proof.nonce,
+                        "signature": proof.signature,
+                    ],
+                    "iosTokenHash": config.iosTokHashHex,
+                    "macTokenHash": config.macTokHashHex,
+                    "ttlSeconds": config.ttl,
+                ]
+                if let data = try? JSONSerialization.data(
+                    withJSONObject: bundle,
+                    options: [.sortedKeys]
+                ) {
+                    queryItems.append(
+                        URLQueryItem(name: "bundle", value: data.base64EncodedString())
+                    )
+                }
+            } else {
+                macRelayLogger.warning(
+                    "Relay first-connect bundle omitted: no operator creation proof configured"
                 )
             }
         }
@@ -816,6 +884,62 @@ public final class RelayPairingServiceHandshakeRecorder: MacRelayPairingHandshak
     }
 }
 
+public final class RelaySessionCreationSigningKeyProvider: @unchecked Sendable {
+    public static let shared = RelaySessionCreationSigningKeyProvider()
+    private static let envKey = "CLAWDMETER_RELAY_OPERATOR_SIGNING_KEY"
+
+    private let lock = NSLock()
+    private let processEnv: [String: String]
+    private var stored: Data?
+
+    public init(processEnv: [String: String] = ProcessInfo.processInfo.environment) {
+        self.processEnv = processEnv
+        loadFromEnvironmentIfNeeded()
+    }
+
+    public func signingKey() -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
+    }
+
+    public func setForTesting(_ key: Data?) {
+        lock.lock()
+        defer { lock.unlock() }
+        stored = key
+    }
+
+    private func loadFromEnvironmentIfNeeded() {
+        guard let raw = processEnv[Self.envKey], !raw.isEmpty,
+              let decoded = Self.decodeBase64OrHex(raw),
+              decoded.count >= 32 else { return }
+        lock.lock()
+        stored = decoded
+        lock.unlock()
+    }
+
+    private static func decodeBase64OrHex(_ value: String) -> Data? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.range(of: #"^[0-9a-fA-F]+$"#, options: .regularExpression) != nil,
+           trimmed.count % 2 == 0 {
+            var bytes = Data()
+            var idx = trimmed.startIndex
+            while idx < trimmed.endIndex {
+                let next = trimmed.index(idx, offsetBy: 2)
+                guard let b = UInt8(trimmed[idx..<next], radix: 16) else { return nil }
+                bytes.append(b)
+                idx = next
+            }
+            return bytes
+        }
+        let normalized = trimmed
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padded = normalized + String(repeating: "=", count: (4 - normalized.count % 4) % 4)
+        return Data(base64Encoded: padded)
+    }
+}
+
 // MARK: - Config helpers
 
 extension MacRelayClientConfig {
@@ -824,16 +948,29 @@ extension MacRelayClientConfig {
     /// keypair. Used at AppRuntime time when the user taps "Pair iPhone".
     public static func fromMacBundle(
         bundle: RelayPairingBundle,
-        ourPublicKeyBytes: Data
+        ourPublicKeyBytes: Data,
+        creationSigningKey: Data? = RelaySessionCreationSigningKeyProvider.shared.signingKey()
     ) -> MacRelayClientConfig {
-        MacRelayClientConfig(
+        let macHash = sha256Hex(bundle.macTok)
+        let iosHash = sha256Hex(bundle.iosTok)
+        let creationProof = bundle.creationProof ?? creationSigningKey.map {
+            RelaySessionCreationProof.issue(
+                signingKey: $0,
+                sessionId: bundle.sid,
+                macTokenHash: macHash,
+                iosTokenHash: iosHash,
+                ttlSeconds: bundle.ttl
+            )
+        }
+        return MacRelayClientConfig(
             sid: bundle.sid,
             macTok: bundle.macTok,
-            macTokHashHex: sha256Hex(bundle.macTok),
-            iosTokHashHex: sha256Hex(bundle.iosTok),
+            macTokHashHex: macHash,
+            iosTokHashHex: iosHash,
             relayUrl: bundle.relayUrl,
             ttl: bundle.ttl,
-            ourPublicKeyBytes: ourPublicKeyBytes
+            ourPublicKeyBytes: ourPublicKeyBytes,
+            creationProof: creationProof
         )
     }
 }

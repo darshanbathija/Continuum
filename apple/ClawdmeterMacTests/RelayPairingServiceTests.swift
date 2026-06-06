@@ -23,9 +23,9 @@ final class RelayPairingServiceTests: XCTestCase {
         XCTAssertNil(service.bundleURL)
     }
 
-    func testBeginPairingProducesValidBundle() throws {
+    func testBeginPairingProducesValidBundle() async throws {
         let service = makeService()
-        service.beginPairing()
+        await service.beginPairing()
 
         XCTAssertEqual(service.phase, .readyButNotConnected)
         let bundle = try XCTUnwrap(service.bundle)
@@ -44,19 +44,20 @@ final class RelayPairingServiceTests: XCTestCase {
         XCTAssertEqual(bundle.macTok.count, 43)
         XCTAssertEqual(bundle.iosTok.count, 43)
         XCTAssertNotEqual(bundle.macTok, bundle.iosTok)
+        XCTAssertEqual(bundle.creationProof, Self.creationProof)
 
-        // The TTL is in the future and ≤ 15 minutes out.
+        // The TTL is in the future and within the relay's 31-day QR cap.
         let now = UInt64(Date().timeIntervalSince1970)
         XCTAssertGreaterThan(bundle.ttl, now)
-        XCTAssertLessThanOrEqual(bundle.ttl, now + 900 + 5) // 5s slack
+        XCTAssertLessThanOrEqual(bundle.ttl, now + 31 * 24 * 60 * 60)
 
         // The relay URL defaults to staging (no env override).
         XCTAssertEqual(bundle.relayUrl, RelayEnvironment.staging.baseURL)
     }
 
-    func testIPhoneCanDeriveMatchingSymmetricKey() throws {
+    func testIPhoneCanDeriveMatchingSymmetricKey() async throws {
         let service = makeService()
-        service.beginPairing()
+        await service.beginPairing()
 
         let macKeypair = try XCTUnwrap(service.keypairForTesting)
         let bundle = try XCTUnwrap(service.bundle)
@@ -82,9 +83,9 @@ final class RelayPairingServiceTests: XCTestCase {
         XCTAssertEqual(macK.count, 32)
     }
 
-    func testResetReturnsToUnpaired() throws {
+    func testResetReturnsToUnpaired() async throws {
         let service = makeService()
-        service.beginPairing()
+        await service.beginPairing()
         XCTAssertEqual(service.phase, .readyButNotConnected)
 
         service.reset()
@@ -94,13 +95,13 @@ final class RelayPairingServiceTests: XCTestCase {
         XCTAssertNil(service.keypairForTesting)
     }
 
-    func testRegeneratingProducesFreshBundle() throws {
+    func testRegeneratingProducesFreshBundle() async throws {
         let service = makeService()
-        service.beginPairing()
+        await service.beginPairing()
         let first = try XCTUnwrap(service.bundle)
         let firstKey = try XCTUnwrap(service.keypairForTesting).publicKeyBase64URL
 
-        service.beginPairing()
+        await service.beginPairing()
         let second = try XCTUnwrap(service.bundle)
         let secondKey = try XCTUnwrap(service.keypairForTesting).publicKeyBase64URL
 
@@ -111,7 +112,39 @@ final class RelayPairingServiceTests: XCTestCase {
         XCTAssertNotEqual(firstKey, secondKey)
     }
 
-    private func makeService() -> RelayPairingService {
-        RelayPairingService(processEnv: [:])
+    func testBeginPairingPersistsAPNSSigningKeyFromGrant() async throws {
+        let serviceName = "ai.continuum.test.apns.gateway.signing-key-\(UUID().uuidString)"
+        let provider = APNSGatewaySigningKeyProvider(keychainService: serviceName, processEnv: [:])
+        defer { provider.clear() }
+        let key = Data(repeating: 0x7a, count: 32)
+        let service = makeService(
+            grant: RelayPairingCreationGrant(
+                creation: Self.creationProof,
+                apnsSigningKey: RelayPairingBase64URL.encode(key)
+            ),
+            apnsSigningKeyProvider: provider
+        )
+
+        await service.beginPairing()
+
+        XCTAssertEqual(provider.signingKey(), key)
+        XCTAssertEqual(service.bundle?.apnsSigningKey, RelayPairingBase64URL.encode(key))
     }
+
+    private func makeService(
+        grant: RelayPairingCreationGrant = RelayPairingCreationGrant(creation: RelayPairingServiceTests.creationProof),
+        apnsSigningKeyProvider: APNSGatewaySigningKeyProvider? = nil
+    ) -> RelayPairingService {
+        RelayPairingService(
+            processEnv: [:],
+            creationGrantProvider: { _ in grant },
+            apnsSigningKeyProvider: apnsSigningKeyProvider
+        )
+    }
+
+    private static let creationProof = RelaySessionCreationProof(
+        issuedAtSeconds: 1_700_000_000,
+        nonce: "creation_nonce_123",
+        signature: "signature-placeholder"
+    )
 }

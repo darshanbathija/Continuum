@@ -68,6 +68,7 @@ public final class TmuxSupervisor {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 continue
             }
+            var handledServerExitInStream = false
             for await event in stream {
                 if Task.isCancelled { return }
                 switch event {
@@ -78,12 +79,13 @@ public final class TmuxSupervisor {
                     break  // Phase 4 wires these to registry sync
                 case .serverExited(let reason):
                     supervisorLogger.warning("tmux server exited: \(reason ?? "unknown") — marking sessions degraded")
+                    handledServerExitInStream = true
                     await markAllSessionsDegraded()
                     await attemptRestart()
                 }
             }
             // Stream finished without us cancelling — try to restart.
-            if !Task.isCancelled {
+            if !Task.isCancelled && !handledServerExitInStream {
                 await attemptRestart()
             }
         }

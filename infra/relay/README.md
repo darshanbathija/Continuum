@@ -21,8 +21,8 @@ The relay is intentionally dumb. It does THREE things and nothing else:
 | Method | Path                                           | Notes                                                                                                                         |
 | ------ | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | GET    | `/healthz`                                     | 200 ok JSON; CF health probe + smoke test                                                                                     |
-| GET    | `/v1/relay/sessions/:sid/connect`              | WebSocket upgrade. Auth via `Authorization: Bearer <tok>` OR `?token=<tok>` OR `Sec-WebSocket-Protocol: bearer.<tok>`. First peer MUST supply `?bundle=<base64-json-bundle>`. |
-| GET    | `/v1/relay/sessions/:sid/stats`                | JSON aggregate counts (sender role + type + bytes). NEVER body content. For audit + tests.                                    |
+| GET    | `/v1/relay/sessions/:sid/connect`              | WebSocket upgrade. Auth via `Authorization: Bearer <tok>` OR `?token=<tok>` OR `Sec-WebSocket-Protocol: bearer.<tok>`. First peer MUST supply a signed `?bundle=<base64-json-bundle>`. |
+| GET    | `/v1/relay/sessions/:sid/stats`                | Bearer-gated JSON aggregate counts (sender role + type + bytes). NEVER body content. For audit + tests.                      |
 
 `:sid` is 16-64 chars from `[A-Za-z0-9_-]`. Anything else 400s.
 
@@ -32,10 +32,23 @@ The QR generator (Mac side at pairing time) produces three things:
 - `sid` — random 128-bit session ID (URL-safe base64 or hex)
 - `macTok` + `iosTok` — two opaque 256-bit bearer tokens (one per peer)
 - `ttlSeconds` — absolute Unix timestamp after which the relay rejects all connections
+- `creation` — operator HMAC proof over `sid`, both token hashes, `ttlSeconds`, `issuedAtSeconds`, and a nonce
 
-The Mac is **always the first peer** in v1. On its first connect, it presents `?bundle=` containing `{ macTokenHash, iosTokenHash, ttlSeconds }` (each `*TokenHash` = SHA-256 hex of the raw bearer). The DO stores ONLY hashes — even an operator with full DO storage read access cannot recover the raw bearers.
+The Mac is **always the first peer** in v1. On its first connect, it presents `?bundle=` containing `{ macTokenHash, iosTokenHash, ttlSeconds, creation }` (each `*TokenHash` = SHA-256 hex of the raw bearer). The DO stores ONLY hashes — even an operator with full DO storage read access cannot recover the raw bearers.
+
+The `creation.signature` is:
+
+```
+base64url( HMAC-SHA256( RELAY_OPERATOR_SIGNING_KEY,
+  "relay-create:" + sid + ":" + macTokenHash + ":" + iosTokenHash + ":" +
+  ttlSeconds + ":" + issuedAtSeconds + ":" + nonce ) )
+```
+
+The proof is accepted only for a short window around `issuedAtSeconds`, so a copied bundle cannot authorize fresh arbitrary sessions indefinitely. The Worker mints creation grants only for callers that present `Authorization: Bearer <RELAY_CREATION_GRANT_TOKEN>`; without that bearer the grant endpoint is disabled as an operator signing oracle.
 
 Subsequent connections (Mac reconnecting, iOS connecting, iOS reconnecting) just present a bearer; no bundle needed.
+
+The `/stats` route is diagnostic metadata only and requires either peer's current bearer. Missing bearer returns `401`; bearer mismatch returns `403`.
 
 ### Envelope wire format
 
@@ -104,10 +117,13 @@ Covered by:
 - `test/relay.integration.test.ts → "Mac → iOS: one ciphertext envelope is fanned out unchanged"`
 - `test/relay.integration.test.ts → "bidirectional: iOS → Mac envelopes also fan out"`
 - `test/relay.integration.test.ts → "stats endpoint — counts only, no body content"` — explicit assertion that `JSON.stringify(stats)` does NOT contain the plaintext body bytes (the test plants the literal string `PLAINTEXT_THAT_MUST_NEVER_LEAK` in the envelope body and assert-greps the stats output for it).
+- `test/relay.integration.test.ts → "requires a valid session bearer for stats metadata"` — stats metadata is not anonymously readable.
 
 D22 (per-peer auth) covered by:
 - `test/auth.test.ts → "rejects a token that matches neither side"`
 - `test/auth.test.ts → "rejects when the two hashes are identical"`
+- `test/auth.test.ts → "accepts an operator-signed creation proof for the same sid and bundle"`
+- `test/auth.test.ts → "rejects an expired creation proof"`
 - `test/relay.integration.test.ts → "Mac token is rejected by the iOS role check"`
 - `test/relay.integration.test.ts → "a malicious bundle with mac==ios hashes is rejected"`
 
@@ -131,7 +147,7 @@ bun install     # or npm install
 bun run dev     # wrangler dev — http://localhost:8787
 ```
 
-The dev env uses in-memory DOs and dummy KV namespaces; secrets are placeholders. Suitable for integration testing against a local Mac/iOS simulator.
+The dev env uses in-memory DOs and dummy KV namespaces; secrets are placeholders. Suitable for integration testing against a local Mac/iOS simulator. Staging/production must set `RELAY_OPERATOR_SIGNING_KEY` and `RELAY_CREATION_GRANT_TOKEN` with `wrangler secret put`; Macs that call the grant endpoint need the matching `CLAWDMETER_RELAY_CREATION_GRANT_TOKEN`. Local operator Macs may instead set `CLAWDMETER_RELAY_OPERATOR_SIGNING_KEY` to sign directly when the grant endpoint is unavailable.
 
 ## Test
 

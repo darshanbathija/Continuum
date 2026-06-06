@@ -5,7 +5,7 @@ export interface Env {
   // ---- KV namespaces ----
   /** 90-day TTL audit trail. Entry shape in audit-log.ts. */
   APNS_AUDIT_LOG: KVNamespace;
-  /** Per-device hourly counter. Key = `rl:<deviceTokenHash>:<hourBucket>`. */
+  /** Per verified sender identity hourly counter. Key = `rl:<subjectHash>:<hourBucket>`. */
   APNS_RATE_LIMIT: KVNamespace;
   /**
    * Hashed-device-token → pairing-session-id registry (codex #5 tenant
@@ -18,6 +18,7 @@ export interface Env {
   ENVIRONMENT: "development" | "staging" | "production" | "canary";
   LOG_LEVEL: "debug" | "info" | "warn" | "error";
   RATE_LIMIT_PER_HOUR: string;
+  APNS_BEARER_TTL_SECONDS: string;
   APNS_ENDPOINT: string;
   TOPIC_ENV: "sandbox" | "production";
   APNS_DISABLED: string;
@@ -52,6 +53,11 @@ export function isKillSwitchOn(env: Env): boolean {
 export function rateLimitPerHour(env: Env): number {
   const n = Number.parseInt(env.RATE_LIMIT_PER_HOUR ?? "60", 10);
   return Number.isFinite(n) && n > 0 ? n : 60;
+}
+
+export function bearerTtlSeconds(env: Env): number {
+  const n = Number.parseInt(env.APNS_BEARER_TTL_SECONDS ?? "300", 10);
+  return Number.isFinite(n) && n > 0 ? n : 300;
 }
 
 export function deviceTokenTtlSeconds(env: Env): number {

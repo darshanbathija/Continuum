@@ -19,7 +19,7 @@ public struct APNSGatewayPushRequest: Codable, Sendable, Equatable {
     /// The Worker NEVER decrypts; only the paired iPhone has the key.
     public let encryptedPayload: String
 
-    /// APNS topic — `com.clawdmeter.iphone` in production. The Worker rejects
+    /// APNS topic — `ai.continuum.ios` in production. The Worker rejects
     /// any topic that doesn't match its operator-configured value
     /// (`APNS_TOPIC_PRODUCTION`/`APNS_TOPIC_SANDBOX`).
     public let topic: String

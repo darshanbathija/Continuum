@@ -92,7 +92,7 @@ public final class DoneDetector: @unchecked Sendable {
             }
         }
 
-        if type == "tool_result" || type == "tool_use_result" {
+        if containsToolResult(event) {
             // A tool just returned — clear the pending flag. Also check for
             // `git commit` exit 0 as signal (b) within the same turn.
             hasPendingToolCall = false
@@ -150,18 +150,56 @@ public final class DoneDetector: @unchecked Sendable {
     private func isSuccessfulGitCommit(_ event: [String: Any]) -> Bool {
         if let isError = event["is_error"] as? Bool, isError { return false }
         // Content may be string or array of blocks.
-        if let s = event["content"] as? String {
-            return s.contains("git commit") || s.contains("[main") || s.contains("master ")
+        if containsGitCommitSuccessText(event["content"]) { return true }
+        if let message = event["message"] as? [String: Any],
+           containsGitCommitSuccessText(message["content"]) {
+            return true
         }
-        if let blocks = event["content"] as? [[String: Any]] {
-            for block in blocks {
-                if let text = block["text"] as? String,
-                   text.contains("git commit") || text.contains("[main") || text.contains("master ") {
-                    return true
-                }
+        return false
+    }
+
+    private func containsToolResult(_ event: [String: Any]) -> Bool {
+        let type = event["type"] as? String
+        if type == "tool_result" || type == "tool_use_result" {
+            return true
+        }
+        if containsToolResultBlock(event["content"]) {
+            return true
+        }
+        if let message = event["message"] as? [String: Any],
+           containsToolResultBlock(message["content"]) {
+            return true
+        }
+        return false
+    }
+
+    private func containsToolResultBlock(_ content: Any?) -> Bool {
+        guard let blocks = content as? [[String: Any]] else { return false }
+        return blocks.contains { block in
+            let type = block["type"] as? String
+            return type == "tool_result" || type == "tool_use_result"
+        }
+    }
+
+    private func containsGitCommitSuccessText(_ content: Any?) -> Bool {
+        if let text = content as? String {
+            return isGitCommitSuccessText(text)
+        }
+        guard let blocks = content as? [[String: Any]] else { return false }
+        for block in blocks {
+            if let isError = block["is_error"] as? Bool, isError { continue }
+            if let text = block["text"] as? String, isGitCommitSuccessText(text) {
+                return true
+            }
+            if let nested = block["content"], containsGitCommitSuccessText(nested) {
+                return true
             }
         }
         return false
+    }
+
+    private func isGitCommitSuccessText(_ text: String) -> Bool {
+        text.contains("git commit") || text.contains("[main") || text.contains("master ")
     }
 
     private func extractAssistantContent(_ event: [String: Any]) -> [[String: Any]] {

@@ -279,8 +279,15 @@ struct EmptyStateCenteredComposer: View {
             // 80-char `goal` slice. tmux-based sessions restage below into
             // the final per-session/worktree directory before /send.
             var stagedPaths: [URL] = []
+            var pendingStagingDir: URL?
+            defer {
+                if let pendingStagingDir {
+                    AttachmentStaging.cleanupPendingStagingDir(pendingStagingDir)
+                }
+            }
             if !store.attachments.isEmpty || !selectedSourceIds.isEmpty || !unavailableSourceIds.isEmpty {
                 let dir = try AttachmentStaging.makePendingStagingDir()
+                pendingStagingDir = dir
                 for att in store.attachments {
                     if let staged = try? AttachmentStaging.stage(source: att.sourceURL, into: dir, attachmentId: att.id) {
                         stagedPaths.append(staged)

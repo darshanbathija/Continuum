@@ -1,14 +1,21 @@
 {
   "name": "session-bundle-001",
   "kind": "session-bundle",
-  "description": "Auth bundle the first peer presents on ?bundle=<base64-json>. Swift encodes identical fields.",
+  "description": "Operator-signed auth bundle the first peer presents on ?bundle=<base64-json>. Swift encodes identical fields.",
+  "session_id": "session-bundle-001",
   "raw_mac_token_ascii": "mac-token-001",
   "raw_ios_token_ascii": "ios-token-001",
+  "creation_message": "relay-create:session-bundle-001:0f33eadb14a9bd7132fa141825fb1ed88b92a657503532b4da3b47ee6df0b1b7:24f1624e0545afb7ffc4d544c49f94706c1c5aea3f43a063ff81f5aabd47f2b2:1735689600:1735689300:creation_nonce_001",
   "bundle_object": {
-    "macTokenHash": "0f33eadb14a9bd7132fa141825fb1ed88b92a657503532b4da3b47ee6df0b1b7",
+    "creation": {
+      "issuedAtSeconds": 1735689300,
+      "nonce": "creation_nonce_001",
+      "signature": "5GnK5eygKrZ5Pn1UtkXdaJlC8bHkWPjOtf_Yt9AvKTY"
+    },
     "iosTokenHash": "24f1624e0545afb7ffc4d544c49f94706c1c5aea3f43a063ff81f5aabd47f2b2",
+    "macTokenHash": "0f33eadb14a9bd7132fa141825fb1ed88b92a657503532b4da3b47ee6df0b1b7",
     "ttlSeconds": 1735689600
   },
-  "expected_bundle_json": "{\"macTokenHash\":\"0f33eadb14a9bd7132fa141825fb1ed88b92a657503532b4da3b47ee6df0b1b7\",\"iosTokenHash\":\"24f1624e0545afb7ffc4d544c49f94706c1c5aea3f43a063ff81f5aabd47f2b2\",\"ttlSeconds\":1735689600}",
-  "expected_bundle_base64": "eyJtYWNUb2tlbkhhc2giOiIwZjMzZWFkYjE0YTliZDcxMzJmYTE0MTgyNWZiMWVkODhiOTJhNjU3NTAzNTMyYjRkYTNiNDdlZTZkZjBiMWI3IiwiaW9zVG9rZW5IYXNoIjoiMjRmMTYyNGUwNTQ1YWZiN2ZmYzRkNTQ0YzQ5Zjk0NzA2YzFjNWFlYTNmNDNhMDYzZmY4MWY1YWFiZDQ3ZjJiMiIsInR0bFNlY29uZHMiOjE3MzU2ODk2MDB9"
+  "expected_bundle_json": "{\"creation\":{\"issuedAtSeconds\":1735689300,\"nonce\":\"creation_nonce_001\",\"signature\":\"5GnK5eygKrZ5Pn1UtkXdaJlC8bHkWPjOtf_Yt9AvKTY\"},\"iosTokenHash\":\"24f1624e0545afb7ffc4d544c49f94706c1c5aea3f43a063ff81f5aabd47f2b2\",\"macTokenHash\":\"0f33eadb14a9bd7132fa141825fb1ed88b92a657503532b4da3b47ee6df0b1b7\",\"ttlSeconds\":1735689600}",
+  "expected_bundle_base64": "eyJjcmVhdGlvbiI6eyJpc3N1ZWRBdFNlY29uZHMiOjE3MzU2ODkzMDAsIm5vbmNlIjoiY3JlYXRpb25fbm9uY2VfMDAxIiwic2lnbmF0dXJlIjoiNUduSzVleWdLclo1UG4xVXRrWGRhSmxDOGJIa1dQak90Zl9ZdDlBdktUWSJ9LCJpb3NUb2tlbkhhc2giOiIyNGYxNjI0ZTA1NDVhZmI3ZmZjNGQ1NDRjNDlmOTQ3MDZjMWM1YWVhM2Y0M2EwNjNmZjgxZjVhYWJkNDdmMmIyIiwibWFjVG9rZW5IYXNoIjoiMGYzM2VhZGIxNGE5YmQ3MTMyZmExNDE4MjVmYjFlZDg4YjkyYTY1NzUwMzUzMmI0ZGEzYjQ3ZWU2ZGYwYjFiNyIsInR0bFNlY29uZHMiOjE3MzU2ODk2MDB9"
 }

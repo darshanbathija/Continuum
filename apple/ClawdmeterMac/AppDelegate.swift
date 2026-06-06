@@ -45,9 +45,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         claude: Bool,
         codex: Bool,
         gemini: Bool,
+        cursor: Bool,
         opencode: Bool,
-        grok: Bool,
-        cursor: Bool
+        grok: Bool
     )?
 
     /// Notification posted by the menu bar popover's "Show dashboard" button.
@@ -312,16 +312,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let cursorShown = (defaults.object(forKey: ProviderStatusController.prefKey("cursor")) as? Bool ?? false)
             && ProviderEnablement.isEnabled("cursor")
         // Perf: this fires on every app-wide defaults write via
-        // `didChangeNotification`; bail unless one of the menu-bar keys
+        // `didChangeNotification`; bail unless one of the provider menu-bar keys
         // actually moved so we don't re-toggle every NSStatusItem on
         // unrelated pref changes.
         let next = (
             claude: claudeShown,
             codex: codexShown,
             gemini: geminiShown,
+            cursor: cursorShown,
             opencode: opencodeShown,
-            grok: grokShown,
-            cursor: cursorShown
+            grok: grokShown
         )
         guard lastAppliedVisibility == nil || lastAppliedVisibility! != next else { return }
         lastAppliedVisibility = next

@@ -18,7 +18,7 @@ import {
   hashDeviceToken,
   purgeDeviceToken,
 } from "./device-tokens.js";
-import { checkRateLimit } from "./rate-limit.js";
+import { checkRateLimit, rateLimitSubjectHash } from "./rate-limit.js";
 import {
   validateOptOutRequest,
   validatePushRequest,
@@ -104,7 +104,7 @@ async function handlePush(req: Request, hc: HandlerContext): Promise<Response> {
   const auth = await verifyBearer(env, req.headers.get("authorization"), {
     sessionId: push.sessionId,
     senderMacFingerprint: push.senderMacFingerprint,
-  });
+  }, nowSeconds);
   if (!auth.ok) {
     await writeAudit(
       env,
@@ -121,6 +121,43 @@ async function handlePush(req: Request, hc: HandlerContext): Promise<Response> {
 
   // Hash the device token before ANY persistence (codex #5 storage rule).
   const deviceTokenHash = await hashDeviceToken(push.deviceToken);
+
+  // Rate limit is bound to the verified auth identity, not the supplied APNS
+  // device token. Otherwise a stolen bearer could rotate fake tokens to bypass
+  // a per-token quota before APNS rejects them.
+  const rateSubjectHash = await rateLimitSubjectHash(push.sessionId, push.senderMacFingerprint);
+  const decision = await checkRateLimit(env, rateSubjectHash, nowSeconds);
+  if (!decision.allowed) {
+    await writeAudit(
+      env,
+      makeAuditEntry(env, {
+        outcome: "rejected-rate-limit",
+        requestId,
+        deviceTokenHash,
+        senderMacFingerprint: push.senderMacFingerprint,
+        sessionId: push.sessionId,
+        reason: `used ${decision.used}/${decision.limit} in current hour`,
+      }),
+    );
+    return new Response(
+      JSON.stringify({
+        error: "rate-limited",
+        reason: `sender identity exceeded ${decision.limit}/hour`,
+        retry_after_seconds: decision.resetSeconds,
+      }),
+      {
+        status: 429,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "x-request-id": requestId,
+          "retry-after": String(decision.resetSeconds),
+          "x-ratelimit-limit": String(decision.limit),
+          "x-ratelimit-remaining": String(Math.max(0, decision.limit - decision.used)),
+          "x-ratelimit-reset": String(nowSeconds + decision.resetSeconds),
+        },
+      },
+    );
+  }
 
   // Tenant binding (codex #5). First push registers the token under the
   // session; subsequent pushes must come from the same session.
@@ -147,40 +184,6 @@ async function handlePush(req: Request, hc: HandlerContext): Promise<Response> {
       403,
       { error: "forbidden", reason: "device token bound to a different pairing session" },
       requestId,
-    );
-  }
-
-  // Rate limit (D21 mitigation suite — 60/h/device).
-  const decision = await checkRateLimit(env, deviceTokenHash, nowSeconds);
-  if (!decision.allowed) {
-    await writeAudit(
-      env,
-      makeAuditEntry(env, {
-        outcome: "rejected-rate-limit",
-        requestId,
-        deviceTokenHash,
-        senderMacFingerprint: push.senderMacFingerprint,
-        sessionId: push.sessionId,
-        reason: `used ${decision.used}/${decision.limit} in current hour`,
-      }),
-    );
-    return new Response(
-      JSON.stringify({
-        error: "rate-limited",
-        reason: `device exceeded ${decision.limit}/hour`,
-        retry_after_seconds: decision.resetSeconds,
-      }),
-      {
-        status: 429,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "x-request-id": requestId,
-          "retry-after": String(decision.resetSeconds),
-          "x-ratelimit-limit": String(decision.limit),
-          "x-ratelimit-remaining": String(Math.max(0, decision.limit - decision.used)),
-          "x-ratelimit-reset": String(nowSeconds + decision.resetSeconds),
-        },
-      },
     );
   }
 
@@ -396,16 +399,19 @@ async function handleHealth(hc: HandlerContext): Promise<Response> {
   const issuedAt = Number.parseInt(issuedAtRaw, 10);
   const p8AgeSeconds = Number.isFinite(issuedAt) && issuedAt > 0 ? nowSeconds - issuedAt : null;
   const maxAge = p8MaxAgeSeconds(env);
-  const p8Stale = p8AgeSeconds !== null && p8AgeSeconds > maxAge;
+  const p8IssuedAtValid = p8AgeSeconds !== null && p8AgeSeconds >= 0;
+  const p8Stale = p8IssuedAtValid && p8AgeSeconds > maxAge;
+  const ok = p8IssuedAtValid && !p8Stale;
 
   return jsonResponse(
-    p8Stale ? 503 : 200,
+    ok ? 200 : 503,
     {
-      ok: !p8Stale,
+      ok,
       env: env.ENVIRONMENT,
       killSwitch: isKillSwitchOn(env),
       apnsEndpoint: env.APNS_ENDPOINT,
       topicEnv: env.TOPIC_ENV,
+      p8IssuedAtValid,
       p8AgeSeconds,
       p8MaxAgeSeconds: maxAge,
       p8Stale,

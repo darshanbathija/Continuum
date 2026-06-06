@@ -2,6 +2,10 @@ import XCTest
 @testable import ClawdmeterShared
 
 final class UIPrimitivesTests: XCTestCase {
+    func testChimeSettingsDefaultPackIsAudible() {
+        XCTAssertEqual(ChimeSettings().pack, .bell)
+    }
+
     func testCommandRegistryFiltersByTitleSubtitleAndKeywords() {
         let registry = ClawdmeterCommandRegistry(commands: [
             .init(id: "nav.code", title: "Open Code", subtitle: "Sessions", keywords: ["workbench"], scope: .global, kind: .navigation),

@@ -47,10 +47,12 @@ public final class AgentControlClient: ObservableObject {
     @Published public private(set) var workspaces: [CodeWorkspaceRecord] = []
     @Published public private(set) var lastPolledAt: Date?
     @Published public private(set) var lastError: String?
+    @Published public private(set) var lastHTTPStatusCode: Int?
     @Published public private(set) var isDesktopEventSyncConnected: Bool = false
     @Published public private(set) var desktopEventSyncLastEventAt: Date?
     @Published public private(set) var desktopEventSyncLastError: String?
     @Published public private(set) var desktopEventSyncLastSeq: UInt64 = 0
+    @Published public private(set) var relayActive: Bool = false
     /// Sessions v2 Phase 0: fetched from `GET /models`. Defaults to the
     /// bundled catalog so the iOS UI works while paired Mac is unreachable.
     @Published public private(set) var modelCatalog: ModelCatalog = .bundled
@@ -74,7 +76,12 @@ public final class AgentControlClient: ObservableObject {
     /// request routes through the mux correlator instead of a direct URLSession
     /// call. Set by the iOS app via bindAgentClient alongside relayMux; nil ⇒
     /// the direct URLSession path runs byte-identically.
-    @MainActor public var relayRequestClient: RelayMuxRequestClient?
+    @MainActor public var relayRequestClient: RelayMuxRequestClient? {
+        didSet {
+            relayActive = relayRequestClient != nil
+            isConfigured = hasDirectPairingConfig || relayActive
+        }
+    }
 
     /// Instance-level overrides for pairing config. Set by the
     /// explicit-arg init; nil for the UserDefaults-backed path. The
@@ -83,6 +90,7 @@ public final class AgentControlClient: ObservableObject {
     private let httpPortOverride: Int?
     private let wsPortOverride: Int?
     private let tokenOverride: String?
+    private let urlSession: URLSession
     private var desktopEventSyncTask: Task<Void, Never>?
     private var desktopEventResyncTask: Task<Void, Never>?
 
@@ -96,11 +104,12 @@ public final class AgentControlClient: ObservableObject {
 
     /// UserDefaults-backed init — the existing iOS path. Reads pairing
     /// from `UserDefaults.standard`. `setPairing(...)` writes those keys.
-    public init() {
+    public init(urlSession: URLSession = .shared) {
         self.hostOverride = nil
         self.httpPortOverride = nil
         self.wsPortOverride = nil
         self.tokenOverride = nil
+        self.urlSession = urlSession
         self.isConfigured = (UserDefaults.standard.string(forKey: Self.hostKey) != nil
                              && UserDefaults.standard.string(forKey: Self.tokenKey) != nil)
     }
@@ -122,11 +131,12 @@ public final class AgentControlClient: ObservableObject {
     /// NOT touch UserDefaults — pairing values are held in-memory for
     /// this instance only. `setPairing(...)` is a no-op on instances
     /// constructed this way.
-    public init(host: String, httpPort: Int, wsPort: Int, token: String) {
+    public init(host: String, httpPort: Int, wsPort: Int, token: String, urlSession: URLSession = .shared) {
         self.hostOverride = host
         self.httpPortOverride = httpPort
         self.wsPortOverride = wsPort
         self.tokenOverride = token
+        self.urlSession = urlSession
         self.isConfigured = true
     }
 
@@ -498,6 +508,10 @@ public final class AgentControlClient: ObservableObject {
     public var token: String? {
         tokenOverride ?? UserDefaults.standard.string(forKey: Self.tokenKey)
     }
+
+    private var hasDirectPairingConfig: Bool {
+        host != nil && token != nil
+    }
     // v0.27.0: designPort + designToken accessors removed along with the
     // Design tab + DesignPortForwarder.
 
@@ -530,18 +544,31 @@ public final class AgentControlClient: ObservableObject {
             UserDefaults.standard.removeObject(forKey: key)
         }
         DispatchQueue.main.async {
-            self.isConfigured = false
+            self.isConfigured = self.relayActive
         }
     }
 
     // MARK: - REST
 
     private func makeRequest(path: String, method: String = "GET", body: Data? = nil) -> URLRequest? {
-        guard let host, let token else { return nil }
-        guard let url = URL(string: "http://\(Self.urlHostLiteral(host)):\(httpPort)\(path)") else { return nil }
+        let url: URL
+        let bearerToken: String?
+        if let host, let token {
+            guard let directURL = URL(string: "http://\(Self.urlHostLiteral(host)):\(httpPort)\(path)") else { return nil }
+            url = directURL
+            bearerToken = token
+        } else if relayActive {
+            guard let relayURL = URL(string: "http://relay.invalid\(path)") else { return nil }
+            url = relayURL
+            bearerToken = nil
+        } else {
+            return nil
+        }
         var req = URLRequest(url: url)
         req.httpMethod = method
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let bearerToken {
+            req.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
         if let body {
             req.httpBody = body
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -564,6 +591,18 @@ public final class AgentControlClient: ObservableObject {
         if path.hasPrefix("/vendor-provisioning/") {
             return path == "/vendor-provisioning/check-device" ? 75 : 20
         }
+        if path.range(of: #"^/sessions/[0-9A-Fa-f-]{8}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{12}/create-pr(?:\?|$)"#, options: .regularExpression) != nil {
+            return 75
+        }
+        if path.range(of: #"^/sessions/[0-9A-Fa-f-]{8}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{12}/pr/review(?:\?|$)"#, options: .regularExpression) != nil {
+            return 75
+        }
+        if path.range(of: #"^/sessions/[0-9A-Fa-f-]{8}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{12}/merge(?:\?|$)"#, options: .regularExpression) != nil {
+            return 110
+        }
+        if path.range(of: #"^/sessions/[0-9A-Fa-f-]{8}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{12}/approve-plan(?:\?|$)"#, options: .regularExpression) != nil {
+            return 45
+        }
         switch path {
         case "/workspaces/open-local":   return 300  // matches daemon's NSOpenPanel cap
         case "/workspaces/from-github":  return 300  // matches ShellRunner gh-clone cap
@@ -582,6 +621,10 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
+    static func timeoutForPathForTesting(_ path: String) -> TimeInterval {
+        timeoutForPath(path)
+    }
+
     /// Wrap raw IPv6 literals in brackets so `URL(string:)` parses the
     /// authority correctly. RFC 3986 requires `[fd7a:...]:port` form, but
     /// the Tailscale `tailscale ip -6` output and the pairing URL's
@@ -591,6 +634,11 @@ public final class AgentControlClient: ObservableObject {
         if host.hasPrefix("[") { return host }
         if host.contains(":") { return "[\(host)]" }
         return host
+    }
+
+    @MainActor
+    public func clearLastHTTPStatusCode() {
+        lastHTTPStatusCode = nil
     }
 
     private enum ClientHTTPError: LocalizedError {
@@ -608,8 +656,10 @@ public final class AgentControlClient: ObservableObject {
     }
 
     private func sendChecked(_ request: URLRequest) async throws -> Data {
+        lastHTTPStatusCode = nil
         let (data, response) = try await runRequest(request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            lastHTTPStatusCode = http.statusCode
             throw ClientHTTPError.badStatus(http.statusCode, http.value(forHTTPHeaderField: "Retry-After"))
         }
         return data
@@ -622,15 +672,26 @@ public final class AgentControlClient: ObservableObject {
         // HTTPURLResponse from the relay reply — sendChecked's 2xx gate is
         // unchanged. nil relayRequestClient ⇒ the direct URLSession path below.
         if let relay = await relayRequestClient, let url = request.url {
-            return try await runRequestViaRelay(request, url: url, relay: relay)
+            do {
+                return try await runRequestViaRelay(request, url: url, relay: relay)
+            } catch {
+                guard let directRequest = directFallbackRequest(for: request) else { throw error }
+                clientLogger.debug("relay request failed; retrying direct daemon path: \(error.localizedDescription)")
+                return try await runDirectRequest(directRequest)
+            }
         }
+
+        return try await runDirectRequest(request)
+    }
+
+    private func runDirectRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
         struct NetResult: Sendable {
             let data: Data
             let response: URLResponse
         }
 
         let result: NetResult = try await withCheckedThrowingContinuation { continuation in
-            let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            let task = urlSession.dataTask(with: request) { data, response, error in
                 if let error {
                     continuation.resume(throwing: error)
                 } else if let data, let response {
@@ -644,6 +705,22 @@ public final class AgentControlClient: ObservableObject {
         return (result.data, result.response)
     }
 
+    private func directFallbackRequest(for request: URLRequest) -> URLRequest? {
+        guard let host, let token, let requestURL = request.url else { return nil }
+        let comps = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)
+        var path = comps?.path ?? requestURL.path
+        if let query = comps?.query, !query.isEmpty {
+            path += "?\(query)"
+        }
+        guard let directURL = URL(string: "http://\(Self.urlHostLiteral(host)):\(httpPort)\(path)") else {
+            return nil
+        }
+        var direct = request
+        direct.url = directURL
+        direct.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return direct
+    }
+
     /// Track B (B1.7): perform one request over the relay correlator and
     /// synthesize the (Data, HTTPURLResponse) tuple callers expect. Path carries
     /// the query string so daemon endpoints that read query params still work.
@@ -654,7 +731,12 @@ public final class AgentControlClient: ObservableObject {
         var path = comps?.path ?? url.path
         if let q = comps?.query, !q.isEmpty { path += "?\(q)" }
         let method = request.httpMethod ?? "GET"
-        let resp = try await relay.request(method: method, path: path, body: request.httpBody)
+        let resp = try await relay.request(
+            method: method,
+            path: path,
+            body: request.httpBody,
+            timeout: request.timeoutInterval
+        )
         guard let http = HTTPURLResponse(
             url: url, statusCode: resp.status, httpVersion: "HTTP/1.1", headerFields: nil
         ) else {
@@ -781,6 +863,11 @@ public final class AgentControlClient: ObservableObject {
 
     // MARK: - Desktop event sync
 
+    /// Relay event-stream watchdog. If the relay `events` subscription
+    /// produces no frames for this long, unsubscribe and try the direct
+    /// WebSocket path when pairing data exists.
+    public static var desktopEventRelayStalenessThreshold: TimeInterval = 45
+
     /// Keep the iOS/macOS client mirror aligned with the paired Mac's live
     /// session registry. The daemon already exposes an `events` WebSocket
     /// with cursor replay; this loop consumes it and uses HTTP refreshes as
@@ -804,15 +891,17 @@ public final class AgentControlClient: ObservableObject {
 
     @MainActor
     private func runDesktopEventSyncLoop() async {
-        // Track B (B1): drive the events stream over the relay multiplex when
-        // it's the default transport. The mux + IOSRelayClient own reconnect
-        // (resubscribeAll), so we subscribe once and park; nil ⇒ legacy WS loop.
-        if let mux = relayMux {
-            await runEventsViaRelay(mux)
-            return
-        }
         var attempt = 0
         while !Task.isCancelled {
+            // Track B (B1): prefer relay events, but do not park forever if
+            // the mux stream stalls. A stale relay pass returns here, then
+            // the existing direct WS path below gets one chance before the
+            // loop retries the best current transport.
+            if let mux = relayMux {
+                await runEventsViaRelay(mux)
+                if Task.isCancelled { break }
+            }
+
             guard let host, let token else {
                 isDesktopEventSyncConnected = false
                 desktopEventSyncLastError = "Not paired with a Mac."
@@ -844,24 +933,38 @@ public final class AgentControlClient: ObservableObject {
 
     /// Track B (B1): drive the `events` stream over the relay multiplex.
     /// Subscribe with a `since` cursor, decode each AgentEvent off the SAME
-    /// applyDesktopSyncEvent path, park until cancelled, then unsubscribe. The
-    /// mux + IOSRelayClient own reconnect; events stay ordered because the relay
-    /// + mux preserve frame order and the apply path dedups by sequence.
+    /// applyDesktopSyncEvent path, and park until cancelled, ended, or stale.
+    /// The outer loop then falls back to direct WS when available.
     @MainActor
     private func runEventsViaRelay(_ mux: RelayMuxClient) async {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         isDesktopEventSyncConnected = true
         desktopEventSyncLastError = nil
+        var lastRelayFrameAt = Date()
+        var relayEnded = false
         let spec = RelaySubscribeSpec(op: "events", since: desktopEventSyncLastSeq)
         let opId = await mux.subscribe(spec, handlers: .init(
             onFrame: { [weak self] data in
                 guard let self, let event = try? decoder.decode(AgentEvent.self, from: data) else { return }
+                lastRelayFrameAt = Date()
                 Task { @MainActor in await self.applyDesktopSyncEvent(event, scheduleAuthoritativeRefresh: true) }
+            },
+            onEnd: {
+                relayEnded = true
+            },
+            onError: { [weak self] error in
+                self?.desktopEventSyncLastError = error
+                relayEnded = true
             }
         ))
         while !Task.isCancelled {
-            do { try await Task.sleep(nanoseconds: 5_000_000_000) }
+            if relayEnded { break }
+            if Date().timeIntervalSince(lastRelayFrameAt) >= Self.desktopEventRelayStalenessThreshold {
+                desktopEventSyncLastError = "Relay event stream stale; trying direct WebSocket fallback."
+                break
+            }
+            do { try await Task.sleep(nanoseconds: 1_000_000_000) }
             catch { break }
         }
         await mux.unsubscribe(opId)
@@ -926,7 +1029,7 @@ public final class AgentControlClient: ObservableObject {
             if scheduleAuthoritativeRefresh {
                 scheduleDesktopEventAuthoritativeRefresh()
             }
-        case .sessionCreated, .statusChanged, .planReady, .doneDetected, .paused, .tmuxServerLost, .tmuxServerRecovered:
+        case .sessionCreated, .statusChanged, .planReady, .doneDetected, .paused, .tmuxServerLost, .tmuxServerRecovered, .unknown:
             if scheduleAuthoritativeRefresh {
                 scheduleDesktopEventAuthoritativeRefresh()
             }
@@ -1343,7 +1446,6 @@ public final class AgentControlClient: ObservableObject {
     /// already exists, the function returns it without re-fetching.
     @MainActor
     public func downloadArtifact(sessionId: UUID, remotePath: String, forceRefresh: Bool = false) async throws -> URL {
-        guard let host, let token else { throw ArtifactError.notPaired }
         let cacheDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("clawdmeter-artifacts/\(sessionId.uuidString)")
         try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
@@ -1358,14 +1460,11 @@ public final class AgentControlClient: ObservableObject {
             return localURL
         }
         var comps = URLComponents()
-        comps.scheme = "http"
-        comps.host = host
-        comps.port = httpPort
         comps.path = "/sessions/\(sessionId.uuidString)/artifact"
         comps.queryItems = [URLQueryItem(name: "path", value: remotePath)]
-        guard let url = comps.url else { throw ArtifactError.ioError("bad URL") }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let path = comps.string,
+              var req = makeRequest(path: path)
+        else { throw ArtifactError.notPaired }
         req.timeoutInterval = 30
         let (data, response) = try await runRequest(req)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
@@ -1380,7 +1479,6 @@ public final class AgentControlClient: ObservableObject {
     /// session worktree, but only after Markdown-specific size and text checks.
     @MainActor
     public func downloadMarkdownDocument(sessionId: UUID, remotePath: String, forceRefresh: Bool = false) async throws -> URL {
-        guard let host, let token else { throw ArtifactError.notPaired }
         let cacheDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("clawdmeter-markdown-documents/\(sessionId.uuidString)")
         try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
@@ -1392,14 +1490,11 @@ public final class AgentControlClient: ObservableObject {
             return localURL
         }
         var comps = URLComponents()
-        comps.scheme = "http"
-        comps.host = host
-        comps.port = httpPort
         comps.path = "/sessions/\(sessionId.uuidString)/markdown-document"
         comps.queryItems = [URLQueryItem(name: "path", value: remotePath)]
-        guard let url = comps.url else { throw ArtifactError.ioError("bad URL") }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let path = comps.string,
+              var req = makeRequest(path: path)
+        else { throw ArtifactError.notPaired }
         req.timeoutInterval = 30
         let (data, response) = try await runRequest(req)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {

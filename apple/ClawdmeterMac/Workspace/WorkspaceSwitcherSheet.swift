@@ -57,7 +57,7 @@ struct WorkspaceSwitcherSheet: View {
                     .focused($searchFocused)
                     .onSubmit { activateDefaultResult() }
                 Button("New") {
-                    model.showingNewSessionSheet = true
+                    model.prepareNewSession(in: nil)
                     isPresented = false
                 }
                 .buttonStyle(.bordered)
@@ -70,8 +70,7 @@ struct WorkspaceSwitcherSheet: View {
                    let repoKey = focusedSession.repoKey {
                     Section("Current Repo") {
                         Button {
-                            model.selectedRepoKey = repoKey
-                            model.showingNewSessionSheet = true
+                            openRepo(repoKey)
                             isPresented = false
                         } label: {
                             HStack(spacing: 8) {
@@ -96,9 +95,7 @@ struct WorkspaceSwitcherSheet: View {
                     Section("Sessions") {
                         ForEach(filteredSessions) { session in
                             Button {
-                                model.openOutsideJSONLPath = nil
-                                model.openSessionId = session.id
-                                isPresented = false
+                                openSession(session)
                             } label: {
                                 workspaceSessionRow(session)
                             }
@@ -110,9 +107,7 @@ struct WorkspaceSwitcherSheet: View {
                     Section("Repos") {
                         ForEach(filteredRepos, id: \.key) { repo in
                             Button {
-                                model.selectedRepoKey = repo.key
-                                model.showingNewSessionSheet = true
-                                isPresented = false
+                                openRepo(repo.key)
                             } label: {
                                 HStack(spacing: 8) {
                                     Image(systemName: "folder.fill")
@@ -175,14 +170,12 @@ struct WorkspaceSwitcherSheet: View {
     }
 
     private func openSession(_ session: AgentSession) {
-        model.openOutsideJSONLPath = nil
-        model.openSessionId = session.id
+        model.openSession(session)
         isPresented = false
     }
 
     private func openRepo(_ repoKey: String) {
-        model.selectedRepoKey = repoKey
-        model.showingNewSessionSheet = true
+        model.prepareNewSession(in: repoKey)
         isPresented = false
     }
 

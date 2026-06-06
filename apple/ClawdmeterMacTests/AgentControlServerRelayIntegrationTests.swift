@@ -78,6 +78,17 @@ final class AgentControlServerRelayIntegrationTests: XCTestCase {
         XCTAssertFalse(body?.isEmpty ?? true, "health endpoint should respond with a body")
     }
 
+    func testRelayDispatcherResponseEnvelopePreservesBinaryBody() throws {
+        let bytes = Data([0x00, 0xff, 0x80, 0x41])
+        let data = RelayRequestDispatcher.responseEnvelope(status: 200, body: bytes)
+        let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(envelope["status"] as? Int, 200)
+        XCTAssertEqual(envelope["bodyLength"] as? Int, bytes.count)
+        let bodyBase64 = try XCTUnwrap(envelope["bodyBase64"] as? String)
+        XCTAssertEqual(Data(base64Encoded: bodyBase64), bytes)
+    }
+
     // ───────────────────────────────────────────────────────────
     // Malformed op → 400 envelope
     // ───────────────────────────────────────────────────────────

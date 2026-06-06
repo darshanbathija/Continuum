@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { issueBearerToken, verifyBearer } from "../src/auth.js";
+import { deriveAPNSSessionSigningKey, issueBearerToken, verifyBearer } from "../src/auth.js";
 import { makeEnv } from "./helpers.js";
 
 describe("verifyBearer", () => {
@@ -7,6 +7,15 @@ describe("verifyBearer", () => {
     const env = await makeEnv();
     const claim = { sessionId: "s-1", senderMacFingerprint: "f-1" };
     const token = await issueBearerToken(env.RELAY_BEARER_SIGNING_KEY, claim);
+    const r = await verifyBearer(env, `Bearer ${token}`, claim);
+    expect(r.ok).toBe(true);
+  });
+
+  it("accepts a token issued with the pairing-derived session signing key", async () => {
+    const env = await makeEnv();
+    const claim = { sessionId: "s-1", senderMacFingerprint: "f-1" };
+    const sessionSigningKey = await deriveAPNSSessionSigningKey(env.RELAY_BEARER_SIGNING_KEY, claim);
+    const token = await issueBearerToken(sessionSigningKey, claim);
     const r = await verifyBearer(env, `Bearer ${token}`, claim);
     expect(r.ok).toBe(true);
   });
@@ -67,8 +76,32 @@ describe("verifyBearer", () => {
   it("is case-insensitive on the Bearer prefix", async () => {
     const env = await makeEnv();
     const claim = { sessionId: "s", senderMacFingerprint: "f" };
-    const token = await issueBearerToken(env.RELAY_BEARER_SIGNING_KEY, claim);
-    expect((await verifyBearer(env, `bearer ${token}`, claim)).ok).toBe(true);
-    expect((await verifyBearer(env, `BEARER ${token}`, claim)).ok).toBe(true);
+    const lowerToken = await issueBearerToken(env.RELAY_BEARER_SIGNING_KEY, claim);
+    const upperToken = await issueBearerToken(env.RELAY_BEARER_SIGNING_KEY, claim);
+    expect((await verifyBearer(env, `bearer ${lowerToken}`, claim)).ok).toBe(true);
+    expect((await verifyBearer(env, `BEARER ${upperToken}`, claim)).ok).toBe(true);
+  });
+
+  it("rejects an expired bearer", async () => {
+    const env = await makeEnv({ bearerTtlSeconds: 300 });
+    const claim = { sessionId: "s", senderMacFingerprint: "f" };
+    const token = await issueBearerToken(env.RELAY_BEARER_SIGNING_KEY, claim, {
+      issuedAtSeconds: 1000,
+      nonce: "expired_nonce_123",
+    });
+    const r = await verifyBearer(env, `Bearer ${token}`, claim, 1401);
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects replay of the same nonce-bearing token", async () => {
+    const env = await makeEnv();
+    const claim = { sessionId: "s", senderMacFingerprint: "f" };
+    const token = await issueBearerToken(env.RELAY_BEARER_SIGNING_KEY, claim, {
+      issuedAtSeconds: 1700000000,
+      nonce: "replay_nonce_123",
+    });
+    expect((await verifyBearer(env, `Bearer ${token}`, claim, 1700000010)).ok).toBe(true);
+    const replay = await verifyBearer(env, `Bearer ${token}`, claim, 1700000011);
+    expect(replay).toEqual({ ok: false, reason: "bearer nonce replay" });
   });
 });

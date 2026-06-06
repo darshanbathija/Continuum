@@ -29,7 +29,7 @@ public final class GeminiQuotaLiveActivityCoordinator: ObservableObject {
 
     public weak var client: AgentControlClient?
     public var bundleId: String {
-        Bundle.main.bundleIdentifier ?? "com.clawdmeter.iOS"
+        Bundle.main.bundleIdentifier ?? "ai.continuum.ios"
     }
 
     public init() {}

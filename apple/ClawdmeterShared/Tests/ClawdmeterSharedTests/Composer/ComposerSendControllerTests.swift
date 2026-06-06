@@ -8,12 +8,51 @@ import XCTest
 /// integration-tested separately.
 final class ComposerSendControllerTests: XCTestCase {
 
+    private final class ComposerURLProtocol: URLProtocol {
+        static var responder: ((URLRequest) -> (Int, Data))?
+
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+        override func startLoading() {
+            guard let responder = Self.responder else {
+                client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+                return
+            }
+            let (status, data) = responder(request)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: status,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+
+        override func stopLoading() {}
+    }
+
     private func makeClient() -> AgentControlClient {
         AgentControlClient(
             host: "127.0.0.1",
             httpPort: 21731,
             wsPort: 21732,
             token: "test-token"
+        )
+    }
+
+    private func makeClient(responder: @escaping (URLRequest) -> (Int, Data)) -> AgentControlClient {
+        ComposerURLProtocol.responder = responder
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ComposerURLProtocol.self]
+        return AgentControlClient(
+            host: "127.0.0.1",
+            httpPort: 21731,
+            wsPort: 21732,
+            token: "test-token",
+            urlSession: URLSession(configuration: config)
         )
     }
 
@@ -118,5 +157,23 @@ final class ComposerSendControllerTests: XCTestCase {
         refineController.text = "Refine this"
         await refineController.send(via: .refine(sessionId: sessionId))
         XCTAssertFalse(refineController.sending, "refine dispatch must reset sending")
+    }
+
+    @MainActor
+    func test_soloSendUsesBoolReturn_notLastErrorDelta() async {
+        let client = makeClient { _ in (500, Data()) }
+        let controller = ComposerSendController(client: client)
+        let sessionId = UUID()
+
+        controller.text = "first"
+        await controller.send(via: .solo(sessionId: sessionId))
+        XCTAssertEqual(controller.text, "first")
+        XCTAssertEqual(client.lastHTTPStatusCode, 500)
+
+        controller.text = "second"
+        await controller.send(via: .solo(sessionId: sessionId))
+
+        XCTAssertEqual(controller.text, "second", "A repeated identical client error must not be mistaken for success")
+        XCTAssertEqual(controller.lastError, "Daemon returned HTTP 500.")
     }
 }
