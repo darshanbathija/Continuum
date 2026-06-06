@@ -80,8 +80,10 @@ private struct ChatBody: View {
             await client.refreshSessions()
             await client.refreshModelCatalog()
             await client.refreshProviderDefaults()
+            let matrix = await client.fetchChatProviders()
+            providerMatrix = matrix
+            chatStore.applyEnabledVendorScope(ChatV2Store.enabledChatVendors(from: matrix?.enabledProviderIDs))
             chatStore.applyProviderDefaults(client.providerDefaults, catalog: client.modelCatalog)
-            providerMatrix = await client.fetchChatProviders()
         }
         .onChange(of: client.providerDefaults) { _, defaults in
             chatStore.applyProviderDefaults(defaults, catalog: client.modelCatalog)
@@ -798,38 +800,49 @@ private struct Composer: View {
     @ViewBuilder
     private var providerControls: some View {
         HStack(spacing: 6) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(store.selectedVendors, id: \.self) { vendor in
-                        Button {
-                            modelPickerVendor = vendor
-                            modelPickerPresented = true
-                        } label: {
-                            HStack(spacing: 5) {
-                                TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 12)
-                                Text(compactModelLabel(for: vendor) ?? vendor.displayName)
-                                    .font(TahoeFont.body(11.5, weight: .semibold))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .frame(maxWidth: 104, alignment: .leading)
+            if enabledVendors.isEmpty {
+                Text("Enable on Mac")
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg4)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.white.opacity(0.06), in: Capsule())
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(visibleSelectedVendors, id: \.self) { vendor in
+                            Button {
+                                modelPickerVendor = vendor
+                                modelPickerPresented = true
+                            } label: {
+                                HStack(spacing: 5) {
+                                    TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 12)
+                                    Text(compactModelLabel(for: vendor) ?? vendor.displayName)
+                                        .font(TahoeFont.body(11.5, weight: .semibold))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                        .frame(maxWidth: 104, alignment: .leading)
+                                }
+                                .foregroundStyle(isVendorAvailable(vendor) ? t.fg : t.fg4)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 7)
+                                .frame(maxWidth: 138, alignment: .leading)
+                                .background(Color.white.opacity(0.08), in: Capsule())
+                                .overlay(Capsule().stroke(vendor.backingProvider.tahoeProvider.dot.opacity(0.35), lineWidth: 0.5))
                             }
-                            .foregroundStyle(isVendorAvailable(vendor) ? t.fg : t.fg4)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 7)
-                            .frame(maxWidth: 138, alignment: .leading)
-                            .background(Color.white.opacity(0.08), in: Capsule())
-                            .overlay(Capsule().stroke(vendor.backingProvider.tahoeProvider.dot.opacity(0.35), lineWidth: 0.5))
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
+                    .padding(.vertical, 1)
                 }
-                .padding(.vertical, 1)
+                .frame(maxWidth: 168, alignment: .leading)
             }
-            .frame(maxWidth: 168, alignment: .leading)
 
             Button {
-                modelPickerVendor = firstConfigurableVendor
-                modelPickerPresented = true
+                if let vendor = firstConfigurableVendor {
+                    modelPickerVendor = vendor
+                    modelPickerPresented = true
+                }
             } label: {
                 TahoeIcon(store.selectedVendorCount < 3 ? "plus" : "sliders", size: 12)
                     .foregroundStyle(t.fg3)
@@ -837,6 +850,7 @@ private struct Composer: View {
                     .background(Color.white.opacity(0.06), in: Circle())
             }
             .buttonStyle(.plain)
+            .disabled(firstConfigurableVendor == nil)
         }
         .frame(maxWidth: 176, alignment: .leading)
     }
@@ -911,6 +925,7 @@ private struct Composer: View {
         if openTarget?.isReadOnlyTranscript == true { return "Archived transcript is read-only" }
         if openTarget?.isFrontier == true { return "Ask all selected…" }
         if openTarget != nil { return "Reply…" }
+        if enabledVendors.isEmpty { return "Enable a provider on your Mac…" }
         return store.selectedVendorCount == 1 ? "Ask \(store.primaryVendor.displayName)…" : "Ask selected providers…"
     }
 
@@ -943,14 +958,18 @@ private struct Composer: View {
             case .transcript:
                 return "Archived transcripts are read-only. Start a new chat to continue."
             case nil:
-                let selectedVendors = store.selectedVendors
+                let selectedVendors = visibleSelectedVendors
+                guard !selectedVendors.isEmpty else {
+                    return "Enable a provider in Continuum → Providers on your Mac."
+                }
                 let unavailableReasons = selectedVendors.compactMap { providerUnavailableReason($0) }
                 guard unavailableReasons.isEmpty else {
                     return unavailableReasons.joined(separator: "\n")
                 }
                 if selectedVendors.count >= 2 {
                     let slots = store.frontierSlots(catalog: client.modelCatalog).filter { slot in
-                        slot.chatVendor.map(isVendorAvailable(_:)) ?? isProviderAvailable(slot.provider)
+                        selectedVendors.contains { $0.backingProvider == slot.provider }
+                            && (slot.chatVendor.map(isVendorAvailable(_:)) ?? isProviderAvailable(slot.provider))
                     }
                     guard slots.count >= 2 else { return "At least two selected providers must be available." }
                     guard let created = await client.createBroadcastChat(slots: slots) else {
@@ -1003,6 +1022,7 @@ private struct Composer: View {
     }
 
     private func isProviderAvailable(_ provider: AgentKind) -> Bool {
+        guard enabledVendors.contains(where: { $0.backingProvider == provider }) else { return false }
         guard let entries = providerMatrix?.providers.filter({ $0.provider == provider }),
               !entries.isEmpty else {
             return true
@@ -1011,6 +1031,7 @@ private struct Composer: View {
     }
 
     private func isVendorAvailable(_ vendor: ChatVendor) -> Bool {
+        guard enabledVendors.contains(vendor) else { return false }
         let provider = vendor.backingProvider
         guard let entries = providerMatrix?.providers.filter({ $0.provider == provider }),
               !entries.isEmpty else {
@@ -1020,6 +1041,9 @@ private struct Composer: View {
     }
 
     private func providerUnavailableReason(_ vendor: ChatVendor) -> String? {
+        guard enabledVendors.contains(vendor) else {
+            return "Enable \(vendor.displayName) in Continuum → Providers on your Mac."
+        }
         guard !isVendorAvailable(vendor) else { return nil }
         let provider = vendor.backingProvider
         return providerMatrix?.providers.first { $0.provider == provider && !$0.capabilityProbePassed }?.reason
@@ -1033,10 +1057,21 @@ private struct Composer: View {
         return entry.supportsEffort
     }
 
-    private var firstConfigurableVendor: ChatVendor {
-        ChatV2Store.defaultChatVendorOrder.first { vendor in
+    private var firstConfigurableVendor: ChatVendor? {
+        enabledVendors.first { vendor in
             !store.isVendorSelected(vendor) && isVendorAvailable(vendor)
-        } ?? store.primaryVendor
+        } ?? visibleSelectedVendors.first
+    }
+
+    private var enabledVendors: [ChatVendor] {
+        ChatV2Store.enabledChatVendors(from: providerMatrix?.enabledProviderIDs)
+    }
+
+    private var visibleSelectedVendors: [ChatVendor] {
+        ChatV2Store.normalizedVendors(
+            store.selectedVendors.filter { enabledVendors.contains($0) },
+            enabledVendors: enabledVendors
+        )
     }
 
     private func compactModelLabel(for vendor: ChatVendor) -> String? {
@@ -1119,7 +1154,7 @@ private struct IOSChatModelSelectorSheet: View {
     @State private var refreshing = false
     @ObservedObject var store: ChatV2Store
     @ObservedObject var client: AgentControlClient
-    let providerMatrix: ChatProvidersResponse?
+    @State private var providerMatrix: ChatProvidersResponse?
 
     init(
         initialVendor: ChatVendor,
@@ -1130,7 +1165,7 @@ private struct IOSChatModelSelectorSheet: View {
         self._selectedVendor = State(initialValue: initialVendor)
         self.store = store
         self.client = client
-        self.providerMatrix = providerMatrix
+        self._providerMatrix = State(initialValue: providerMatrix)
     }
 
     var body: some View {
@@ -1163,42 +1198,55 @@ private struct IOSChatModelSelectorSheet: View {
                 }
             }
             .presentationDetents([.large])
+            .onAppear {
+                if !enabledVendors.contains(selectedVendor),
+                   let first = enabledVendors.first {
+                    selectedVendor = first
+                }
+                store.applyEnabledVendorScope(enabledVendors)
+            }
         }
     }
 
     private var vendorSection: some View {
         Section("Providers") {
-            ForEach(ChatV2Store.defaultChatVendorOrder, id: \.rawValue) { vendor in
-                Button {
-                    selectedVendor = vendor
-                } label: {
-                    HStack(spacing: 10) {
-                        TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 18)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(vendor.displayName)
-                                .font(TahoeFont.body(14, weight: .semibold))
-                                .foregroundStyle(t.fg)
-                            Text(isVendorAvailable(vendor) ? "Available" : (providerUnavailableReason(vendor) ?? "Unavailable"))
-                                .font(TahoeFont.body(11))
-                                .foregroundStyle(isVendorAvailable(vendor) ? t.fg3 : Color.orange)
-                        }
-                        Spacer()
-                        if selectedVendor == vendor {
-                            Text("Editing")
-                                .font(TahoeFont.body(10.5, weight: .semibold))
-                                .foregroundStyle(t.accent)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(t.accent.opacity(0.12), in: Capsule())
-                        }
-                        if store.isVendorSelected(vendor) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(t.accent)
+            if enabledVendors.isEmpty {
+                Text("Enable a provider in Continuum → Providers on your Mac.")
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(enabledVendors, id: \.rawValue) { vendor in
+                    Button {
+                        selectedVendor = vendor
+                    } label: {
+                        HStack(spacing: 10) {
+                            TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 18)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(vendor.displayName)
+                                    .font(TahoeFont.body(14, weight: .semibold))
+                                    .foregroundStyle(t.fg)
+                                Text(isVendorAvailable(vendor) ? "Available" : (providerUnavailableReason(vendor) ?? "Unavailable"))
+                                    .font(TahoeFont.body(11))
+                                    .foregroundStyle(isVendorAvailable(vendor) ? t.fg3 : Color.orange)
+                            }
+                            Spacer()
+                            if selectedVendor == vendor {
+                                Text("Editing")
+                                    .font(TahoeFont.body(10.5, weight: .semibold))
+                                    .foregroundStyle(t.accent)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(t.accent.opacity(0.12), in: Capsule())
+                            }
+                            if store.isVendorSelected(vendor) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(t.accent)
+                            }
                         }
                     }
+                    .listRowBackground(selectedVendor == vendor ? t.accent.opacity(0.08) : Color.clear)
+                    .disabled(!store.isVendorSelected(vendor) && !isVendorAvailable(vendor))
                 }
-                .listRowBackground(selectedVendor == vendor ? t.accent.opacity(0.08) : Color.clear)
-                .disabled(!store.isVendorSelected(vendor) && !isVendorAvailable(vendor))
             }
         }
     }
@@ -1221,44 +1269,52 @@ private struct IOSChatModelSelectorSheet: View {
         return "Add \(selectedVendor.displayName)"
     }
 
+    @ViewBuilder
     private var modelSection: some View {
-        let sections = ProviderModelPickerSupport.sections(
-            for: selectedVendor,
-            catalog: client.modelCatalog,
-            query: query
-        )
-        return Section("Model - \(selectedVendor.displayName)") {
-            if sections.isEmpty {
-                Text("No models match the search.")
+        if !enabledVendors.contains(selectedVendor) {
+            Section("Model") {
+                Text("Enable a provider on your Mac to choose models.")
                     .foregroundStyle(.secondary)
             }
-            ForEach(sections) { section in
-                if selectedVendor == .openrouter {
-                    Text(section.title)
-                        .font(TahoeFont.body(12, weight: .semibold))
+        } else {
+            let sections = ProviderModelPickerSupport.sections(
+                for: selectedVendor,
+                catalog: client.modelCatalog,
+                query: query
+            )
+            Section("Model - \(selectedVendor.displayName)") {
+                if sections.isEmpty {
+                    Text("No models match the search.")
                         .foregroundStyle(.secondary)
                 }
-                ForEach(section.entries) { entry in
-                    Button {
-                        selectModel(entry)
-                    } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.displayName)
-                                    .font(TahoeFont.body(14, weight: .semibold))
-                                    .foregroundStyle(t.fg)
-                                    .lineLimit(2)
-                                    .truncationMode(.middle)
-                                Text(ProviderModelPickerSupport.metadataLine(for: entry))
-                                    .font(TahoeFont.mono(11))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                                badges(for: entry)
-                            }
-                            Spacer()
-                            if store.model(for: selectedVendor, catalog: client.modelCatalog) == entry.id {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(t.accent)
+                ForEach(sections) { section in
+                    if selectedVendor == .openrouter {
+                        Text(section.title)
+                            .font(TahoeFont.body(12, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(section.entries) { entry in
+                        Button {
+                            selectModel(entry)
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(entry.displayName)
+                                        .font(TahoeFont.body(14, weight: .semibold))
+                                        .foregroundStyle(t.fg)
+                                        .lineLimit(2)
+                                        .truncationMode(.middle)
+                                    Text(ProviderModelPickerSupport.metadataLine(for: entry))
+                                        .font(TahoeFont.mono(11))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                    badges(for: entry)
+                                }
+                                Spacer()
+                                if store.model(for: selectedVendor, catalog: client.modelCatalog) == entry.id {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(t.accent)
+                                }
                             }
                         }
                     }
@@ -1267,35 +1323,43 @@ private struct IOSChatModelSelectorSheet: View {
         }
     }
 
+    @ViewBuilder
     private var effortSection: some View {
-        let modelId = store.model(for: selectedVendor, catalog: client.modelCatalog)
-        let supports = ProviderModelPickerSupport.supportsEffort(
-            vendor: selectedVendor,
-            modelId: modelId,
-            catalog: client.modelCatalog
-        )
-        return Section("Effort - \(selectedVendor.displayName)") {
-            if supports {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
-                    ForEach(ReasoningEffort.allCases, id: \.self) { effort in
-                        Button {
-                            selectEffort(effort)
-                        } label: {
-                            effortPill(
-                                effort,
-                                selected: (store.effort(for: selectedVendor, catalog: client.modelCatalog) ?? .medium) == effort
-                            )
+        if !enabledVendors.contains(selectedVendor) {
+            Section("Effort") {
+                Text("Enable a provider on your Mac to choose effort.")
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            let modelId = store.model(for: selectedVendor, catalog: client.modelCatalog)
+            let supports = ProviderModelPickerSupport.supportsEffort(
+                vendor: selectedVendor,
+                modelId: modelId,
+                catalog: client.modelCatalog
+            )
+            Section("Effort - \(selectedVendor.displayName)") {
+                if supports {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
+                        ForEach(ReasoningEffort.allCases, id: \.self) { effort in
+                            Button {
+                                selectEffort(effort)
+                            } label: {
+                                effortPill(
+                                    effort,
+                                    selected: (store.effort(for: selectedVendor, catalog: client.modelCatalog) ?? .medium) == effort
+                                )
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
-                }
-            } else {
-                HStack {
-                    Text("Auto")
-                    Spacer()
-                    Text(selectedVendor == .cursor ? "Cursor account default" : "Unsupported by selected model")
-                        .font(TahoeFont.body(12))
-                        .foregroundStyle(.secondary)
+                } else {
+                    HStack {
+                        Text("Auto")
+                        Spacer()
+                        Text(selectedVendor == .cursor ? "Cursor account default" : "Unsupported by selected model")
+                            .font(TahoeFont.body(12))
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -1327,6 +1391,7 @@ private struct IOSChatModelSelectorSheet: View {
     }
 
     private var canToggleSelectedVendor: Bool {
+        guard enabledVendors.contains(selectedVendor) else { return false }
         if store.isVendorSelected(selectedVendor) {
             return store.selectedVendorCount > 1
         }
@@ -1336,7 +1401,14 @@ private struct IOSChatModelSelectorSheet: View {
     private func refreshCatalog() {
         Task {
             refreshing = true
-            _ = await client.refreshChatProviders()
+            if let matrix = await client.refreshChatProviders() {
+                providerMatrix = matrix
+                store.applyEnabledVendorScope(ChatV2Store.enabledChatVendors(from: matrix.enabledProviderIDs))
+                if !enabledVendors.contains(selectedVendor),
+                   let first = enabledVendors.first {
+                    selectedVendor = first
+                }
+            }
             await client.refreshModelCatalog()
             refreshing = false
         }
@@ -1370,6 +1442,7 @@ private struct IOSChatModelSelectorSheet: View {
     }
 
     private func isVendorAvailable(_ vendor: ChatVendor) -> Bool {
+        guard enabledVendors.contains(vendor) else { return false }
         let provider = vendor.backingProvider
         guard let entries = providerMatrix?.providers.filter({ $0.provider == provider }),
               !entries.isEmpty else {
@@ -1379,9 +1452,16 @@ private struct IOSChatModelSelectorSheet: View {
     }
 
     private func providerUnavailableReason(_ vendor: ChatVendor) -> String? {
+        guard enabledVendors.contains(vendor) else {
+            return "Enable in Continuum → Providers"
+        }
         guard !isVendorAvailable(vendor) else { return nil }
         let provider = vendor.backingProvider
         return providerMatrix?.providers.first { $0.provider == provider && !$0.capabilityProbePassed }?.reason
+    }
+
+    private var enabledVendors: [ChatVendor] {
+        ChatV2Store.enabledChatVendors(from: providerMatrix?.enabledProviderIDs)
     }
 
     private func effortLabel(_ effort: ReasoningEffort) -> String {

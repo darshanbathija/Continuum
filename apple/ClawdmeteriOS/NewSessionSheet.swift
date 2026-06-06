@@ -60,38 +60,28 @@ struct NewSessionSheet: View {
                     // the picked agent's defaults so the model picker
                     // below doesn't sit on a stale Claude id when the
                     // user flips to Codex / Gemini.
-                    Picker("Agent", selection: Binding(
-                        get: { agent },
-                        set: { newAgent in
-                            setAgent(newAgent)
+                    if selectableAgents.isEmpty {
+                        Label("Enable a provider in Continuum -> Providers", systemImage: "slider.horizontal.3")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Picker("Agent", selection: Binding(
+                            get: { effectiveAgent ?? agent },
+                            set: { newAgent in
+                                setAgent(newAgent)
+                            }
+                        )) {
+                            ForEach(selectableAgents, id: \.self) { option in
+                                Text(displayName(for: option)).tag(option)
+                            }
                         }
-                    )) {
-                        Text("Claude").tag(AgentKind.claude)
-                        Text("Codex").tag(AgentKind.codex)
-                        Text("Gemini").tag(AgentKind.gemini)
-                        // v0.22.30: surface OpenCode in iOS new-session
-                        // picker too. Live spawn happens on the paired
-                        // Mac via OpencodeProcessManager/SSEAdapter, so
-                        // the iOS side just emits the kind in the RPC.
-                        Text("OpenCode").tag(AgentKind.opencode)
-                        // v17: Cursor sessions also start on the paired
-                        // Mac. iOS only sends the request; the Mac chooses
-                        // cursor-agent/agent and binds the workspace.
-                        if client.supportsCursor {
-                            Text("Cursor").tag(AgentKind.cursor)
-                        }
-                        // v26: Grok drives over the native ACP harness on the
-                        // paired Mac. iOS only sends the request; gate on the
-                        // Mac wire version so older Macs don't offer it.
-                        if client.supportsGrok {
-                            Text("Grok").tag(AgentKind.grok)
+                        .pickerStyle(.segmented)
+
+                        if let effectiveAgent {
+                            iOSModelPicker(selectedModelId: $modelId, catalog: client.modelCatalog, agent: effectiveAgent)
+
+                            iOSEffortDial(selected: $effort, supportsEffort: currentModelSupportsEffort)
                         }
                     }
-                    .pickerStyle(.segmented)
-
-                    iOSModelPicker(selectedModelId: $modelId, catalog: client.modelCatalog, agent: agent)
-
-                    iOSEffortDial(selected: $effort, supportsEffort: currentModelSupportsEffort)
                 }
 
                 Section("Run mode") {
@@ -101,11 +91,12 @@ struct NewSessionSheet: View {
                     // back-compat with persisted v3 sessions.
 
                     Toggle("Plan mode", isOn: $planMode)
-                        .disabled(agent == .cursor || agent == .grok)
+                        .disabled(effectiveAgent.map { planModeUnavailable(for: $0) } ?? true)
 
                     Toggle("Run as A/B pair (Claude + Codex)", isOn: $runAsABPair)
                         .toggleStyle(.switch)
                         .tint(SessionsV2Theme.accent)
+                        .disabled(effectiveAgent.flatMap { abPairPartner(for: $0) } == nil)
                 }
 
                 preflightSection
@@ -131,7 +122,7 @@ struct NewSessionSheet: View {
                                 .font(.subheadline)
                         }
                         .buttonStyle(.bordered)
-                        .disabled(goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !client.isConfigured)
+                        .disabled(goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !client.isConfigured || effectiveAgent == nil)
                         .help("Send the prompt to the paired Mac's empty-state composer instead of starting a session here.")
                         .accessibilityLabel("Send draft to Mac")
                         Button(action: startSession) {
@@ -145,7 +136,7 @@ struct NewSessionSheet: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(SessionsV2Theme.accent)
-                        .disabled(repoKey.isEmpty || isStarting)
+                        .disabled(repoKey.isEmpty || isStarting || effectiveAgent == nil)
                         .accessibilityLabel("Start new session")
                     }
                 }
@@ -157,21 +148,16 @@ struct NewSessionSheet: View {
                 if repoKey.isEmpty, let first = client.repos.first {
                     repoKey = first.key
                 }
-                if agent == .cursor && !client.supportsCursor {
-                    setAgent(.claude)
-                } else if agent == .grok && !client.supportsGrok {
-                    setAgent(.claude)
-                } else if modelId == nil {
-                    applyDefaults(for: agent)
-                }
+                normalizeAgentSelection()
             }
             .task(id: preflightInputs) {
                 await refreshPreflight()
             }
             .onChange(of: client.serverWireVersion) { _, _ in
-                if (agent == .cursor && !client.supportsCursor) || (agent == .grok && !client.supportsGrok) {
-                    setAgent(.claude)
-                }
+                normalizeAgentSelection()
+            }
+            .onChange(of: client.modelCatalog.updatedAt) { _, _ in
+                normalizeAgentSelection()
             }
             .alert("Couldn't open on Mac",
                    isPresented: Binding(
@@ -197,13 +183,14 @@ struct NewSessionSheet: View {
     /// the `.task(id:)` key so SwiftUI re-runs the refresh whenever any
     /// input changes (Form binding edits invalidate the task naturally).
     private var preflightInputs: String {
-        "\(repoKey)|\(agent.rawValue)|\(modelId ?? "")|\(effort.rawValue)|\(goal.count)"
+        "\(repoKey)|\(effectiveAgent?.rawValue ?? "none")|\(modelId ?? "")|\(effort.rawValue)|\(goal.count)"
     }
 
     @MainActor
     private func refreshPreflight() async {
         // Need all three keys before the daemon can answer.
         guard !repoKey.isEmpty,
+              let effectiveAgent,
               let modelId, !modelId.isEmpty,
               client.isConfigured else {
             preflight = nil
@@ -213,7 +200,7 @@ struct NewSessionSheet: View {
         defer { preflightLoading = false }
         let query = PreflightQuery(
             repoKey: repoKey,
-            agent: agent,
+            agent: effectiveAgent,
             model: modelId,
             effort: currentModelSupportsEffort ? effort : nil,
             goalLength: goal.count
@@ -253,21 +240,26 @@ struct NewSessionSheet: View {
 
     private var currentModelSupportsEffort: Bool {
         guard let id = modelId,
-              let entry = client.modelCatalog.entry(forId: id)
+              let effectiveAgent,
+              let entry = client.modelCatalog.entries(for: effectiveAgent).first(where: { $0.id == id || $0.cliAlias == id })
         else { return true }
         return entry.supportsEffort
     }
 
     private func setAgent(_ newAgent: AgentKind) {
+        guard selectableAgents.contains(newAgent) else {
+            normalizeAgentSelection()
+            return
+        }
         guard newAgent != agent else { return }
-        var nextAgent = newAgent
-        if nextAgent == .cursor && !client.supportsCursor { nextAgent = .claude }
-        if nextAgent == .grok && !client.supportsGrok { nextAgent = .claude }
+        let nextAgent = newAgent
         agent = nextAgent
         applyDefaults(for: nextAgent)
-        // Cursor + Grok start in code mode (no daemon plan-mode for them yet).
-        if nextAgent == .cursor || nextAgent == .grok {
+        if planModeUnavailable(for: nextAgent) {
             planMode = false
+        }
+        if abPairPartner(for: nextAgent) == nil {
+            runAsABPair = false
         }
     }
 
@@ -294,19 +286,19 @@ struct NewSessionSheet: View {
     }
 
     private func startSession() {
-        guard !repoKey.isEmpty else { return }
+        guard !repoKey.isEmpty, let effectiveAgent else { return }
         isStarting = true
         Task {
             _ = await client.createSession(NewSessionRequest(
                 repoKey: repoKey,
-                agent: agent,
+                agent: effectiveAgent,
                 model: modelId,
-                planMode: agent == .cursor ? false : planMode,
+                planMode: planModeUnavailable(for: effectiveAgent) ? false : planMode,
                 goal: goal.isEmpty ? nil : goal,
                 useWorktree: mode == .worktree,
                 baseBranch: baseBranch.isEmpty ? nil : baseBranch,
                 effort: currentModelSupportsEffort ? effort : nil,
-                abPair: runAsABPair ? (agent == .claude ? .codex : .claude) : nil
+                abPair: runAsABPair ? abPairPartner(for: effectiveAgent) : nil
             ))
             await MainActor.run {
                 isStarting = false
@@ -320,10 +312,14 @@ struct NewSessionSheet: View {
     /// composer pre-fills with this text + chip suggestions. No session is
     /// spawned here — the user finishes on the Mac.
     private func openOnMac() {
+        guard let effectiveAgent else {
+            openOnMacUnsupportedAlert = "Enable a provider in Continuum -> Providers before sending a draft."
+            return
+        }
         let draft = ComposeDraft(
             text: goal.trimmingCharacters(in: .whitespacesAndNewlines),
             repoKey: repoKey.isEmpty ? nil : repoKey,
-            suggestedAgent: agent,
+            suggestedAgent: effectiveAgent,
             suggestedModel: modelId,
             suggestedEffort: currentModelSupportsEffort ? effort : nil
         )
@@ -352,6 +348,88 @@ struct NewSessionSheet: View {
                 }
             }
         }
+    }
+
+    private var selectableAgents: [AgentKind] {
+        let enabledRoots = client.modelCatalog.enabledProviderIDs
+            .map { Set($0.map { ProviderRegistry.rootProviderID(for: $0) }) }
+        return ProviderRegistry.descriptors.compactMap { descriptor in
+            guard descriptor.capabilities.contains(.code),
+                  let kind = descriptor.agentKind,
+                  kind != .unknown,
+                  wireSupports(kind)
+            else { return nil }
+            if let enabledRoots, !enabledRoots.contains(descriptor.id) {
+                return nil
+            }
+            guard !client.modelCatalog.entries(for: kind).isEmpty else {
+                return nil
+            }
+            return kind
+        }
+    }
+
+    private var effectiveAgent: AgentKind? {
+        if selectableAgents.contains(agent) {
+            return agent
+        }
+        return selectableAgents.first
+    }
+
+    private func normalizeAgentSelection() {
+        guard let nextAgent = effectiveAgent else {
+            modelId = nil
+            runAsABPair = false
+            return
+        }
+        let modelIsValid = modelId.map { id in
+            client.modelCatalog.entries(for: nextAgent).contains { $0.id == id || $0.cliAlias == id }
+        } ?? false
+        if nextAgent != agent {
+            agent = nextAgent
+        }
+        if !modelIsValid {
+            applyDefaults(for: nextAgent)
+        }
+        if planModeUnavailable(for: nextAgent) {
+            planMode = false
+        }
+        if abPairPartner(for: nextAgent) == nil {
+            runAsABPair = false
+        }
+    }
+
+    private func wireSupports(_ agent: AgentKind) -> Bool {
+        switch agent {
+        case .cursor:
+            return client.supportsCursor
+        case .grok:
+            return client.supportsGrok
+        case .unknown:
+            return false
+        default:
+            return true
+        }
+    }
+
+    private func planModeUnavailable(for agent: AgentKind) -> Bool {
+        agent == .cursor || agent == .grok
+    }
+
+    private func abPairPartner(for agent: AgentKind) -> AgentKind? {
+        switch agent {
+        case .claude where selectableAgents.contains(.codex):
+            return .codex
+        case .codex where selectableAgents.contains(.claude):
+            return .claude
+        default:
+            return nil
+        }
+    }
+
+    private func displayName(for agent: AgentKind) -> String {
+        ProviderRegistry.descriptor(agentKind: agent)?.displayName
+            ?? AgentKindUI.displayName(for: agent)
     }
 }
 

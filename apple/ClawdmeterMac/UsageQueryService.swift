@@ -66,6 +66,10 @@ private final class UsageQueryServer: NSObject, UsageWriterProtocol {
     ) {
         Task { @MainActor [weak runtime] in
             guard let runtime else { reply(nil); return }
+            guard ProviderRegistry.isVisible(id: providerID, capability: .widget) else {
+                reply(nil)
+                return
+            }
             let model: AppModel?
             switch providerID {
             case "claude": model = runtime.claudeModel
@@ -82,14 +86,17 @@ private final class UsageQueryServer: NSObject, UsageWriterProtocol {
     func readAllSnapshots(reply: @escaping ([Data]) -> Void) {
         Task { @MainActor [weak runtime] in
             guard let runtime else { reply([]); return }
-            let blobs = [
-                runtime.claudeModel,
-                runtime.codexModel,
-                runtime.geminiModel,
-                runtime.cursorModel,
-                runtime.grokModel
+            let pairs: [(String, AppModel?)] = [
+                ("claude", runtime.claudeModel),
+                ("codex", runtime.codexModel),
+                ("gemini", runtime.geminiModel),
+                ("cursor", runtime.cursorModel),
+                ("grok", runtime.grokModel)
             ]
-                .compactMap { encode(model: $0) }
+            let blobs = pairs.compactMap { id, model -> Data? in
+                guard ProviderRegistry.isVisible(id: id, capability: .widget) else { return nil }
+                return model.flatMap { encode(model: $0) }
+            }
             reply(blobs)
         }
     }

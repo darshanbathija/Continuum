@@ -37,7 +37,8 @@ final class ProviderHardcodingAuditTests: XCTestCase {
             "SpendChart and RepoList must not manually render Grok segments."
         )
         XCTAssertTrue(
-            content.contains("static let order = UsageRecord.Provider.analyticsDisplayOrder"),
+            content.contains("static var order: [UsageRecord.Provider]") &&
+            content.contains("UsageRecord.Provider.analyticsDisplayOrder.filter"),
             "Tahoe usage analytics must source provider order from UsageRecord.Provider.analyticsDisplayOrder."
         )
         XCTAssertTrue(

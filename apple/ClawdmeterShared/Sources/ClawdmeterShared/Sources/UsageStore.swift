@@ -33,6 +33,7 @@ public struct UsageStore: Sendable {
     ]
 
     private static let logger = Logger(subsystem: "com.clawdmeter.shared", category: "UsageStore")
+    private static let enabledProviderIDsKey = "UsageStore.enabledProviderIDs"
 
     /// Serialised snapshot envelope. `version` lets us evolve the format
     /// without crashing older readers in the wild. Public so the XPC-vending
@@ -176,6 +177,14 @@ public struct UsageStore: Sendable {
             .sorted { $0.providerID < $1.providerID }
     }
 
+    public static func writeEnabledProviderIDs(_ ids: [String]?) {
+        _ = ids
+    }
+
+    public static func readEnabledProviderIDs() -> [String]? {
+        ProviderEnablement.enabledProviderIDs()
+    }
+
     private static func querySync<T>(
         _ body: (UsageWriterProtocol, @escaping (T?) -> Void) -> Void
     ) -> T? {
@@ -268,6 +277,22 @@ public struct UsageStore: Sendable {
         return ids
             .compactMap { read(providerID: $0) }
             .sorted { $0.providerID < $1.providerID }
+    }
+
+    public static func writeEnabledProviderIDs(_ ids: [String]?) {
+        guard let defaults = sharedDefaults else { return }
+        if let ids {
+            let normalized = ids
+                .map { ProviderRegistry.rootProviderID(for: $0) }
+                .filter { ProviderRegistry.descriptor(id: $0) != nil }
+            defaults.set(Array(Set(normalized)).sorted(), forKey: enabledProviderIDsKey)
+        } else {
+            defaults.removeObject(forKey: enabledProviderIDsKey)
+        }
+    }
+
+    public static func readEnabledProviderIDs() -> [String]? {
+        sharedDefaults?.stringArray(forKey: enabledProviderIDsKey)
     }
 #endif
 

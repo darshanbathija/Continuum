@@ -56,11 +56,19 @@ public struct MacMenubarPopover: View {
     /// wrapper drops away.
     private var usageHistoryStore: UsageHistoryStore
 
-    /// v0.22.30: OpenCode joins Claude / Codex / Antigravity as a
-    /// first-class tab in the popover. The user reported "we built
-    /// complete integrations with OpenCode but I don't see that
-    /// anywhere in the UI". The tab itself was missing here.
-    private let enabled: [TahoeProvider] = [.claude, .codex, .gemini, .opencode, .cursor, .grok]
+    @State private var enabledProviderIDs = ProviderEnablement.enabledProviderIDs(for: .menuBar)
+
+    private let allProviders = TahoeProvider.allCases.filter {
+        ProviderRegistry.descriptor(id: $0.rawValue)?.capabilities.contains(.menuBar) ?? false
+    }
+
+    private var enabledProviders: [TahoeProvider] {
+        allProviders.filter { enabledProviderIDs.contains(ProviderRegistry.rootProviderID(for: $0.rawValue)) }
+    }
+
+    private var selectedProvider: TahoeProvider {
+        enabledProviders.contains(selected) ? selected : (enabledProviders.first ?? selected)
+    }
 
     /// Preview / demo init — no live AppModels; uses the static
     /// `data` snapshot.
@@ -223,7 +231,8 @@ public struct MacMenubarPopover: View {
 
     public var body: some View {
         let activeData = liveData
-        let row = activeData.row(for: selected)
+        let activeProvider = selectedProvider
+        let row = activeData.row(for: activeProvider)
         // v0.22.8: drop the outer `TahoeGlass(radius: 8, tone: .panel)`
         // wrapper. NSPopover already draws its own translucent bubble
         // around the contentViewController, so stacking a second glass
@@ -233,7 +242,7 @@ public struct MacMenubarPopover: View {
         VStack(alignment: .leading, spacing: 0) {
             // Provider segmented control
             HStack(spacing: 3) {
-                ForEach(enabled) { p in
+                ForEach(enabledProviders) { p in
                     providerTab(p)
                 }
             }
@@ -247,7 +256,7 @@ public struct MacMenubarPopover: View {
             // (pay-as-you-go through underlying provider; no rolling
             // 5h window or weekly quota). Other providers keep the
             // percent meter shape.
-            if selected == .opencode {
+            if activeProvider == .opencode {
                 VStack(spacing: 12) {
                     OpencodeDollarTile(
                         label: "Today",
@@ -259,20 +268,20 @@ public struct MacMenubarPopover: View {
                     )
                 }
                 .padding(.horizontal, 4)
-            } else if selected == .grok {
+            } else if activeProvider == .grok {
                 GrokHistorySummary(
                     row: row,
                     hasLimit: liveSource.models?.grok?.usage != nil,
                     snapshot: usageHistoryStore.snapshot
                 )
-            } else if selected == .cursor {
+            } else if activeProvider == .cursor {
                 CursorMonthlyMenuBarMeters(row: row)
                     .padding(.horizontal, 4)
             } else {
                 VStack(spacing: 12) {
-                    TahoeMenuBarMeter(label: "5h session", percent: row.sessionPercent, hint: "resets in \(row.sessionResetIn)", provider: selected, stale: row.stale)
+                    TahoeMenuBarMeter(label: "5h session", percent: row.sessionPercent, hint: "resets in \(row.sessionResetIn)", provider: activeProvider, stale: row.stale)
                     if row.hasWeekly {
-                        TahoeMenuBarMeter(label: "Weekly", percent: row.weeklyPercent, hint: "resets in \(row.weeklyResetIn)", provider: selected, stale: row.stale)
+                        TahoeMenuBarMeter(label: "Weekly", percent: row.weeklyPercent, hint: "resets in \(row.weeklyResetIn)", provider: activeProvider, stale: row.stale)
                     }
                 }
                 .padding(.horizontal, 4)
@@ -308,10 +317,19 @@ public struct MacMenubarPopover: View {
         // self-owned driver never bumps `epoch`, so the preview / legacy
         // paths keep seed-once behavior.
         .onChange(of: selectionDriver.epoch) { _, _ in
-            guard selected != selectionDriver.requested else { return }
+            let requested = enabledProviders.contains(selectionDriver.requested)
+                ? selectionDriver.requested
+                : (enabledProviders.first ?? selectionDriver.requested)
+            guard selected != requested else { return }
             var tx = Transaction()
             tx.disablesAnimations = true
-            withTransaction(tx) { selected = selectionDriver.requested }
+            withTransaction(tx) { selected = requested }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
+            enabledProviderIDs = ProviderEnablement.enabledProviderIDs(for: .menuBar)
+            if !enabledProviders.contains(selected), let first = enabledProviders.first {
+                selected = first
+            }
         }
     }
 
@@ -330,9 +348,9 @@ public struct MacMenubarPopover: View {
     ///      capsule snap is uniform across re-renders.
     @ViewBuilder
     private func providerTab(_ p: TahoeProvider) -> some View {
-        let active = p == selected
+        let active = p == selectedProvider
         Button {
-            guard p != selected else { return }
+            guard p != selectedProvider else { return }
             var tx = Transaction()
             tx.disablesAnimations = true
             withTransaction(tx) { selected = p }
@@ -356,7 +374,7 @@ public struct MacMenubarPopover: View {
                         .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0, y: 1)
                 }
             }
-            .animation(nil, value: selected)
+            .animation(nil, value: selectedProvider)
         }
         .buttonStyle(.plain)
     }

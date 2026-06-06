@@ -176,6 +176,7 @@ private struct ChatRoot: View {
             await refreshProviderSurface()
         }
         .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
+            store.normalizeForEnabledProviders()
             Task { await refreshProviderSurface() }
         }
         .onChange(of: client.providerDefaults) { _, defaults in
@@ -592,17 +593,29 @@ private struct StartPanel: View {
     var body: some View {
         TahoeGlass(radius: 8, tone: .panel) {
             VStack(spacing: 16) {
-                HStack(spacing: 10) {
-                    ForEach(store.selectedVendors, id: \.self) { vendor in
-                        TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 30)
+                if store.selectedVendors.isEmpty {
+                    Image(systemName: "switch.2")
+                        .font(.system(size: 30, weight: .semibold))
+                        .foregroundStyle(t.fg3)
+                    Text("Enable a provider in Settings")
+                        .font(TahoeFont.body(18, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text("Chat will appear here after at least one provider is turned on.")
+                        .font(TahoeFont.body(12.5))
+                        .foregroundStyle(t.fg3)
+                } else {
+                    HStack(spacing: 10) {
+                        ForEach(store.selectedVendors, id: \.self) { vendor in
+                            TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 30)
+                        }
                     }
+                    Text(store.selectedVendorCount == 1 ? "Ask \(store.primaryVendor.displayName)" : "Broadcast to all selected agents")
+                        .font(TahoeFont.body(18, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text(store.selectedVendorCount == 1 ? "One selected vendor answers this thread." : "Send one prompt and compare live replies side by side.")
+                        .font(TahoeFont.body(12.5))
+                        .foregroundStyle(t.fg3)
                 }
-                Text(store.selectedVendorCount == 1 ? "Ask \(store.primaryVendor.displayName)" : "Broadcast to all selected agents")
-                    .font(TahoeFont.body(18, weight: .semibold))
-                    .foregroundStyle(t.fg)
-                Text(store.selectedVendorCount == 1 ? "One selected vendor answers this thread." : "Send one prompt and compare live replies side by side.")
-                    .font(TahoeFont.body(12.5))
-                    .foregroundStyle(t.fg3)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -1497,7 +1510,11 @@ private struct ComposerBar: View {
                     TahoeProviderGlyph(provider: v.backingProvider.tahoeProvider, size: 16)
                 }
             }
-            if store.selectedVendorCount == 1 {
+            if store.selectedVendorCount == 0 {
+                Text("No provider")
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg4)
+            } else if store.selectedVendorCount == 1 {
                 let v = store.primaryVendor
                 VStack(alignment: .leading, spacing: 1) {
                     Text(v.displayName)
@@ -1551,7 +1568,7 @@ private struct ComposerBar: View {
 
             Rectangle().fill(t.hairline).frame(height: 0.5)
             Text(store.selectedVendorCount <= 1
-                 ? "Solo · \(store.primaryVendor.displayName)"
+                 ? (store.selectedVendorCount == 0 ? "Enable a provider in Settings → Providers" : "Solo · \(store.primaryVendor.displayName)")
                  : "Comparing \(store.selectedVendorCount) — answers shown side by side")
                 .font(TahoeFont.body(10.5))
                 .foregroundStyle(t.fg4)
@@ -1564,11 +1581,16 @@ private struct ComposerBar: View {
     private var soloCompareToggle: some View {
         HStack(spacing: 2) {
             soloCompareSegment(title: "Solo", active: store.selectedVendorCount <= 1) {
-                store.selectedVendors = [store.primaryVendor]
-                store.persist()
+                if let vendor = store.selectedVendors.first ?? providerPickerVendors.first {
+                    store.selectedVendors = [vendor]
+                    store.persist()
+                }
             }
             soloCompareSegment(title: "Compare", active: store.selectedVendorCount > 1) {
-                if store.selectedVendorCount <= 1 { store.toggleVendor(firstConfigurableVendor) }
+                if store.selectedVendorCount <= 1,
+                   let vendor = firstConfigurableVendor {
+                    store.toggleVendor(vendor)
+                }
             }
         }
         .padding(2)
@@ -1590,13 +1612,8 @@ private struct ComposerBar: View {
     @ViewBuilder
     private func providerSelectorRow(_ vendor: ChatVendor) -> some View {
         let selected = store.isVendorSelected(vendor)
-        let enabled = ProviderEnablement.isEnabled(vendor)
         let available = isVendorAvailable(vendor)
-        let canSelect = enabled && (selected || available)
-        // A not-yet-enabled provider stays tappable so the row can opt it in
-        // inline (toggleProviderRow enables + selects it); once enabled, normal
-        // availability gating applies.
-        let canInteract = canSelect || !enabled
+        let canSelect = selected || available
         HStack(spacing: 10) {
             Button { toggleProviderRow(vendor) } label: {
                 Image(systemName: selected ? "checkmark.square.fill" : "square")
@@ -1604,14 +1621,14 @@ private struct ComposerBar: View {
                     .foregroundStyle(selected ? t.accent : t.fg4)
             }
             .buttonStyle(.plain)
-            .disabled(!canInteract)
+            .disabled(!canSelect)
 
             TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 18)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(vendor.displayName)
                     .font(TahoeFont.body(12.5, weight: .semibold))
-                    .foregroundStyle(enabled ? t.fg : t.fg4)
+                    .foregroundStyle(t.fg)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 if let reason = providerUnavailableReason(vendor) {
@@ -1640,19 +1657,7 @@ private struct ComposerBar: View {
     }
 
     private func toggleProviderRow(_ vendor: ChatVendor) {
-        // Inline-enable: checking a not-yet-enabled provider (e.g. Antigravity/
-        // Gemini or OpenRouter) opts it in right here instead of forcing a detour
-        // to Settings → Providers, then selects it. The provider probe + model
-        // catalog refresh off the changed-notification setEnabled posts; the
-        // ChatV2Store selection change re-renders the row to its enabled state.
-        if !ProviderEnablement.isEnabled(vendor) {
-            // setEnabled posts ProviderEnablement.changedNotification, which
-            // ChatRoot observes to re-run the probe + model-catalog refresh — so
-            // the row un-greys and its model dropdown populates on the next render.
-            ProviderEnablement.setEnabled(vendor.backingProvider.rawValue, true)
-            if !store.isVendorSelected(vendor) { store.toggleVendor(vendor) }
-            return
-        }
+        guard ProviderRegistry.isEnabled(chatVendor: vendor) else { return }
         if !store.isVendorSelected(vendor), !isVendorAvailable(vendor) { return }
         store.toggleVendor(vendor)
     }
@@ -1857,7 +1862,11 @@ private struct ComposerBar: View {
             case .transcript:
                 return "Archived transcripts are read-only. Start a new chat to continue."
             case nil:
+                store.normalizeForEnabledProviders()
                 let selectedVendors = store.selectedVendors
+                guard !selectedVendors.isEmpty else {
+                    return "Enable a provider in Settings → Providers to start chatting."
+                }
                 let unavailableReasons = selectedVendors.compactMap { providerUnavailableReason($0) }
                 guard unavailableReasons.isEmpty else {
                     return unavailableReasons.joined(separator: "\n")
@@ -1996,13 +2005,9 @@ private struct ComposerBar: View {
     }
 
     private var providerPickerVendors: [ChatVendor] {
-        // Show EVERY chat-capable vendor (incl. Antigravity/Gemini + OpenRouter) so
-        // they're discoverable in chat even before they're enabled. Disabled rows
-        // render greyed with an "Enable … in Settings → Providers" reason and a
-        // tap enables them inline (see toggleProviderRow). Selected vendors are
-        // always present even if reordered.
-        var vendors = ChatV2Store.defaultChatVendorOrder
-        for vendor in store.selectedVendors where !vendors.contains(vendor) {
+        var vendors = providerEnabledVendors
+        for vendor in store.selectedVendors
+        where ProviderRegistry.isEnabled(chatVendor: vendor) && !vendors.contains(vendor) {
             vendors.append(vendor)
         }
         return vendors
@@ -2024,10 +2029,10 @@ private struct ComposerBar: View {
         return entry.supportsEffort
     }
 
-    private var firstConfigurableVendor: ChatVendor {
+    private var firstConfigurableVendor: ChatVendor? {
         providerEnabledVendors.first { vendor in
             !store.isVendorSelected(vendor) && isVendorAvailable(vendor)
-        } ?? store.primaryVendor
+        }
     }
 
     /// Solo path: upload each attachment to one session's staging dir

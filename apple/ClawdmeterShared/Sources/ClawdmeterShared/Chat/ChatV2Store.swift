@@ -124,6 +124,8 @@ public final class ChatV2Store: ObservableObject {
 
     private let defaults: UserDefaults
     private let providerDefaults: ProviderDefaultsStore
+    private var enabledVendorScope: [ChatVendor]?
+    private var persistedVendorSelection: [ChatVendor]
     private static let defaultsPrefix = "clawdmeter.chatv2."
 
     public init(defaults: UserDefaults = .standard) {
@@ -135,8 +137,10 @@ public final class ChatV2Store: ObservableObject {
         // composer state on cold-launch without prompting the user
         // for everything.
         let hasVendorSelection = defaults.object(forKey: Self.defaultsPrefix + "vendors") != nil
-        let restoredVendors = Self.restoreVendors(defaults: defaults)
+        let persistedVendors = Self.restorePersistedVendors(defaults: defaults)
+        let restoredVendors = Self.restoreVendors(persistedVendors: persistedVendors)
         self.selectedVendors = restoredVendors
+        self.persistedVendorSelection = persistedVendors
         self.selectedModelByVendor = providerDefaults.snapshot.decodedModelMap()
         self.selectedEffortByVendor = providerDefaults.snapshot.decodedEffortMap()
         let restoredModeRaw = defaults.string(forKey: Self.defaultsPrefix + "mode") ?? ChatV2Mode.broadcast.rawValue
@@ -177,14 +181,21 @@ public final class ChatV2Store: ObservableObject {
     /// UserDefaults write per modifier — so callers don't need to
     /// debounce.
     public func persist() {
-        selectedVendors = Self.normalizedVendors(selectedVendors)
+        selectedVendors = normalizedVendorsForEnabledProviders(selectedVendors)
+        let vendorsToPersist: [ChatVendor]
+        if selectedVendors.isEmpty, !persistedVendorSelection.isEmpty {
+            vendorsToPersist = persistedVendorSelection
+        } else {
+            persistedVendorSelection = selectedVendors
+            vendorsToPersist = selectedVendors
+        }
         mode = selectedVendors.count > 1 ? .broadcast : .solo
         selectedProvider = selectedVendors.first?.backingProvider ?? .codex
         broadcastProviders = Set(selectedVendors.map(\.backingProvider))
         if !broadcastProviders.contains(selectedReplyProvider) {
             selectedReplyProvider = selectedProvider
         }
-        defaults.set(selectedVendors.map(\.rawValue), forKey: Self.defaultsPrefix + "vendors")
+        defaults.set(vendorsToPersist.map(\.rawValue), forKey: Self.defaultsPrefix + "vendors")
         defaults.set(Self.encodeMap(selectedModelByVendor), forKey: Self.defaultsPrefix + "modelByVendor")
         defaults.set(Self.encodeMap(selectedEffortByVendor.mapValues { $0.rawValue }),
                      forKey: Self.defaultsPrefix + "effortByVendor")
@@ -218,8 +229,16 @@ public final class ChatV2Store: ObservableObject {
     public static let broadcastCapableProviders: Set<AgentKind> = Set(defaultChatVendorOrder.map(\.backingProvider))
     public static let defaultBroadcastProviderOrder: [AgentKind] = defaultChatVendorOrder.map(\.backingProvider)
 
+    public static func enabledChatVendors(from providerIDs: [String]?) -> [ChatVendor] {
+        guard let providerIDs else { return defaultChatVendorOrder }
+        let enabled = Set(providerIDs.map { ProviderRegistry.rootProviderID(for: $0) })
+        return defaultChatVendorOrder.filter { vendor in
+            enabled.contains(ProviderRegistry.rootProviderID(for: vendor.backingProvider.rawValue))
+        }
+    }
+
     public var primaryVendor: ChatVendor {
-        selectedVendors.first ?? .chatgpt
+        selectedVendors.first ?? effectiveEnabledChatVendors.first ?? .chatgpt
     }
 
     public var selectedVendorCount: Int {
@@ -254,6 +273,7 @@ public final class ChatV2Store: ObservableObject {
     }
 
     public func toggleVendor(_ vendor: ChatVendor) {
+        guard effectiveEnabledChatVendors.contains(vendor) else { return }
         if selectedVendors.contains(vendor) {
             guard selectedVendors.count > 1 else { return }
             selectedVendors.removeAll { $0 == vendor }
@@ -262,8 +282,31 @@ public final class ChatV2Store: ObservableObject {
             // horizontally, so allow selecting every available provider.
             selectedVendors.append(vendor)
         }
-        selectedVendors = Self.normalizedVendors(selectedVendors)
+        selectedVendors = normalizedVendorsForEnabledProviders(selectedVendors)
         persist()
+    }
+
+    public func applyEnabledVendorScope(_ vendors: [ChatVendor]?, persistSelection: Bool = false) {
+        enabledVendorScope = vendors.map(Self.uniqueVendors)
+        normalizeForEnabledProviders(persistSelection: persistSelection)
+    }
+
+    public func normalizeForEnabledProviders(persistSelection: Bool = false) {
+        let candidates = selectedVendors.isEmpty ? persistedVendorSelection : selectedVendors
+        let normalized = normalizedVendorsForEnabledProviders(candidates)
+        guard normalized != selectedVendors else { return }
+        selectedVendors = normalized
+        mode = selectedVendors.count > 1 ? .broadcast : .solo
+        if let provider = selectedVendors.first?.backingProvider {
+            selectedProvider = provider
+            selectedReplyProvider = provider
+            broadcastProviders = Set(selectedVendors.map(\.backingProvider))
+        } else {
+            broadcastProviders = []
+        }
+        if persistSelection {
+            persist()
+        }
     }
 
     public func selectModel(_ modelId: String, for vendor: ChatVendor, catalog: ModelCatalog = .bundled) {
@@ -455,21 +498,51 @@ public final class ChatV2Store: ObservableObject {
         Dictionary(uniqueKeysWithValues: m.map { ($0.key.rawValue, $0.value) })
     }
 
-    private static func restoreVendors(defaults: UserDefaults) -> [ChatVendor] {
+    private static func restorePersistedVendors(defaults: UserDefaults) -> [ChatVendor] {
         if let raw = defaults.stringArray(forKey: Self.defaultsPrefix + "vendors") {
-            return normalizedVendors(raw.compactMap(ChatVendor.init(rawValue:)))
+            return normalizedVendors(raw.compactMap(ChatVendor.init(rawValue:)), enabledVendors: defaultChatVendorOrder)
         }
-        return [.chatgpt]
+        return []
     }
 
-    private static func normalizedVendors(_ vendors: [ChatVendor]) -> [ChatVendor] {
+    private static func restoreVendors(persistedVendors: [ChatVendor]) -> [ChatVendor] {
+        if !persistedVendors.isEmpty {
+            return normalizedVendorsForEnabledProviders(persistedVendors)
+        }
+        return firstEnabledVendor().map { [$0] } ?? []
+    }
+
+    public static func normalizedVendors(_ vendors: [ChatVendor], enabledVendors: [ChatVendor]) -> [ChatVendor] {
+        let out = uniqueVendors(vendors.filter { enabledVendors.contains($0) })
+        return out.isEmpty ? Array(enabledVendors.prefix(1)) : out
+    }
+
+    private static func uniqueVendors(_ vendors: [ChatVendor]) -> [ChatVendor] {
         var out: [ChatVendor] = []
         for vendor in vendors {
-            guard defaultChatVendorOrder.contains(vendor), !out.contains(vendor) else { continue }
+            guard !out.contains(vendor) else { continue }
             out.append(vendor)
             if out.count == 3 { break }
         }
-        return out.isEmpty ? [.chatgpt] : out
+        return out
+    }
+
+    private func normalizedVendorsForEnabledProviders(_ vendors: [ChatVendor]) -> [ChatVendor] {
+        Self.normalizedVendors(vendors, enabledVendors: effectiveEnabledChatVendors)
+    }
+
+    private var effectiveEnabledChatVendors: [ChatVendor] {
+        if let enabledVendorScope { return enabledVendorScope }
+        return ProviderEnablement.enabledChatVendors(in: Self.defaultChatVendorOrder)
+    }
+
+    private static func normalizedVendorsForEnabledProviders(_ vendors: [ChatVendor]) -> [ChatVendor] {
+        let enabled = ProviderEnablement.enabledChatVendors(in: defaultChatVendorOrder)
+        return normalizedVendors(vendors, enabledVendors: enabled)
+    }
+
+    private static func firstEnabledVendor() -> ChatVendor? {
+        ProviderRegistry.firstEnabledProvider(for: .chat)?.chatVendor
     }
 
     private static func catalog(_ catalog: ModelCatalog, contains id: String, for vendor: ChatVendor) -> Bool {

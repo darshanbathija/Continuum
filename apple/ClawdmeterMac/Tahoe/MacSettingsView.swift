@@ -1244,6 +1244,7 @@ struct ProviderPreferenceRows: View {
     @Environment(\.tahoe) private var t
     let client: AgentControlClient?
     var runtime: AppRuntime?
+    var onEnabledProvidersChanged: (([String]) -> Void)? = nil
     @StateObject private var localStore = ProviderDefaultsStore()
     @State private var snapshot: ProviderDefaultsSnapshot = .empty
     @State private var catalog: ModelCatalog = .bundled
@@ -1266,6 +1267,9 @@ struct ProviderPreferenceRows: View {
             }
         }
         .task { await refreshAll() }
+        .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
+            refreshEnabledState()
+        }
     }
 
     private func refreshAll() async {
@@ -1287,6 +1291,7 @@ struct ProviderPreferenceRows: View {
                 return (id, ProviderEnablement.isEnabled(id))
             }
         )
+        onEnabledProvidersChanged?(ProviderEnablement.enabledProviderIDs())
     }
 
     private func enabledBinding(for vendor: ChatVendor) -> Binding<Bool> {
@@ -1301,6 +1306,7 @@ struct ProviderPreferenceRows: View {
                     ProviderEnablement.setEnabled(id, newValue)
                     Task { await invalidateProviderCaches(for: id) }
                 }
+                onEnabledProvidersChanged?(ProviderEnablement.enabledProviderIDs())
                 if newValue {
                     Task { await refreshCatalogIfAllowed(for: vendor) }
                     // Enabling Claude seeds Continuum's own usage token from

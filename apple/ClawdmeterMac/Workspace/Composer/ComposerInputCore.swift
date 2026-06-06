@@ -466,10 +466,7 @@ struct ComposerInputCore: View {
     }
 
     private var enabledModelPickerVendors: [ChatVendor] {
-        if case .emptyState = store.modeKind {
-            return ProviderEnablement.enabledChatVendors()
-        }
-        return ChatV2Store.defaultChatVendorOrder
+        ProviderEnablement.enabledChatVendors()
     }
 
     private var attachButton: some View {

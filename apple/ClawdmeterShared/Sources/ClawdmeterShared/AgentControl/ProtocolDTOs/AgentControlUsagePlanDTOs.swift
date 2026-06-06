@@ -21,6 +21,10 @@ public struct UsageEnvelope: Codable, Sendable {
     /// `{usage: {gemini: …}}` without `claude`/`codex` keys still lets
     /// legacy fields carry those providers through).
     public let usage: [String: UsageData]?
+    /// Optional provider-enable envelope. Missing means legacy all-provider
+    /// behavior for older Mac/iOS payloads; an empty array is explicit no
+    /// enabled providers.
+    public let enabledProviderIDs: [String]?
     /// Server-side wall-clock when the snapshot was assembled. The
     /// iPhone uses this to age the gauges ("Last checked X ago") so
     /// the user knows when the Mac last actually polled the providers.
@@ -30,11 +34,13 @@ public struct UsageEnvelope: Codable, Sendable {
         claude: UsageData?,
         codex: UsageData?,
         usage: [String: UsageData]? = nil,
+        enabledProviderIDs: [String]? = nil,
         lastChecked: Date
     ) {
         self.claude = claude
         self.codex = codex
         self.usage = usage
+        self.enabledProviderIDs = enabledProviderIDs
         self.lastChecked = lastChecked
     }
 
@@ -50,6 +56,12 @@ public struct UsageEnvelope: Codable, Sendable {
     /// "antigravity", and vice versa. The provider id "gemini" stays the
     /// canonical id at the iOS callsite; the wire just shifted the key.
     public func usageData(for providerID: String) -> UsageData? {
+        if let enabledProviderIDs {
+            let enabled = Set(enabledProviderIDs.map { ProviderRegistry.rootProviderID(for: $0) })
+            guard enabled.contains(ProviderRegistry.rootProviderID(for: providerID)) else {
+                return nil
+            }
+        }
         if let dict = usage {
             // Direct hit.
             if let snapshot = dict[providerID] { return snapshot }
@@ -105,7 +117,7 @@ public struct UsageEnvelope: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case claude, codex, usage, lastChecked
+        case claude, codex, usage, enabledProviderIDs, lastChecked
     }
 
     public init(from decoder: Decoder) throws {
@@ -113,6 +125,7 @@ public struct UsageEnvelope: Codable, Sendable {
         self.claude = try c.decodeIfPresent(UsageData.self, forKey: .claude)
         self.codex = try c.decodeIfPresent(UsageData.self, forKey: .codex)
         self.usage = try c.decodeIfPresent([String: UsageData].self, forKey: .usage)
+        self.enabledProviderIDs = try c.decodeIfPresent([String].self, forKey: .enabledProviderIDs)
         self.lastChecked = try c.decode(Date.self, forKey: .lastChecked)
     }
 
@@ -121,6 +134,7 @@ public struct UsageEnvelope: Codable, Sendable {
         try c.encodeIfPresent(claude, forKey: .claude)
         try c.encodeIfPresent(codex, forKey: .codex)
         try c.encodeIfPresent(usage, forKey: .usage)
+        try c.encodeIfPresent(enabledProviderIDs, forKey: .enabledProviderIDs)
         try c.encode(lastChecked, forKey: .lastChecked)
     }
 }

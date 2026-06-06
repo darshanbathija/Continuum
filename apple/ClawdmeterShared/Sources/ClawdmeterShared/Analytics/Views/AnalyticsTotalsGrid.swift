@@ -23,15 +23,27 @@ public struct AnalyticsTotalsGrid: View {
         self.isLoading = isLoading
     }
 
-    /// Providers to render, in display order. Claude first, Codex second,
-    /// then Gemini. Only includes providers that have a key in the
-    /// snapshot's `byProvider` dict (no zero-state empty columns for
-    /// providers the user never used). Falls back to the legacy 2-column
-    /// view when the snapshot is empty so first-launch users see a
-    /// familiar shape.
+    /// Providers to render, in display order. Missing `enabledProviderIDs`
+    /// keeps legacy all-provider behavior for old payloads; an explicit
+    /// envelope, including `[]`, is the product-visible provider set.
+    static func visibleProviders(for snapshot: UsageHistorySnapshot) -> [UsageRecord.Provider] {
+        let candidates: [UsageRecord.Provider]
+        if let enabledProviderIDs = snapshot.enabledProviderIDs {
+            let enabled = Set(enabledProviderIDs.map { ProviderRegistry.rootProviderID(for: $0) })
+            candidates = UsageRecord.Provider.analyticsDisplayOrder.filter {
+                enabled.contains(ProviderRegistry.rootProviderID(for: $0.rawValue))
+            }
+        } else {
+            candidates = UsageRecord.Provider.analyticsDisplayOrder
+        }
+
+        let active = candidates.filter { snapshot.byProvider[$0] != nil }
+        if !active.isEmpty { return active }
+        return snapshot.enabledProviderIDs == nil ? [.claude, .codex] : candidates
+    }
+
     private var visibleProviders: [UsageRecord.Provider] {
-        let active = UsageRecord.Provider.analyticsDisplayOrder.filter { snapshot.byProvider[$0] != nil }
-        return active.isEmpty ? [.claude, .codex] : active
+        Self.visibleProviders(for: snapshot)
     }
 
     public var body: some View {

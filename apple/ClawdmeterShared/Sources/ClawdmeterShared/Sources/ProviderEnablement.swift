@@ -21,24 +21,45 @@ public enum ProviderEnablement {
     /// UserDefaults key gating a provider's poller + credential reads.
     public static func key(for id: String) -> String { "clawdmeter.provider.\(id).enabled" }
 
+    private static var sharedDefaults: UserDefaults? {
+        for group in UsageStore.appGroups {
+            if let defaults = UserDefaults(suiteName: group) {
+                return defaults
+            }
+        }
+        return nil
+    }
+
+    private static func storedBool(forKey key: String) -> Bool? {
+        if let value = UserDefaults.standard.object(forKey: key) as? Bool { return value }
+        return sharedDefaults?.object(forKey: key) as? Bool
+    }
+
+    private static func setStoredBool(_ value: Bool, forKey key: String) {
+        UserDefaults.standard.set(value, forKey: key)
+        sharedDefaults?.set(value, forKey: key)
+    }
+
     /// Whether `id` (e.g. "claude", "cursor") is enabled. An env override
     /// `CLAWDMETER_PROVIDER_<ID>_ENABLED` wins (CI / power users); otherwise the
     /// persisted flag, defaulting to **false** (opt-in).
     public static func isEnabled(_ id: String) -> Bool {
-        let env = "CLAWDMETER_PROVIDER_\(id.uppercased())_ENABLED"
+        let rootID = ProviderRegistry.rootProviderID(for: id)
+        let env = "CLAWDMETER_PROVIDER_\(rootID.uppercased())_ENABLED"
         if let raw = ProcessInfo.processInfo.environment[env] {
             let v = raw.lowercased()
             return v == "1" || v == "true" || v == "yes"
         }
-        return UserDefaults.standard.object(forKey: key(for: id)) as? Bool ?? false
+        return storedBool(forKey: key(for: rootID)) ?? false
     }
 
     public static func setEnabled(_ id: String, _ on: Bool) {
-        UserDefaults.standard.set(on, forKey: key(for: id))
+        let rootID = ProviderRegistry.rootProviderID(for: id)
+        setStoredBool(on, forKey: key(for: rootID))
         NotificationCenter.default.post(
             name: changedNotification,
             object: nil,
-            userInfo: [changedProviderIdUserInfoKey: id]
+            userInfo: [changedProviderIdUserInfoKey: rootID]
         )
     }
 
@@ -53,7 +74,18 @@ public enum ProviderEnablement {
     public static func enabledChatVendors(
         in order: [ChatVendor] = [.chatgpt, .claude, .antigravity, .cursor, .openrouter, .grok]
     ) -> [ChatVendor] {
-        order.filter { isEnabled($0) }
+        order.filter { ProviderRegistry.isEnabled(chatVendor: $0) }
+    }
+
+    public static func enabledProviderIDs(
+        for capability: ProviderCapability? = nil
+    ) -> [String] {
+        ProviderRegistry.descriptors
+            .filter { descriptor in
+                if let capability, !descriptor.capabilities.contains(capability) { return false }
+                return isEnabled(descriptor.id)
+            }
+            .map(\.id)
     }
 
     /// Analytics (Usage tab) reads other apps' data (~/.codex, ~/.gemini,
@@ -71,5 +103,5 @@ public enum ProviderEnablement {
     }
 
     /// Providers surfaced in onboarding + Settings toggles, in display order.
-    public static let allProviderIds: [String] = ProviderDescriptor.settingsOrder.map(\.id)
+    public static let allProviderIds: [String] = ProviderRegistry.allProviderIDs
 }

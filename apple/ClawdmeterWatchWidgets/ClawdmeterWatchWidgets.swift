@@ -50,11 +50,12 @@ struct ClaudeComplication: Widget {
 struct ClaudeEntry: TimelineEntry {
     let date: Date
     let snapshot: UsageStore.Snapshot?
+    let disabled: Bool
 }
 
 struct ClaudeTimeline: TimelineProvider {
     func placeholder(in context: Context) -> ClaudeEntry {
-        ClaudeEntry(date: .now, snapshot: nil)
+        ClaudeEntry(date: .now, snapshot: nil, disabled: false)
     }
     func getSnapshot(in context: Context, completion: @escaping (ClaudeEntry) -> Void) {
         completion(currentEntry())
@@ -65,7 +66,18 @@ struct ClaudeTimeline: TimelineProvider {
         completion(Timeline(entries: [entry], policy: .after(next)))
     }
     private func currentEntry() -> ClaudeEntry {
-        ClaudeEntry(date: .now, snapshot: UsageStore.read(providerID: "claude"))
+        let disabled = Self.isProviderDisabled("claude")
+        return ClaudeEntry(
+            date: .now,
+            snapshot: disabled ? nil : UsageStore.read(providerID: "claude"),
+            disabled: disabled
+        )
+    }
+
+    private static func isProviderDisabled(_ providerID: String) -> Bool {
+        guard let enabledProviderIDs = UsageStore.readEnabledProviderIDs() else { return false }
+        let enabled = Set(enabledProviderIDs.map { ProviderRegistry.rootProviderID(for: $0) })
+        return !enabled.contains(ProviderRegistry.rootProviderID(for: providerID))
     }
 }
 
@@ -89,7 +101,9 @@ struct ClaudeView: View {
 
     @ViewBuilder
     private var circular: some View {
-        if let snap = entry.snapshot {
+        if entry.disabled {
+            Image(systemName: "slash.circle")
+        } else if let snap = entry.snapshot {
             Gauge(value: Double(snap.usage.sessionPct), in: 0...100) {
                 Text("Claude")
             } currentValueLabel: {
@@ -107,7 +121,10 @@ struct ClaudeView: View {
 
     @ViewBuilder
     private var corner: some View {
-        if let snap = entry.snapshot {
+        if entry.disabled {
+            Image(systemName: "slash.circle")
+                .widgetLabel("Enable provider")
+        } else if let snap = entry.snapshot {
             Text("\(snap.usage.sessionPct)%")
                 .font(.system(.title3, weight: .bold))
                 .monospacedDigit()
@@ -129,7 +146,15 @@ struct ClaudeView: View {
 
     @ViewBuilder
     private var rectangular: some View {
-        if let snap = entry.snapshot {
+        if entry.disabled {
+            VStack(alignment: .leading) {
+                Text("Claude off")
+                    .font(.headline)
+                Text("Enable in Continuum -> Providers")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        } else if let snap = entry.snapshot {
             let resetDate = Date(timeIntervalSince1970: TimeInterval(snap.usage.sessionEpoch))
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
@@ -159,7 +184,9 @@ struct ClaudeView: View {
 
     @ViewBuilder
     private var inline: some View {
-        if let snap = entry.snapshot {
+        if entry.disabled {
+            Text("Enable Claude in Continuum")
+        } else if let snap = entry.snapshot {
             let resetDate = Date(timeIntervalSince1970: TimeInterval(snap.usage.sessionEpoch))
             Text("Claude \(snap.usage.sessionPct)% · resets \(resetDate, style: .relative)")
         } else {
