@@ -97,7 +97,7 @@ Goal: **defend the moat + close the 4 Conductor v0.28–0.29 gaps that aren't sh
 
 7. **Voice-first new session creation (iPhone + Watch)** — "Hey Siri, start a Claude session in Continuum to fix the redis bug." Foundation Models on-device intent parse → pre-fill NewSessionSheet. **Effort: 1 day if we lean on existing `SpeechDictation` (G11); 1 week if we ship the Foundation Models intent parser.** *Why P0: Watch-crown session creation is the demo that goes viral on Twitter.*
 
-8. **Pause/Resume the swarm** — One click suspends all running agents (kills tmux panes cleanly with checkpointing). One click resumes from the JSONL cursor. **Effort: 2–3 days.** *Why P0: "suspend overnight to save $50 in tokens" is a 5-second viral demo, and the only local product to ship it.*
+8. **Pause/Resume the swarm** — One click suspends all running agents cleanly with checkpointing. One click resumes from the JSONL cursor. **Effort: 2–3 days.** *Why P0: "suspend overnight to save $50 in tokens" is a 5-second viral demo, and the only local product to ship it.*
 
 ### Tier 2 — Ship next quarter (September – November 2026)
 

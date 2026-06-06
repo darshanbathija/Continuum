@@ -43,10 +43,10 @@ The Mac daemon (`AgentControlServer`) is the undisputed source of truth.
 
 | Provider          | Maturity       | Key Strengths                              | Limitations                          |
 |-------------------|----------------|--------------------------------------------|--------------------------------------|
-| Claude Code       | Most Mature    | Native plan mode, full effort control, rich JSONL | tmux dependency                     |
+| Claude Code       | Most Mature    | Native plan mode, full effort control, rich JSONL | Direct PTY path needs broader mobile E2E |
 | Codex             | Very Strong    | Dual CLI + SDK, excellent lineage resolver | Plan UX synthetic on SDK path       |
 | Antigravity/Gemini| Good + Improving | Real token extraction from .db protobuf + LSP | Reverse-engineered proto stability  |
-| OpenCode          | Solid Hybrid   | Clean serve + SSE architecture             | No direct tmux/terminal control     |
+| OpenCode          | Solid Hybrid   | Clean serve + SSE architecture             | Terminal visibility depends on serve/SSE path |
 | Cursor            | Quota-focused  | Discovery + period usage                   | Weakest transcript richness         |
 
 Extensibility scaffolding is solid (AgentKind + adapter pattern). New agents are feasible but require per-provider boilerplate today.

@@ -121,9 +121,8 @@ Original deferral text retained below for historical reference.
 ### Missing regression tests (5 high-value gaps from `/review`)
 - `isValidJsonlPath` + `isValidRepoKey` symlink-resolve (AgentControlServer)
 - `TailscaleWhois.ipOnly` IPv6 round-trip (regression for the P2-Mac-4 rollback)
-- `TmuxControlClient` CR/LF / control-byte rejection (requires extracting
-  `validateArg` as static helper)
-- `TmuxControlClient.markExited` → `start()` re-spawn lifecycle
+- direct PTY input/control-byte rejection coverage for terminal submission
+- terminal registry natural-exit pruning and process-group teardown coverage
 - `PastedAnthropicTokenProvider.setToken("")` unconditional cache-clear (requires
   Keychain-deleter override in test init)
 
@@ -225,13 +224,12 @@ are the explicit deferrals.
   fingerprint (similar to `AppRuntime.liveActivityFingerprint`).
 - **Effort**: M with CC.
 
-### AgentSpawner.geminiArgv + Sessions runtime (E3 #2, Codex P1(4))
-- **What**: `AgentSpawner` gains a Gemini case so the chat composer can
-  spawn a `gemini` CLI session in tmux. Includes `GeminiJSONLParser` for
-  `gemini -o stream-json` output and Composer model picker extension.
-- **Hook**: Mirrors `claudeArgv` / `codexArgv` patterns. The user already
-  has `gemini` CLI 0.42.0 at `/opt/homebrew/bin/gemini` with stream-json
-  output format support.
+### Gemini Sessions runtime (E3 #2, Codex P1(4))
+- **What**: Gemini chat/code now belongs on the headless `agy` harness path.
+  Keep parser/model-picker follow-ups tied to harness transcripts, not a
+  terminal CLI fallback.
+- **Hook**: Mirrors the harness provider patterns used by Codex app-server,
+  Cursor, and Grok.
 - **Effort**: L with CC.
 
 ### Adversarial Google quota endpoint test fixtures (D3 declined)
@@ -592,11 +590,11 @@ Captured during /plan-ceo-review of the Mac chat-IDE rewrite. The rewrite
 itself landed on `feat/mac-chat-ide-2026-05-18`; these are explicitly
 deferred items the CEO review identified.
 
-### Cmd+/ tmux→chat selection bridge (X3 deferral)
-- **What**: When the user opens the Cmd+T raw-tmux overlay and makes a
+### Cmd+/ terminal→chat selection bridge (X3 deferral)
+- **What**: When the user opens the Cmd+T raw-terminal overlay and makes a
   SwiftTerm text selection, Cmd+/ wraps the selection in a fenced code
   block and inserts it into the chat composer ready to send.
-- **Why**: Closes the loop between raw tmux and chat without copy-paste
+- **Why**: Closes the loop between raw terminal output and chat without copy-paste
   gymnastics. Easy to backfill now that the Cmd+T overlay is in place.
 - **Effort**: ~80 LOC; hooks into SwiftTerm's selection delegate +
   posts to ComposerStore via NotificationCenter.

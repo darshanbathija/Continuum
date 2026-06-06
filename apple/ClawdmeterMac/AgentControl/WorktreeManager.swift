@@ -20,7 +20,7 @@ private final class WorktreeDataBox: @unchecked Sendable {
 ///   1. Registry owns this worktree (we created it; not a manual one)
 ///   2. `git status --porcelain` is empty (no uncommitted changes)
 ///   3. `git stash list` is empty for this worktree
-///   4. No tmux pane has this path as its `pane_current_path`
+    ///   4. No attached terminal/process is using this path as cwd
 ///   5. ≥ 24h since the session was deleted (grace period)
 ///
 /// Failures surface in Settings as "Could not clean up worktree X —
@@ -636,9 +636,9 @@ public actor WorktreeManager {
         if !stashResult.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return .skipped(reason: "Has stashed changes (git stash list not empty)")
         }
-        // Gate 4: no tmux pane is attached here.
+        // Gate 4: no attached terminal/process is using this path.
         if attachedPanePaths.contains(worktreePath) {
-            return .skipped(reason: "Worktree is the cwd of an attached tmux pane")
+            return .skipped(reason: "Worktree is the cwd of an attached terminal")
         }
         // All gates passed: actually delete.
         let removeResult = try await runGit(

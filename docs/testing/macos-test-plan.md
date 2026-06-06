@@ -29,9 +29,9 @@ or a stale test). `swift test` was 1289/0; capture the Mac-target result.
 |---|---|---|
 | **AcpHarnessBridge** | `ClawdmeterMacTests/AcpHarnessBridgeTests.swift` (+ `FakeHarnessDriver`) | text buffers→flush on turnEnded; plan→planText; tool→row; permission→prompt + `pendingPermissionRpcIds` map + `respondToPermission` round-trip clears prompt; turnEnded(.cancelled)→`.interrupted`; teardown drains buffer + closes; gRPC factory (no child) start path |
 | **HarnessSessionRegistry** | same file | register / bridge(for:) / contains / remove(teardown) |
-| **Daemon harness routing** | `AgentControlServerHarnessRouteTests.swift` | `acpSupport(for:)` (grok/cursor→non-nil, others nil); `codexAppServerEnabled`/`antigravityGrpcEnabled` default false; create→404/registry state for an ACP agent; send/interrupt/permission for a session WITH a registered bridge; legacy session w/o bridge falls through |
+| **Daemon harness routing** | `AgentControlServerHarnessRouteTests.swift` | `acpSupport(for:)` (grok/cursor→non-nil, others nil); Codex app-server and headless `agy` harnesses are the default; send/interrupt/permission for a session WITH a registered bridge; legacy session w/o bridge returns stale/retired |
 | **SessionChatStore** | extend / `SessionChatStoreParsingTests.swift` | `ParsedLine.from` Claude + Codex `response_item` shapes, malformed/empty lines, dedup; `appendSDKMessages` + plan/turn-state setters |
-| **Registries** | extend `AgentSessionRegistry*Tests` | `inferred(.grok)→.acpGrok`, `inferred(.cursor)→.acpCursor` persisted round-trip; create w/ nil tmux; delete; lenient decode of legacy `cursor_cli`/`codex_cli` from old sessions.json |
+| **Registries** | extend `AgentSessionRegistry*Tests` | `inferred(.grok)→.acpGrok`, `inferred(.cursor)→.acpCursor`, `inferred(.codex)→.codexAppServer`, `inferred(.gemini)→.agyHeadless` persisted round-trip; create w/ nil legacy pane fields; delete; lenient decode of old sessions.json |
 | **Codex/Antigravity driver** | extend `AntigravityCascadeClientDecodeTests`; `CodexAppServerDriver` via FakeAcpAgent-style frames | decode→mapper round-trips for the remaining step/event kinds |
 
 ## Step 2 — adversarial bug-hunt (read-only)

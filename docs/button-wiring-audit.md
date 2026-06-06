@@ -218,7 +218,7 @@ the next branches.
 | D6 | Mac titlebar | **Wire all three to real state** | `Updated Xs ago` reads `runtime.lastPolledAt`; `Sync with iPhone` becomes a button (opens QR popover when unpaired); `iPhone paired` shows real pairing state |
 | D7 | Chat reply icons | **Copy + Pick winner only** | Drop refresh/share/star icons. Copy → pasteboard. Pick winner → `client.frontierPickWinner(groupId:childIndex:)` |
 | D8 | Mac sidebar filter | **Build full NSMenu** | Toggles: live only / paused / by-provider / sort by last active; UserDefaults-persisted |
-| D9 | Mac ReviewPane tabs | **All 5 wired (Plan + Diff + Sources + PR + Term)** | Diff = `git diff main...HEAD`; Sources = `RepoIndex` semantic; PR = `gh pr view` + `NSWorkspace.open`; Term = live tmux mirror via SwiftTerm |
+| D9 | Mac ReviewPane tabs | **All 5 wired (Plan + Diff + Sources + PR + Term)** | Diff = `git diff main...HEAD`; Sources = `RepoIndex` semantic; PR = `gh pr view` + `NSWorkspace.open`; Term = live direct PTY mirror via SwiftTerm |
 | D10 | Release sequencing | **Phased PRs by surface — Code first, Chat second** | See plan below |
 | D11 | OpenCode fork vs. build | **Hybrid — keep Swift harness, add OpenCode as another provider** | Fork was ruled out: kills iOS (Bun can't run there), breaks CLI OAuth handover, breaks the cost meter (no rate-limit headers when OpenCode hits APIs directly). New `OpencodeProcessManager` peers with `CodexSDKManager`/`AntigravitySidecarManager`; new `AgentKind.opencode`; SSE→`AgentSession` event adapter. See `docs/opencode-research-2026-05-22.md` for the full deep-research record |
 | D12 | OpenCode adapter timing | **Standalone PR #27 after Polish** | v1.0 ships without OpenCode; v1.1 adds it. Keeps PR #24/25/26 review surfaces clean |
@@ -239,7 +239,7 @@ control reaches a real backend.
 - D9 (Diff): live `git diff main...HEAD` against worktree.
 - D9 (Sources): semantic search via `RepoIndex.search(query:)`.
 - D9 (PR): `gh pr view` JSON; "Open PR on GitHub" → `NSWorkspace.open`.
-- D9 (Term): live tmux pane mirror via `SwiftTerm` view.
+- D9 (Term): live direct PTY mirror via `SwiftTerm` view.
 - Plan halo "Approve & run" → `client.approvePlan(sessionId:)` (now on
   loopback).
 - Plan halo "Refine" / "Edit plan" → `client.sendPrompt(...)` with refine UI.

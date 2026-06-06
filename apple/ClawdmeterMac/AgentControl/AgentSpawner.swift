@@ -1,12 +1,11 @@
 import Foundation
 import ClawdmeterShared
 
-/// Builds the child-process argv that runs inside a tmux pane for a given
+/// Builds the child-process argv that runs inside a direct PTY for a given
 /// (agent, cwd, options) tuple.
 ///
-/// Per E4: returns argv arrays, NEVER `cd && exec` shell strings. The
-/// caller (`TmuxControlClient.newWindow`) passes the cwd separately via
-/// tmux's `-c` flag.
+/// Per E4: returns argv arrays, NEVER `cd && exec` shell strings. The caller
+/// passes the cwd separately to the PTY host.
 ///
 /// Sessions v2 changes (T1 + T2 + T3 + Phase 0):
 /// - Uses `ShellRunner.locateBinary` instead of hardcoded user-specific paths.
@@ -16,11 +15,9 @@ import ClawdmeterShared
 ///   `codex --help` 2026-05). Codex does NOT have a `--reasoning-effort` flag.
 public enum AgentSpawner {
 
-    /// The child environment for a Claude PTY spawn, at PARITY with a tmux pane.
+    /// The child environment for a Claude PTY spawn.
     ///
-    /// A tmux pane inherits the tmux server's env, which `TmuxControlClient`
-    /// starts with `SpawnPathResolver.merged(...)` — the enriched login PATH.
-    /// Without that, a PTY `claude` runs under launchd's thin GUI PATH
+    /// Without the enriched login PATH, a PTY `claude` runs under launchd's thin GUI PATH
     /// (`/usr/bin:/bin:…`) and can't find node/rg/hooks. `extra` carries managed
     /// repo env (only the daemon's repo-env resolver can compute it; callers
     /// without one pass nil). Sanitized LAST so the subscription-billing rail
@@ -118,9 +115,9 @@ public enum AgentSpawner {
             // v27: every non-Claude provider is ACP-harness-driven (paneless) —
             // codex via app-server, cursor via cursor-agent ACP, gemini via the
             // Cascade gRPC driver, grok headless, opencode via its SSE manager.
-            // None take a tmux argv; the Mac fork + daemon route them to the
-            // AcpHarnessBridge before this builder is reached. Only Claude spawns
-            // via tmux.
+            // None take a direct CLI argv here; the Mac fork + daemon route them
+            // to the AcpHarnessBridge/app-server/SSE manager before this builder
+            // is reached. Claude uses the direct PTY path.
             return []
         case .unknown:
             // X3: forward-compat unknown agent — no argv builder. Caller
@@ -135,18 +132,13 @@ public enum AgentSpawner {
     /// - `.chat`: forces `planMode = true` for Claude/Codex CLI, ignores
     ///   autopilot, and produces the appropriate per-agent argv.
     ///
-    /// **Codex SDK chat** (`session.codexChatBackend == .sdk`) returns an
-    /// empty array — the SDK path is handled by `CodexSubscriptionRelay`
-    /// directly in Phase 4.5, not through tmux argv. Callers must
-    /// detect this case (`session.agent == .codex && session.kind == .chat
-    /// && session.codexChatBackend == .sdk`) and route to the relay
-    /// instead of spawning a tmux pane.
+    /// **Legacy Codex SDK chat** (`session.codexChatBackend == .sdk`) returns
+    /// an empty array. Those persisted sessions are decode-only and command
+    /// routes retire them with `legacy_session_retired`; new Codex chat uses
+    /// the app-server harness.
     ///
-    /// **Gemini chat** returns an empty array in v0.8 — the gemini CLI
-    /// is being replaced by Antigravity (agy) in a parallel thread; the
-    /// Chat tab spawn path lands in v0.9. The /chat-sessions route
-    /// handler surfaces 501 Not Implemented for `agent == .gemini` chat
-    /// requests.
+    /// **Gemini chat** is now started through the headless `agy` harness. This
+    /// argv builder remains a compatibility boundary for legacy CLI shapes.
     public static func argv(for session: AgentSession, autopilot: Bool = false) -> [String] {
         // Chat sessions always run in plan-mode regardless of stored
         // request flags — that's the safety wedge for v0.8.
@@ -165,15 +157,13 @@ public enum AgentSpawner {
                 // Track A: a session that already captured a CLI session id is a
                 // RESUME (idle-teardown / relaunch / crash-degraded) — pass it so
                 // `claude --resume` continues the conversation. nil for a fresh
-                // session ⇒ clean start. tmux sessions never capture an id, so
-                // this is a no-op for them.
+                // session -> clean start.
                 resumeSessionId: session.claudeSessionId,
                 deepResearch: session.deepResearch
             ) ?? []
         case (.codex, _), (.gemini, _), (.cursor, _), (.opencode, _), (.grok, _):
-            // v27: every non-Claude provider is ACP-harness-driven (paneless) —
-            // no tmux argv. The Mac fork + daemon route them to the
-            // AcpHarnessBridge before this builder is reached. Only Claude tmux.
+            // v27: every non-Claude provider is harness/server-driven. The Mac
+            // fork + daemon route them before this builder is reached.
             return []
         case (.unknown, _):
             // X3: forward-compat unknown kind — no argv. Caller surfaces
@@ -209,7 +199,7 @@ public enum AgentSpawner {
         case .codex, .gemini, .cursor, .opencode, .grok:
             // v27: non-Claude providers are ACP-harness-driven — respawn /
             // config-swap / approve-plan go through rebuilding the harness
-            // bridge, not a tmux argv. Only Claude respawns via tmux.
+            // bridge, not a direct CLI argv. Claude respawns via direct PTY.
             return []
         case .unknown:
             // X3: forward-compat unknown agent — no respawn argv builder.
@@ -233,8 +223,7 @@ public enum AgentSpawner {
 
     /// Locate the Cursor Agent CLI: prefer `cursor-agent`, fall back to `agent`.
     /// Returns nil when neither is on PATH. Used by the cursor preflight +
-    /// ChatProviderProbe. (The tmux argv builder that also used it is gone — v27
-    /// routes cursor through the cursor-agent ACP harness, not tmux.)
+    /// ChatProviderProbe. Cursor routes through the cursor-agent ACP harness.
     public static func cursorBinaryPath() -> String? {
         ShellRunner.locateBinary("cursor-agent") ?? ShellRunner.locateBinary("agent")
     }

@@ -27,7 +27,7 @@ This document breaks down the **architectural, strategic, and feature-level gaps
 | **Product Category** | Native mobile/desktop control plane & companion | Full AI-first integrated development environment (IDE) | Multi-agent parallel workbench & git worktree manager |
 | **Form Factor** | Mac (menu-bar + Tahoe window), iOS, watchOS | Desktop application (fork of VS Code) | macOS desktop app |
 | **Primary Wedge** | Mobile plan approvals, cost analytics, model comparisons | Inline autocompletions (Cursor Tab) & multi-file editing | Running 3–5 agents in parallel in clean, isolated git worktrees |
-| **Code Modification** | *Indirect:* Spawns external CLI agents (tmux/LSP) to edit files | *Direct:* Inline `Cmd+K`, codebase Composer `Cmd+I` with instant diffs | *Indirect:* Manages external agent instances (Claude Code, Codex CLI) |
+| **Code Modification** | *Indirect:* Drives external CLI agents through direct PTY/harness sessions to edit files | *Direct:* Inline `Cmd+K`, codebase Composer `Cmd+I` with instant diffs | *Indirect:* Manages external agent instances (Claude Code, Codex CLI) |
 | **Repository Intelligence** | Basic file mentions (`@`), active session citations | Auto-refreshing vector index, AST graphs, codebase semantic search | Relies on the underlying CLI agents (e.g., Claude Code's own search) |
 | **Multi-Agent Scale** | Supports multiple sessions but focused on a single active run | Single-developer active editor; linear agent runs in Composer | Explicitly orchestrates a parallel fleet of virtual junior engineers |
 | **Pervasive Control** | Paired iPhone/Watch app, background alerts, local notifications | None (strictly desktop) | None (strictly desktop) |
@@ -68,7 +68,7 @@ Conductor's value proposition is scaling developer leverage by **treating AI age
    * *Continuum:* While Continuum has a `WorktreeManager` that can spawn sessions in `.claude/worktrees/*` (D7) and a basic 24-hour grace period GC (D12), its interface is not designed around parallel workspace visualization. It lacks visual conflict-resolution and cross-branch merge tooling.
 2. **Multi-Agent "Team Dashboard" Visuals:**
    * *Conductor:* Visualizes agents as distinct entities (with mock names/avatars) working simultaneously on a backlog. The developer acts as a "Technical Lead" or "Conductor," monitoring the board, reviewing PRs, and coordinating the output.
-   * *Continuum:* Treats sessions as sequential chat files or tmux terminals. It has "Conductor-style sidebar buckets" (Active, In Review, Done, Archived) in its Mac dashboard, but does not provide a holistic "multi-agent team project board."
+   * *Continuum:* Treats sessions as sequential chat files or direct terminal-backed agent runs. It has "Conductor-style sidebar buckets" (Active, In Review, Done, Archived) in its Mac dashboard, but does not provide a holistic "multi-agent team project board."
 3. **Direct Backlog / Issue Tracking Integration:**
    * *Conductor:* Integrates directly with GitHub Issues or project boards to let you drag-and-drop a task, assign it to a virtual agent, and watch the agent create a branch, write the code, run tests, and open a PR.
    * *Continuum:* Spawns sessions from explicit user prompts or manual goal-pinning. It has a PR Review pane, but lacks direct issue-to-agent task assignment pipelines.
@@ -119,7 +119,7 @@ graph TD
 Neither Cursor nor Conductor has a mobile presence. Continuum owns the physical space:
 * **Live Activities & Dynamic Island:** Displays real-time agent token burns, execution duration, and current sub-task status directly on the lock screen.
 * **Apple Watch Complications:** A wrist-tap notification that a plan is ready, offering immediate "Approve" or "Interrupt" controls.
-* **Local Daemon Bridge:** By hosting a native HTTP/WS engine on the Mac, it seamlessly control tmux sessions without exposing remote SSH ports to the internet.
+* **Local Daemon Bridge:** By hosting a native HTTP/WS engine on the Mac, it controls direct PTY and harness-backed sessions without exposing remote SSH ports to the internet.
 
 ### 2. Multi-Provider Broadcaster (The Chat V3 Wedge)
 * Cursor locks you into their model gateway or custom API proxies. Conductor runs CLI instances in isolation.

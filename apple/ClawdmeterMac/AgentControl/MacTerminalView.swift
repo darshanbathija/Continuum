@@ -19,8 +19,8 @@ public struct MacTerminalView: NSViewRepresentable {
     public let host: String
     public let wsPort: Int
     public let token: String
-    /// G12 multi-terminal: override the session's primary pane with a
-    /// specific tmux pane id (e.g. "%9"). nil = use primary.
+    /// G12 multi-terminal: override the session's primary terminal with a
+    /// specific direct PTY instance id. nil = use primary.
     public let paneId: String?
     public let onFirstOutput: (() -> Void)?
 

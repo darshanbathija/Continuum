@@ -602,10 +602,9 @@ public final class AgentControlClient: ObservableObject {
         case "/workspaces/quick-start":  return 30   // mkdir + git init
         case "/workspaces/wake-mac":     return 15   // tailscale wake + caffeinate
         case "/workspaces/allow-list":   return 5    // pure read
-        // Chat-session create spawns the agent before responding. Claude is a
-        // tmux pane whose cold start (it reads ~/.claude.json) takes ~9-10s —
-        // longer than the 8s default, which surfaced as "request timed out".
-        // The daemon's own tmux race caps at 10s; give the client margin.
+        // Chat-session create spawns the agent before responding. Claude's
+        // direct PTY cold start (it reads ~/.claude.json) can take ~9-10s,
+        // longer than the 8s default, so give the client margin.
         case "/chat-sessions":           return 25
         // Broadcast spawns 2-3 children sequentially, each capped at 25s by the
         // daemon. The optimistic skeleton means the user isn't blocked on this.
@@ -1022,7 +1021,7 @@ public final class AgentControlClient: ObservableObject {
             if scheduleAuthoritativeRefresh {
                 scheduleDesktopEventAuthoritativeRefresh()
             }
-        case .sessionCreated, .statusChanged, .planReady, .doneDetected, .paused, .tmuxServerLost, .tmuxServerRecovered, .unknown:
+        case .sessionCreated, .statusChanged, .planReady, .doneDetected, .paused, .unknown:
             if scheduleAuthoritativeRefresh {
                 scheduleDesktopEventAuthoritativeRefresh()
             }
@@ -1105,9 +1104,9 @@ public final class AgentControlClient: ObservableObject {
         )
     }
 
-    /// Revive a degraded session: respawn its agent into a fresh tmux pane
-    /// (same config + resume). Returns the updated session (new tmuxPaneId)
-    /// so the caller can reconnect the terminal. v25 — gated on
+    /// Revive a degraded session through its current runtime (same config +
+    /// resume). Returns the updated session so the caller can reconnect. v25 —
+    /// gated on
     /// `supportsRevive`; older Macs 404 the route.
     @MainActor
     @discardableResult
@@ -1308,8 +1307,8 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
-    /// Spawn a new tmux pane in the session and return its ref. Daemon's
-    /// existing handler accepts `{title}` and returns the new TerminalPaneRef.
+    /// Spawn a new direct terminal in the session and return its ref. Daemon's
+    /// handler accepts `{title}` and returns the new TerminalPaneRef.
     @MainActor
     public func addTerminal(sessionId: UUID, title: String) async -> TerminalPaneRef? {
         guard let bodyData = try? JSONSerialization.data(withJSONObject: ["title": title]) else { return nil }
@@ -1328,9 +1327,8 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
-    /// Delete a pane by its `TerminalPaneRef.id` (not the tmux pane id).
-    /// Daemon's DELETE handler matches on the ref UUID, not the underlying
-    /// tmux pane id.
+    /// Delete a terminal by its `TerminalPaneRef.id`. Daemon's DELETE handler
+    /// matches on the ref UUID, not the underlying direct PTY instance id.
     @MainActor
     public func deleteTerminal(sessionId: UUID, terminalRefId: UUID) async {
         guard let request = makeRequest(

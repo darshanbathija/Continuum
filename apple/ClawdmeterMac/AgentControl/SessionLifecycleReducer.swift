@@ -180,7 +180,7 @@ public enum SessionLifecycleReducer {
         if !blockers.filter({ $0.kind == .preflight || $0.kind == .providerAuth || $0.kind == .repoState }).isEmpty {
             return .preflightBlocked
         }
-        if flags.isSpawning || isTmuxBackedSpawnPending(session) {
+        if flags.isSpawning {
             return .spawning
         }
         if flags.isValidating || validationStatus?.state == .running {
@@ -464,18 +464,6 @@ public enum SessionLifecycleReducer {
 
     private static func hasPendingPlan(_ session: AgentSession) -> Bool {
         normalized(session.planText) != nil && normalized(session.approvedPlanText) == nil
-    }
-
-    private static func isTmuxBackedSpawnPending(_ session: AgentSession) -> Bool {
-        guard session.status == .running,
-              session.tmuxPaneId == nil,
-              session.tmuxWindowId == nil
-        else { return false }
-
-        if session.kind == .chat { return false }
-        if session.agent == .gemini { return false }  // gemini is paneless (headless agy harness)
-        if session.agent == .opencode { return false }
-        return true
     }
 
     private static func hasMergeGateBlocker(_ blockers: [LifecycleBlocker]) -> Bool {

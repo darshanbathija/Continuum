@@ -4,7 +4,7 @@ import ClawdmeterShared
 /// Owns one harness-driven agent session end to end on the daemon: runs an
 /// `AgentDriver` and projects its `HarnessEvent` stream into the session's
 /// `SessionChatStore` so chat / plan / tool / turn-state / permission render
-/// exactly like the tmux + SDK backends. Transport is per-driver:
+/// exactly like the other runtime backends. Transport is per-driver:
 ///   • stdio (Grok/Cursor over ACP, Codex over app-server) — the bridge owns an
 ///     `AcpStdioChild` + `NdjsonRpcConnection` and pumps stdout→connection;
 ///   • gRPC (Antigravity Cascade) — the driver owns its channel; child == nil.

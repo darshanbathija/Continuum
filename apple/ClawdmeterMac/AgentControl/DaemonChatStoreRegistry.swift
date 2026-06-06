@@ -194,11 +194,13 @@ public final class DaemonChatStoreRegistry {
                 desiredURL = nil
             }
         case .code:
-            // v27: paneless harness Code sessions are sdkOnly (bridge-fed) —
-            // never roll them over to a JSONL, or every snapshot would drop +
-            // rebuild the store and lose streamed content. Only LEGACY tmux Code
-            // sessions (real pane) track rollout lineage.
-            if session.tmuxPaneId == nil {
+            // Harness Code sessions are sdkOnly (bridge-fed): never roll them
+            // over to a JSONL, or every snapshot would drop + rebuild the store
+            // and lose streamed content. Claude direct PTY and retired legacy
+            // pane-bearing sessions still use JSONL resolution.
+            if session.agent == .claude {
+                desiredURL = resolveURL(session.id, session)
+            } else if session.tmuxPaneId == nil {
                 desiredURL = nil
             } else {
                 // Plan-mode rollout swap on approve-plan (PR #69 audit P1).
@@ -341,8 +343,9 @@ public final class DaemonChatStoreRegistry {
     private func createStore(for session: AgentSession) -> SessionChatStore? {
         // v0.8 chat sessions: route by backend.
         //
-        // - Codex SDK chat → sdkOnly store, populated by CodexSDKEventIngestor.
-        //   No JSONLTail (the SDK doesn't write JSONL).
+        // - Legacy Codex SDK chat → sdkOnly store for persisted transcript
+        //   compatibility. Send/config routes retire these sessions instead of
+        //   starting the removed SDK runtime.
         // - Claude chat (CLI) → JSONLTail at exact encoded chat-cwd path. The
         //   chat-cwd is `<AppSupport>/chat-sessions/<sessionUUID>/`, unique per
         //   session, so the encoded `~/.claude/projects/-Users-..-chat-sessions-<UUID>/`
@@ -352,11 +355,8 @@ public final class DaemonChatStoreRegistry {
         //   resolver (good enough for v0.8; the CLI writes to
         //   `~/.codex/sessions/<date>/rollout-...jsonl` keyed by date/uuid).
         if session.kind == .chat {
-            // Codex SDK: sdkOnly (no JSONL exists). v0.9.x.1 replays the
-            // disk-backed SDK transcript mirror so chat history survives
-            // idle-eviction — without this, every 5-min idle wipes the
-            // visible thread even though the SDK server-side thread is
-            // still resumable via op:"resume" with the persisted threadId.
+            // Legacy Codex SDK: sdkOnly (no JSONL exists). Keep the transcript
+            // mirror readable for old sessions, but the runtime path is retired.
             if session.agent == .codex && session.codexChatBackend == .sdk {
                 let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
                 store.start()
@@ -426,19 +426,11 @@ public final class DaemonChatStoreRegistry {
             SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
             return store
         }
-        // v27 Code-tab harness migration: paneless harness-driven Code sessions
-        // (cursor/grok always; gemini always — headless `agy` by default, gRPC
-        // Cascade when its flag is on; codex via app-server when its flag is on)
-        // are fed by the AcpHarnessBridge through `appendSDKMessages` — there is
-        // NO JSONL to tail. Use an sdkOnly store. Distinguished from a LEGACY tmux
-        // Code session (real pane + JSONL) by the absence of a tmux pane, so old
-        // tmux codex/cursor sessions keep resolving their JSONL below. Gemini has
-        // no tmux spawn path at all, so paneless gemini is always harness-driven.
+        // Harness-driven Code sessions are fed by AcpHarnessBridge through
+        // `appendSDKMessages`; there is no JSONL to tail. Claude direct PTY
+        // sessions skip this branch and resolve their JSONL below.
         if session.tmuxPaneId == nil,
-           session.agent == .cursor
-             || session.agent == .grok
-             || session.agent == .gemini
-             || (session.agent == .codex && AgentControlServer.codexAppServerEnabled) {
+           session.runtimeBinding?.runtimeKind.isACPDriven == true {
             let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
             store.start()
             SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)

@@ -4,6 +4,20 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.6 build 206] - 2026-06-06 - Remove tmux runtime (`darshanbathija/remove-tmux`)
+
+### Removed
+
+- Removes tmux runtime code, control-mode parsing, bundled tmux provisioning, the tmux control-mode probe tool, and tmux-specific tests from active Mac/shared build paths.
+- Retires old tmux pane-backed sessions instead of reconnecting them, while preserving legacy `tmuxWindowId` and `tmuxPaneId` decoding compatibility.
+
+### Changed
+
+- Claude Code and chat sessions now always use the direct Claude PTY registry for sends, interrupts, deletes, approval, revive, scheduler, and config-swap flows.
+- Codex, Cursor, Gemini, and Grok stay on ACP/app-server/headless harnesses; missing live harnesses now surface stale-session responses instead of tmux fallbacks.
+- Terminal, vendor provisioning, and OpenCode setup surfaces now use direct PTY hosts while keeping the existing terminal WebSocket frame shape.
+- Bumps `VERSION` 0.31.5 -> 0.31.6, `MARKETING_VERSION` 0.31.5 -> 0.31.6, and `CURRENT_PROJECT_VERSION` 205 -> 206.
+
 ## [0.31.5 build 205] - 2026-06-06 - Strip external session noise from Code (`darshanbathija/session-noise`)
 
 ### Removed

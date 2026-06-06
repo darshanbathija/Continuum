@@ -35,8 +35,9 @@ final class ChatSendPerProviderTests: XCTestCase {
     func test_send_codexChat_routesToHarnessByDefault() {
         // Harness default: codexChatBackend nil + a live bridge → app-server harness.
         XCTAssertEqual(chatRoute(agent: .codex, hasLiveBridge: true), .harnessBridge)
-        // Kill-switch legacy: codexChatBackend .sdk (no bridge) → SDK relay.
-        XCTAssertEqual(chatRoute(agent: .codex, codexBackend: .sdk), .codexSDK)
+        // Persisted SDK-style Codex chats are retired once app-server harness is
+        // the only Codex chat runtime.
+        XCTAssertEqual(chatRoute(agent: .codex, codexBackend: .sdk), .legacyRetired)
     }
 
     func test_send_geminiChat_routesToHarnessByDefault() {
@@ -52,8 +53,8 @@ final class ChatSendPerProviderTests: XCTestCase {
         XCTAssertEqual(chatRoute(agent: .cursor, hasLiveBridge: true), .harnessBridge)
     }
 
-    func test_send_claudeChat_routesToTmux() {
-        XCTAssertEqual(chatRoute(agent: .claude), .tmux)
+    func test_send_claudeChat_routesToPty() {
+        XCTAssertEqual(chatRoute(agent: .claude), .claudePty)
     }
 
     func test_send_opencodeChat_routesToServe() {

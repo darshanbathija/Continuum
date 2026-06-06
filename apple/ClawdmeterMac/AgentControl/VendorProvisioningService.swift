@@ -73,7 +73,6 @@ public final class VendorProvisioningService: ObservableObject {
         pluginDiscovery: @escaping () -> [PluginInfo] = { PluginRegistry.discover() },
         shellRunner: ShellRunner = .shared,
         openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
-        tmuxClient: TmuxControlClient? = nil,
         launchTerminalCommand: ((String) async -> TerminalLaunchResult)? = nil,
         deviceProbe: ((VendorProvisioningVendor, [PluginInfo]) async -> VendorProvisioningStatus)? = nil
     ) {
@@ -85,7 +84,7 @@ public final class VendorProvisioningService: ObservableObject {
         self.shellRunner = shellRunner
         self.openURL = openURL
         self.launchTerminalCommand = launchTerminalCommand ?? { command in
-            await VisibleTerminalCommandLauncher.launch(command, tmuxClient: tmuxClient)
+            await DirectTerminalCommandLauncher.launch(command)
         }
         self.deviceProbe = deviceProbe
     }
@@ -551,71 +550,34 @@ public final class VendorProvisioningService: ObservableObject {
     }
 }
 
-private enum VisibleTerminalCommandLauncher {
-    static func launch(
-        _ command: String,
-        tmuxClient: TmuxControlClient?
-    ) async -> VendorProvisioningService.TerminalLaunchResult {
-        guard let tmuxClient else {
-            return .init(launched: false, message: "tmux is unavailable for vendor provisioning commands.")
-        }
-
+private enum DirectTerminalCommandLauncher {
+    static func launch(_ command: String) async -> VendorProvisioningService.TerminalLaunchResult {
         do {
-            try await tmuxClient.start()
-            let ref = try await tmuxClient.newWindow(
-                cwd: FileManager.default.homeDirectoryForCurrentUser.path,
-                child: ["/bin/zsh", "-lc", tmuxShellScript(for: command)]
+            let host = try await TerminalPtyRegistry.shared.spawnCommand(
+                wrappedShellScript(for: command),
+                cwd: NSHomeDirectory(),
+                title: "Vendor Provisioning"
             )
-            _ = try? await tmuxClient.command(["select-window", "-t", ref.windowId])
-            let attachOpened = launchTerminalAttach(tmuxClient: tmuxClient)
-            let message = attachOpened
-                ? "Opened a visible tmux terminal for this command."
-                : "Launched in tmux, but Terminal attach automation failed."
+            let paneId = host.id.uuidString
             return .init(
                 launched: true,
-                message: message,
-                windowId: ref.windowId,
-                paneId: ref.paneId
+                message: "Started a direct terminal for this command.",
+                paneId: paneId
             )
         } catch {
-            vendorProvisioningLogger.error("tmux vendor command launch failed: \(error.localizedDescription, privacy: .public)")
+            vendorProvisioningLogger.warning("Direct terminal launch failed: \(error.localizedDescription, privacy: .public)")
             return .init(
                 launched: false,
-                message: "Could not launch tmux command: \(error.localizedDescription)"
+                message: "Could not start a direct terminal for this command."
             )
         }
     }
 
-    private static func launchTerminalAttach(tmuxClient: TmuxControlClient) -> Bool {
-        let command = [
-            shellQuoted(tmuxClient.configuration.tmuxBinary),
-            "-L",
-            shellQuoted(tmuxClient.configuration.socketName),
-            "attach",
-            "-t",
-            "control",
-        ].joined(separator: " ")
+    private static func wrappedShellScript(for command: String) -> String {
         let script = """
-        tell application "Terminal"
-          activate
-          do script "\(appleScriptEscaped(command))"
-        end tell
-        """
-        var error: NSDictionary?
-        if NSAppleScript(source: script)?.executeAndReturnError(&error) != nil {
-            return true
-        }
-        if let error {
-            vendorProvisioningLogger.warning("Terminal launch failed: \(String(describing: error), privacy: .public)")
-        }
-        return false
-    }
-
-    private static func tmuxShellScript(for command: String) -> String {
-        """
         clear
-        echo 'Clawdmeter vendor provisioning'
-        echo '+ \(shellQuoted(command))'
+        echo 'Continuum vendor provisioning'
+        printf '%s\\n' \(shellQuoted("+ \(command)"))
         \(command)
         status=$?
         echo
@@ -624,12 +586,7 @@ private enum VisibleTerminalCommandLauncher {
         read _
         exit $status
         """
-    }
-
-    private static func appleScriptEscaped(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        return script
     }
 
     private static func shellQuoted(_ value: String) -> String {

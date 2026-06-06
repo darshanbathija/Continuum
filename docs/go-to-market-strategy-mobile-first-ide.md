@@ -739,7 +739,7 @@ Post 1:
 
 Post 2:
 
-> The Mac still does the real work: Claude/Codex/Gemini/OpenCode/Cursor runtimes, local auth, tmux/sidecars, repo context, usage parsing.
+> The Mac still does the real work: Claude/Codex/Gemini/OpenCode/Cursor runtimes, local auth, direct PTY/harness sidecars, repo context, usage parsing.
 >
 > The phone is the control plane: approve, interrupt, inspect, compare.
 

@@ -1,7 +1,7 @@
 # Continuum — Known Limitations
 
 This doc enumerates work that is described in the plan or implied by
-the security / privacy posture, but is **not yet in main**. Companion
+the security / privacy posture, but is still deferred or follow-up. Companion
 docs are [`docs/security.md`](security.md) and
 [`docs/privacy.md`](privacy.md); both cite this file in their
 "status note" callouts.
@@ -10,45 +10,44 @@ Plan reference: `~/.claude/plans/study-this-codebase-crystalline-shore.md` (main
 
 ---
 
-## 1. Secure relay + APNS clients are not in main yet
+## 1. Secure relay + APNS is live, with hardening follow-ups
 
-The Cloudflare Workers that back the secure-cloud pairing path are
-shipped:
+The secure-cloud pairing path now has both Worker and Apple-client pieces:
 
 - **E2 — relay Worker** at `infra/relay/`.
   [PR #151](https://github.com/darshanbathija/Clawdmeter/pull/151).
 - **E5 — APNS gateway Worker** at `infra/apns-gateway/`.
   [PR #147](https://github.com/darshanbathija/Clawdmeter/pull/147).
+- **Mac relay client** at
+  `apple/ClawdmeterMac/AgentControl/RelayClient.swift` plus
+  `RelaySubscriptionBridge.swift`.
+- **iOS relay client** at
+  `apple/ClawdmeteriOS/AgentControl/IOSRelayClient.swift` and
+  `IOSRelayClientCoordinator.swift`.
+- **Relay mux/shared transport** under
+  `apple/ClawdmeterShared/Sources/ClawdmeterShared/Relay/`.
+- **APNS client/registration** at
+  `apple/ClawdmeterMac/AgentControl/APNSGatewayClient.swift` and
+  `apple/ClawdmeteriOS/iOSAPNSRegistration.swift`.
 
-What is NOT shipped:
+What remains follow-up:
 
-- **E3 — Mac daemon `RelayClient.swift`.** The Mac side that opens a
-  relay session, runs the X25519 ECDH handshake, and routes existing
-  daemon handlers over relay envelopes. Not in main.
-- **E4 — iOS daemon `RelayClient.swift`.** The iOS side that scans
-  the QR, performs the matching ECDH, and consumes envelopes. Not in
-  main.
-- **E6 — Mac daemon `APNSGatewayClient.swift`.** The Mac side that
-  POSTs sealed payloads to the gateway. Not in main.
-- **E7 — pairing UX rewrite.** The QR-with-relay-token + ECDH-pubkey
-  pairing flow on the Mac + iOS side. Not in main.
+- **Operational drills.** Rotation, kill-switch, canary, and incident
+  drills need regular production proof after the live relay/default
+  transport cutover.
+- **Relay edge hardening.** Keep tightening rate limits, replay windows,
+  signed creation grants, and auth telemetry as production traffic grows.
+- **APNS delivery polish.** Keep validating token cleanup, retry behavior,
+  and degraded-mode user copy under real device churn.
 
-**Net effect:** Mac and iPhone clients do not actually use the
-relay/APNS Worker path today. The currently shipped pairing surface
-is still the **Tailscale-or-local-network** path:
+**Net effect:** Mac and iPhone clients can use the relay/APNS Worker path.
+Loopback/Tailscale remains useful for local development and fallback:
 
-- iPhone pairing remains QR/token based and expects loopback or
-  Tailscale-reachable hosts.
-- Tailscale MagicDNS is the recommended path for iOS App Transport
-  Security (per `README.md` §"App model").
-- Plan-approval push latency is bounded by iOS Background App
-  Refresh (15-30 min) rather than the ~2s the APNS gateway path
-  targets.
-
-The Worker side is shippable in isolation (its acceptance tests
-exercise the protocol end-to-end against mock peers), so the staging
-deploys are real; users just can't reach them yet without the
-Mac/iOS clients.
+- Pairing remains QR/token based.
+- Relay transport avoids requiring both devices to share a LAN or
+  Tailscale route.
+- APNS is the low-latency path for plan-approval notifications when
+  the device token and gateway are available.
 
 ## 2. Relay crypto parity is guarded by vectors
 

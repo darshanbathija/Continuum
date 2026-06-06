@@ -35,7 +35,6 @@ final class AgentControlServerRelayIntegrationTests: XCTestCase {
         let server = AgentControlServer(
             repoIndex: RepoIndex(),
             registry: AgentSessionRegistry(),
-            tmux: TmuxControlClient(),
             notifications: NotificationDispatcher(),
             listenPortRange: range,
             writesServerMetadata: false

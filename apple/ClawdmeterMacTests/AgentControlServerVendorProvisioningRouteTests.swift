@@ -26,7 +26,6 @@ final class AgentControlServerVendorProvisioningRouteTests: XCTestCase {
     private var tempDir: URL!
     private var repoRoot: URL!
     private var server: AgentControlServer!
-    private var tmux: TmuxControlClient!
     private var workspace: CodeWorkspaceRecord!
     private var envStore: RepoEnvStore!
     private var launchedCommand: String?
@@ -84,12 +83,10 @@ final class AgentControlServerVendorProvisioningRouteTests: XCTestCase {
             }
         )
 
-        tmux = TmuxControlClient(configuration: .init(socketName: "clawdmeter-vendor-route-\(UUID().uuidString)"))
         let portBase = UInt16(Int.random(in: 30_000...60_000))
         server = AgentControlServer(
             repoIndex: RepoIndex(),
             registry: AgentSessionRegistry(storeURL: sessionsURL),
-            tmux: tmux,
             notifications: NotificationDispatcher(),
             chatStoreRegistry: DaemonChatStoreRegistry(resolveURL: { _, _ in nil }),
             chatFileResolver: SessionFileResolver(
@@ -110,7 +107,6 @@ final class AgentControlServerVendorProvisioningRouteTests: XCTestCase {
 
     override func tearDown() async throws {
         server?.stop()
-        await tmux?.stop()
         if let tempDir {
             try? FileManager.default.removeItem(at: tempDir)
         }

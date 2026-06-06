@@ -43,8 +43,8 @@ actor ClaudePtyRegistry {
         let cwd: String?
         /// Explicit child environment (already sanitized of the billing-breaking
         /// keys by the caller). Carries the enriched login PATH + repo env so a
-        /// PTY `claude` finds node/rg/hooks exactly like a tmux pane does. The
-        /// host re-sanitizes defensively, so the billing rail holds regardless.
+        /// PTY `claude` finds node/rg/hooks. The host re-sanitizes defensively,
+        /// so the billing rail holds regardless.
         let env: [String: String]
         init(argv: [String], cwd: String?, env: [String: String] = ClaudeSpawnEnv.sanitized()) {
             self.argv = argv

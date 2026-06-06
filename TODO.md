@@ -33,8 +33,6 @@
 - [ ] **P2-19** archive() leaves the surviving A/B sibling pointing at an archived session (asymmetric link) — `apple/ClawdmeterMac/AgentControl/AgentSessionRegistry.swift:613-624`
 - [ ] **P2-20** Replayed `.failed` receipts lose their original HTTP status and error message and get a synthetic 500, masking the original 4xx — `apple/ClawdmeterMac/AgentControl/MobileCommandOutbox.swift:255-262`
 - [ ] **P2-21** iOS outbox `dispatch` treats undecodable persisted payloads as retryable, not terminal — a malformed envelope burns the full retry schedule before parking — `apple/ClawdmeteriOS/AgentControl/MobileCommandOutbox.swift:300-364`
-- [ ] **P2-22** `command()` timeout tears down the entire shared tmux control client, collapsing every live pane — `apple/ClawdmeterMac/AgentControl/TmuxControlClient.swift:667-679`
-- [ ] **P2-23** Control-mode line buffer is unbounded — a newline-free `%output` burst grows memory without limit — `apple/ClawdmeterMac/AgentControl/ControlModeParser.swift:37-63`
 - [ ] **P2-24** `HarnessProcessReaper.liveComm` blocks the main actor with a synchronous `ps` + `waitUntilExit()` per orphan at startup — `apple/ClawdmeterMac/AgentControl/HarnessProcessReaper.swift:54-85,117-130`
 - [ ] **P2-25** CodexAppServerDriver never clears currentTurnId after a turn completes — `apple/ClawdmeterMac/AgentControl/CodexAppServerDriver.swift:42`
 - [ ] **P2-26** CodexAppServerDriver leaks pendingApprovals entries; never cleared on close() — `apple/ClawdmeterMac/AgentControl/CodexAppServerDriver.swift:45`

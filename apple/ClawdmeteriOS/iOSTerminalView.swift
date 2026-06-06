@@ -28,8 +28,8 @@ struct iOSTerminalView: UIViewRepresentable {
     let host: String
     let wsPort: Int
     let token: String
-    /// Optional tmux pane filter. When nil the daemon falls back to the
-    /// session's primary pane (preserves single-pane behavior).
+    /// Optional direct terminal instance id. When nil the daemon attaches the
+    /// session's primary runtime terminal.
     var paneId: String? = nil
     @Binding var command: IOSTerminalCommand?
     var onConnectionStateChange: (IOSTerminalConnectionState) -> Void = { _ in }

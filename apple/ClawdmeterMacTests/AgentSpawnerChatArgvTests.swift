@@ -86,10 +86,11 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
     }
 
     func test_chatCodexSDK_returnsEmptyArgv() {
-        // SDK backend = caller routes to the relay/app-server path, not tmux.
+        // SDK backend is now a legacy, decode-only shape. Empty argv is the
+        // contract signal that command routes retire it instead of spawning.
         let session = makeChatSession(agent: .codex, codexBackend: .sdk, model: "gpt-5.5")
         let argv = AgentSpawner.argv(for: session)
-        XCTAssertTrue(argv.isEmpty, "SDK chat backend bypasses argv-based tmux spawn")
+        XCTAssertTrue(argv.isEmpty, "SDK chat backend bypasses argv-based spawn")
     }
 
     func test_chatCodexSDK_default_returnsEmptyArgv() {

@@ -30,12 +30,12 @@ final class SessionLifecycleReducerTests: XCTestCase {
                 .preflightBlocked
             ),
             (
-                "tmux-backed spawning",
+                "direct pty running without legacy pane metadata",
                 snapshot(session: session(id: sessionId, status: .running, tmuxWindowId: nil, tmuxPaneId: nil)),
-                .spawning
+                .running
             ),
             (
-                "codex sdk chat running without tmux",
+                "codex sdk chat running without legacy pane metadata",
                 snapshot(
                     session: session(
                         id: sessionId,
@@ -49,7 +49,7 @@ final class SessionLifecycleReducerTests: XCTestCase {
                 .running
             ),
             (
-                "gemini running without tmux (headless agy, paneless)",
+                "gemini running through headless harness",
                 snapshot(
                     session: session(
                         id: sessionId,
@@ -61,7 +61,7 @@ final class SessionLifecycleReducerTests: XCTestCase {
                 .running
             ),
             (
-                "opencode running without tmux",
+                "opencode running through server transport",
                 snapshot(
                     session: session(
                         id: sessionId,

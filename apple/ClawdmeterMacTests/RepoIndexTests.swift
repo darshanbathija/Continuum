@@ -3,7 +3,7 @@ import ClawdmeterShared
 @testable import Clawdmeter
 
 final class RepoIndexTests: XCTestCase {
-    func test_refreshUsesWorkspaceSnapshotOnlyAndEmitsNoRecentSessions() async {
+    func test_refreshUsesWorkspaceSnapshotOnlyAndEmitsNoRecentSessions() async throws {
         let defaults = UserDefaults.standard
         let originalRoots = defaults.stringArray(forKey: RepoIndex.scanRootsKey)
         defaults.set(["/tmp/continuum-external-scan-root"], forKey: RepoIndex.scanRootsKey)
@@ -15,18 +15,26 @@ final class RepoIndexTests: XCTestCase {
             }
         }
 
+        let repoRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("continuum-owned-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: repoRoot.appendingPathComponent(".git", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: repoRoot) }
+
         let workspace = CodeWorkspaceRecord(
             projectId: UUID(),
-            repoRoot: "/Users/dev/continuum-owned",
+            repoRoot: repoRoot.path,
             repoDisplayName: "Continuum Owned",
-            runtimeCwd: "/Users/dev/continuum-owned/.claude/worktrees/main",
+            runtimeCwd: repoRoot.appendingPathComponent(".claude/worktrees/main").path,
             activeSessionIds: [UUID()]
         )
         let repoIndex = RepoIndex(workspaceSnapshotProvider: { [workspace] })
 
         let snapshot = await repoIndex.refresh()
 
-        XCTAssertEqual(snapshot.map(\.key), ["/Users/dev/continuum-owned"])
+        XCTAssertEqual(snapshot.map(\.key), [repoRoot.path])
         XCTAssertEqual(snapshot.first?.displayName, "Continuum Owned")
         XCTAssertEqual(snapshot.first?.recentSessions, [])
         XCTAssertEqual(snapshot.first?.hasActiveSessions, false)

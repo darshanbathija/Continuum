@@ -898,11 +898,9 @@ final class RunProfileManagerTests: XCTestCase {
             storeURL: dir.appendingPathComponent("workspaces.json"),
             sessionsURL: sessionsURL
         )
-        let tmux = TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false"))
         return SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
-            supervisor: TmuxSupervisor(tmux: tmux, registry: registry),
             workspaceStore: workspaceStore
         )
     }

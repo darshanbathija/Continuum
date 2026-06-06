@@ -270,11 +270,8 @@ final class SessionsV2Tests: XCTestCase {
         XCTAssertEqual(AgentControlWireVersion.antigravityMinimum, 7)
         XCTAssertEqual(AgentControlWireVersion.codexSDKMinimum, 8)
         XCTAssertEqual(AgentControlWireVersion.agentapiMinimum, 10)
-        // Codex P1.4: v0.8.1's daemon POST /sessions endpoint still
-        // spawns Gemini via the legacy tmux argv path; only the Mac UI's
-        // SessionsView was migrated. iOS gate stays at 11 (deferred to
-        // v0.8.2 when the daemon path is also migrated) so iOS doesn't
-        // claim Antigravity chat support on a v10 Mac.
+        // Codex P1.4: iOS gate stays at 11 so older v10 Macs do not claim
+        // Antigravity chat support before the daemon-side migration.
         XCTAssertEqual(AgentControlWireVersion.antigravityChatMinimum, 11)
     }
 

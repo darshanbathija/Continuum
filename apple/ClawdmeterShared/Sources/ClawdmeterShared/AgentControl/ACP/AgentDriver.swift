@@ -1,9 +1,8 @@
 import Foundation
 
-/// The unified harness driver. Every backend (ACP agents, Codex app-server,
-/// Antigravity agentapi, the kept Claude/tmux path) conforms so the daemon
-/// drives one object regardless of transport. The ACP implementation is below;
-/// other backends land in later phases.
+/// The unified harness driver. Harness backends (ACP agents, Codex app-server,
+/// Antigravity agentapi) conform so the daemon drives one object regardless of
+/// transport. Direct Claude PTY is owned separately by `ClaudePtyRegistry`.
 public protocol AgentDriver: Actor {
     /// Live harness events. Consume on a background task; the daemon marshals
     /// to its (off-main) sinks.
