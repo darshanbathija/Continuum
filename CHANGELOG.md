@@ -10,6 +10,7 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 
 - The Code sidebar now ignores stale `discoverParallelSessions` opt-ins and only shows managed repos plus Continuum-owned sessions, so prior outside-session discovery cannot reintroduce external Claude sessions into the app.
 - Removed the "Discover parallel sessions" sidebar action that could scan `~/.claude` and `~/.codex` again after the user had already seen unexpected Claude `hi` sessions.
+- Live provider drive tests now require both `CLAWDMETER_LIVE_VERIFY=1` and `~/.continuum-live-verify`, so a stale marker file alone cannot burn Codex or other provider usage with PONG probes.
 - Added regression coverage proving external session discovery cannot be re-enabled through the persisted UserDefaults key or setter.
 
 ### Changed

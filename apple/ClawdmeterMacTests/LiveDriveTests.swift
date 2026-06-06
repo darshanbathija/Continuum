@@ -5,11 +5,12 @@ import ClawdmeterShared
 /// LIVE end-to-end drive verification for every non-Claude harness connector.
 ///
 /// These hit the REAL, authenticated provider CLIs and burn provider quota, so
-/// they are GATED behind `CLAWDMETER_LIVE_VERIFY=1` and auto-skip when the
-/// provider's binary / project isn't available. Each test drives the exact
-/// production path the daemon uses (`AcpHarnessBridge` factory → `start` →
-/// `prompt`) and asserts a real assistant reply reaches the `SessionChatStore`
-/// and the turn completes.
+/// they are GATED behind both `CLAWDMETER_LIVE_VERIFY=1` and an explicit
+/// `~/.continuum-live-verify` marker, then auto-skip when the provider's
+/// binary / project isn't available. Each test drives the exact production path
+/// the daemon uses (`AcpHarnessBridge` factory → `start` → `prompt`) and
+/// asserts a real assistant reply reaches the `SessionChatStore` and the turn
+/// completes.
 ///
 /// Run:
 ///   CLAWDMETER_LIVE_VERIFY=1 xcodebuild test \
@@ -23,9 +24,12 @@ final class LiveDriveTests: XCTestCase {
     private var cwd: String = "/tmp"
 
     override func setUpWithError() throws {
+        guard ProcessInfo.processInfo.environment["CLAWDMETER_LIVE_VERIFY"] == "1" else {
+            throw XCTSkip("Set CLAWDMETER_LIVE_VERIFY=1 and create ~/.continuum-live-verify to run live provider drives (uses real CLIs + quota).")
+        }
         let marker = (NSHomeDirectory() as NSString).appendingPathComponent(".continuum-live-verify")
         guard FileManager.default.fileExists(atPath: marker) else {
-            throw XCTSkip("Create ~/.continuum-live-verify to run live provider drives (uses real CLIs + quota).")
+            throw XCTSkip("Create ~/.continuum-live-verify after setting CLAWDMETER_LIVE_VERIFY=1 to run live provider drives (uses real CLIs + quota).")
         }
         // A throwaway git repo as the agent cwd (agents expect a workspace root).
         let dir = NSTemporaryDirectory() + "continuum-live-\(UUID().uuidString)"
