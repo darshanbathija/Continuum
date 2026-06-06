@@ -9,7 +9,7 @@ final class AutoReviverTests: XCTestCase {
         AutoReviverURLProtocol.reset()
     }
 
-    func test_tickFiresAtMostOncePerSessionEpoch() async {
+    func test_tickDoesNotSendNetworkRequest() async {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [AutoReviverURLProtocol.self]
         let reviver = AutoReviver(
@@ -22,19 +22,26 @@ final class AutoReviverTests: XCTestCase {
         let usage = makeUsage(sessionEpoch: Int(now.timeIntervalSince1970) - 1)
 
         await reviver.tick(usage: usage, now: now)
-        await reviver.tick(usage: usage, now: now.addingTimeInterval(300))
 
-        XCTAssertEqual(reviver.fireCount, 1)
-        XCTAssertEqual(AutoReviverURLProtocol.requestCount, 1)
+        XCTAssertEqual(reviver.fireCount, 0)
+        XCTAssertEqual(reviver.lastResult?.outcome, .disabled)
+        XCTAssertEqual(AutoReviverURLProtocol.requestCount, 0)
+    }
 
-        let nextUsage = makeUsage(sessionEpoch: usage.sessionEpoch + 3_600)
-        await reviver.tick(
-            usage: nextUsage,
-            now: Date(timeIntervalSince1970: TimeInterval(nextUsage.sessionEpoch + 1))
+    func test_fireNowDoesNotSendNetworkRequest() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [AutoReviverURLProtocol.self]
+        let reviver = AutoReviver(
+            tokenProvider: StubTokenProvider(token: "token"),
+            session: URLSession(configuration: config),
+            endpoint: URL(string: "https://example.invalid/messages")!
         )
 
-        XCTAssertEqual(reviver.fireCount, 2)
-        XCTAssertEqual(AutoReviverURLProtocol.requestCount, 2)
+        await reviver.fireNow()
+
+        XCTAssertEqual(reviver.fireCount, 0)
+        XCTAssertEqual(reviver.lastResult?.outcome, .disabled)
+        XCTAssertEqual(AutoReviverURLProtocol.requestCount, 0)
     }
 
     private func makeUsage(sessionEpoch: Int) -> UsageData {

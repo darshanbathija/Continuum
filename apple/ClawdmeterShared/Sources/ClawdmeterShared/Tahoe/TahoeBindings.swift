@@ -41,7 +41,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
         modelName: String = "",
         autoReviveOn: Bool = false,
         autoReviveAgo: String = "",
-        supportsAutoRevive: Bool = true,
+        supportsAutoRevive: Bool = false,
         hasWeekly: Bool = true,
         cursorQuota: UsageData.CursorQuota? = nil,
         stale: Bool = false
@@ -94,7 +94,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
                 }
             }(),
             autoReviveOn: d.reviveOn, autoReviveAgo: d.reviveAgo,
-            supportsAutoRevive: true,
+            supportsAutoRevive: false,
             hasWeekly: provider != .cursor
         )
     }

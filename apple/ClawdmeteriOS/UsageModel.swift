@@ -222,14 +222,12 @@ public final class UsageModel: ObservableObject {
     }
 
     public func setAutoReviveEnabled(_ enabled: Bool) {
-        autoReviver.isEnabled = enabled
+        _ = enabled
+        autoReviver.isEnabled = false
     }
 
     public func reviveNow() {
-        Task { @MainActor in
-            await autoReviver.fireNow()
-            forcePoll()
-        }
+        autoReviver.isEnabled = false
     }
 
     private func startClock() {

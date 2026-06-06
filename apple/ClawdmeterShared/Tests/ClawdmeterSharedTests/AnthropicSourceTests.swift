@@ -4,11 +4,12 @@ import FoundationNetworking
 #endif
 @testable import ClawdmeterShared
 
-/// Tests `AnthropicSource` against a `URLProtocol`-based mock. v0.4.11's
-/// fix restored `POST /v1/messages` as the primary path (with the magic
-/// `x-anthropic-additional-protection: true` header) while keeping
-/// `GET /api/oauth/usage` as a fallback for the day Anthropic rotates the
-/// additional-protection mechanism.
+/// Tests `AnthropicSource` against a `URLProtocol`-based mock.
+///
+/// The important safety contract is that quota polling never posts to
+/// `/v1/messages`: it must use the non-generative OAuth usage endpoint so a
+/// background refresh cannot create throwaway Claude conversations or spend
+/// model quota.
 final class AnthropicSourceTests: XCTestCase {
 
     override func tearDown() {
@@ -24,100 +25,81 @@ final class AnthropicSourceTests: XCTestCase {
         return AnthropicSource(tokenProvider: tokenProvider, urlSession: session)
     }
 
-    // MARK: - Primary path: /v1/messages + unified rate-limit headers
+    // MARK: - Primary path: /api/oauth/usage
 
-    func test_poll_happyPath_parsesContractHeaders() async throws {
-        var observedAdditionalProtection: String?
-        var observedBillingHeader: String?
+    func test_poll_usesOAuthUsageGetWithoutPromptBody() async throws {
+        var observedPath: String?
+        var observedMethod: String?
+        var observedBody: Data?
+        var observedBeta: String?
+        let usageBody = """
+        {"rate_limit_type":"five_hour","utilization":0.14,"resets_at":"2026-05-14T11:00:00Z","organization_uuid":"test-org"}
+        """.data(using: .utf8)!
+
         MockURLProtocol.responder = { request in
-            // Snapshot the request headers so we can assert the magic
-            // additional-protection header is on the wire.
-            observedAdditionalProtection = request.value(forHTTPHeaderField: "x-anthropic-additional-protection")
-            observedBillingHeader = request.value(forHTTPHeaderField: "x-anthropic-billing-header")
+            observedPath = request.url?.path
+            observedMethod = request.httpMethod
+            observedBody = request.httpBody
+            observedBeta = request.value(forHTTPHeaderField: "anthropic-beta")
             return (
                 statusCode: 200,
-                headers: [
-                    "date": "Thu, 14 May 2026 07:40:31 GMT",
-                    "anthropic-ratelimit-unified-5h-utilization": "0.05",
-                    "anthropic-ratelimit-unified-5h-reset": "1778756400",
-                    "anthropic-ratelimit-unified-5h-status": "allowed",
-                    "anthropic-ratelimit-unified-7d-utilization": "0.26",
-                    "anthropic-ratelimit-unified-7d-reset": "1779238800",
-                    "anthropic-ratelimit-unified-7d-status": "allowed",
-                    "anthropic-ratelimit-unified-representative-claim": "five_hour",
-                    "anthropic-organization-id": "test-org",
-                ],
-                body: Data()
+                headers: ["date": "Thu, 14 May 2026 07:40:31 GMT"],
+                body: usageBody
             )
         }
 
-        let source = makeSource()
-        let usage = try await source.poll()
-        XCTAssertEqual(usage.sessionPct, 5)
-        XCTAssertEqual(usage.weeklyPct, 26)
-        XCTAssertEqual(usage.sessionEpoch, 1_778_756_400)
-        XCTAssertEqual(usage.weeklyEpoch, 1_779_238_800)
-        XCTAssertEqual(usage.status, .allowed)
+        let usage = try await makeSource().poll()
+
+        XCTAssertEqual(observedPath, "/api/oauth/usage")
+        XCTAssertEqual(observedMethod, "GET")
+        XCTAssertNil(observedBody)
+        XCTAssertEqual(observedBeta, "oauth-2025-04-20")
+        XCTAssertEqual(usage.sessionPct, 14)
+        XCTAssertEqual(usage.weeklyPct, 0)
         XCTAssertEqual(usage.representativeClaim, .fiveHour)
         XCTAssertEqual(usage.organizationID, "test-org")
-
-        // Critical: confirm we're sending the magic header. Without it
-        // Anthropic returns 403 permission_error.
-        XCTAssertEqual(observedAdditionalProtection, "true")
-        XCTAssertEqual(observedBillingHeader, "cc_version=2.1.143")
     }
 
-    func test_poll_compositeStatus_limitedIfEitherWindowLimited() async throws {
-        MockURLProtocol.responder = { _ in
-            (
-                statusCode: 200,
-                headers: [
-                    "date": "Thu, 14 May 2026 07:40:31 GMT",
-                    "anthropic-ratelimit-unified-5h-utilization": "0.95",
-                    "anthropic-ratelimit-unified-5h-reset": "1778756400",
-                    "anthropic-ratelimit-unified-5h-status": "limited",
-                    "anthropic-ratelimit-unified-7d-utilization": "0.50",
-                    "anthropic-ratelimit-unified-7d-reset": "1779238800",
-                    "anthropic-ratelimit-unified-7d-status": "allowed",
-                ],
-                body: Data()
-            )
+    func test_poll_dualWindowBody_parsesBothWindows() async throws {
+        let usageBody = """
+        {
+          "rate_limits": {
+            "five_hour": {"utilization": 0.31, "resets_at": "2026-05-14T11:00:00Z"},
+            "seven_day": {"used_percentage": 81, "resets_at": "2026-05-20T13:00:00Z"}
+          }
         }
+        """.data(using: .utf8)!
+
+        MockURLProtocol.responder = { _ in
+            (200, ["date": "Thu, 14 May 2026 07:40:31 GMT"], usageBody)
+        }
+
         let usage = try await makeSource().poll()
+        XCTAssertEqual(usage.sessionPct, 31)
+        XCTAssertEqual(usage.weeklyPct, 81)
+        XCTAssertEqual(usage.status, .allowed)
+        XCTAssertEqual(usage.representativeClaim, .unknown)
+    }
+
+    func test_poll_limitedWhenEitherWindowAtOneHundred() async throws {
+        let usageBody = """
+        {
+          "five_hour": {"used_percentage": 100, "resets_at": "2026-05-14T11:00:00Z"},
+          "seven_day": {"used_percentage": 50, "resets_at": "2026-05-20T13:00:00Z"}
+        }
+        """.data(using: .utf8)!
+
+        MockURLProtocol.responder = { _ in
+            (200, ["date": "Thu, 14 May 2026 07:40:31 GMT"], usageBody)
+        }
+
+        let usage = try await makeSource().poll()
+        XCTAssertEqual(usage.sessionPct, 100)
+        XCTAssertEqual(usage.weeklyPct, 50)
         XCTAssertEqual(usage.status, .limited)
     }
 
-    func test_poll_allowedWarning_isStillAllowed() async throws {
-        // Real-world observation 2026-05-19: `allowed_warning` is what
-        // Anthropic returns when you cross the 75% threshold but haven't
-        // been cut off. v0.4.10 mapped `allowed_warning` → `.unknown`,
-        // which made the gauge color logic act weird at the cusp. Now
-        // we treat any `allowed*` status as `.allowed`.
-        MockURLProtocol.responder = { _ in
-            (
-                statusCode: 200,
-                headers: [
-                    "date": "Thu, 14 May 2026 07:40:31 GMT",
-                    "anthropic-ratelimit-unified-5h-utilization": "0.31",
-                    "anthropic-ratelimit-unified-5h-reset": "1778756400",
-                    "anthropic-ratelimit-unified-5h-status": "allowed",
-                    "anthropic-ratelimit-unified-7d-utilization": "0.81",
-                    "anthropic-ratelimit-unified-7d-reset": "1779238800",
-                    "anthropic-ratelimit-unified-7d-status": "allowed_warning",
-                    "anthropic-ratelimit-unified-representative-claim": "seven_day",
-                ],
-                body: Data()
-            )
-        }
-        let usage = try await makeSource().poll()
-        XCTAssertEqual(usage.status, .allowed)
-        XCTAssertEqual(usage.weeklyPct, 81)
-        XCTAssertEqual(usage.representativeClaim, .sevenDay)
-    }
-
     func test_poll_401_throwsUnauthenticated() async {
-        // Both endpoints rejected — caller should see .unauthenticated so
-        // refreshCredentialsIfNeeded fires.
         MockURLProtocol.responder = { _ in (401, [:], Data()) }
         do {
             _ = try await makeSource().poll()
@@ -141,18 +123,15 @@ final class AnthropicSourceTests: XCTestCase {
         }
     }
 
-    func test_poll_missingContractHeaders_throwsContractViolation() async {
-        // 200 but no rate-limit headers — Phase 0 contract violated.
+    func test_poll_malformedBody_throwsMalformedResponse() async {
         MockURLProtocol.responder = { _ in
-            (200, ["date": "Thu, 14 May 2026 07:40:31 GMT"], Data())
+            (200, ["date": "Thu, 14 May 2026 07:40:31 GMT"], Data("not-json".utf8))
         }
         do {
             _ = try await makeSource().poll()
             XCTFail("Expected throw")
-        } catch AISourceError.dataSourceContractViolation {
-            // expected — primary path saw 200 but headers missing; falls
-            // through as a contract violation rather than triggering the
-            // fallback (which is only for auth-style failures).
+        } catch AISourceError.malformedResponse {
+            // expected
         } catch {
             XCTFail("Wrong error: \(error)")
         }
@@ -170,60 +149,15 @@ final class AnthropicSourceTests: XCTestCase {
         }
     }
 
-    // MARK: - Fallback path: /api/oauth/usage when /v1/messages 403s
-
-    func test_poll_403onMessages_fallsBackToOAuthUsage() async throws {
-        // Simulate Anthropic rotating the additional-protection mechanism.
-        // First request (/v1/messages) gets 403; second request
-        // (/api/oauth/usage) returns valid JSON.
-        var callCount = 0
-        let usageBody = """
-        {"rate_limit_type":"five_hour","utilization":0.14,"resets_at":"2026-05-14T11:00:00Z"}
-        """.data(using: .utf8)!
-
-        MockURLProtocol.responder = { request in
-            callCount += 1
-            if request.url?.path == "/v1/messages" {
-                return (403, [:], "{\"error\":\"permission_error\"}".data(using: .utf8)!)
-            }
-            if request.url?.path == "/api/oauth/usage" {
-                return (200, ["date": "Thu, 14 May 2026 07:40:31 GMT"], usageBody)
-            }
-            return (500, [:], Data())
-        }
-
-        let usage = try await makeSource().poll()
-        XCTAssertEqual(callCount, 2, "Expected /v1/messages then fallback /api/oauth/usage")
-        XCTAssertEqual(usage.sessionPct, 14)
-        XCTAssertEqual(usage.representativeClaim, .fiveHour)
-    }
-
-    func test_poll_403onBothPaths_surfacesUnauthenticated() async {
-        // Genuine token expiry: both paths return 401/403.
-        MockURLProtocol.responder = { _ in (403, [:], Data()) }
-        do {
-            _ = try await makeSource().poll()
-            XCTFail("Expected throw")
-        } catch AISourceError.unauthenticated {
-            // expected — fallback also failed, so we surface the auth
-            // error and let UsagePoller's refresh path try.
-        } catch {
-            XCTFail("Wrong error: \(error)")
-        }
-    }
-
     // MARK: - Refresh
 
     func test_refreshCredentials_boundedRetry_throwsAuthExpiredAfterTwoAttempts() async throws {
-        // E7: bounded refresh per 10-min window
         let provider = AlwaysFailRefreshProvider()
         let source = AnthropicSource(tokenProvider: provider)
 
-        // 2 attempts allowed
         _ = try? await source.refreshCredentialsIfNeeded()
         _ = try? await source.refreshCredentialsIfNeeded()
 
-        // 3rd: throw .authExpired
         do {
             _ = try await source.refreshCredentialsIfNeeded()
             XCTFail("Expected authExpired throw")

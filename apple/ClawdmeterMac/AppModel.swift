@@ -135,10 +135,15 @@ public final class AppModel: ObservableObject {
     }
 
     public func setAutoReviveEnabled(_ enabled: Bool) {
+        guard config.supportsAutoRevive else {
+            autoReviver.isEnabled = false
+            return
+        }
         autoReviver.isEnabled = enabled
     }
 
     public func reviveNow() {
+        guard config.supportsAutoRevive else { return }
         Task { @MainActor in
             await autoReviver.fireNow()
             _ = await poller.forcePoll()

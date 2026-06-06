@@ -7,16 +7,13 @@ public struct ProviderConfig: Identifiable, Sendable {
     public let id: String
     public let displayName: String
     public let logoAssetName: String            // Bundle resource name (e.g. "ClaudeLogo")
-    public let reviveModel: String              // Model id used by AutoReviver for the "Hi" ping
-    public let reviveEndpoint: URL              // POST target for AutoReviver
+    public let reviveModel: String              // Model id previously used by AutoReviver
+    public let reviveEndpoint: URL              // Reserved for a future non-generative AutoReviver endpoint
     public let reviveAuthVersion: String?       // e.g. "anthropic-version: 2023-06-01" (nil for OpenAI)
     public let storageKeyPrefix: String         // Namespacing for @AppStorage
-    /// True when this provider supports the "perpetual 5h timer" auto-revive
-    /// pattern (a 1-token "Hi" ping to extend the rate-limit window). Today
-    /// only Claude supports this — Codex needs a streaming SSE protocol we
-    /// haven't wired up, and Gemini's quota model isn't a 5h window we can
-    /// extend with a free ping. Eliminates the `id == "claude"` hardcoded
-    /// check at `DashboardView.swift` and `PopoverView.swift`.
+    /// True when this provider supports a non-consuming "perpetual 5h timer"
+    /// auto-revive path. Prompt-based keepalives are not allowed: they create
+    /// visible throwaway conversations and spend quota.
     public let supportsAutoRevive: Bool
 
     /// True when this provider exposes a separate weekly quota window
@@ -56,7 +53,7 @@ public struct ProviderConfig: Identifiable, Sendable {
         displayName: "Claude",
         logoAssetName: "ClaudeLogo",
         reviveModel: "claude-haiku-4-5",
-        reviveEndpoint: URL(string: "https://api.anthropic.com/v1/messages")!,
+        reviveEndpoint: URL(string: "https://api.anthropic.com/api/oauth/usage")!,
         reviveAuthVersion: "2023-06-01",
         storageKeyPrefix: "clawdmeter.claude",
         supportsAutoRevive: AutoReviveSupport.supports("claude")

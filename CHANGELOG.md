@@ -4,6 +4,19 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.4 build 204] - 2026-06-06 - Stop Claude background prompt polling (`darshanbathija/stop-claude-hi-spam`)
+
+### Fixed
+
+- Claude usage polling now reads the non-generative OAuth usage endpoint instead of creating throwaway `hi` conversations through `/v1/messages`.
+- Claude auto-revive is paused across Mac and iOS until a non-consuming keepalive endpoint exists, so stale toggles or RPC calls cannot spend quota in the background.
+- The Auto-revive settings surfaces now show the feature as unavailable instead of offering controls that can create hidden Claude prompts.
+- Focused regression coverage now asserts Claude polling sends no prompt body and auto-revive sends no network request.
+
+### Changed
+
+- Bumps `VERSION` 0.31.3 -> 0.31.4, `MARKETING_VERSION` 0.31.3 -> 0.31.4, and `CURRENT_PROJECT_VERSION` 203 -> 204.
+
 ## [0.31.3 build 203] - 2026-06-06 - Relay/APNS hardening, chat launch, and updater fixes (`darshanbathija/security-fixes`, `darshanbathija/fix-bugs`)
 
 ### Fixed

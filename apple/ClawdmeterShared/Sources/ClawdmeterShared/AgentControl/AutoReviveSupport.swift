@@ -5,11 +5,10 @@ import Foundation
 /// `ProviderConfigAutoReviveTests` suite can assert the contract from
 /// a swift-package XCTest target (no Mac target test scaffolding needed).
 ///
-/// Today only Claude qualifies — Anthropic's perpetual 5h-window quota
-/// model is what auto-revive targets. Codex's wham/usage quota is
-/// already tied to user activity; firing a "1-token Hi" wouldn't
-/// meaningfully extend the window. Gemini's cloudcode-pa quota uses
-/// 24h-style refreshes per model with no benefit from auto-revive.
+/// No provider currently qualifies. Claude used to be enabled here, but the
+/// implementation kept the window warm by sending a tiny model prompt, which
+/// consumed quota and created visible throwaway conversations. Any future
+/// provider must use a non-generative endpoint before opting in.
 ///
 /// When a new provider lands, add it here AND add the corresponding
 /// `ProviderConfig.<provider>.supportsAutoRevive` constant (the
@@ -18,7 +17,7 @@ import Foundation
 public enum AutoReviveSupport {
     public static func supports(_ providerID: String) -> Bool {
         switch providerID {
-        case "claude": return true
+        case "claude": return false
         case "codex":  return false
         case "gemini": return false
         default:       return false
