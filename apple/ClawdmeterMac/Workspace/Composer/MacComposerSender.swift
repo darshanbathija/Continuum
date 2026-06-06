@@ -4,10 +4,9 @@ import OSLog
 
 private let senderLogger = Logger(subsystem: "com.clawdmeter.mac", category: "MacComposerSender")
 
-/// Loopback HTTP client that the Mac composer uses instead of poking
-/// `tmuxClient.pasteBytes` directly. Going through the daemon gives us
-/// rate-limit + audit-log + `sendKeys`/`paste-buffer` heuristics for free
-/// (Codex P0 finding: Mac send was bypassing all of these).
+/// Loopback HTTP client that the Mac composer uses instead of poking local
+/// runtimes directly. Going through the daemon gives us rate-limit + audit-log
+/// behavior consistently across Mac and iOS.
 ///
 /// All calls hit `http://127.0.0.1:<boundPort>/...` with `Authorization:
 /// Bearer <token>` — same auth as iOS but local-only.
@@ -53,6 +52,14 @@ final class MacComposerSender {
     func interrupt(sessionId: UUID) async throws {
         let req = try makeRequest(
             path: "/sessions/\(sessionId.uuidString)/interrupt",
+            method: "POST"
+        )
+        _ = try await execute(req)
+    }
+
+    func approvePlan(sessionId: UUID) async throws {
+        let req = try makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/approve-plan",
             method: "POST"
         )
         _ = try await execute(req)
@@ -119,17 +126,22 @@ final class MacComposerSender {
         return try decoder.decode(AgentSession.self, from: data)
     }
 
+    func continueReadOnly(_ request: ContinueReadOnlyRequest) async throws -> ContinueReadOnlyResponse {
+        let req = try makeRequest(path: "/sessions/continue-readonly", jsonBody: request)
+        let data = try await execute(req)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(ContinueReadOnlyResponse.self, from: data)
+    }
+
     // MARK: - HTTP
 
     private func makeRequest<Body: Encodable>(path: String, jsonBody: Body) throws -> URLRequest {
         guard let url = URL(string: "http://\(host):\(port)\(path)") else { throw Error.badURL }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        // 30s, not 8s: the FIRST send to a Claude (tmux) chat blocks server-side
-        // on the CLI warmup (boot + trust-dismiss), which can take ~10-14s with a
-        // heavy MCP/plugin config. Harness providers (codex/grok/cursor) are ready
-        // at create so they return fast either way; Claude is the one that needs
-        // the headroom. Without it the first "hi" hit "The request timed out."
+        // 30s, not 8s: provider create/send can include first-run CLI boot,
+        // repo setup, or harness startup.
         req.timeoutInterval = 30
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

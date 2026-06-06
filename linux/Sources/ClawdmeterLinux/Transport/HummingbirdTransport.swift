@@ -77,7 +77,7 @@ public final class HummingbirdTransport: @unchecked Sendable {
 
     /// Wire the WebSocket upgrade routes — `/sessions/:id/terminals` and
     /// `/events`. These are the bidirectional streams the iOS app
-    /// consumes for live chat snapshots + tmux pane output.
+    /// consumes for live chat snapshots + terminal output.
     private func wireWebSockets() {
         #if os(Linux)
         // TODO(Phase 3): app.ws.on("/events") { ws in ... }

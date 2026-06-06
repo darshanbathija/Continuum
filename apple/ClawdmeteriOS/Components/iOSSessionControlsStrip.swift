@@ -69,9 +69,8 @@ struct iOSSessionControlsStrip: View {
                 .accessibilityLabel("Interrupt session")
                 .accessibilityHint("Sends an escape key to stop the agent.")
 
-                // Revive a degraded session: the Mac respawns its dead tmux
-                // pane and the terminal reconnects. Gated on the paired Mac's
-                // wire version (older Macs 404 the route).
+                // Revive a degraded session by restarting its direct runtime.
+                // Gated on the paired Mac's wire version (older Macs 404 the route).
                 if session.status == .degraded && client.supportsRevive {
                     Button(action: { Task { await client.revive(sessionId: session.id) } }) {
                         Label("Revive", systemImage: "arrow.clockwise.circle")
@@ -82,7 +81,7 @@ struct iOSSessionControlsStrip: View {
                     .tint(.orange)
                     .frame(minHeight: 44)
                     .accessibilityLabel("Revive degraded session")
-                    .accessibilityHint("Respawns the session's tmux pane and reconnects.")
+                    .accessibilityHint("Restarts the session runtime and reconnects.")
                 }
                 Spacer()
             }

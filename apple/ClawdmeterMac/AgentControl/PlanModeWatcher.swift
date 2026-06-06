@@ -9,9 +9,9 @@ private let planWatcherLogger = Logger(subsystem: "com.clawdmeter.mac", category
 /// with `planText` populated, and emits a `planReady` event so the UI
 /// shows the yellow pill + the structured plan card.
 ///
-/// Per D13: when the user approves, the daemon kills the plan-mode pane
-/// and spawns a fresh `claude --resume <id> --permission-mode acceptEdits`
-/// in the same tmux window. The overlay covers the visual swap.
+/// Per D13: when the user approves, the daemon suspends the plan-mode runtime
+/// and spawns a fresh `claude --resume <id> --permission-mode acceptEdits`.
+/// The overlay covers the visual swap.
 public final class PlanModeWatcher: @unchecked Sendable {
 
     public typealias PlanReadyHandler = @Sendable (_ sessionId: UUID, _ planText: String, _ files: [PlanCardView.PlanFile]) -> Void

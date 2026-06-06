@@ -5,7 +5,7 @@ import OSLog
 private let schedulerLogger = Logger(subsystem: "com.clawdmeter.mac", category: "SessionScheduler")
 
 /// G15: fires scheduled follow-up prompts at their `fireAt` time by writing
-/// into the target session's primary tmux pane via `paste-buffer`.
+/// into the target session's direct runtime.
 ///
 /// A single `DispatchSourceTimer` is re-armed for the soonest unfired
 /// follow-up across all sessions. Whenever the registry's
@@ -18,9 +18,16 @@ private let schedulerLogger = Logger(subsystem: "com.clawdmeter.mac", category: 
 /// own state, so re-armed correctly across crashes / restarts.
 @MainActor
 public final class SessionScheduler {
+    public enum DeliveryResult: Sendable, Equatable {
+        case delivered
+        case unavailable(reason: String)
+        case retired(reason: String)
+    }
+
+    public typealias FollowUpDeliverer = @MainActor (AgentSession, ScheduledFollowUp) async -> DeliveryResult
 
     private let registry: AgentSessionRegistry
-    private let tmuxClient: TmuxControlClient
+    private let deliverer: FollowUpDeliverer?
 
     /// Single re-armable timer. We keep one timer total and adjust its
     /// next-fire deadline whenever follow-ups change — cheaper than one
@@ -30,10 +37,17 @@ public final class SessionScheduler {
     /// Observer token for the registry's @Published change stream.
     private var observerTask: Task<Void, Never>?
     private var inFlightFollowUps: Set<String> = []
+    private var followUpRetryAfter: [String: Date] = [:]
+    private let unavailableRetryInterval: TimeInterval
 
-    public init(registry: AgentSessionRegistry, tmuxClient: TmuxControlClient) {
+    public init(
+        registry: AgentSessionRegistry,
+        deliverer: FollowUpDeliverer? = nil,
+        unavailableRetryInterval: TimeInterval = 30
+    ) {
         self.registry = registry
-        self.tmuxClient = tmuxClient
+        self.deliverer = deliverer
+        self.unavailableRetryInterval = unavailableRetryInterval
     }
 
     public func start() {
@@ -65,16 +79,21 @@ public final class SessionScheduler {
         timer = nil
 
         let now = Date()
-        let pending = registry.sessions.flatMap { session -> [(UUID, ScheduledFollowUp)] in
+        let pending = registry.sessions.flatMap { session -> [(UUID, ScheduledFollowUp, Date)] in
             session.scheduledFollowUps
                 .filter { $0.firedAt == nil }
-                .filter { !inFlightFollowUps.contains(Self.followUpDeliveryKey(sessionId: session.id, followUpId: $0.id)) }
-                .map { (session.id, $0) }
+                .compactMap { followUp -> (UUID, ScheduledFollowUp, Date)? in
+                    let key = Self.followUpDeliveryKey(sessionId: session.id, followUpId: followUp.id)
+                    guard !inFlightFollowUps.contains(key) else { return nil }
+                    let retryAt = followUpRetryAfter[key]
+                    let dueAt = retryAt.map { Swift.max(followUp.fireAt, $0) } ?? followUp.fireAt
+                    return (session.id, followUp, dueAt)
+                }
         }
-        guard let next = pending.min(by: { $0.1.fireAt < $1.1.fireAt }) else {
+        guard let next = pending.min(by: { $0.2 < $1.2 }) else {
             return
         }
-        let delay = max(next.1.fireAt.timeIntervalSince(now), 0)
+        let delay = max(next.2.timeIntervalSince(now), 0)
         if delay == 0 {
             schedulerLogger.info("Past-due follow-up; firing immediately")
             guard claimFollowUpDelivery(sessionId: next.0, followUpId: next.1.id) else { return }
@@ -96,64 +115,17 @@ public final class SessionScheduler {
         schedulerLogger.info("Next follow-up scheduled \(Int(delay))s from now (session \(next.0.uuidString, privacy: .public))")
     }
 
-    /// Deliver one follow-up: pastes the prompt + newline into the session's
-    /// primary tmux pane, then marks the registry entry as fired. Reschedule
-    /// runs again automatically via the registry observer.
+    /// Deliver one follow-up into the session's live runtime, then mark the
+    /// registry entry as fired. Reschedule runs again automatically via the
+    /// registry observer.
     private func fireClaimed(sessionId: UUID, followUpId: UUID) async {
+        let deliveryKey = Self.followUpDeliveryKey(sessionId: sessionId, followUpId: followUpId)
         defer {
-            inFlightFollowUps.remove(Self.followUpDeliveryKey(sessionId: sessionId, followUpId: followUpId))
+            inFlightFollowUps.remove(deliveryKey)
         }
         guard let session = registry.session(id: sessionId) else {
             schedulerLogger.warning("fire: session missing — dropping follow-up")
-            do {
-                try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
-            } catch {
-                schedulerLogger.error("markFollowUpFired write-ahead failed: \(error.localizedDescription, privacy: .public)")
-            }
-            return
-        }
-        // Track A: a Claude PTY session has no tmux pane. Deliver to its host,
-        // RESUMING/spawning it if it was idle/LRU-suspended (the previous version
-        // only delivered to an already-live host, so a swept session silently
-        // dropped its follow-up). Resume via the persisted claudeSessionId (T7)
-        // baked into AgentSpawner.argv(for:).
-        if session.tmuxPaneId == nil && session.tmuxWindowId == nil && session.agent == .claude {
-            guard let followUp = session.scheduledFollowUps.first(where: { $0.id == followUpId }) else { return }
-            let argv = AgentSpawner.argv(for: session)
-            let cwd = session.effectiveCwd
-            let host: ClaudePtyHost?
-            if !argv.isEmpty {
-                let env = AgentSpawner.claudePtyEnv()
-                host = try? await ClaudePtyRegistry.shared.resumeOrSpawn(
-                    id: sessionId,
-                    plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env) }
-                )
-            } else {
-                host = await ClaudePtyRegistry.shared.host(for: sessionId)
-            }
-            if let host {
-                await host.submitPrompt(followUp.prompt, isChat: session.kind == .chat, isFollowUp: true)
-                do {
-                    try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
-                } catch {
-                    schedulerLogger.error("markFollowUpFired write-ahead failed: \(error.localizedDescription, privacy: .public)")
-                }
-                schedulerLogger.info("Delivered follow-up to PTY session \(sessionId.uuidString, privacy: .public)")
-            } else {
-                // Could not resume (claude not on PATH). Mark fired to avoid a
-                // hot reschedule loop — strictly better than today, which dropped
-                // every suspended-session follow-up.
-                schedulerLogger.error("fire: could not resume PTY host for \(sessionId.uuidString, privacy: .public); dropping follow-up")
-                try? await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
-            }
-            return
-        }
-        guard let pane = session.tmuxPaneId ?? session.tmuxWindowId
-        else {
-            schedulerLogger.warning("fire: session or pane missing — dropping follow-up")
-            // F2-wire: write-ahead failure on the scheduler path is
-            // best-effort logged; a failed receipt write still leaves
-            // the follow-up in the queue (will retry on next tick).
+            followUpRetryAfter.removeValue(forKey: deliveryKey)
             do {
                 try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
             } catch {
@@ -162,19 +134,67 @@ public final class SessionScheduler {
             return
         }
         guard let followUp = session.scheduledFollowUps.first(where: { $0.id == followUpId }) else {
+            followUpRetryAfter.removeValue(forKey: deliveryKey)
             return
         }
-        let bytes = Data((followUp.prompt + "\n").utf8)
-        do {
-            try await tmuxClient.pasteBytes(paneId: pane, bytes: bytes)
-            schedulerLogger.info("Delivered follow-up to session \(sessionId.uuidString, privacy: .public)")
-        } catch {
-            schedulerLogger.error("Failed to paste follow-up: \(error.localizedDescription, privacy: .public)")
+
+        let result: DeliveryResult
+        if let deliverer {
+            result = await deliverer(session, followUp)
+        } else {
+            result = await deliverClaudeFollowUp(session: session, followUp: followUp)
         }
-        do {
-            try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
-        } catch {
-            schedulerLogger.error("markFollowUpFired write-ahead failed: \(error.localizedDescription, privacy: .public)")
+
+        switch result {
+        case .delivered:
+            followUpRetryAfter.removeValue(forKey: deliveryKey)
+            do {
+                try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
+            } catch {
+                schedulerLogger.error("markFollowUpFired write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            }
+            schedulerLogger.info("Delivered follow-up to session \(sessionId.uuidString, privacy: .public)")
+        case .unavailable(let reason):
+            followUpRetryAfter[deliveryKey] = Date().addingTimeInterval(unavailableRetryInterval)
+            try? await registry.updateStatus(id: sessionId, status: .degraded)
+            schedulerLogger.error("fire: follow-up held pending for \(sessionId.uuidString, privacy: .public): \(reason, privacy: .public)")
+        case .retired(let reason):
+            followUpRetryAfter.removeValue(forKey: deliveryKey)
+            do {
+                try await registry.removeScheduledFollowUp(sessionId: sessionId, followUpId: followUpId)
+            } catch {
+                schedulerLogger.error("removeScheduledFollowUp failed: \(error.localizedDescription, privacy: .public)")
+            }
+            schedulerLogger.error("fire: follow-up retired for \(sessionId.uuidString, privacy: .public): \(reason, privacy: .public)")
+        }
+    }
+
+    private func deliverClaudeFollowUp(session: AgentSession, followUp: ScheduledFollowUp) async -> DeliveryResult {
+        guard session.tmuxPaneId == nil && session.tmuxWindowId == nil else {
+            return .retired(reason: "legacy_session_retired")
+        }
+        guard session.agent == .claude else {
+            return .retired(reason: "unsupported_runtime")
+        }
+        let argv = AgentSpawner.argv(for: session)
+        let cwd = session.effectiveCwd
+        let host: ClaudePtyHost?
+        if !argv.isEmpty {
+            let env = AgentSpawner.claudePtyEnv()
+            host = try? await ClaudePtyRegistry.shared.resumeOrSpawn(
+                id: session.id,
+                plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env) }
+            )
+        } else {
+            host = await ClaudePtyRegistry.shared.host(for: session.id)
+        }
+        if let host {
+            guard await host.submitPrompt(followUp.prompt, isChat: session.kind == .chat, isFollowUp: true) else {
+                return .unavailable(reason: "pty_write_failed")
+            }
+            return .delivered
+        } else {
+            return .unavailable(reason: "agent_cli_not_found")
         }
     }
 

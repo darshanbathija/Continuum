@@ -3,7 +3,7 @@ import ClawdmeterShared
 @testable import Clawdmeter
 
 /// v0.7.7 regression suite for the daemon-side path safety predicates.
-/// These guard the trust boundary between paired clients and tmux —
+/// These guard the trust boundary between paired clients and local runtimes —
 /// a regression that re-accepts traversal, control bytes, or symlinks
 /// outside the allowlist re-opens the v0.5.x P1-Mac-7 / codex-7 family
 /// of vulnerabilities, and nothing in the ClawdmeterShared swift-test

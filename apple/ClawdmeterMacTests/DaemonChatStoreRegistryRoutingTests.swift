@@ -15,7 +15,8 @@ import ClawdmeterShared
 final class DaemonChatStoreRegistryRoutingTests: XCTestCase {
 
     private func makeSession(
-        agent: AgentKind
+        agent: AgentKind,
+        runtimeBinding: SessionRuntimeBinding? = nil
     ) -> AgentSession {
         AgentSession(
             id: UUID(),
@@ -32,7 +33,8 @@ final class DaemonChatStoreRegistryRoutingTests: XCTestCase {
             createdAt: Date(),
             lastEventAt: Date(),
             lastEventSeq: 1,
-            mode: .local
+            mode: .local,
+            runtimeBinding: runtimeBinding
         )
     }
 
@@ -41,10 +43,9 @@ final class DaemonChatStoreRegistryRoutingTests: XCTestCase {
 
     func test_defaultResolveURL_legacyGeminiWithoutBackendUsesCodexFallback() {
         // Sessions created before v0.8.0 have geminiBackend == nil. These
-        // were tmux-based v0.42 chat sessions (now extinct after D4 hard-
-        // stop, but the data may persist on disk for old session.json
-        // entries). Fallthrough returns whatever the Codex newest-JSONL
-        // path picks (or nil) — same as v0.7 behavior.
+        // legacy chat sessions may persist on disk. Fallthrough returns
+        // whatever the Codex newest-JSONL path picks (or nil) — same as v0.7
+        // behavior.
         let session = makeSession(agent: .gemini)
         _ = DaemonChatStoreRegistry.defaultResolveURL(sessionId: session.id, session: session)
     }
@@ -54,6 +55,45 @@ final class DaemonChatStoreRegistryRoutingTests: XCTestCase {
         // Claude path still goes through SessionChatStore.resolveSessionFileURL
         // — no regression from the agentapi branch.
         _ = DaemonChatStoreRegistry.defaultResolveURL(sessionId: session.id, session: session)
+    }
+
+    func test_claudePtyCodeSessionRolloverUsesResolverWithoutLegacyPane() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("daemon-chat-rollover-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let firstURL = dir.appendingPathComponent("first.jsonl")
+        let secondURL = dir.appendingPathComponent("second.jsonl")
+        try "{}\n".write(to: firstURL, atomically: true, encoding: .utf8)
+        try "{}\n".write(to: secondURL, atomically: true, encoding: .utf8)
+
+        var resolvedURL = firstURL
+        let registry = DaemonChatStoreRegistry(resolveURL: { _, _ in resolvedURL })
+        let session = makeSession(agent: .claude)
+
+        let firstStore = try XCTUnwrap(registry.snapshotStore(for: session))
+        XCTAssertEqual(firstStore.currentFileURL, firstURL)
+
+        resolvedURL = secondURL
+        let secondStore = try XCTUnwrap(registry.snapshotStore(for: session))
+        XCTAssertEqual(secondStore.currentFileURL, secondURL)
+    }
+
+    func test_codexAppServerSessionUsesPersistedHarnessRuntimeNotGlobalFlag() throws {
+        var resolverCallCount = 0
+        let registry = DaemonChatStoreRegistry(resolveURL: { _, _ in
+            resolverCallCount += 1
+            return URL(fileURLWithPath: "/tmp/unrelated-codex.jsonl")
+        })
+        let session = makeSession(
+            agent: .codex,
+            runtimeBinding: SessionRuntimeBinding(runtimeKind: .codexAppServer)
+        )
+
+        let store = try XCTUnwrap(registry.snapshotStore(for: session))
+
+        XCTAssertTrue(store.isSDKOnly)
+        XCTAssertEqual(resolverCallCount, 0, "bridge-fed Codex app-server sessions must not fall back to JSONL resolution")
     }
 
     // MARK: - v0.23.2 T8: opencode branch routing

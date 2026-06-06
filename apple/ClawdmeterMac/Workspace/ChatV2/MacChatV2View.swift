@@ -1926,8 +1926,8 @@ private struct ComposerBar: View {
                 } else {
                     let vendor = selectedVendors.first ?? store.primaryVendor
                     // Optimistic single-column skeleton so the loading animation
-                    // shows during the ~9-10s tmux spawn (Claude cold start) —
-                    // not a blank center. Reuses the broadcast pending overlay.
+                    // shows during Claude cold start, not a blank center. Reuses
+                    // the broadcast pending overlay.
                     pendingBroadcast = PendingBroadcast(
                         prompt: trimmed,
                         columns: [PendingBroadcast.Column(

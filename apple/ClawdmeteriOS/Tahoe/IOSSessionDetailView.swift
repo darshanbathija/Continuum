@@ -253,7 +253,7 @@ public struct IOSSessionDetailView: View {
                     workspaceKey: workspaceKey,
                     sessions: agentClient.sessions,
                     activeSessionId: realAgentSession.id,
-                    terminalAvailable: !(realAgentSession.tmuxPaneId?.isEmpty ?? true),
+                    terminalAvailable: hasTerminalSurface(realAgentSession),
                     documentTabs: documentTabs,
                     activeDocumentTabId: selectedDocumentTab?.id,
                     onOpenSession: { id in
@@ -497,9 +497,7 @@ public struct IOSSessionDetailView: View {
             // Show PR + Terminal eagerly so the user can navigate to
             // them when empty (the pane handles its own empty state).
             tabs.append(.pr)
-            if hasTerminalSurface(s) {
-                tabs.append(.terminal)
-            }
+            if hasTerminalSurface(s) { tabs.append(.terminal) }
             tabs.append(.artifacts)
         }
         return tabs
@@ -751,13 +749,8 @@ public struct IOSSessionDetailView: View {
     }
 
     private func hasTerminalSurface(_ session: AgentSession) -> Bool {
-        if !(session.tmuxPaneId?.isEmpty ?? true) { return true }
-        if !(session.tmuxWindowId?.isEmpty ?? true) { return true }
-        if !session.terminalPanes.isEmpty { return true }
-        return chatStore.snapshot.items.contains { item in
-            guard case let .toolRun(_, pairs) = item else { return false }
-            return pairs.contains { Self.isShellTool($0.call.title) }
-        }
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil { return false }
+        return true
     }
 
     private static func isShellTool(_ title: String) -> Bool {

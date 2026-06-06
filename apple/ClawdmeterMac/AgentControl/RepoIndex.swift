@@ -392,7 +392,7 @@ public actor RepoIndex {
         return currentPath
     }
 
-    /// Walk a tmux/codex sessions directory recursively for `*.jsonl` and
+    /// Walk a provider sessions directory recursively for `*.jsonl` and
     /// extract the cwd from the first line of each. Returns one row per
     /// JSONL with its mtime + path so the caller can both register the cwd
     /// and surface each JSONL as a recent-session row.

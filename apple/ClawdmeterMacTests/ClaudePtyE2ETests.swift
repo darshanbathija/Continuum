@@ -5,20 +5,18 @@ import ClawdmeterShared
 
 /// Track A END-TO-END: boots a real AgentControlServer, points the `claude`
 /// binary at a fake stub (via the clawdmeter.binaries.claude override that
-/// ShellRunner.locateBinary honors), flips clawdmeter.claude.ptyHost.enabled ON,
-/// then drives a Claude chat session through the REAL HTTP handlers:
+/// ShellRunner.locateBinary honors), then drives a Claude chat session through
+/// the REAL HTTP handlers:
 /// create → send → interrupt → delete. Verifies the session routes .claudePty,
-/// gets a live PTY host (no tmux pane), the prompt reaches the child, and delete
-/// tears the host down. Deterministic — no real `claude`, no login, no network.
+/// gets a live PTY host, the prompt reaches the child, and delete tears the
+/// host down. Deterministic — no real `claude`, no login, no network.
 @MainActor
 final class ClaudePtyE2ETests: XCTestCase {
     private var tempDir: URL!
     private var server: AgentControlServer!
     private var registry: AgentSessionRegistry!
-    private var tmux: TmuxControlClient!
     private var stubPath: String!
     private var savedBinaryOverride: Any?
-    private var savedFlag: Any?
 
     private struct RawResponse { let status: Int; let data: Data }
 
@@ -41,15 +39,12 @@ final class ClaudePtyE2ETests: XCTestCase {
         try script.write(toFile: stubPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stubPath)
 
-        // Point the daemon's real spawn plan at the stub + enable the PTY path.
+        // Point the daemon's real spawn plan at the stub.
         savedBinaryOverride = UserDefaults.standard.object(forKey: "clawdmeter.binaries.claude")
-        savedFlag = UserDefaults.standard.object(forKey: "clawdmeter.claude.ptyHost.enabled")
         UserDefaults.standard.set(stubPath, forKey: "clawdmeter.binaries.claude")
-        UserDefaults.standard.set(true, forKey: "clawdmeter.claude.ptyHost.enabled")
 
         let sessionsURL = tempDir.appendingPathComponent("sessions.json")
         registry = AgentSessionRegistry(storeURL: sessionsURL)
-        tmux = TmuxControlClient(configuration: .init(socketName: "clawdmeter-e2e-\(UUID().uuidString)"))
         let resolver = SessionFileResolver(
             codexSessionsRoot: tempDir.appendingPathComponent("codex", isDirectory: true),
             geminiTmpRoot: tempDir.appendingPathComponent("gemini", isDirectory: true),
@@ -59,7 +54,6 @@ final class ClaudePtyE2ETests: XCTestCase {
         server = AgentControlServer(
             repoIndex: RepoIndex(),
             registry: registry,
-            tmux: tmux,
             notifications: NotificationDispatcher(),
             chatStoreRegistry: DaemonChatStoreRegistry(resolveURL: { _, _ in nil }),
             chatFileResolver: resolver,
@@ -79,11 +73,8 @@ final class ClaudePtyE2ETests: XCTestCase {
         // Tear down any live host for cleanliness across the shared registry.
         for s in registry?.sessions ?? [] { await ClaudePtyRegistry.shared.suspend(s.id) }
         server?.stop()
-        await tmux?.stop()
         if let savedBinaryOverride { UserDefaults.standard.set(savedBinaryOverride, forKey: "clawdmeter.binaries.claude") }
         else { UserDefaults.standard.removeObject(forKey: "clawdmeter.binaries.claude") }
-        if let savedFlag { UserDefaults.standard.set(savedFlag, forKey: "clawdmeter.claude.ptyHost.enabled") }
-        else { UserDefaults.standard.removeObject(forKey: "clawdmeter.claude.ptyHost.enabled") }
         if let tempDir { try? FileManager.default.removeItem(at: tempDir) }
         try await super.tearDown()
     }

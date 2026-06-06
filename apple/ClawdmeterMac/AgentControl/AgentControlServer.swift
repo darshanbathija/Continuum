@@ -42,7 +42,6 @@ public final class AgentControlServer {
     private let repoIndex: RepoIndex
     private let whois: TailscaleWhois
     private let registry: AgentSessionRegistry
-    private let tmux: TmuxControlClient
     private let notifications: NotificationDispatcher
     /// v16 Code V2: persisted per-repo workspace registry. Drives the
     /// `GET /workspaces` + `PATCH /workspaces/:id` endpoints and seeds
@@ -76,16 +75,14 @@ public final class AgentControlServer {
     /// chat-snapshot request rescans for the new rollout file. The
     /// `chatStoreRegistry` delegates JSONL URL resolution to this.
     private let chatFileResolver: SessionFileResolver
-    /// ACP harness: live `AcpHarnessBridge`s keyed by session id. Grok (and,
-    /// later, every migrated ACP/SDK provider) is driven through one of these
-    /// instead of a tmux pane. Claude/Codex/Cursor stay on their existing
-    /// paths; the registry only holds the new harness-driven sessions.
+    /// ACP harness: live `AcpHarnessBridge`s keyed by session id. Non-Claude
+    /// providers are driven through one of these instead of a terminal pane.
     private let harnessRegistry = HarnessSessionRegistry()
-    /// Track A: per-session direct PTY hosts for Claude session-drive, gated
-    /// by `clawdmeter.claude.ptyHost.enabled` (default OFF → Claude stays on
-    /// tmux, byte-identical). tmux stays for terminals + non-Claude providers.
+    /// Per-session direct PTY hosts for Claude session-drive.
     let claudePtyRegistry = ClaudePtyRegistry.shared
     private var claudePtyExitWired = false
+    /// Direct PTY-backed shell terminals keyed by `TerminalPaneRef.paneId`.
+    private let terminalRegistry = TerminalPtyRegistry.shared
     /// Track A: tears down dormant Claude PTY hosts (flag-gated OFF by default).
     private lazy var idleSessionSweeper = IdleSessionSweeper(
         registry: registry, chatStoreRegistry: chatStoreRegistry
@@ -175,7 +172,7 @@ public final class AgentControlServer {
     /// where multiple prompts per session is real). Cleared alongside
     /// the continuation.
     private var pendingPermissionPromptIds: [UUID: String] = [:]
-    /// Pending prompt → option-id → tmux key sequence map. Server-side
+    /// Pending prompt -> option-id -> key sequence map. Server-side
     /// because the wire never carries raw key sequences (security).
     private var permissionOptionDispatch: [UUID: [String: [String]]] = [:]
     /// v0.8 QA F2: sentinel optionId resumed by handleDeleteSession /
@@ -243,7 +240,6 @@ public final class AgentControlServer {
         pairingTokens: PairingTokenStore = .shared,
         repoIndex: RepoIndex,
         registry: AgentSessionRegistry,
-        tmux: TmuxControlClient,
         notifications: NotificationDispatcher,
         whois: TailscaleWhois = .shared,
         chatStoreRegistry: DaemonChatStoreRegistry? = nil,
@@ -258,7 +254,6 @@ public final class AgentControlServer {
         self.pairingTokens = pairingTokens
         self.repoIndex = repoIndex
         self.registry = registry
-        self.tmux = tmux
         self.notifications = notifications
         self.whois = whois
         self.listenPortRange = listenPortRange
@@ -465,7 +460,7 @@ public final class AgentControlServer {
             kind: .statusChanged,
             payload: ["autopilot": "false", "reason": "inactivity_timeout"]
         )
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
         let result = await changer.swap(sessionId: id)
         switch result {
         case .swapped:
@@ -683,32 +678,12 @@ public final class AgentControlServer {
                 sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
                 return
             }
-            // G12: envelope can target a specific pane within the session
-            // (multi-terminal tab strip). Only actual pane ids owned by the
-            // session are accepted; tmux output is keyed by "%pane", not
-            // "@window".
-            let paneId: String? = {
-                if let explicit = envelope.paneId, !explicit.isEmpty {
-                    guard Self.isValidTmuxPaneId(explicit),
-                          explicit == session.tmuxPaneId || session.terminalPanes.contains(where: { $0.paneId == explicit })
-                    else { return nil }
-                    return explicit
-                }
-                return session.tmuxPaneId
-            }()
-            guard let paneId else {
+            if let channel = await makeTerminalChannel(connection: connection, session: session, requestedPaneId: envelope.paneId) {
+                wsChannels[ObjectIdentifier(connection)] = channel
+                channel.start()
+            } else {
                 sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
-                return
             }
-            let channel = TerminalWebSocketChannel(
-                connection: connection,
-                tmux: tmux,
-                paneId: paneId,
-                registry: registry,
-                sessionId: sessionId
-            )
-            wsChannels[ObjectIdentifier(connection)] = channel
-            channel.start()
         case "events":
             let since = envelope.since ?? 0
             let stream = AgentEventStream(
@@ -850,6 +825,64 @@ public final class AgentControlServer {
         /// clients that don't know to send it (the default-to-legacy path
         /// covers them).
         let wireVersion: Int?
+    }
+
+    private func makeTerminalChannel(
+        connection: NWConnection,
+        session: AgentSession,
+        requestedPaneId: String?
+    ) async -> TerminalWebSocketChannel? {
+        func channel(for host: TerminalPtyHost) -> TerminalWebSocketChannel {
+            TerminalWebSocketChannel(
+                connection: connection,
+                outputStream: { await host.outputStream() },
+                writeInput: { data in await host.writeBytes(data) },
+                resize: { cols, rows in await host.resize(cols: cols, rows: rows) }
+            )
+        }
+        func claudeChannel(for host: ClaudePtyHost) -> TerminalWebSocketChannel {
+            TerminalWebSocketChannel(
+                connection: connection,
+                outputStream: { await host.outputStream() },
+                writeInput: { data in await host.writeBytes(data) },
+                resize: { cols, rows in await host.resize(cols: cols, rows: rows) }
+            )
+        }
+
+        if let paneId = requestedPaneId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !paneId.isEmpty {
+            guard session.terminalPanes.contains(where: { $0.paneId == paneId }),
+                  let host = await terminalRegistry.host(id: paneId) else {
+                return nil
+            }
+            return channel(for: host)
+        }
+
+        if SessionCommandRouter.resolve(routeContext(for: session)) == .claudePty {
+            guard let host = await claudePtyHost(for: session) else { return nil }
+            return claudeChannel(for: host)
+        }
+
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil {
+            return nil
+        }
+
+        if let primary = session.terminalPanes.first(where: { $0.isPrimary }),
+           let host = await terminalRegistry.host(id: primary.paneId) {
+            return channel(for: host)
+        }
+
+        guard let host = try? await terminalRegistry.spawnShell(cwd: session.effectiveCwd, title: "Shell") else {
+            return nil
+        }
+        let pane = TerminalPaneRef(
+            id: session.terminalPanes.first(where: { $0.isPrimary })?.id ?? UUID(),
+            paneId: host.id.uuidString,
+            title: "Shell",
+            isPrimary: true
+        )
+        try? await registry.replacePrimaryTerminalPane(sessionId: session.id, pane: pane)
+        return channel(for: host)
     }
 
     // MARK: - Accept handling
@@ -1483,14 +1516,14 @@ public final class AgentControlServer {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
         let oldModel = session.model
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
         let result = await changer.swap(
             sessionId: uuid,
             newModel: req.model,
             newEffort: req.effort == nil ? nil : .some(req.effort)
         )
-        guard isSuccessfulSwap(result) else {
-            sendResponse(.internalError, on: connection); return
+        guard sendSwapFailureIfNeeded(result, on: connection) else {
+            return
         }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordSwap(
@@ -1521,10 +1554,10 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
         let result = await changer.swap(sessionId: uuid, newEffort: .some(req.effort))
-        guard isSuccessfulSwap(result) else {
-            sendResponse(.internalError, on: connection); return
+        guard sendSwapFailureIfNeeded(result, on: connection) else {
+            return
         }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordEffortChange(
@@ -1558,14 +1591,14 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
         let result = await changer.swap(
             sessionId: uuid,
             newPlanMode: req.planMode,
             newMode: req.mode
         )
-        guard isSuccessfulSwap(result) else {
-            sendResponse(.internalError, on: connection); return
+        guard sendSwapFailureIfNeeded(result, on: connection) else {
+            return
         }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordModeChange(
@@ -1581,7 +1614,7 @@ public final class AgentControlServer {
         )
     }
 
-    /// v25: respawn a degraded session whose tmux pane died. Same rate-limit
+    /// v25: revive a degraded session through its direct runtime. Same rate-limit
     /// + idempotency contract as the other config-swap commands so a retried
     /// or double-tapped revive can't double-spawn the agent.
     private func handleRevive(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
@@ -1598,10 +1631,10 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
         let result = await changer.revive(sessionId: uuid)
-        guard isSuccessfulSwap(result) else {
-            sendResponse(.internalError, on: connection); return
+        guard sendSwapFailureIfNeeded(result, on: connection) else {
+            return
         }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordSwap(
@@ -1619,10 +1652,10 @@ public final class AgentControlServer {
 
     // MARK: - Track A: Claude PTY host helpers
 
-    /// Flag reader. When false (default), Claude routes to tmux exactly as
-    /// before — the whole PTY path is dormant and there is zero behavior change.
+    /// Compatibility shim for PR #248-era call sites. Claude PTY is the only
+    /// runtime now; the old UserDefaults fallback is intentionally ignored.
     var claudePtyEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "clawdmeter.claude.ptyHost.enabled")
+        true
     }
 
     /// Build the routing context for a session, including the PTY flag. Single
@@ -1634,18 +1667,17 @@ public final class AgentControlServer {
             codexChatBackend: session.codexChatBackend,
             runtimeIsACPDriven: session.runtimeBinding?.runtimeKind.isACPDriven == true,
             hasLiveBridge: harnessRegistry.bridge(for: session.id) != nil,
-            claudePtyEnabled: claudePtyEnabled,
-            // A session that already owns a tmux pane keeps using it even if the
-            // PTY flag flips on mid-session — prevents a 2nd `claude` spawn.
-            hasTmuxPane: session.tmuxPaneId != nil || session.tmuxWindowId != nil
+            claudePtyEnabled: true,
+            // Old pane-bearing sessions are decode-compatible only and resolve
+            // to `.legacyRetired`.
+            hasLegacyPaneMetadata: session.tmuxPaneId != nil || session.tmuxWindowId != nil
         )
     }
 
-    /// argv + cwd + env for a Claude PTY spawn. Mirrors the tmux spawn paths'
-    /// `AgentSpawner.argv(for:)` so the PTY child is launched identically — and
-    /// crucially carries the SAME env a tmux pane gets: the enriched login PATH
-    /// (launchd's GUI PATH is thin → node/rg/hooks vanish) plus the managed repo
-    /// env. Sanitized last so the subscription-billing rail still holds.
+    /// argv + cwd + env for a Claude PTY spawn. The PTY child gets the enriched
+    /// login PATH (launchd's GUI PATH is thin, so node/rg/hooks vanish) plus the
+    /// managed repo env. Sanitized last so the subscription-billing rail still
+    /// holds.
     func claudeSpawnPlan(for session: AgentSession) -> ClaudePtyRegistry.SpawnPlan? {
         let argv = AgentSpawner.argv(for: session)
         guard !argv.isEmpty else { return nil }
@@ -1659,7 +1691,7 @@ public final class AgentControlServer {
 
     /// Wire the registry's unexpected-exit callback once: a crashed Claude
     /// child marks its session `.degraded` (offers Resume) instead of looking
-    /// frozen-but-running. Replaces TmuxSupervisor's role per session.
+    /// frozen-but-running.
     private func ensureClaudePtyWiring() async {
         guard !claudePtyExitWired else { return }
         claudePtyExitWired = true
@@ -1693,11 +1725,10 @@ public final class AgentControlServer {
         }
     }
 
-    /// T6: port the tmux trust-folder warmup to the PTY. Claude's first run in
+    /// T6: trust-folder warmup for Claude PTY. Claude's first run in
     /// an untrusted directory shows a "trust this folder?" dialog that swallows
-    /// the first keystroke — the tmux path scrapes capture-pane + sends
-    /// Down/Up/Enter. The PTY equivalent polls `recentOutput()` (ANSI-stripped)
-    /// and writes the same keys as bytes (Down=ESC[B, Up=ESC[A, Enter=CR). chat
+    /// the first keystroke. The PTY warmup polls `recentOutput()` (ANSI-stripped)
+    /// and writes navigation keys as bytes (Down=ESC[B, Up=ESC[A, Enter=CR). chat
     /// sessions are pre-trusted (markTrustedForClaude) so this is only needed for
     /// code sessions in new worktrees. Best-effort, bounded, runs in background.
     func warmupClaudePtyHost(_ host: ClaudePtyHost) {
@@ -1710,7 +1741,7 @@ public final class AgentControlServer {
             }
             for _ in 0..<40 {   // ~12s
                 if isTrustPrompt(await host.recentOutput()) {
-                    // Down, Up, Enter — mirrors the tmux send-keys sequence.
+                    // Down, Up, Enter selects the trust option in Claude's prompt.
                     await host.writeBytes(Data([0x1b, 0x5b, 0x42, 0x1b, 0x5b, 0x41, 0x0d]))
                     return
                 }
@@ -1749,8 +1780,8 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSend, on: connection); return
         }
-        // Track A: Claude over a per-session PTY (flag on). Resume-or-spawn the
-        // host (single-flight) and submit; no tmux pane involved.
+        // Claude over a per-session PTY. Resume-or-spawn the host
+        // (single-flight) and submit directly.
         if route == .claudePty {
             guard let host = await claudePtyHost(for: session) else {
                 sendResponse(HTTPResponse(
@@ -1760,7 +1791,14 @@ public final class AgentControlServer {
                 ), on: connection)
                 return
             }
-            await host.submitPrompt(req.text, isChat: session.kind == .chat, isFollowUp: req.asFollowUp)
+            guard await host.submitPrompt(req.text, isChat: session.kind == .chat, isFollowUp: req.asFollowUp) else {
+                sendResponse(HTTPResponse(
+                    status: 503, reason: "Service Unavailable",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"pty_write_failed"}"#.utf8)
+                ), on: connection)
+                return
+            }
             captureClaudeSessionId(for: session)   // re-capture the (possibly rotated) CLI id
             let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
@@ -1790,8 +1828,8 @@ public final class AgentControlServer {
         // The reply streams back into the session's SessionChatStore as the
         // driver emits HarnessEvents — clients on chat-subscribe see the turn
         // appear with no extra poll, like the opencode/agentapi paths. Keyed
-        // off the bridge registry so legacy tmux sessions (no bridge) fall
-        // through to the tmux path below.
+        // off the bridge registry so retired legacy sessions never masquerade
+        // as live harnesses.
         if route == .harnessBridge, let bridge = harnessRegistry.bridge(for: uuid) {
             await bridge.prompt(req.text)
             let peer = Self.endpointString(connection.endpoint)
@@ -1806,9 +1844,9 @@ public final class AgentControlServer {
             )
             return
         }
-        // An ACP session whose bridge died (daemon restart) has no tmux pane —
+        // An ACP session whose bridge died (daemon restart) has no live bridge:
         // return an explicit 503 ("paste succeeded" ≠ "provider accepted")
-        // instead of falling into the tmux-guard 500. Revive is Phase-1.
+        // return an explicit stale-session error. Revive is Phase-1.
         if SessionCommandRouter.acpExpectedButNoBridge(routeCtx) {
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
@@ -1817,17 +1855,6 @@ public final class AgentControlServer {
             ), on: connection)
             return
         }
-        guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
-            sendResponse(.internalError, on: connection); return
-        }
-        // v0.8 QA: chat-mode CLI sessions don't need the user-prompt echo
-        // anymore — the rollout JSONL (Codex) / project JSONL (Claude)
-        // contains the user turn directly, so JSONLTail picks it up and
-        // appends to the store within ~1s. Echoing here AND parsing the
-        // JSONL caused the user bubble to render twice on multi-turn
-        // (two different message IDs → seen-IDs dedup missed both).
-        // We DO still rename the session (D1 first-prompt-becomes-title)
-        // and the snapshot's update-counter bumps via the JSONL parse.
         if session.kind == .chat {
             if (session.customName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
                 let trimmed = req.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1840,65 +1867,47 @@ public final class AgentControlServer {
                 }
             }
         }
-        // v0.8 QA: for CLI sessions (code or chat), wait for the warmup
-        // task (trust prompt + update prompt dismissal) to finish before
-        // pasting the user's first prompt. Without this barrier, sends
-        // arriving within ~3s of session creation race the dismissal —
-        // bytes land in the wrong screen and either trigger options
-        // (1/2/3) or are dropped.
-        if let warmupTask = chatWarmupTasks[uuid] {
-            await warmupTask.value
-        }
-        do {
-            let data = Data(bytes)
-            // v0.8 QA: for chat-mode CLI sessions, clear the input line
-            // before pasting so multi-turn prompts don't concatenate with
-            // leftover text in the input box. C-u is a no-op when the
-            // input is empty, so the first prompt isn't affected.
-            if session.kind == .chat {
-                try await tmux.command(["send-keys", "-t", paneId, "C-u"])
+        sendResponse(.legacySessionRetired, on: connection)
+    }
+
+    func deliverScheduledFollowUp(
+        session: AgentSession,
+        followUp: ScheduledFollowUp
+    ) async -> SessionScheduler.DeliveryResult {
+        let current = registry.session(id: session.id) ?? session
+        let routeCtx = routeContext(for: current)
+        let route = SessionCommandRouter.resolve(routeCtx)
+        switch route {
+        case .claudePty:
+            guard let host = await claudePtyHost(for: current) else {
+                return .unavailable(reason: "agent_cli_not_found")
             }
-            // v0.8 QA: chat-mode CLI sessions must use pasteBytes (not
-            // sendKeys -l -H). tmux's hex-literal sendKeys sends each byte
-            // as a SEPARATE key event, which Codex CLI's TUI input
-            // ignores — bytes drop on the floor and the trailing Enter
-            // submits the placeholder text instead of the user's prompt.
-            // paste-buffer + paste-buffer lands the entire string atomically
-            // and the input widget treats it as a paste.
-            if session.kind == .chat
-                || req.asFollowUp
-                || bytes.count > 256
-                || req.text.contains("\n") {
-                try await tmux.pasteBytes(paneId: paneId, bytes: data)
-            } else {
-                try await tmux.sendKeys(paneId: paneId, bytes: data)
+            guard await host.submitPrompt(followUp.prompt, isChat: current.kind == .chat, isFollowUp: true) else {
+                return .unavailable(reason: "pty_write_failed")
             }
-            // v0.8 QA: chat-mode CLI prompts need a trailing Enter so the
-            // CLI's input box actually submits. The Enter key event must
-            // be sent as a key name ("Enter" / "C-m") rather than a
-            // literal CR byte — TUI apps differentiate between the two
-            // (literal CR is text input, key Enter is a submit event).
-            // Brief delay before Enter lets the CLI's input widget
-            // settle after the paste — without it, Codex CLI's input
-            // sometimes sees the Enter before its render loop has
-            // committed the pasted text, dropping the submit on the floor.
-            if session.kind == .chat {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                try await tmux.command(["send-keys", "-t", paneId, "Enter"])
+            captureClaudeSessionId(for: current)
+            await AuditLog.shared.recordSend(sessionId: current.id, sourcePeer: "scheduler", text: followUp.prompt)
+            return .delivered
+        case .harnessBridge:
+            guard let bridge = harnessRegistry.bridge(for: current.id) else {
+                return .unavailable(reason: "acp_session_not_live")
             }
-            let peer = Self.endpointString(connection.endpoint)
-            await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
-            await sendCommandResponse(
-                body: ["ok": true],
-                key: req.idempotencyKey,
-                kind: .send,
-                sessionId: uuid,
-                payloadHash: payloadHash,
-                on: connection
-            )
-        } catch {
-            serverLogger.error("send-prompt failed: \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection)
+            await bridge.prompt(followUp.prompt)
+            await AuditLog.shared.recordSend(sessionId: current.id, sourcePeer: "scheduler", text: followUp.prompt)
+            return .delivered
+        case .opencodeServe:
+            do {
+                try await forwardOpencodePrompt(session: current, prompt: followUp.prompt)
+                await AuditLog.shared.recordSend(sessionId: current.id, sourcePeer: "scheduler", text: followUp.prompt)
+                return .delivered
+            } catch {
+                return .unavailable(reason: error.localizedDescription)
+            }
+        case .legacyRetired:
+            if SessionCommandRouter.acpExpectedButNoBridge(routeCtx) {
+                return .unavailable(reason: "acp_session_not_live")
+            }
+            return .retired(reason: "legacy_session_retired")
         }
     }
 
@@ -1908,8 +1917,8 @@ public final class AgentControlServer {
     /// to round-trip through the Mac UI.
     ///
     /// Flow: parse JSONL header for the CLI session id → spawn a fresh
-    /// tmux pane with `--resume`/`resume` argv → register the new session
-    /// → optionally paste the user's first prompt once the pane is ready.
+    /// direct PTY with `--resume` argv → register the new session
+    /// → optionally submit the user's first prompt once the PTY is ready.
     /// JSONL wiring picks up the existing JSONL automatically because
     /// `--resume` appends to the same file (it's the newest in the dir).
     private func handleContinueReadOnly(request: HTTPRequest, connection: NWConnection) async {
@@ -1917,12 +1926,10 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection); return
         }
         // P1-Mac-7: defensively validate the repoKey before it flows into
-        // `tmux.newWindow(cwd:)`. P1-Mac-6 already rejects CR/LF/control
-        // bytes inside the tmux client, but a compromised paired client
-        // could still ask the daemon to spawn an agent in `..`-traversed
-        // paths or paths outside the user's home. Refuse any repoKey that
-        // isn't an absolute, traversal-free path that resolves under the
-        // user's home directory.
+        // local agent launch. A compromised paired client could ask the daemon
+        // to spawn an agent in `..`-traversed paths or paths outside the user's
+        // home. Refuse any repoKey that isn't an absolute, traversal-free path
+        // that resolves under the user's home directory.
         guard Self.isValidRepoKey(req.repoKey) else {
             sendResponse(HTTPResponse(
                 status: 400, reason: "Bad Request",
@@ -1983,7 +1990,7 @@ public final class AgentControlServer {
             ) ?? []
         case .codex:
             // v27: codex is harness-driven; external "Continue here" resume is
-            // deprioritized — no tmux resume argv. Empty → the missing-binary
+            // deprioritized. Empty -> the missing-binary
             // surface returns a clean 4xx (start a fresh harness session instead).
             argv = []
         case .gemini:
@@ -1992,8 +1999,7 @@ public final class AgentControlServer {
             // instead of silently spawning an empty process.
             argv = []
         case .opencode:
-            // PR #29: OpenCode sessions don't spawn through tmux argv;
-            // they're SSE clients of the shared `opencode serve`
+            // PR #29: OpenCode sessions are SSE clients of the shared `opencode serve`
             // process. The handler routes opencode spawns to
             // OpencodeProcessManager + OpencodeSSEAdapter instead;
             // dropping into the 503 branch here is unreachable in
@@ -2005,9 +2011,9 @@ public final class AgentControlServer {
             // keep this conservative until the Cursor importer can prove one.
             argv = []
         case .grok:
-            // ACP agent — driven via AcpAgentDriver, not a tmux argv. The
+            // ACP agent: driven via AcpAgentDriver. The
             // daemon ACP spawn path is not wired yet, so fall through to the
-            // 503 (honest "not available" rather than an empty tmux spawn).
+            // 503 (honest "not available" rather than an empty spawn).
             argv = []
         case .unknown:
             // X3: forward-compat unknown agent — no argv builder. Fall
@@ -2024,16 +2030,10 @@ public final class AgentControlServer {
             return
         }
 
-        // Spawn into a new tmux window cwd'd to the repo. Local mode —
-        // outside JSONLs don't carry a worktree.
+        // Spawn a direct Claude PTY cwd'd to the repo. Local mode — outside
+        // JSONLs don't carry a worktree.
         do {
-            try await tmux.start()
             let resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: req.repoKey)
-            let window = try await tmux.newWindow(
-                cwd: req.repoKey,
-                child: argv,
-                environment: resolvedEnv?.environment ?? [:]
-            )
             let session = try await registry.create(
                 repoKey: req.repoKey,
                 repoDisplayName: (req.repoKey as NSString).lastPathComponent,
@@ -2041,13 +2041,17 @@ public final class AgentControlServer {
                 model: modelDefault,
                 goal: nil,
                 worktreePath: nil,
-                tmuxWindowId: window.windowId,
-                tmuxPaneId: window.paneId,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
                 planMode: false,
                 ownsWorktree: false,
                 envSetId: resolvedEnv?.set?.id,
                 envSetName: resolvedEnv?.set?.name
             )
+            await ensureClaudePtyWiring()
+            let env = AgentSpawner.claudePtyEnv(extra: resolvedEnv?.environment)
+            let spawnPlan = ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: req.repoKey, env: env)
+            let host = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { spawnPlan })
             if req.agent == .claude {
                 attachClaudeWiring(for: session, cwd: req.repoKey)
             }
@@ -2061,22 +2065,20 @@ public final class AgentControlServer {
                 ]
             )
 
-            // If a prompt came along, paste it after the pane is ready.
+            // If a prompt came along, submit it after the PTY is ready.
             // Fire-and-forget so the HTTP response returns quickly with
             // the new session id; the client can also poll /sessions
             // for status.
             if let prompt = req.prompt, !prompt.isEmpty {
-                let bytes = prompt.hasSuffix("\n")
-                    ? Array(prompt.utf8)
-                    : Array((prompt + "\n").utf8)
-                Task { [tmux] in
+                Task {
                     try? await Task.sleep(nanoseconds: 600_000_000)
-                    try? await tmux.pasteBytes(paneId: window.paneId, bytes: Data(bytes))
-                    await AuditLog.shared.recordSend(
-                        sessionId: session.id,
-                        sourcePeer: Self.endpointString(connection.endpoint),
-                        text: prompt
-                    )
+                    if await host.submitPrompt(prompt, isChat: false, isFollowUp: true) {
+                        await AuditLog.shared.recordSend(
+                            sessionId: session.id,
+                            sourcePeer: Self.endpointString(connection.endpoint),
+                            text: prompt
+                        )
+                    }
                 }
             }
 
@@ -2266,7 +2268,7 @@ public final class AgentControlServer {
         } }
         // ACP harness interrupt (Grok, Cursor): the SessionInterruptDispatcher
         // has no handle on the harness registry, so cancel the live bridge here
-        // first. Keyed off the bridge registry (agent-agnostic); legacy tmux
+        // first. Keyed off the bridge registry (agent-agnostic); retired legacy
         // sessions have no bridge and fall through to the dispatcher. Flip the
         // turn state up front (mirrors the dispatcher) so the V2 UI's Send
         // button restores immediately, then cancel the in-flight ACP turn.
@@ -2285,15 +2287,21 @@ public final class AgentControlServer {
             )
             return
         }
-        // Track A: Claude PTY session — Stop = ESC written to the PTY (the raw
-        // equivalent of the tmux ESC the dispatcher would send). The dispatcher
+        // Claude PTY session: Stop = ESC written to the PTY. The dispatcher
         // has no handle on the PTY registry, so we do it here (mirrors the
-        // bridge branch above). A PTY session has no tmux pane, so the
+        // bridge branch above). A PTY session has no legacy pane metadata, so the
         // dispatcher would otherwise return .notSupported.
         if let s = registry.session(id: uuid),
            SessionCommandRouter.resolve(routeContext(for: s)) == .claudePty {
             if let host = await claudePtyRegistry.host(for: uuid) {
-                await host.writeBytes(Data([0x1b]))   // ESC
+                guard await host.writeBytes(Data([0x1b])) else {
+                    sendResponse(HTTPResponse(
+                        status: 503, reason: "Service Unavailable",
+                        contentType: "application/json",
+                        body: Data(#"{"error":"pty_write_failed"}"#.utf8)
+                    ), on: connection)
+                    return
+                }
             }
             chatStoreRegistry.snapshotStore(for: s)?.setCurrentTurnState(.interrupted)
             await sendCommandResponse(
@@ -2304,13 +2312,12 @@ public final class AgentControlServer {
         }
         // v0.23 (Chat V2 — audit P0 #2): route through
         // SessionInterruptDispatcher so Stop works for Codex SDK and
-        // Gemini agentapi sessions too, not just tmux-backed ones.
+        // Gemini agentapi sessions too.
         // The dispatcher flips currentTurnState to .interrupted up
         // front so the V2 UI's stopwatch + Send button restore
         // immediately, then dispatches the per-backend cancel.
         let dispatcher = SessionInterruptDispatcher(
             registry: registry,
-            tmux: tmux,
             chatStoreRegistry: chatStoreRegistry
         )
         let result = await dispatcher.interrupt(sessionId: uuid)
@@ -2326,10 +2333,8 @@ public final class AgentControlServer {
             )
         case .sessionNotFound:
             sendResponse(.notFound, on: connection)
-        case .tmuxFailed:
-            sendResponse(.internalError, on: connection)
         case .notSupported:
-            sendJSON(["ok": false, "error": "notSupported"], on: connection, status: 501)
+            sendResponse(.legacySessionRetired, on: connection)
         }
     }
 
@@ -3388,6 +3393,9 @@ public final class AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil {
+            sendResponse(.legacySessionRetired, on: connection); return
+        }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let body = try? encoder.encode(session.terminalPanes) {
@@ -3626,9 +3634,11 @@ public final class AgentControlServer {
     }
 
     private func handleAddTerminal(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
-        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid),
-              let windowId = session.tmuxWindowId else {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
+        }
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil {
+            sendResponse(.legacySessionRetired, on: connection); return
         }
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
@@ -3644,12 +3654,8 @@ public final class AgentControlServer {
         struct AddTerminalRequest: Codable { let title: String? }
         let req = (try? JSONDecoder().decode(AddTerminalRequest.self, from: request.body)) ?? AddTerminalRequest(title: nil)
         do {
-            let paneId = try await tmux.splitWindow(
-                windowId: windowId,
-                cwd: session.effectiveCwd,
-                horizontal: false
-            )
-            let pane = TerminalPaneRef(paneId: paneId, title: req.title ?? "", isPrimary: false)
+            let host = try await terminalRegistry.spawnShell(cwd: session.effectiveCwd, title: req.title ?? "")
+            let pane = TerminalPaneRef(paneId: host.id.uuidString, title: req.title ?? "", isPrimary: false)
             try await registry.addTerminalPane(sessionId: uuid, pane: pane)
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -3664,15 +3670,20 @@ public final class AgentControlServer {
     }
 
     private func handleDeleteTerminal(sessionId: String, paneId: String, connection: NWConnection) async {
-        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid),
-              let pane = session.terminalPanes.first(where: { $0.id.uuidString == paneId }) else {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil {
+            sendResponse(.legacySessionRetired, on: connection); return
+        }
+        guard let pane = session.terminalPanes.first(where: { $0.id.uuidString == paneId }) else {
             sendResponse(.notFound, on: connection); return
         }
         if pane.isPrimary {
             sendResponse(.badRequest, on: connection); return
         }
         do {
-            try await tmux.killPane(pane.paneId)
+            await terminalRegistry.kill(id: pane.paneId)
             try await registry.removeTerminalPane(sessionId: uuid, paneRefId: pane.id)
             sendJSON(["ok": true], on: connection)
         } catch {
@@ -3683,8 +3694,11 @@ public final class AgentControlServer {
     private func handleRenameTerminal(sessionId: String, paneId: String, request: HTTPRequest, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId),
               let paneUUID = UUID(uuidString: paneId),
-              registry.session(id: uuid) != nil else {
+              let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
+        }
+        if session.tmuxPaneId != nil || session.tmuxWindowId != nil {
+            sendResponse(.legacySessionRetired, on: connection); return
         }
         struct RenameTerminalRequest: Codable { let title: String? }
         guard let req = try? JSONDecoder().decode(RenameTerminalRequest.self, from: request.body) else {
@@ -3731,7 +3745,7 @@ public final class AgentControlServer {
             snapshotItems = registryStore?.snapshot.items ?? []
             snapshotCounter = registryStore?.snapshot.updateCounter ?? 0
             snapshotLastEventAt = registryStore?.snapshot.lastEventAt ?? session.lastEventAt
-        } else if let store = registryStore, !store.snapshot.items.isEmpty {
+        } else if let store = registryStore, store.isSDKOnly || !store.snapshot.items.isEmpty {
             snapshotItems = store.snapshot.items
             // Phase 0a / Codex P0: this is the real chat cursor now.
             // Pre-v5, this field was populated from session.lastEventSeq
@@ -3878,9 +3892,8 @@ public final class AgentControlServer {
 
     // MARK: - PR #30: OpenCode session dispatch (wire v13)
 
-    /// Spawn an OpenCode-backed AgentSession. Diverges from the
-    /// tmux argv path because opencode sessions are SSE clients of the
-    /// shared `opencode serve` process (P1 singleton). Flow:
+    /// Spawn an OpenCode-backed AgentSession. OpenCode sessions are SSE clients
+    /// of the shared `opencode serve` process (P1 singleton). Flow:
     ///   1. Ensure `opencode serve` is running (boots on first request).
     ///   2. POST to the server's `/session` endpoint to mint an
     ///      opencode session id.
@@ -4045,8 +4058,7 @@ public final class AgentControlServer {
         }
 
         // Step 3: create the Clawdmeter-side AgentSession + register
-        // the bidirectional id mapping. opencode sessions don't carry
-        // a tmux pane, but every OpenCode HTTP call is scoped with the
+        // the bidirectional id mapping. OpenCode HTTP calls are scoped with the
         // same directory so code-mode sessions operate in the prepared cwd.
         let session: AgentSession
         do {
@@ -4106,7 +4118,7 @@ public final class AgentControlServer {
     }
 
     /// The single switch deciding which providers are driven over the native
-    /// ACP harness (vs tmux / SDK / serve). Returns the agent's spawn+auth
+    /// ACP harness (vs SDK / serve / direct PTY). Returns the agent's spawn+auth
     /// policy, or nil for non-ACP agents (Claude/Codex/Gemini/OpenCode).
     static func acpSupport(for agent: AgentKind) -> AcpAgentSupport? {
         switch agent {
@@ -4118,18 +4130,11 @@ public final class AgentControlServer {
         }
     }
 
-    /// The `codex app-server` harness is the DEFAULT Codex drive path now
-    /// (Sessions + Chat). The legacy tmux/SDK Codex paths are deprecated. This
-    /// stays a kill-switch only: during live-verify, opt OUT of the harness with
-    /// `defaults write com.clawdmeter.mac clawdmeter.codex.appServer.enabled -bool false`.
-    static var codexAppServerEnabled: Bool {
-        UserDefaults.standard.object(forKey: "clawdmeter.codex.appServer.enabled") as? Bool ?? true
-    }
-
     /// v27 Code-tab harness migration: true when a live harness bridge is
     /// driving this session (paneless codex/cursor/gemini/grok). The Code-tab
     /// chat-store routing + first-send readiness use this to treat the session
-    /// like the Chat tab's harness sessions instead of waiting on a tmux pane.
+    /// like the Chat tab's harness sessions instead of waiting on legacy pane
+    /// metadata.
     func isHarnessLive(_ id: UUID) -> Bool { harnessRegistry.contains(id) }
 
     /// v27: tear down a session's harness bridge (stdio child / gRPC channel)
@@ -4146,8 +4151,8 @@ public final class AgentControlServer {
     }
 
     /// Generic harness spawn (Grok/Cursor over ACP, Codex over app-server,
-    /// Antigravity over gRPC). Mirrors `handleSpawnOpencodeSession`: no tmux pane
-    /// — the daemon drives an `AgentDriver` via `AcpHarnessBridge` (built by
+    /// Antigravity over gRPC). Mirrors `handleSpawnOpencodeSession`: the daemon
+    /// drives an `AgentDriver` via `AcpHarnessBridge` (built by
     /// `makeBridge`), projecting its event stream into the session's
     /// `SessionChatStore`. Two-phase failure contract (A3): `bridge.start()`
     /// throws synchronously on spawn/handshake/auth failure, so a failed start
@@ -4165,7 +4170,7 @@ public final class AgentControlServer {
         connection: NWConnection,
         makeBridge: (UUID, SessionChatStore) -> AcpHarnessBridge
     ) async {
-        // Resolve the per-repo env set (same path as the tmux/opencode spawns).
+        // Resolve the per-repo env set used by provider spawns.
         let resolvedEnv: RepoEnvResolvedEnvironment?
         do {
             resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: cwd)
@@ -4191,7 +4196,7 @@ public final class AgentControlServer {
         var childEnv = ProcessInfo.processInfo.environment
         for (k, v) in (resolvedEnv?.environment ?? [:]) { childEnv[k] = v }
 
-        // Step 1: write-ahead the Clawdmeter session (no tmux pane). The
+        // Step 1: write-ahead the Clawdmeter session. The
         // runtime kind is inferred as `.acpGrok` from `agent: .grok`.
         let session: AgentSession
         if let pre = provisionalSessionId, let existing = registry.session(id: pre) {
@@ -4502,9 +4507,17 @@ public final class AgentControlServer {
         sendResponse(.ok(contentType: "application/json", body: bytes), on: connection)
     }
 
-    private func isSuccessfulSwap(_ result: SessionConfigChanger.SwapResult) -> Bool {
-        if case .swapped = result { return true }
-        return false
+    private func sendSwapFailureIfNeeded(_ result: SessionConfigChanger.SwapResult, on connection: NWConnection) -> Bool {
+        switch result {
+        case .swapped:
+            return true
+        case .spawnError(let message) where message == "legacy_session_retired":
+            sendResponse(.legacySessionRetired, on: connection)
+            return false
+        case .resumeFailed, .spawnError:
+            sendResponse(.internalError, on: connection)
+            return false
+        }
     }
 
     // MARK: - Usage / Analytics endpoints
@@ -5068,7 +5081,7 @@ public final class AgentControlServer {
         }
 
         // Audit P0 fix: validate `repoKey` BEFORE either dispatch path
-        // — the OpenCode branch and the worktree/tmux branch both use
+        // — the OpenCode branch and the worktree/direct-runtime branch both use
         // it as cwd / worktree-root / registry-state. Without this
         // guard, an authenticated paired client could POST a /tmp or
         // symlink-escaping path and the Mac would spawn the agent
@@ -5144,7 +5157,7 @@ public final class AgentControlServer {
 
         let effectivePlanMode = req.agent == .cursor ? false : req.planMode
         // ACP harness agents (Grok, Cursor) and OpenCode spawn via their own
-        // managers, not tmux, so `AgentSpawner.argv` returns [] for them. Use a
+        // managers, so `AgentSpawner.argv` returns [] for them. Use a
         // non-empty sentinel so they pass the CLI-presence guard and reach their
         // dedicated spawn branch below (binary presence is checked there, at
         // launch, via the two-phase start contract / provider preflight).
@@ -5228,9 +5241,9 @@ public final class AgentControlServer {
             return
         }
 
-        // Harness-driven providers bypass tmux: the daemon drives an AgentDriver
+        // Harness-driven providers: the daemon drives an AgentDriver
         // and projects its events into the chat store. Each branch owns its own
-        // session-create + response, returning before the tmux argv/spawn below.
+        // session-create + response, returning before the direct PTY branch below.
         // (1) ACP stdio agents (Cursor — `cursor-agent acp`, verified live).
         // Grok is NOT ACP; it's handled by the headless branch (1c) below.
         if let support = Self.acpSupport(for: req.agent) {
@@ -5286,10 +5299,8 @@ public final class AgentControlServer {
                 })
             return
         }
-        // (2) Codex over `codex app-server` — the DEFAULT Codex drive path.
-        // The legacy tmux/SDK codex paths are deprecated; `codexAppServerEnabled`
-        // is now a live-verify kill-switch (default on).
-        if req.agent == .codex, Self.codexAppServerEnabled {
+        // (2) Codex over `codex app-server` — the Codex drive path.
+        if req.agent == .codex {
             let display = providerDisplayName(req.agent)
             await handleSpawnHarnessSession(
                 req: req, displayName: display,
@@ -5360,80 +5371,38 @@ public final class AgentControlServer {
             return
         }
 
-        // Spawn into a new tmux window — OR, for Claude with the PTY flag on,
-        // a per-session PseudoTerminal (Track A). The two paths differ only in
-        // how the child is launched + whether the session carries a tmux pane;
-        // everything downstream (workspace record, JSONL wiring, response) is
-        // shared. Errors from either path land in the same catch below.
+        // Claude runs in a per-session direct PTY. Non-Claude providers should
+        // have returned through the harness/OpenCode branches above; do not
+        // fall back to any pane-backed runtime.
         do {
             let resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: cwd)
-            let usePty = claudePtyEnabled && req.agent == .claude
-            let session: AgentSession
-            if usePty {
-                // Create the session FIRST (no tmux pane), then single-flight
-                // spawn the PTY host keyed by its id. argv was already verified
-                // non-empty above, so the spawn plan is present.
-                session = try await registry.create(
-                    repoKey: req.repoKey,
-                    repoDisplayName: (req.repoKey as NSString).lastPathComponent,
-                    agent: req.agent,
-                    model: req.model,
-                    goal: req.goal,
-                    worktreePath: worktreePath,
-                    provisioning: provisioning,
-                    tmuxWindowId: nil,
-                    tmuxPaneId: nil,
-                    planMode: effectivePlanMode,
-                    mode: req.useWorktree ? .worktree : .local,
-                    effort: req.effort,
-                    ownsWorktree: worktreePath != nil,
-                    envSetId: resolvedEnv?.set?.id,
-                    envSetName: resolvedEnv?.set?.name,
-                    id: provisionalSessionId ?? UUID()
-                )
-                await ensureClaudePtyWiring()
-                let plan = claudeSpawnPlan(for: session)
-                do {
-                    let host = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { plan })
-                    // Code sessions can hit the first-run trust dialog in a fresh
-                    // worktree; dismiss it on the PTY (chat is pre-trusted).
-                    warmupClaudePtyHost(host)
-                } catch {
-                    // Unlike the tmux path (which spawns the window BEFORE create),
-                    // the PTY path persists the session first, so a spawn failure
-                    // would otherwise leave an orphan nil-pane record in
-                    // sessions.json. Delete it before rethrowing into the outer
-                    // catch (which does worktree/city cleanup).
-                    await claudePtyRegistry.suspend(session.id)
-                    try? await registry.delete(id: session.id)
-                    throw error
-                }
-            } else {
-                try await tmux.start()  // idempotent
-                let window = try await tmux.newWindow(
-                    cwd: cwd,
-                    child: argv,
-                    environment: resolvedEnv?.environment ?? [:]
-                )
-                // Phase 2 simplification: pane id = first pane of the new window.
-                session = try await registry.create(
-                    repoKey: req.repoKey,
-                    repoDisplayName: (req.repoKey as NSString).lastPathComponent,
-                    agent: req.agent,
-                    model: req.model,
-                    goal: req.goal,
-                    worktreePath: worktreePath,
-                    provisioning: provisioning,
-                    tmuxWindowId: window.windowId,
-                    tmuxPaneId: window.paneId,
-                    planMode: effectivePlanMode,
-                    mode: req.useWorktree ? .worktree : .local,
-                    effort: req.effort,
-                    ownsWorktree: worktreePath != nil,
-                    envSetId: resolvedEnv?.set?.id,
-                    envSetName: resolvedEnv?.set?.name,
-                    id: provisionalSessionId ?? UUID()
-                )
+            let session = try await registry.create(
+                repoKey: req.repoKey,
+                repoDisplayName: (req.repoKey as NSString).lastPathComponent,
+                agent: req.agent,
+                model: req.model,
+                goal: req.goal,
+                worktreePath: worktreePath,
+                provisioning: provisioning,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                planMode: effectivePlanMode,
+                mode: req.useWorktree ? .worktree : .local,
+                effort: req.effort,
+                ownsWorktree: worktreePath != nil,
+                envSetId: resolvedEnv?.set?.id,
+                envSetName: resolvedEnv?.set?.name,
+                id: provisionalSessionId ?? UUID()
+            )
+            await ensureClaudePtyWiring()
+            let plan = claudeSpawnPlan(for: session)
+            do {
+                let host = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { plan })
+                warmupClaudePtyHost(host)
+            } catch {
+                await claudePtyRegistry.suspend(session.id)
+                try? await registry.delete(id: session.id)
+                throw error
             }
             recordWorkspaceSession(repoRoot: req.repoKey, sessionId: session.id)
             // Wire up JSONL tail + done-detector + plan-watcher for this
@@ -5472,17 +5441,6 @@ public final class AgentControlServer {
             // prompt does fire (e.g. brand-new worktree), it surfaces
             // through the same PermissionPromptCard the chat workspace
             // renders.
-            // tmux warmup only — a PTY session has no pane (warmup port is T6).
-            if let warmupPane = session.tmuxPaneId {
-                let warmupSession = session
-                let warmupTask = Task { [weak self] in
-                    await self?.warmupCLIPane(session: warmupSession, paneId: warmupPane)
-                    await MainActor.run { [weak self] in
-                        self?.chatWarmupTasks[warmupSession.id] = nil
-                    }
-                }
-                chatWarmupTasks[session.id] = warmupTask
-            }
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             if let body = try? encoder.encode(session) {
@@ -5506,7 +5464,7 @@ public final class AgentControlServer {
                 worktreePath: worktreePath,
                 provisioning: provisioning,
                 provisionalSessionId: provisionalSessionId,
-                context: "spawn tmux failure"
+                context: "spawn PTY failure"
             )
             serverLogger.error("Failed to spawn session: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
@@ -5742,7 +5700,7 @@ public final class AgentControlServer {
         // Harness is the DEFAULT Chat drive path for non-Claude providers now:
         // a chat session created here gets a live AcpHarnessBridge, and the
         // send/interrupt/permission handlers already route to that bridge
-        // (SessionCommandRouter `.harnessBridge`). The legacy SDK/agentapi/tmux
+        // (SessionCommandRouter `.harnessBridge`). The legacy SDK/agentapi
         // chat paths below are deprecated, reachable only via the per-provider
         // kill-switch (default off). Codex → `codex app-server`.
         if req.provider == .codex {
@@ -5777,8 +5735,7 @@ public final class AgentControlServer {
                 sendChatProviderUnavailable(provider: .cursor, reason: reason, on: connection)
                 return
             }
-            // Cursor chat drives over ACP via the harness (the legacy tmux argv
-            // path is deprecated; Phase 9 removes it).
+            // Cursor chat drives over ACP via the harness.
             await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
             return
         }
@@ -5827,10 +5784,9 @@ public final class AgentControlServer {
             tmuxPaneId: nil,
             mode: .local
         )
-        // Spawn dispatch — Phase 3 dispatch handles the kind branches.
-        // For SDK chat (codex + .sdk) argv is empty and the daemon needs
-        // to route to CodexSubscriptionRelay; Phase 4.5 wires that. For
-        // CLI chat (claude / codex+.cli) we spawn a tmux window now.
+        // Spawn dispatch. Harness-eligible providers returned before this point;
+        // Claude chat spawns a direct PTY. Persisted Codex SDK-shaped sessions
+        // are decode-only and are retired by send/config routes.
         let updatedSession = registry.session(id: session.id) ?? session
         // Claude chat: pre-trust the throwaway chat-cwd so the CLI boots
         // straight to the composer instead of blocking at the first-run trust
@@ -5851,12 +5807,9 @@ public final class AgentControlServer {
                 body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
             ), on: connection)
             return
-        } else if claudePtyEnabled && updatedSession.agent == .claude {
-            // Track A: Claude chat over a per-session PTY (flag on). chat-cwd
-            // is pre-trusted above (markTrustedForClaude), so no warmup is
-            // needed; SessionChatStore resolves the JSONL by cwd (tmux-pane-
-            // independent), so chat rendering is unchanged. Single-flight
-            // resume-or-spawn the host; store NO tmux pane.
+        } else if updatedSession.agent == .claude {
+            // Claude chat over a per-session direct PTY. chat-cwd is pre-trusted
+            // above, so no pane warmup is needed.
             guard let host = await claudePtyHost(for: updatedSession) else {
                 try? await registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
@@ -5876,66 +5829,10 @@ public final class AgentControlServer {
                 mode: .local
             )
         } else {
-            // CLI chat path: spawn tmux window in the chat-cwd. v0.8 QA
-            // surfaced a wedged-tmux scenario where tmux.newWindow hung
-            // forever — the handler never returned, AgentSession +
-            // chat-cwd were left orphaned in the registry. Use a
-            // continuation-race timeout that returns even when the
-            // underlying tmux await is unrecoverably stuck (Swift Task
-            // cancellation is cooperative; tmux.command's
-            // withCheckedThrowingContinuation never resumes on a wedged
-            // PTY). The spawn task may leak if tmux stays wedged, but
-            // leaking one wrapping Task is much better than leaking a
-            // registry entry + chat-cwd dir + a confused user.
-            let tmuxRef = self.tmux
-            let spawnResult: (windowId: String, paneId: String)? = await withCheckedContinuation { (cont: CheckedContinuation<(String, String)?, Never>) in
-                let resumedBox = ResumeOnceBox()
-                Task {
-                    do {
-                        try await tmuxRef.start()
-                        let window = try await tmuxRef.newWindow(cwd: chatCwd, child: argv)
-                        if resumedBox.tryClaim() { cont.resume(returning: (window.windowId, window.paneId)) }
-                    } catch {
-                        if resumedBox.tryClaim() { cont.resume(returning: nil) }
-                    }
-                }
-                Task {
-                    try? await Task.sleep(nanoseconds: 10_000_000_000)
-                    if resumedBox.tryClaim() { cont.resume(returning: nil) }
-                }
-            }
-            guard let spawn = spawnResult else {
-                serverLogger.error("chat spawn failed or timed out for \(session.id.uuidString, privacy: .public) — tmux unresponsive after 10s")
-                try? await registry.delete(id: session.id)
-                try? ChatCwdManager.remove(for: session.id)
-                sendResponse(HTTPResponse(
-                    status: 504, reason: "Gateway Timeout",
-                    contentType: "application/json",
-                    body: Data(#"{"error":"tmux_unresponsive","hint":"Quit Clawdmeter and relaunch; if the issue persists, kill any stale tmux processes with: pkill -9 -f tmux"}"#.utf8)
-                ), on: connection)
-                return
-            }
-            try? await registry.updateRuntime(
-                id: session.id,
-                worktreePath: chatCwd,
-                tmuxWindowId: spawn.windowId,
-                tmuxPaneId: spawn.paneId,
-                mode: .local
-            )
-            // v0.8 QA: dismiss Codex CLI's in-pane prompts (update, trust)
-            // and any Claude TUI welcome that swallows the first keystroke.
-            // Runs in the background so chat-session creation returns
-            // immediately — handleSendPrompt awaits the task before pasting
-            // so the user's first send doesn't race the dismissal.
-            let warmupSession = registry.session(id: session.id) ?? session
-            let warmupPane = spawn.paneId
-            let warmupTask = Task { [weak self] in
-                await self?.warmupCLIPane(session: warmupSession, paneId: warmupPane)
-                await MainActor.run { [weak self] in
-                    self?.chatWarmupTasks[warmupSession.id] = nil
-                }
-            }
-            chatWarmupTasks[session.id] = warmupTask
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            sendResponse(.legacySessionRetired, on: connection)
+            return
         }
         AgentEventStream.recordEvent(
             sessionId: session.id, kind: .sessionCreated,
@@ -5951,7 +5848,7 @@ public final class AgentControlServer {
         }
     }
 
-    /// Create a Chat session driven by the harness (no tmux pane). The chat
+    /// Create a Chat session driven by the harness. The chat
     /// send/interrupt/permission handlers already route to a live
     /// `AcpHarnessBridge` (`SessionCommandRouter.harnessBridge`); this wires
     /// chat-CREATE to build + register one for a non-Claude provider.
@@ -5985,12 +5882,12 @@ public final class AgentControlServer {
 
     /// Whether a provider's CHAT/FRONTIER child drives through the harness (vs a
     /// legacy backend). grok/cursor always (ACP); gemini always (headless `agy`
-    /// by default, Cascade gRPC behind its opt-in flag — both via the harness);
-    /// codex behind its kill-switch (default on); claude → tmux, opencode → SSE.
+    /// via the harness); codex always through app-server; claude -> direct PTY,
+    /// opencode -> SSE.
     private func isChatHarnessEligible(_ provider: AgentKind) -> Bool {
         switch provider {
         // Codex chat now ALWAYS drives over `codex app-server` (same engine as
-        // Code, readOnly+never posture) — the legacy SDK relay is removed.
+        // Code, readOnly+never posture) — the legacy SDK runtime is removed.
         case .grok, .cursor, .gemini, .codex: return true
         default: return false
         }
@@ -6016,8 +5913,8 @@ public final class AgentControlServer {
         frontierGroupId: UUID? = nil,
         frontierChildIndex: Int? = nil
     ) async throws -> AgentSession {
-        // Step 1: write-ahead the chat session. codexChatBackend stays nil so
-        // SessionCommandRouter does NOT resolve `.codexSDK` for this session.
+        // Step 1: write-ahead the chat session. codexChatBackend stays nil
+        // because Codex chat is now driven by the app-server harness.
         let session: AgentSession
         do {
             session = try await registry.createChat(
@@ -6474,11 +6371,9 @@ public final class AgentControlServer {
         let groupId = UUID()
         var slotResults: [FrontierSlotResult] = []
         for (idx, slot) in req.models.enumerated() {
-            // Per-child spawn timeout: a child that HANGS (a wedged tmux claude
-            // pane, or a driver handshake that never completes) must not hang the
-            // whole broadcast → the "request timed out" the user hits. Time the
-            // slot out so the other providers still come through. Mirrors the
-            // continuation-race timeout handlePostChatSession uses for tmux.
+            // Per-child spawn timeout: a child that hangs must not hang the
+            // whole broadcast. Time the slot out so the other providers still
+            // come through.
             let slotResult: FrontierSlotResult = await withCheckedContinuation { (cont: CheckedContinuation<FrontierSlotResult, Never>) in
                 let box = ResumeOnceBox()
                 // Hold the timeout task so the spawn path can cancel it — otherwise
@@ -6588,7 +6483,7 @@ public final class AgentControlServer {
     }
 
     /// Best-effort send to one Frontier child. Mirrors the dispatch
-    /// inside handleSendPrompt (agentapi vs SDK vs tmux) but does NOT
+    /// inside handleSendPrompt (harness vs SDK vs direct PTY/SSE) but does NOT
     /// touch the HTTP connection — Frontier fan-out caller already
     /// returned a 202. Errors are logged + dropped.
     private func forwardFrontierChildSend(session: AgentSession, text: String) async -> FrontierChildSendResult {
@@ -6598,7 +6493,7 @@ public final class AgentControlServer {
         }
         // v0.23.9 adversarial-review fix: handleFrontierSend snapshots
         // the child list before iterating, then awaits per-child sends
-        // serially. While we're awaiting child[i]'s tmux/SDK/agentapi
+        // serially. While we're awaiting child[i]'s runtime send
         // call, a concurrent /pick-winner can archive child[i+1] on
         // the same @MainActor registry. Re-fetch the live session
         // immediately before each send so a just-archived loser
@@ -6635,24 +6530,18 @@ public final class AgentControlServer {
             guard let host = await claudePtyHost(for: session) else {
                 return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "agent_cli_not_found")
             }
-            await host.submitPrompt(text, isChat: session.kind == .chat, isFollowUp: true)
+            guard await host.submitPrompt(text, isChat: session.kind == .chat, isFollowUp: true) else {
+                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "pty_write_failed")
+            }
             await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
             return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
         }
-        // CLI (Claude / Codex CLI)
-        guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
-            serverLogger.warning("frontier child has no pane id — skipping send")
-            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "missing_pane_id")
-        }
-        do {
-            let bytes = text.data(using: .utf8) ?? Data()
-            try await tmux.pasteBytes(paneId: paneId, bytes: bytes + Data([0x0D]))
-            await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
-            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
-        } catch {
-            serverLogger.warning("frontier child tmux paste failed: \(error.localizedDescription, privacy: .public)")
-            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: error.localizedDescription)
-        }
+        return FrontierChildSendResult(
+            childIndex: session.frontierChildIndex ?? 0,
+            sessionId: session.id,
+            ok: false,
+            reason: "legacy_session_retired"
+        )
     }
 
     /// POST /chat-sessions/frontier/:groupId/retry-slot — replace one
@@ -6876,9 +6765,9 @@ public final class AgentControlServer {
         // Harness is the default drive path for non-Claude broadcast children
         // (codex app-server / gemini headless agy / grok+cursor ACP), exactly as
         // Solo chat. Reuse the shared core; map its errors to a slot failure reason.
-        // Claude → tmux + opencode → SSE (and a kill-switched codex) fall through
-        // to the legacy per-provider switch below. Gemini is always harness-eligible
-        // so it never reaches the (now-unreachable) legacy gemini case below.
+        // Claude -> direct PTY and opencode -> SSE fall through to the
+        // per-provider switch below. Gemini/Codex/Grok/Cursor are always
+        // harness-eligible and never reach their defensive cases below.
         if isChatHarnessEligible(slot.provider) {
             do {
                 return try await createHarnessChatSessionCore(
@@ -6893,12 +6782,10 @@ public final class AgentControlServer {
         }
 
         switch slot.provider {
-        case .claude, .codex:
-            // Reuse the same plumbing as Solo chat: createChat → chat-cwd →
-            // spawn tmux (or SDK relay) → warm chat store. We don't need
-            // the full HTTP wrapper since we already have all the data.
-            // (cursor is harness-eligible — it returns above via the ACP bridge
-            // and never reaches this tmux fork.)
+        case .claude:
+            // Reuse the same plumbing as Solo chat: createChat -> chat-cwd ->
+            // spawn direct PTY -> warm chat store. We don't need the full HTTP
+            // wrapper since we already have all the data.
             let session = try await registry.createChat(
                 provider: slot.provider,
                 model: slot.model,
@@ -6928,31 +6815,26 @@ public final class AgentControlServer {
             }
             let updated = registry.session(id: session.id) ?? session
             let argv = AgentSpawner.argv(for: updated)
-            if argv.isEmpty && updated.agent == .codex && updated.codexChatBackend == .sdk {
-                // SDK: warm store; sidecar starts on first send (per Phase 4.5).
-                _ = chatStoreRegistry.snapshotStore(for: updated)
-                return updated
-            }
             if argv.isEmpty {
                 try? await registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
                 throw SpawnFailure.message("agent_cli_not_found")
             }
-            // CLI: spawn tmux. Best-effort — children that fail to spawn
-            // are surfaced as a slot failure, not a 500.
             do {
-                try await tmux.start()
-                let window = try await tmux.newWindow(cwd: chatCwd, child: argv)
+                await ensureClaudePtyWiring()
+                let env = AgentSpawner.claudePtyEnv()
+                let plan = ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: chatCwd, env: env)
+                _ = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { plan })
                 try? await registry.updateRuntime(
                     id: session.id, worktreePath: chatCwd,
-                    tmuxWindowId: window.windowId, tmuxPaneId: window.paneId, mode: .local
+                    tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
                 )
                 _ = chatStoreRegistry.snapshotStore(for: registry.session(id: session.id) ?? updated)
                 return registry.session(id: session.id) ?? updated
             } catch {
                 try? await registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
-                throw SpawnFailure.message("tmux_spawn_failed: \(error.localizedDescription)")
+                throw SpawnFailure.message("claude_pty_spawn_failed: \(error.localizedDescription)")
             }
         case .gemini:
             // Unreachable: gemini is always harness-eligible (isChatHarnessEligible),
@@ -7055,26 +6937,15 @@ public final class AgentControlServer {
                 payload: ["repo": chatCwd, "agent": "opencode", "opencodeID": opencodeID]
             )
             return updated
-        case .unknown, .grok, .cursor:
-            // Unreachable for cursor/grok: both are harness-eligible
+        case .unknown, .codex, .grok, .cursor:
+            // Unreachable for codex/cursor/grok: they are harness-eligible
             // (isChatHarnessEligible) and return via createHarnessChatSessionCore
-            // above, so they never reach this legacy tmux switch. .unknown is the
+            // above, so they never reach this legacy switch. .unknown is the
             // forward-compat catch-all. Defensive: surface a slot failure.
             throw SpawnFailure.message("unknown_agent_kind")
         }
     }
 
-    /// v0.8 Phase 4.5: route a prompt for a Codex-SDK chat session to
-    /// CodexSubscriptionRelay instead of tmux. Lazy-starts the relay on
-    /// the first send (we don't have a prompt to seed it with at chat-
-    /// session create time). On subsequent sends, uses `forwardPrompt`
-    /// with the persisted threadId so the SDK reuses the same server-
-    /// side thread (and resume-after-evict works per NEW-T13).
-    ///
-    /// D1 (first-message-becomes-title): if the session has no
-    /// customName yet, derive a 40-char title from the prompt body and
-    /// persist via `registry.rename(...)`. Future renames via /rename
-    /// override this.
     /// v0.23.2 P1-04: send a prompt into an OpenCode session.
     ///
     /// Flow:
@@ -7280,165 +7151,6 @@ public final class AgentControlServer {
         return ["providerID": "openrouter", "modelID": id]
     }
 
-    /// v0.8 QA: prepare a CLI pane (code or chat) for the user's first
-    /// prompt. Same flow either way:
-    /// - **Codex update prompt**: auto-update (per user spec — always
-    ///   take the latest, no question asked).
-    /// - **Codex trust prompt**: auto-accept only for verified
-    ///   Clawdmeter-owned worktrees; otherwise surface to the user.
-    /// - **Claude welcome**: just give the TUI time to render.
-    ///
-    /// Renamed from `warmupChatPane` — the flow works for both code and
-    /// chat sessions. Code sessions usually skip the trust prompt (they
-    /// run in trusted git repos) so the cycle is fast.
-    private func warmupCLIPane(session: AgentSession, paneId: String) async {
-        switch session.agent {
-        case .codex:
-            // For code sessions, the embedded terminal IS the input path
-            // already — no backend gate. For chat sessions we restrict
-            // to CLI backend (SDK has no tmux pane).
-            if session.kind == .chat, session.codexChatBackend != .cli {
-                return
-            }
-            // First pane probe lets the CLI render its initial screen.
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            // Step 1: auto-update if the update prompt is showing. Per
-            // user spec we always take the latest version — no UI prompt.
-            var captured = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
-            if captured.contains("Update available") {
-                serverLogger.info("chat warmup: auto-updating Codex CLI for \(session.id.uuidString, privacy: .public)")
-                try? await tmux.sendKeys(paneId: paneId, bytes: Data([0x31, 0x0d]))
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                captured = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
-            }
-            // Step 2: surface the trust prompt to the user if shown. Only
-            // surfaces ONCE per warmup — the CLI flickers the trust screen
-            // briefly during MCP init even after dismissal, and the
-            // continuation already resolved so we don't double-prompt.
-            if captured.contains("Do you trust the contents") {
-                if await isVerifiedOwnedWorktree(session) {
-                    serverLogger.info("chat warmup: auto-trusting Codex owned worktree for \(session.id.uuidString, privacy: .public)")
-                    try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
-                    try? await Task.sleep(nanoseconds: 3_000_000_000)
-                    return
-                }
-                serverLogger.info("chat warmup: surfacing Codex trust prompt for \(session.id.uuidString, privacy: .public)")
-                let cwd = session.effectiveCwd
-                let prompt = PendingPermissionPrompt(
-                    id: "codex-trust-\(UUID().uuidString)",
-                    title: "Trust this directory?",
-                    detail: "Codex wants to run in \(cwd). Trusting it allows project-local config, hooks, and exec policies to load. Working with untrusted contents has higher risk of prompt injection.",
-                    header: "Codex CLI",
-                    options: [
-                        PermissionOption(
-                            id: "yes",
-                            label: "Yes, continue",
-                            description: "Trust this directory and allow Codex to run.",
-                            isRecommended: true
-                        ),
-                        PermissionOption(
-                            id: "no",
-                            label: "No, quit",
-                            description: "Quit the Codex CLI for this chat.",
-                            isDestructive: true
-                        ),
-                    ]
-                )
-                let dispatch: [String: [String]] = [
-                    // Down + Up refreshes selection back to option 1
-                    // ("Yes, continue") — the dialog ignores a bare
-                    // Enter until a nav key wakes its input handler.
-                    "yes": ["Down", "Up", "Enter"],
-                    // To select "No, quit" we go Down then Enter.
-                    "no": ["Down", "Enter"],
-                ]
-                let chosen = await surfacePermissionPrompt(
-                    session: session,
-                    prompt: prompt,
-                    dispatch: dispatch
-                )
-                // v0.8 QA F2: handleDeleteSession may wake us with the
-                // cancellation sentinel. Bail without dispatching keys —
-                // the session is being torn down anyway.
-                if chosen == Self.cancelledPermissionOptionId {
-                    return
-                }
-                if chosen == "no" {
-                    return
-                }
-                try? await tmux.command(["send-keys", "-t", paneId] + (dispatch[chosen] ?? ["Down", "Up", "Enter"]))
-                // Give the CLI 3s to finish dismissing + start MCP init.
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-            }
-            // Give the CLI another 3s to finish MCP setup + wire up its
-            // input handler before the first user prompt can paste.
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-        case .claude:
-            // Claude Code shows a one-time "Do you trust the files in this
-            // folder?" prompt on first launch in a directory. For a CHAT the cwd
-            // is a throwaway /tmp sandbox, so auto-accept it — otherwise the TUI
-            // sits at the prompt, the first /send pastes into the dialog instead
-            // of the composer, no reply ever streams, and the client times out.
-            // Claude Code's first-run dialog (verified live 2026-06-03):
-            //   "Quick safety check: Is this a project you created or one you
-            //    trust? ... ❯ 1. Yes, I trust this folder / 2. No, exit"
-            // It renders ~5-7s after launch (a single 1.5s capture missed it),
-            // so POLL for it, accept it (Down/Up wakes the handler + keeps the
-            // default "Yes" highlighted, Enter confirms — verified to reach the
-            // composer), then settle before the first paste. Without this the TUI
-            // sits at the prompt, /send pastes into the dialog, and the client
-            // times out.
-            func isClaudeTrustPrompt(_ s: String) -> Bool {
-                s.contains("Quick safety check")
-                    || s.localizedCaseInsensitiveContains("trust this folder")
-                    || s.localizedCaseInsensitiveContains("Is this a project you created")
-                    || s.contains("Do you trust")
-            }
-            var claudeAccepted = false
-            var claudeReady = false
-            // Poll fast (0.6s) so we detect the composer the moment it renders
-            // instead of waiting out a coarse interval — shaves seconds off the
-            // first send. ~28 × 0.6s ≈ 17s window covers a heavy MCP/plugin boot.
-            for _ in 0..<28 {
-                try? await Task.sleep(nanoseconds: 600_000_000)
-                let cap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
-                if isClaudeTrustPrompt(cap) {
-                    serverLogger.info("chat warmup: auto-accepting Claude trust prompt for \(session.id.uuidString, privacy: .public)")
-                    try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
-                    claudeAccepted = true
-                    // Don't break — keep polling for the composer so we settle on
-                    // real readiness, not a fixed guess after the keypress.
-                    continue
-                }
-                // Composer is up (pre-trusted boot, or post-accept) → ready.
-                if cap.contains("? for shortcuts") || cap.contains("Welcome back") {
-                    claudeReady = true
-                    break
-                }
-            }
-            // Settle so the composer's input handler is wired before the paste.
-            // Short when we confirmed the composer; longer as a fallback when the
-            // boot outran the poll window (paste-into-not-quite-ready insurance).
-            try? await Task.sleep(nanoseconds: claudeReady ? 800_000_000 : 2_500_000_000)
-        case .gemini:
-            break
-        case .opencode:
-            // PR #29: opencode sessions never enter the tmux warmup
-            // choreography — they're SSE clients of `opencode serve`,
-            // which OpencodeProcessManager + OpencodeSSEAdapter handle
-            // out-of-band.
-            break
-        case .cursor, .grok:
-            // ACP agents (cursor-agent acp / grok headless) have no tmux pane —
-            // no warmup choreography.
-            break
-        case .unknown:
-            // X3: forward-compat unknown agent — no warmup choreography
-            // plumbed.
-            break
-        }
-    }
-
     private func isVerifiedOwnedWorktree(_ session: AgentSession) async -> Bool {
         guard session.kind == .code,
               let provisioning = session.provisioning,
@@ -7602,7 +7314,7 @@ public final class AgentControlServer {
     }
 
     /// One-shot guard for a CheckedContinuation race. Used by
-    /// handlePostChatSession's tmux-timeout path: two Tasks (spawn +
+    /// handlePostChatSession's spawn-timeout path: two Tasks (spawn +
     /// 10s sleep) race to resume the continuation; only the first
     /// claim wins. The other resume call is silently dropped, which
     /// also prevents Swift's runtime trap on double-resume.
@@ -7688,18 +7400,9 @@ public final class AgentControlServer {
             sendResponse(.notFound, on: connection)
             return
         }
-        // Track A: a Claude PTY session has NO tmux window, so the old
-        // `let windowId = session.tmuxWindowId else notFound` guard 404'd every
-        // PTY chat (chat sessions always run plan-mode → the Approve button was
-        // dead). For a PTY session, approve-plan is a swap to acceptEdits on the
-        // host (handled below). For non-PTY sessions a missing window is still a
-        // genuine notFound.
-        let isClaudePtyApprove = claudePtyEnabled
-            && session.agent == .claude
-            && session.tmuxWindowId == nil
-            && SessionCommandRouter.resolve(routeContext(for: session)) == .claudePty
-        if !isClaudePtyApprove && session.tmuxWindowId == nil {
-            sendResponse(.notFound, on: connection)
+        let route = SessionCommandRouter.resolve(routeContext(for: session))
+        guard route == .claudePty else {
+            sendResponse(.legacySessionRetired, on: connection)
             return
         }
         // v16 outbox: approve-plan is a fire-and-forget POST with no
@@ -7726,147 +7429,39 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        // Per D13: kill the plan-mode pane, spawn a fresh execution pane
-        // in the same window. Overlay covers the swap UI-side.
-        //
-        // Agent-specific replacement argv:
-        //   Claude → `claude --permission-mode acceptEdits` (the
-        //            user has approved the plan; switch to "agent can
-        //            edit without asking"). Resume via `--resume <id>`
-        //            isn't reliable on plan-mode → acceptEdits swaps
-        //            because Claude rotates the session id when plan
-        //            mode exits, so we spawn fresh.
-        //   Codex  → `codex -s workspace-write` (spawn fresh in the
-        //            same cwd; we don't track the Codex rollout id in
-        //            the registry yet, so resume isn't an option. The
-        //            new rollout writes its own JSONL alongside the
-        //            plan-mode one in `~/.codex/sessions/`; the
-        //            user-facing chat picks up the newest file).
-        let argv: [String]?
-        switch session.agent {
-        case .claude:
-            argv = AgentSpawner.claudeArgv(
-                model: session.model,
-                planMode: false,
-                effort: session.effort,
-                autopilot: false
-            )
-        case .codex, .gemini, .grok:
-            // v27: codex/gemini/grok are harness-driven; approve-plan flows
-            // through the bridge (permission response / set_mode), not a tmux
-            // respawn. Surfaces as 500 below for any legacy tmux codex session.
-            argv = nil
-        case .opencode:
-            // PR #29: opencode has no plan-mode → respawn-with-write
-            // flow; OpenCode handles its own tool-call approval inside
-            // `opencode serve`. Surfaces as 500 here so a misrouted
-            // approve-plan from a stale UI doesn't pretend to succeed.
-            argv = nil
-        case .cursor:
-            // v27: cursor is harness-driven; approve-plan flows through the ACP
-            // session (set_mode / permission), not a tmux respawn. Surfaces as
-            // 500 below for any legacy tmux cursor session.
-            argv = nil
-        case .unknown:
-            // X3: forward-compat unknown agent — no respawn path.
-            // Surfaces as 500 below.
-            argv = nil
-        }
-        guard let replacementArgv = argv else {
+        guard let replacementArgv = AgentSpawner.claudeArgv(
+            model: session.model,
+            planMode: false,
+            effort: session.effort,
+            autopilot: false
+        ) else {
             serverLogger.error("approve-plan: missing CLI binary for \(session.agent.rawValue, privacy: .public)")
             sendResponse(.internalError, on: connection)
             return
         }
-        // Track A: PTY Claude approve = swap to acceptEdits on the host. No tmux
-        // window to kill; suspend the plan-mode host + resume-or-spawn fresh with
-        // the post-approval argv. Spawn fresh (not --resume): Claude rotates its
-        // session id on plan-exit, same rationale as the tmux path above.
-        if isClaudePtyApprove {
-            let cwd = session.effectiveCwd
-            let repoEnv = (try? resolveRepoEnv(session: session, cwd: cwd))?.environment
-            let env = AgentSpawner.claudePtyEnv(extra: repoEnv)
-            await claudePtyRegistry.suspend(uuid)
-            let approveSpawn = ClaudePtyRegistry.SpawnPlan(argv: replacementArgv, cwd: cwd, env: env)
-            guard (try? await claudePtyRegistry.resumeOrSpawn(id: uuid, plan: { approveSpawn })) != nil else {
-                sendResponse(.internalError, on: connection)
-                return
-            }
-            try? await registry.updateStatus(id: uuid, status: .running)
-            try? await registry.markPlanApproved(id: uuid)
-            AgentEventStream.recordEvent(
-                sessionId: uuid, kind: .statusChanged, payload: ["status": "running"]
-            )
-            let peer = Self.endpointString(connection.endpoint)
-            await AuditLog.shared.recordPlanApprove(
-                sessionId: uuid, sourcePeer: peer, agent: session.agent.rawValue
-            )
-            chatFileResolver.invalidate(sessionId: uuid)
-            await sendCommandResponse(
-                body: ["ok": true], key: req.idempotencyKey, kind: .approve,
-                sessionId: uuid, payloadHash: payloadHash, on: connection
-            )
+        let cwd = session.effectiveCwd
+        let repoEnv = (try? resolveRepoEnv(session: session, cwd: cwd))?.environment
+        let env = AgentSpawner.claudePtyEnv(extra: repoEnv)
+        await claudePtyRegistry.suspend(uuid)
+        let approveSpawn = ClaudePtyRegistry.SpawnPlan(argv: replacementArgv, cwd: cwd, env: env)
+        guard (try? await claudePtyRegistry.resumeOrSpawn(id: uuid, plan: { approveSpawn })) != nil else {
+            sendResponse(.internalError, on: connection)
             return
         }
-        do {
-            // Non-PTY path: a tmux window is guaranteed here (the head guard
-            // returned notFound otherwise).
-            guard let windowId = session.tmuxWindowId else {
-                sendResponse(.internalError, on: connection); return
-            }
-            let cwd = session.effectiveCwd
-            let resolvedEnv = try resolveRepoEnv(session: session, cwd: cwd)
-            try await tmux.killWindow(windowId)
-            let newWindow = try await tmux.newWindow(
-                cwd: cwd,
-                child: replacementArgv,
-                environment: resolvedEnv?.environment ?? [:]
-            )
-            try await registry.updateRuntime(
-                id: uuid,
-                worktreePath: session.worktreePath,
-                tmuxWindowId: newWindow.windowId,
-                tmuxPaneId: newWindow.paneId,
-                mode: session.mode
-            )
-            // Clear the plan card and flip status to running so the
-            // approve button disappears from the chat UI.
-            try await registry.updateStatus(id: uuid, status: .running)
-            try await registry.markPlanApproved(id: uuid)
-            AgentEventStream.recordEvent(
-                sessionId: uuid,
-                kind: .statusChanged,
-                payload: ["status": "running", "newWindowId": newWindow.windowId]
-            )
-            // T13: plan approval is a mid-session respawn that exits plan
-            // mode and gives the agent edit permission. Recorded AFTER the
-            // respawn succeeds — a failed approval shouldn't leave an
-            // audit entry implying it landed.
-            let peer = Self.endpointString(connection.endpoint)
-            await AuditLog.shared.recordPlanApprove(
-                sessionId: uuid, sourcePeer: peer,
-                agent: session.agent.rawValue
-            )
-            // Phase 0b: Codex respawn-lineage. approve-plan kills the
-            // plan-mode pane and spawns a fresh rollout (new JSONL file
-            // with a new Codex session id). Invalidate the resolver's
-            // cached link so the next chat-snapshot request rescans for
-            // the new file. Claude's resume path keeps the same JSONL so
-            // invalidation there is a cheap no-op. Belt to the suspenders
-            // anyway: invalidate both paths.
-            chatFileResolver.invalidate(sessionId: uuid)
-            await sendCommandResponse(
-                body: ["ok": true],
-                key: req.idempotencyKey,
-                kind: .approve,
-                sessionId: uuid,
-                payloadHash: payloadHash,
-                on: connection
-            )
-        } catch {
-            if sendRepoEnvConflict(error, on: connection) { return }
-            serverLogger.error("approve-plan failed: \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection)
-        }
+        try? await registry.updateStatus(id: uuid, status: .running)
+        try? await registry.markPlanApproved(id: uuid)
+        AgentEventStream.recordEvent(
+            sessionId: uuid, kind: .statusChanged, payload: ["status": "running"]
+        )
+        let peer = Self.endpointString(connection.endpoint)
+        await AuditLog.shared.recordPlanApprove(
+            sessionId: uuid, sourcePeer: peer, agent: session.agent.rawValue
+        )
+        chatFileResolver.invalidate(sessionId: uuid)
+        await sendCommandResponse(
+            body: ["ok": true], key: req.idempotencyKey, kind: .approve,
+            sessionId: uuid, payloadHash: payloadHash, on: connection
+        )
     }
 
     /// Archive / unarchive a session (G7). Hides it from the default
@@ -7996,13 +7591,8 @@ public final class AgentControlServer {
         // Track A: tear down the Claude PTY host (no-op if this session never
         // had one). Done unconditionally so a flag flip mid-session still cleans up.
         await claudePtyRegistry.suspend(uuid)
-        // Kill the tmux window.
-        if let windowId = session.tmuxWindowId {
-            do {
-                try await tmux.killWindow(windowId)
-            } catch {
-                serverLogger.warning("kill-window \(windowId, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
-            }
+        for pane in session.terminalPanes {
+            await terminalRegistry.kill(id: pane.paneId)
         }
         // v0.8 REV-DELETE: chat sessions clean up via FileManager
         // (chat-cwd is a plain dir under chat-sessions/, not a git
@@ -8059,11 +7649,6 @@ public final class AgentControlServer {
             return bytes.count == 16 && bytes.prefix(15).allSatisfy { $0 == 0 } && bytes.last == 1
         }
         return false
-    }
-
-    static func isValidTmuxPaneId(_ paneId: String) -> Bool {
-        guard paneId.first == "%", paneId.count > 1 else { return false }
-        return paneId.dropFirst().allSatisfy { $0.isNumber }
     }
 
     static func endpointString(_ endpoint: NWEndpoint) -> String {
@@ -8161,6 +7746,11 @@ public final class AgentControlServer {
             status: 500, reason: "Internal Server Error",
             contentType: "text/plain", body: Data("Internal Server Error\n".utf8)
         )
+        static let legacySessionRetired = HTTPResponse(
+            status: 410, reason: "Gone",
+            contentType: "application/json",
+            body: Data(#"{"error":"legacy_session_retired","cta":"Start a new session from this repo or worktree."}"#.utf8)
+        )
         /// 403 Forbidden with a JSON body for policy denials (e.g. autopilot
         /// enable on an untrusted repo — review §3 finding 2026-05-18).
         static func forbidden(body: Data) -> HTTPResponse {
@@ -8188,14 +7778,14 @@ public final class AgentControlServer {
         )
     }
 
-    /// P1-Mac-7: validate untrusted repoKey before forwarding to tmux. The
+    /// P1-Mac-7: validate untrusted repoKey before launching local agent work. The
     /// path must be absolute, contain no `..` segments, hold no CR/LF or
     /// control bytes, and resolve under the user's home directory.
     ///
     /// Codex follow-up: also resolve symlinks before the home-prefix
     /// check. The earlier patch only standardized (collapses `..` /
     /// `./`); a symlink at `/Users/me/link → /etc` would pass the
-    /// hasPrefix test and let tmux escape the home sandbox. Resolve the
+    /// hasPrefix test and let a child process escape the home sandbox. Resolve the
     /// real path and re-check.
     static func isValidRepoKey(_ key: String) -> Bool {
         // v0.7.7: delegated to the shared PathValidator helper that
@@ -8378,7 +7968,7 @@ public final class AgentControlServer {
 
     /// Returns true after writing a cached response to `connection`.
     /// The caller short-circuits its handler logic in that case so the
-    /// side effect (send to tmux, swap model, merge PR) doesn't repeat.
+    /// side effect (send, swap model, merge PR) doesn't repeat.
     /// `kind` is recorded into the audit log but is not strictly required
     /// for the lookup itself — keys are globally unique by construction.
     ///

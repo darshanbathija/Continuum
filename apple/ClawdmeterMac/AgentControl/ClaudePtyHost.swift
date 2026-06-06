@@ -9,12 +9,9 @@ private let ptyLogger = Logger(subsystem: "com.clawdmeter.mac", category: "Claud
 
 /// One interactive `claude` process on its own PTY (Track A).
 ///
-/// Replaces Claude's slice of the shared tmux `-CC` server: a wedged tmux
-/// server used to take down EVERY Claude session at once (the repeated 504s).
-/// Each session now owns an isolated `PseudoTerminal` + `claude` child, so one
-/// stuck session can't sink the others. tmux STAYS for the Terminal tab,
-/// multi-pane, scheduler, Stop, swap, and Frontier — this only owns Claude's
-/// session-drive.
+/// Each Claude session owns an isolated `PseudoTerminal` + `claude` child, so
+/// one stuck session can't sink the others. Terminal tabs, scheduler delivery,
+/// Stop, swap, and Frontier now route through direct PTY/harness transports.
 ///
 /// ```
 /// start() -> PseudoTerminal(120x40) -> posix_spawn claude (sanitized env, cwd)
@@ -25,7 +22,7 @@ private let ptyLogger = Logger(subsystem: "com.clawdmeter.mac", category: "Claud
 ///   |
 ///   v  recentOutput() = AnsiStrip.plain(tail)   (readiness + auth detection)
 ///
-/// submitPrompt(text) -> SubmitToTmux.ptyWrites -> write(clear) write(payload)
+/// submitPrompt(text) -> PromptPtySubmission.writes -> write(clear) write(payload)
 ///                       sleep(settle) write(CR)
 /// ```
 ///
@@ -59,6 +56,7 @@ actor ClaudePtyHost {
     private var exitSource: DispatchSourceProcess?
     private(set) var isRunning = false
     private(set) var lastUsedAt = Date()
+    private var subscribers: [UUID: AsyncStream<Data>.Continuation] = [:]
 
     /// Invoked once when the child exits unexpectedly (crash / external kill).
     /// The registry forwards this to the daemon to mark the session `.degraded`
@@ -133,6 +131,11 @@ actor ClaudePtyHost {
         masterFD = -1               // stop any in-flight submit from writing it
         exitSource?.cancel()
         exitSource = nil
+        let pidToReap = childPid
+        childPid = 0
+        if pidToReap > 0 {
+            PtyProcessTerminator.terminateProcessGroup(pid: pidToReap)
+        }
         // Hand the fd to the read source's cancel handler (it owns the close),
         // so a read handler already dispatched can't touch a recycled fd. Detach
         // from PseudoTerminal so deinit won't double-close. If there's no read
@@ -145,21 +148,8 @@ actor ClaudePtyHost {
             pty?.closeMaster()
         }
         pty = nil
-        let pidToReap = childPid
-        childPid = 0
-        if pidToReap > 0 {
-            #if canImport(Darwin)
-            Darwin.kill(pidToReap, SIGTERM)
-            // Reap the SIGTERM'd child so it doesn't linger as a zombie. The exit
-            // watcher (the only other waitpid) was just cancelled, so this is the
-            // sole reaper for an intentional kill. Off-actor on a throwaway queue
-            // thread so we don't block the host actor on the child's shutdown.
-            DispatchQueue.global().async {
-                var status: Int32 = 0
-                while waitpid(pidToReap, &status, 0) < 0 && errno == EINTR {}
-            }
-            #endif
-        }
+        subscribers.values.forEach { $0.finish() }
+        subscribers.removeAll()
         let sid = sessionId
         Task { @MainActor in HarnessProcessReaper.shared.remove(sessionId: sid) }
     }
@@ -167,26 +157,28 @@ actor ClaudePtyHost {
     // MARK: - Submit
 
     /// Write the user's prompt to the PTY: clear (chat) → payload → settle → CR.
-    func submitPrompt(_ text: String, isChat: Bool, isFollowUp: Bool = false) async {
-        guard isRunning, masterFD >= 0 else { return }
+    @discardableResult
+    func submitPrompt(_ text: String, isChat: Bool, isFollowUp: Bool = false) async -> Bool {
+        guard isRunning, masterFD >= 0 else { return false }
         lastUsedAt = Date()
-        let w = SubmitToTmux.ptyWrites(forText: text, isFollowUp: isFollowUp, isChat: isChat)
-        if let clear = w.clear { Self.writeAll(fd: masterFD, data: clear) }
-        Self.writeAll(fd: masterFD, data: w.payload)
+        let w = PromptPtySubmission.writes(forText: text, isFollowUp: isFollowUp, isChat: isChat)
+        if let clear = w.clear, !Self.writeAll(fd: masterFD, data: clear) { return false }
+        guard Self.writeAll(fd: masterFD, data: w.payload) else { return false }
         // Let Ink's render loop commit the paste before the submit Enter
-        // (mirrors the tmux path's 300ms gap + the Ink \r quirk #15553).
+        // (keeps the old 300ms settle and the Ink \r quirk #15553).
         try? await Task.sleep(nanoseconds: submitSettle)
         // kill() runs actor-isolated, so it can only land while we're suspended
         // at the sleep above; it sets isRunning=false + masterFD=-1. Re-check so
         // the submit CR can't write a closed/recycled fd.
-        guard isRunning, masterFD >= 0 else { return }
-        Self.writeAll(fd: masterFD, data: w.submit)
+        guard isRunning, masterFD >= 0 else { return false }
+        return Self.writeAll(fd: masterFD, data: w.submit)
     }
 
     /// Raw write (used by the trust-folder warmup port in T6 too).
-    func writeBytes(_ data: Data) {
-        guard isRunning, masterFD >= 0 else { return }
-        Self.writeAll(fd: masterFD, data: data)
+    @discardableResult
+    func writeBytes(_ data: Data) -> Bool {
+        guard isRunning, masterFD >= 0 else { return false }
+        return Self.writeAll(fd: masterFD, data: data)
     }
 
     // MARK: - Output
@@ -197,14 +189,52 @@ actor ClaudePtyHost {
         AnsiStrip.plain(String(decoding: ring, as: UTF8.self))
     }
 
+    /// Raw output stream for terminal clients. The current ring is yielded
+    /// first so attach-after-output clients receive useful scrollback.
+    func outputStream() -> AsyncStream<Data> {
+        let subscriberId = UUID()
+        let snapshot = ring
+        let pair = AsyncStream<Data>.makeStream(of: Data.self)
+        if !snapshot.isEmpty {
+            pair.continuation.yield(snapshot)
+        }
+        guard isRunning else {
+            pair.continuation.finish()
+            return pair.stream
+        }
+        subscribers[subscriberId] = pair.continuation
+        pair.continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeSubscriber(subscriberId) }
+        }
+        return pair.stream
+    }
+
+    func snapshot() -> Data {
+        ring
+    }
+
+    func resize(cols: Int, rows: Int) {
+        guard cols > 0, rows > 0 else { return }
+        _ = pty?.resize(cols: UInt16(min(cols, Int(UInt16.max))),
+                        rows: UInt16(min(rows, Int(UInt16.max))))
+    }
+
     func touch() { lastUsedAt = Date() }
 
     // MARK: - Internals
 
+    private func removeSubscriber(_ id: UUID) {
+        subscribers[id] = nil
+    }
+
     private func appendOutput(_ bytes: [UInt8]) {
-        ring.append(contentsOf: bytes)
+        let data = Data(bytes)
+        ring.append(data)
         if ring.count > ringCapacity {
             ring.removeFirst(ring.count - ringCapacity)
+        }
+        for continuation in subscribers.values {
+            continuation.yield(data)
         }
     }
 
@@ -214,8 +244,7 @@ actor ClaudePtyHost {
         // blocking-read-per-host would pin one Swift cooperative-pool thread
         // each (the pool is ~core-count) and starve the registry actor's
         // continuations → deadlock. A read source is poll-driven and holds no
-        // thread while idle. (TmuxControlClient can afford the blocking loop —
-        // it's a singleton; per-session hosts cannot.)
+        // thread while idle.
         let flags = fcntl(masterFD, F_GETFL)
         _ = fcntl(masterFD, F_SETFL, flags | O_NONBLOCK)
         let src = DispatchSource.makeReadSource(fileDescriptor: masterFD, queue: .global())
@@ -251,11 +280,15 @@ actor ClaudePtyHost {
 
     private func handleChildExit(status: Int32) {
         guard isRunning else { return }   // explicit kill() already tore down
+        let exitedPid = childPid
         isRunning = false
         masterFD = -1
         childPid = 0   // already reaped via WNOHANG in the exit watcher
         exitSource?.cancel()
         exitSource = nil
+        if exitedPid > 0 {
+            PtyProcessTerminator.terminateProcessGroup(pid: exitedPid)
+        }
         // Same fd-ownership handoff as kill(): the read source's cancel handler
         // is the sole closer; detach so PseudoTerminal won't double-close.
         if let rs = readSource {
@@ -266,16 +299,18 @@ actor ClaudePtyHost {
             pty?.closeMaster()
         }
         pty = nil
+        subscribers.values.forEach { $0.finish() }
+        subscribers.removeAll()
         let sid = sessionId
         Task { @MainActor in HarnessProcessReaper.shared.remove(sessionId: sid) }
         ptyLogger.warning("ClaudePtyHost child exited unexpectedly status=\(status) session=\(self.sessionId.uuidString, privacy: .public)")
         onUnexpectedExit?(sessionId, status)
     }
 
-    private static func writeAll(fd: Int32, data: Data) {
-        guard !data.isEmpty else { return }
-        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-            guard let base = raw.baseAddress else { return }
+    private static func writeAll(fd: Int32, data: Data) -> Bool {
+        guard !data.isEmpty else { return true }
+        return data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
+            guard let base = raw.baseAddress else { return false }
             var off = 0
             let total = raw.count
             // The master fd is O_NONBLOCK (the read source requires it), so a
@@ -291,15 +326,16 @@ actor ClaudePtyHost {
                     let e = errno
                     if e == EINTR { continue }
                     if e == EAGAIN || e == EWOULDBLOCK {
-                        if eagainWaits >= 20 { break }   // ~5s ceiling (20 × 250ms)
+                        if eagainWaits >= 20 { return false }   // ~5s ceiling (20 × 250ms)
                         eagainWaits += 1
                         var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
                         _ = poll(&pfd, 1, 250)
                         continue
                     }
                 }
-                break   // n == 0 or an unrecoverable error
+                return false   // n == 0 or an unrecoverable error
             }
+            return off == total
         }
     }
 }

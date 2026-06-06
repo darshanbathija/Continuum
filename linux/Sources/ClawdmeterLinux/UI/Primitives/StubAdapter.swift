@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Lets `swift build` of `linux/` work on a Mac dev machine — useful for
 /// running pure-Swift logic tests (LinuxUsageStore, LinuxConfigPaths,
-/// SubmitToTmux from shared, etc.) without installing GTK4. Throws no
+/// terminal-submission helpers from shared, etc.) without installing GTK4. Throws no
 /// errors at construction; widgets are inert.
 ///
 /// On Linux: `main.swift` sets `LinuxUI.adapter = SwiftCrossUIAdapter()`

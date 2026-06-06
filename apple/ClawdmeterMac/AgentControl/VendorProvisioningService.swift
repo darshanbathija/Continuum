@@ -73,7 +73,6 @@ public final class VendorProvisioningService: ObservableObject {
         pluginDiscovery: @escaping () -> [PluginInfo] = { PluginRegistry.discover() },
         shellRunner: ShellRunner = .shared,
         openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
-        tmuxClient: TmuxControlClient? = nil,
         launchTerminalCommand: ((String) async -> TerminalLaunchResult)? = nil,
         deviceProbe: ((VendorProvisioningVendor, [PluginInfo]) async -> VendorProvisioningStatus)? = nil
     ) {
@@ -85,7 +84,7 @@ public final class VendorProvisioningService: ObservableObject {
         self.shellRunner = shellRunner
         self.openURL = openURL
         self.launchTerminalCommand = launchTerminalCommand ?? { command in
-            await VisibleTerminalCommandLauncher.launch(command, tmuxClient: tmuxClient)
+            await VisibleTerminalCommandLauncher.launch(command)
         }
         self.deviceProbe = deviceProbe
     }
@@ -552,49 +551,17 @@ public final class VendorProvisioningService: ObservableObject {
 }
 
 private enum VisibleTerminalCommandLauncher {
-    static func launch(
-        _ command: String,
-        tmuxClient: TmuxControlClient?
-    ) async -> VendorProvisioningService.TerminalLaunchResult {
-        guard let tmuxClient else {
-            return .init(launched: false, message: "tmux is unavailable for vendor provisioning commands.")
-        }
-
-        do {
-            try await tmuxClient.start()
-            let ref = try await tmuxClient.newWindow(
-                cwd: FileManager.default.homeDirectoryForCurrentUser.path,
-                child: ["/bin/zsh", "-lc", tmuxShellScript(for: command)]
-            )
-            _ = try? await tmuxClient.command(["select-window", "-t", ref.windowId])
-            let attachOpened = launchTerminalAttach(tmuxClient: tmuxClient)
-            let message = attachOpened
-                ? "Opened a visible tmux terminal for this command."
-                : "Launched in tmux, but Terminal attach automation failed."
-            return .init(
-                launched: true,
-                message: message,
-                windowId: ref.windowId,
-                paneId: ref.paneId
-            )
-        } catch {
-            vendorProvisioningLogger.error("tmux vendor command launch failed: \(error.localizedDescription, privacy: .public)")
-            return .init(
-                launched: false,
-                message: "Could not launch tmux command: \(error.localizedDescription)"
-            )
-        }
+    static func launch(_ command: String) async -> VendorProvisioningService.TerminalLaunchResult {
+        let opened = launchTerminal(command: wrappedShellScript(for: command))
+        return .init(
+            launched: opened,
+            message: opened
+                ? "Opened a visible terminal for this command."
+                : "Could not open Terminal for this command."
+        )
     }
 
-    private static func launchTerminalAttach(tmuxClient: TmuxControlClient) -> Bool {
-        let command = [
-            shellQuoted(tmuxClient.configuration.tmuxBinary),
-            "-L",
-            shellQuoted(tmuxClient.configuration.socketName),
-            "attach",
-            "-t",
-            "control",
-        ].joined(separator: " ")
+    private static func launchTerminal(command: String) -> Bool {
         let script = """
         tell application "Terminal"
           activate
@@ -611,8 +578,8 @@ private enum VisibleTerminalCommandLauncher {
         return false
     }
 
-    private static func tmuxShellScript(for command: String) -> String {
-        """
+    private static func wrappedShellScript(for command: String) -> String {
+        let script = """
         clear
         echo 'Clawdmeter vendor provisioning'
         echo '+ \(shellQuoted(command))'
@@ -624,6 +591,7 @@ private enum VisibleTerminalCommandLauncher {
         read _
         exit $status
         """
+        return "/bin/zsh -lc \(shellQuoted(script))"
     }
 
     private static func appleScriptEscaped(_ value: String) -> String {

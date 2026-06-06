@@ -4,11 +4,11 @@ import ClawdmeterShared
 import UIKit
 #endif
 
-/// Sessions v2 T33. Multi-pane terminal container for iOS — wraps
-/// `iOSTerminalView` in a TabView so the user can spawn additional tmux
-/// panes per session. Mirrors the Mac's `TerminalTabContainer`. Each tab
-/// carries its own WebSocket; the primary pane is always present and
-/// can't be deleted.
+/// Sessions v2 T33. Multi-pane terminal container for iOS. Wraps
+/// `iOSTerminalView` in a TabView so the user can spawn additional direct PTY
+/// terminals per session. Mirrors the Mac's `TerminalTabContainer`. Each tab
+/// carries its own WebSocket; the primary terminal is always present and can't
+/// be deleted.
 struct iOSTerminalTabsView: View {
     @Environment(\.tahoe) private var t
     @ObservedObject var client: AgentControlClient
@@ -45,7 +45,7 @@ struct iOSTerminalTabsView: View {
             Button("Cancel", role: .cancel) { addDraft = "" }
             Button("Create") { Task { await addPane() } }
         } message: {
-            Text("Spawns a new tmux pane in this session.")
+            Text("Spawns a new terminal in this session.")
         }
         .alert("Rename pane", isPresented: Binding(
             get: { renameTarget != nil },
@@ -207,22 +207,10 @@ struct iOSTerminalTabsView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-        } else if panes.isEmpty {
-            HStack {
-                TahoeIcon("terminal", size: 12)
-                    .foregroundStyle(t.fg3)
-                Text("Loading panes...")
-                    .font(TahoeFont.body(11.5, weight: .semibold))
-                    .foregroundStyle(t.fg3)
-                Spacer()
-                addButton
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(panes) { pane in
+                    ForEach(displayPanes) { pane in
                         paneChip(pane)
                     }
                     addButton
@@ -234,12 +222,12 @@ struct iOSTerminalTabsView: View {
     }
 
     private func paneChip(_ pane: TerminalPaneRef) -> some View {
-        let selected = pane.paneId == selectedPaneId
+        let selected = pane.isPrimary ? selectedPaneId == nil : pane.paneId == selectedPaneId
         let label = pane.title.isEmpty
             ? (pane.isPrimary ? "Primary" : pane.paneId)
             : pane.title
         return Button {
-            selectedPaneId = pane.paneId
+            selectedPaneId = pane.isPrimary ? nil : pane.paneId
         } label: {
             HStack(spacing: 6) {
                 TahoeIcon(pane.isPrimary ? "sparkles" : "terminal", size: 11)
@@ -340,9 +328,19 @@ struct iOSTerminalTabsView: View {
     }
 
     private var hasLiveTerminal: Bool {
-        if !(session.tmuxPaneId?.isEmpty ?? true) { return true }
-        if !(session.tmuxWindowId?.isEmpty ?? true) { return true }
-        return !session.terminalPanes.isEmpty
+        return session.tmuxPaneId == nil && session.tmuxWindowId == nil
+    }
+
+    private var displayPanes: [TerminalPaneRef] {
+        guard hasLiveTerminal else { return [] }
+        let primary = panes.first(where: { $0.isPrimary }) ?? TerminalPaneRef(
+            id: session.id,
+            paneId: "",
+            title: "\(session.agent.rawValue.capitalized)",
+            isPrimary: true,
+            createdAt: session.createdAt
+        )
+        return [primary] + panes.filter { !$0.isPrimary }
     }
 
     private struct ShellEntry: Identifiable {
@@ -448,19 +446,10 @@ struct iOSTerminalTabsView: View {
     private func reload() async {
         guard hasLiveTerminal else { return }
         let fetched = await client.fetchTerminals(sessionId: session.id)
-        // Daemon endpoint may return an empty list when only the primary
-        // pane exists; synthesize a primary tab so the UI is never empty.
-        var seeded = fetched
-        if seeded.isEmpty || seeded.allSatisfy({ !$0.isPrimary }) {
-            if let primaryPaneId = session.tmuxPaneId ?? session.tmuxWindowId {
-                seeded.insert(
-                    TerminalPaneRef(paneId: primaryPaneId, title: "Primary", isPrimary: true),
-                    at: 0
-                )
-            }
+        panes = fetched
+        if let selectedPaneId, !fetched.contains(where: { !$0.isPrimary && $0.paneId == selectedPaneId }) {
+            self.selectedPaneId = nil
         }
-        panes = seeded
-        if selectedPaneId == nil { selectedPaneId = seeded.first?.paneId }
     }
 
     private func addPane() async {
@@ -474,14 +463,13 @@ struct iOSTerminalTabsView: View {
 
     private func deletePane(_ pane: TerminalPaneRef) async {
         // Daemon's DELETE handler matches on TerminalPaneRef.id (a UUID),
-        // NOT the tmux pane id (e.g. "%14"). The two collided in the v2
-        // ship — sending pane.paneId here always 404s. Send the ref UUID;
-        // local panes/selectedPaneId still key off the tmux paneId since
-        // that's what the WS envelope expects.
+        // not the direct PTY instance id. Send the ref UUID; local
+        // panes/selectedPaneId still key off pane.paneId because that is what
+        // the WS envelope expects.
         await client.deleteTerminal(sessionId: session.id, terminalRefId: pane.id)
         panes.removeAll { $0.paneId == pane.paneId }
         if selectedPaneId == pane.paneId {
-            selectedPaneId = panes.first?.paneId
+            selectedPaneId = nil
         }
     }
 }

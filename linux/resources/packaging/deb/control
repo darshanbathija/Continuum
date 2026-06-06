@@ -4,7 +4,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Depends: libgtk-4-1 (>= 4.14), libadwaita-1-0 (>= 1.5), libayatana-appindicator3-1, libsecret-1-0, libwebkitgtk-6.0-4, libsoup-3.0-0, libvte-2.91-gtk4-0, libcairo2, libpango-1.0-0, bubblewrap, xdg-dbus-proxy
-Recommends: gnome-shell-extension-appindicator, tmux (>= 3.4), tailscale
+Recommends: gnome-shell-extension-appindicator, tailscale
 Suggests: claude (>= 0.3), codex
 Maintainer: Darshan Bathija <darshan@defx.com>
 Homepage: https://github.com/darshanbathija/Clawdmeter

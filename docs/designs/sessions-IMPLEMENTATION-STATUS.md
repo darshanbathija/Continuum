@@ -1,5 +1,10 @@
 # Sessions feature — implementation status
 
+Historical note: this snapshot documents the original tmux-based Sessions build.
+The current runtime is direct PTY for Claude/terminal panes plus harness
+providers for Codex, Cursor, Gemini, and Grok; old pane-backed sessions are
+retired instead of reconnected.
+
 This is the running status of the Sessions feature build. The full plan
 lives at [`use-tailscale-ssh-for-modular-fern.md`](/Users/darshanbathija_1/.claude/plans/use-tailscale-ssh-for-modular-fern.md);
 the CEO scope decisions live at [`sessions-control-plane.md`](./sessions-control-plane.md).

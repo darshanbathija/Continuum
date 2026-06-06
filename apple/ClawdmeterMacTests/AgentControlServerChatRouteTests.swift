@@ -9,7 +9,6 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     private var tempDir: URL!
     private var server: AgentControlServer!
     private var registry: AgentSessionRegistry!
-    private var tmux: TmuxControlClient!
 
     override func setUp() async throws {
         try await super.setUp()
@@ -20,7 +19,6 @@ final class AgentControlServerChatRouteTests: XCTestCase {
 
         let sessionsURL = tempDir.appendingPathComponent("sessions.json")
         registry = AgentSessionRegistry(storeURL: sessionsURL)
-        tmux = TmuxControlClient(configuration: .init(socketName: "clawdmeter-test-\(UUID().uuidString)"))
 
         let resolver = SessionFileResolver(
             codexSessionsRoot: tempDir.appendingPathComponent("codex-sessions", isDirectory: true),
@@ -37,7 +35,6 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         server = AgentControlServer(
             repoIndex: RepoIndex(),
             registry: registry,
-            tmux: tmux,
             notifications: NotificationDispatcher(),
             chatStoreRegistry: chatRegistry,
             chatFileResolver: resolver,
@@ -58,7 +55,6 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         await OpenRouterModelProbe.shared.invalidate()
 
         server?.stop()
-        await tmux?.stop()
         OpencodeProcessManager.shared.stop()
 
         if let tempDir {
@@ -67,41 +63,25 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func test_oneVendorPostChatSessions_createsSoloChatSession() async throws {
-        // Codex chat now defaults to the `codex app-server` harness, which can't
-        // spawn in the test env. This test exercises the LEGACY Codex SDK
-        // chat-create path (deferred spawn, returns 200), reachable only via the
-        // kill-switch now. Save/restore so we don't clobber the host's default.
-        let killSwitch = "clawdmeter.codex.appServer.enabled"
-        let savedKillSwitch = UserDefaults.standard.object(forKey: killSwitch)
-        UserDefaults.standard.set(false, forKey: killSwitch)
-        defer {
-            if let savedKillSwitch { UserDefaults.standard.set(savedKillSwitch, forKey: killSwitch) }
-            else { UserDefaults.standard.removeObject(forKey: killSwitch) }
-        }
-        let request = CreateChatSessionRequest(
+    func test_persistedCodexSDKChatSendReturnsRetired410() async throws {
+        let session = try await registry.createChat(
             provider: .codex,
             model: "gpt-5.5",
-            effort: .high,
+            chatCwd: tempDir.path,
             codexChatBackend: .sdk,
-            chatVendor: .chatgpt
+            effort: .high,
+            chatVendor: .chatgpt,
+            billingProvider: "codex"
         )
 
-        let response = try await postJSON("/chat-sessions", request)
+        let response = try await postJSON(
+            "/sessions/\(session.id.uuidString)/send",
+            SendPromptRequest(text: "old sdk path", asFollowUp: false, idempotencyKey: UUID().uuidString)
+        )
 
-        XCTAssertEqual(response.status, 200)
-        let session = try decode(AgentSession.self, from: response.data)
-        XCTAssertEqual(session.kind, .chat)
-        XCTAssertEqual(session.agent, .codex)
-        XCTAssertEqual(session.model, "gpt-5.5")
-        XCTAssertEqual(session.effort, .high)
-        XCTAssertEqual(session.codexChatBackend, .sdk)
-        XCTAssertNil(session.frontierGroupId)
-        XCTAssertNil(session.frontierChildIndex)
-        XCTAssertEqual(session.runtimeBinding?.metadata["chatVendor"], ChatVendor.chatgpt.rawValue)
-        XCTAssertEqual(registry.session(id: session.id)?.id, session.id)
-
-        _ = try? await requestRaw(path: "/sessions/\(session.id.uuidString)", method: "DELETE")
+        XCTAssertEqual(response.status, 410)
+        let object = try XCTUnwrap(jsonObject(response.data))
+        XCTAssertEqual(object["error"] as? String, "legacy_session_retired")
     }
 
     func test_lifecycleRouteAndClientReturnSnapshot() async throws {
@@ -135,6 +115,158 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         let clientSnapshot = await client.fetchLifecycle(sessionId: session.id)
         XCTAssertEqual(clientSnapshot?.sessionId, session.id)
         XCTAssertEqual(clientSnapshot?.phase, .awaitingApproval)
+    }
+
+    func test_sendToLegacyPaneBackedSessionReturnsRetired410() async throws {
+        let session = try await registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: "Legacy",
+            agent: .claude,
+            model: "sonnet",
+            goal: "Legacy pane",
+            worktreePath: tempDir.path,
+            tmuxWindowId: "@legacy",
+            tmuxPaneId: "%legacy",
+            planMode: false,
+            mode: .worktree
+        )
+
+        let response = try await postJSON(
+            "/sessions/\(session.id.uuidString)/send",
+            SendPromptRequest(text: "should retire", asFollowUp: false, idempotencyKey: UUID().uuidString)
+        )
+
+        XCTAssertEqual(response.status, 410)
+        let object = try XCTUnwrap(jsonObject(response.data))
+        XCTAssertEqual(object["error"] as? String, "legacy_session_retired")
+    }
+
+    func test_configAndReviveLegacyPaneBackedSessionsReturnRetired410() async throws {
+        let effortSession = try await createLegacyPaneSession(goal: "Legacy effort")
+        let effort = try await postJSON(
+            "/sessions/\(effortSession.id.uuidString)/effort",
+            ChangeEffortRequest(effort: .high, idempotencyKey: UUID().uuidString)
+        )
+        XCTAssertEqual(effort.status, 410)
+        XCTAssertEqual(try XCTUnwrap(jsonObject(effort.data))["error"] as? String, "legacy_session_retired")
+
+        let modeSession = try await createLegacyPaneSession(goal: "Legacy mode")
+        let mode = try await postJSON(
+            "/sessions/\(modeSession.id.uuidString)/mode",
+            ChangeModeRequest(mode: .local, planMode: false, idempotencyKey: UUID().uuidString)
+        )
+        XCTAssertEqual(mode.status, 410)
+        XCTAssertEqual(try XCTUnwrap(jsonObject(mode.data))["error"] as? String, "legacy_session_retired")
+
+        let reviveSession = try await createLegacyPaneSession(goal: "Legacy revive")
+        try await registry.updateStatus(id: reviveSession.id, status: .degraded)
+        let revive = try await postJSON(
+            "/sessions/\(reviveSession.id.uuidString)/revive",
+            ReviveRequest(idempotencyKey: UUID().uuidString)
+        )
+        XCTAssertEqual(revive.status, 410)
+        XCTAssertEqual(try XCTUnwrap(jsonObject(revive.data))["error"] as? String, "legacy_session_retired")
+    }
+
+    func test_terminalListOnLegacyPaneBackedSessionReturnsRetired410() async throws {
+        let session = try await createLegacyPaneSession(goal: "Legacy terminal")
+
+        let response = try await requestRaw(path: "/sessions/\(session.id.uuidString)/terminals", method: "GET")
+
+        XCTAssertEqual(response.status, 410)
+        XCTAssertEqual(try XCTUnwrap(jsonObject(response.data))["error"] as? String, "legacy_session_retired")
+    }
+
+    func test_terminalRenameAndDeleteOnLegacyPaneBackedSessionReturnRetired410() async throws {
+        let session = try await createLegacyPaneSession(goal: "Legacy terminal mutation")
+        let terminalRefId = UUID().uuidString
+
+        let rename = try await requestRaw(
+            path: "/sessions/\(session.id.uuidString)/terminals/\(terminalRefId)",
+            method: "PATCH",
+            body: try JSONEncoder().encode(["title": "Ignored"])
+        )
+        XCTAssertEqual(rename.status, 410)
+        XCTAssertEqual(try XCTUnwrap(jsonObject(rename.data))["error"] as? String, "legacy_session_retired")
+
+        let delete = try await requestRaw(
+            path: "/sessions/\(session.id.uuidString)/terminals/\(terminalRefId)",
+            method: "DELETE"
+        )
+        XCTAssertEqual(delete.status, 410)
+        XCTAssertEqual(try XCTUnwrap(jsonObject(delete.data))["error"] as? String, "legacy_session_retired")
+    }
+
+    func test_addRenameDeleteDirectTerminalPaneRoutes() async throws {
+        let session = try await registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: "Terminal",
+            agent: .codex,
+            model: nil,
+            goal: "Terminal pane",
+            worktreePath: tempDir.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+
+        let add = try await postJSON(
+            "/sessions/\(session.id.uuidString)/terminals",
+            ["title": "Logs"]
+        )
+        XCTAssertEqual(add.status, 200, bodySnippet(add.data))
+        let pane = try decode(TerminalPaneRef.self, from: add.data)
+        XCTAssertFalse(pane.isPrimary)
+
+        let rename = try await requestRaw(
+            path: "/sessions/\(session.id.uuidString)/terminals/\(pane.id.uuidString)",
+            method: "PATCH",
+            body: try JSONEncoder().encode(["title": "Build Logs"])
+        )
+        XCTAssertEqual(rename.status, 200, bodySnippet(rename.data))
+        let renamed = try decode(TerminalPaneRef.self, from: rename.data)
+        XCTAssertEqual(renamed.title, "Build Logs")
+
+        let list = try await requestRaw(path: "/sessions/\(session.id.uuidString)/terminals", method: "GET")
+        XCTAssertEqual(list.status, 200, bodySnippet(list.data))
+        let panes = try decode([TerminalPaneRef].self, from: list.data)
+        XCTAssertEqual(panes.count, 1)
+
+        let delete = try await requestRaw(
+            path: "/sessions/\(session.id.uuidString)/terminals/\(pane.id.uuidString)",
+            method: "DELETE"
+        )
+        XCTAssertEqual(delete.status, 200, bodySnippet(delete.data))
+    }
+
+    func test_registryReplacingPrimaryTerminalPaneDoesNotDuplicatePrimary() async throws {
+        let session = try await registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: "Primary",
+            agent: .codex,
+            model: nil,
+            goal: "Primary",
+            worktreePath: tempDir.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let firstRefId = UUID()
+        try await registry.replacePrimaryTerminalPane(
+            sessionId: session.id,
+            pane: TerminalPaneRef(id: firstRefId, paneId: "pty-1", title: "Shell", isPrimary: true)
+        )
+        try await registry.replacePrimaryTerminalPane(
+            sessionId: session.id,
+            pane: TerminalPaneRef(id: firstRefId, paneId: "pty-2", title: "Shell", isPrimary: true)
+        )
+
+        let panes = try XCTUnwrap(registry.session(id: session.id)?.terminalPanes)
+        XCTAssertEqual(panes.filter(\.isPrimary).count, 1)
+        XCTAssertEqual(panes.count, 1)
+        XCTAssertEqual(panes.first?.paneId, "pty-2")
     }
 
     func test_usageRouteIncludesCursorMonthlyQuota() async throws {
@@ -250,17 +382,6 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     }
 
     func test_frontierRouteAppliesOpenRouterAvailabilityGate() async throws {
-        // Codex frontier children now default to the `codex app-server` harness,
-        // which can't spawn in the test env. This test only needs codex as the
-        // "good" slot to contrast with the gated OpenRouter slot, so exercise the
-        // legacy Codex SDK create path via the kill-switch. Save/restore.
-        let killSwitch = "clawdmeter.codex.appServer.enabled"
-        let savedKillSwitch = UserDefaults.standard.object(forKey: killSwitch)
-        UserDefaults.standard.set(false, forKey: killSwitch)
-        defer {
-            if let savedKillSwitch { UserDefaults.standard.set(savedKillSwitch, forKey: killSwitch) }
-            else { UserDefaults.standard.removeObject(forKey: killSwitch) }
-        }
         await ChatProviderProbe.shared.setAuthOverride(
             providerKey: "opencode",
             authenticated: false,
@@ -273,11 +394,9 @@ final class AgentControlServerChatRouteTests: XCTestCase {
                 clientRequestId: UUID(),
                 models: [
                     FrontierModelSlot(
-                        provider: .codex,
-                        model: "gpt-5.5",
-                        effort: .high,
-                        codexChatBackend: .sdk,
-                        chatVendor: .chatgpt
+                        provider: .unknown,
+                        model: "noop",
+                        effort: .high
                     ),
                     FrontierModelSlot(
                         provider: .opencode,
@@ -293,15 +412,11 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         XCTAssertEqual(response.status, 201)
         let frontier = try decode(CreateFrontierResponse.self, from: response.data)
         XCTAssertEqual(frontier.slots.count, 2)
-        XCTAssertNotNil(frontier.slots[0].sessionId)
-        XCTAssertNil(frontier.slots[0].reason)
+        XCTAssertNil(frontier.slots[0].sessionId)
+        XCTAssertEqual(frontier.slots[0].reason, "invalid_chat_runtime_metadata: provider \(AgentKind.unknown.rawValue) has no chat vendor mapping")
         XCTAssertNil(frontier.slots[1].sessionId)
         XCTAssertEqual(frontier.slots[1].reason, "openrouter auth missing test")
-        XCTAssertEqual(registry.sessions.count, 1)
-        XCTAssertEqual(registry.sessions.first?.runtimeBinding?.metadata["chatVendor"], ChatVendor.chatgpt.rawValue)
-        if let sessionId = frontier.slots[0].sessionId {
-            _ = try? await requestRaw(path: "/sessions/\(sessionId.uuidString)", method: "DELETE")
-        }
+        XCTAssertEqual(registry.sessions.count, 0)
     }
 
     func test_openRouterModelProbeMapsReasoningSupportFromSupportedParameters() throws {
@@ -405,7 +520,8 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         XCTAssertEqual(session.model, CursorModelCatalog.autoModelId)
         XCTAssertEqual(session.runtimeBinding?.runtimeKind, .cursorCLI)
         XCTAssertEqual(session.runtimeBinding?.metadata["chatVendor"], ChatVendor.cursor.rawValue)
-        XCTAssertNotNil(session.tmuxPaneId)
+        XCTAssertNil(session.tmuxPaneId)
+        XCTAssertNil(session.tmuxWindowId)
 
         _ = try? await requestRaw(path: "/sessions/\(session.id.uuidString)", method: "DELETE", timeout: 20)
     }
@@ -695,6 +811,21 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         var currentAccessToken: String? { "token" }
         var hasToken: Bool { true }
         func refreshIfNeeded() async throws -> Bool { false }
+    }
+
+    private func createLegacyPaneSession(goal: String) async throws -> AgentSession {
+        try await registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: "Legacy",
+            agent: .claude,
+            model: "sonnet",
+            goal: goal,
+            worktreePath: tempDir.path,
+            tmuxWindowId: "@legacy-\(UUID().uuidString)",
+            tmuxPaneId: "%legacy-\(UUID().uuidString)",
+            planMode: false,
+            mode: .worktree
+        )
     }
 
     private func postJSON<T: Encodable>(

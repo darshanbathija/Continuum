@@ -9,6 +9,11 @@ Branch: main | Mode: SCOPE EXPANSION
 Repo: darshanbathija/Clawdmeter
 Plan file: /Users/darshanbathija_1/.claude/plans/use-tailscale-ssh-for-modular-fern.md
 
+Historical note: this promoted plan predates the runtime cutover. The current
+implementation uses direct PTY hosts for Claude/terminal panes and harness
+providers for Codex, Cursor, Gemini, and Grok. Old pane-backed sessions are
+retired instead of reconnected.
+
 ## Vision
 
 ### 10x Check

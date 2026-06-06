@@ -47,9 +47,8 @@ Once paired, the iPhone can:
 - **See live diff** and accept the merge.
 - **Trigger PR review** via the embedded GitHub API client.
 - **Switch model / effort mid-session** (Conductor-grade).
-- **Send keystrokes** through the same byte-identical `submitToTmux` heuristic
-  used by Mac (codex C7 — both transports call the shared function so the
-  wire is identical).
+- **Send keystrokes** through the same byte-identical terminal submission
+  heuristic used by Mac.
 
 ## Troubleshooting
 

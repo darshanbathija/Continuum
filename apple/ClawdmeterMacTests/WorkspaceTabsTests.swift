@@ -15,8 +15,8 @@ final class WorkspaceTabsTests: XCTestCase {
             model: "sonnet",
             goal: "source",
             worktreePath: "/repo/.claude/worktrees/kolkata",
-            tmuxWindowId: "@1",
-            tmuxPaneId: "%1",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
             planMode: false,
             mode: .worktree
         )
@@ -51,8 +51,8 @@ final class WorkspaceTabsTests: XCTestCase {
             model: nil,
             goal: nil,
             worktreePath: "/repo/.claude/worktrees/kolkata",
-            tmuxWindowId: "@1",
-            tmuxPaneId: "%1",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
             planMode: false,
             mode: .worktree
         )
@@ -139,8 +139,8 @@ final class WorkspaceTabsTests: XCTestCase {
             model: "gpt",
             goal: "source",
             worktreePath: "/repo/.claude/worktrees/kolkata",
-            tmuxWindowId: "@1",
-            tmuxPaneId: "%1",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
             planMode: false,
             mode: .worktree
         )
@@ -155,8 +155,8 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.selectedWorkspaceTerminalTab?.workspaceKey, WorkspaceKey.of(source))
     }
 
-    func test_openWorkspaceTerminalTabRejectsSessionsWithoutTmuxPane() async throws {
-        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalNoPane")
+    func test_openWorkspaceTerminalTabRejectsLegacyPaneBackedSessions() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalLegacyPane")
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let source = try await registry.create(
             repoKey: "/repo",
@@ -165,8 +165,8 @@ final class WorkspaceTabsTests: XCTestCase {
             model: "opencode",
             goal: "source",
             worktreePath: "/repo/.claude/worktrees/kolkata",
-            tmuxWindowId: nil,
-            tmuxPaneId: nil,
+            tmuxWindowId: "@legacy",
+            tmuxPaneId: "%legacy",
             planMode: false,
             mode: .worktree,
             ownsWorktree: false
@@ -192,8 +192,8 @@ final class WorkspaceTabsTests: XCTestCase {
             model: "gpt",
             goal: "source",
             worktreePath: repo.path,
-            tmuxWindowId: "@1",
-            tmuxPaneId: "%1",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
             planMode: false,
             mode: .worktree
         )
@@ -241,8 +241,8 @@ final class WorkspaceTabsTests: XCTestCase {
             model: "gpt",
             goal: "source",
             worktreePath: repo.path,
-            tmuxWindowId: "@1",
-            tmuxPaneId: "%1",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
             planMode: false,
             mode: .worktree
         )
@@ -304,8 +304,8 @@ final class WorkspaceTabsTests: XCTestCase {
             model: nil,
             goal: "first",
             worktreePath: "/repo/.claude/worktrees/kolkata",
-            tmuxWindowId: "@1",
-            tmuxPaneId: "%1",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
             planMode: false,
             mode: .worktree
         )
@@ -316,12 +316,12 @@ final class WorkspaceTabsTests: XCTestCase {
             model: nil,
             goal: "second",
             worktreePath: "/repo/.claude/worktrees/delhi",
-            tmuxWindowId: "@2",
-            tmuxPaneId: "%2",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
             planMode: false,
             mode: .worktree
         )
-        let pane = TerminalPaneRef(paneId: "%3", title: "Logs", isPrimary: false)
+        let pane = TerminalPaneRef(paneId: UUID().uuidString, title: "Logs", isPrimary: false)
         try await registry.addTerminalPane(sessionId: first.id, pane: pane)
 
         model.openWorkspaceTerminalTab(from: first, paneRefId: pane.id, createdAt: Date(timeIntervalSince1970: 2))
@@ -446,8 +446,8 @@ final class WorkspaceTabsTests: XCTestCase {
             model: "gpt-5.5",
             goal: "src",
             worktreePath: "/repo/.claude/worktrees/feature",
-            tmuxWindowId: "@1",
-            tmuxPaneId: "%1",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
             planMode: false,
             mode: .worktree
         )
@@ -541,14 +541,9 @@ final class WorkspaceTabsTests: XCTestCase {
             storeURL: directory.appendingPathComponent("workspaces.json"),
             sessionsURL: directory.appendingPathComponent("sessions.json")
         )
-        let supervisor = TmuxSupervisor(
-            tmux: TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false")),
-            registry: registry
-        )
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
-            supervisor: supervisor,
             workspaceStore: workspaceStore
         )
         return (model, registry, directory)

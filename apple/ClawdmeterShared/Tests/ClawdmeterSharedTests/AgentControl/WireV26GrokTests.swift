@@ -59,6 +59,11 @@ final class WireV26GrokTests: XCTestCase {
         XCTAssertEqual(SessionRuntimeKind.inferred(agent: .cursor), .acpCursor)
     }
 
+    func testCodexAndGeminiInferHarnessRuntimes() {
+        XCTAssertEqual(SessionRuntimeKind.inferred(agent: .codex), .codexAppServer)
+        XCTAssertEqual(SessionRuntimeKind.inferred(agent: .gemini), .agyHeadless)
+    }
+
     /// Old persisted Cursor sessions keep their stored `.cursorCLI` runtime kind
     /// (lenient decode) — the Phase-5 `inferred` flip only affects new spawns.
     func testLegacyCursorCliStillDecodes() throws {
@@ -69,10 +74,12 @@ final class WireV26GrokTests: XCTestCase {
     }
 
     /// `isACPDriven` is the daemon's discriminator for routing a session through
-    /// the harness bridge vs the tmux/SDK/serve paths.
+    /// the harness bridge vs direct PTY / serve paths.
     func testIsACPDrivenDiscriminator() {
         XCTAssertTrue(SessionRuntimeKind.acpGrok.isACPDriven)
         XCTAssertTrue(SessionRuntimeKind.acpCursor.isACPDriven)
+        XCTAssertTrue(SessionRuntimeKind.codexAppServer.isACPDriven)
+        XCTAssertTrue(SessionRuntimeKind.agyHeadless.isACPDriven)
         for rt in [SessionRuntimeKind.claudeCLI, .codexCLI, .codexSDK,
                    .opencodeServer, .cursorCLI, .unknown] {
             XCTAssertFalse(rt.isACPDriven, "\(rt.rawValue) must not route to the ACP harness")

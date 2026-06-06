@@ -70,8 +70,6 @@ struct PairingSettingsView: View {
             TahoeHair()
             scanRootsSection
             TahoeHair()
-            supervisorSection
-            TahoeHair()
             relaySecuritySection
             TahoeHair()
             legacyTailscaleSection
@@ -419,32 +417,6 @@ struct PairingSettingsView: View {
                     .filter { !$0.isEmpty }
                 UserDefaults.standard.set(roots, forKey: RepoIndex.scanRootsKey)
                 Task { await runtime.repoIndex.refresh() }
-            }
-        }
-    }
-
-    private var supervisorSection: some View {
-        tahoeSection("Supervisor") {
-            LabeledContent("Status") {
-                if runtime.tmuxSupervisor.isRecoveryBlocked {
-                    HStack(spacing: 8) {
-                        Label("Unrecoverable", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        Spacer()
-                        Button("Recover") {
-                            Task { await runtime.tmuxSupervisor.userInitiatedRecovery() }
-                        }
-                        .controlSize(.small)
-                    }
-                } else {
-                    Label("tmux server is healthy", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-            }
-            LabeledContent("Restart count") {
-                Text("\(runtime.tmuxSupervisor.restartCount)")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.secondary)
             }
         }
     }

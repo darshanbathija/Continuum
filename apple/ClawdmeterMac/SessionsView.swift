@@ -2,8 +2,8 @@ import SwiftUI
 import ClawdmeterShared
 
 /// Sessions/Code data layer. Owns `SessionsModel` (the @MainActor
-/// ObservableObject that bridges `RepoIndex` + `AgentSessionRegistry` +
-/// `TmuxSupervisor` to SwiftUI) and `NewSessionMacSheet` (still hosted by
+/// ObservableObject that bridges `RepoIndex` + `AgentSessionRegistry` to
+/// SwiftUI) and `NewSessionMacSheet` (still hosted by
 /// `SessionWorkspaceView`).
 ///
 /// The top-level `SessionsView` SwiftUI struct that used to live here was
@@ -253,7 +253,6 @@ struct NewSessionMacSheet: View {
                 planMode: agent == .cursor ? false : planMode,
                 goal: goal.isEmpty ? nil : goal,
                 mode: mode,
-                tmux: runtime.tmuxClient,
                 model: selectedModel,
                 effort: supportsEffort(modelId: selectedModel) ? defaults.effort : nil
             )
@@ -263,9 +262,9 @@ struct NewSessionMacSheet: View {
         }
     }
 
-    // (former TmuxError-only humanizer removed — startSession() now routes
+    // (former spawn-error-only humanizer removed — startSession() now routes
     // every failure through SessionsModel.humanize(spawnError:) so worktree
-    // and access errors are humanized too, not just tmux ones.)
+    // and access errors are humanized too.)
 }
 
 struct PendingFirstSendRecovery: Equatable {
@@ -605,7 +604,7 @@ public final class SessionsModel: ObservableObject {
                 openSessionId = provisional.id
                 provisionAndAttachWorktree(
                     sessionId: sessionId, repoKey: repoKey,
-                    agent: agent, model: modelId, effort: effort, tmux: runtime.tmuxClient
+                    agent: agent, model: modelId, effort: effort
                 )
             } catch {
                 // registry.create failed → no session was persisted; just undo
@@ -624,9 +623,9 @@ public final class SessionsModel: ObservableObject {
     }
 
     /// Background half of the optimistic "+" spawn: provisions the worktree
-    /// (new branch + Conductor-style file copy + setup script), spawns the codex
-    /// agent in a tmux pane, attaches both to the already-open provisional
-    /// session, then flushes any prompt the user queued while it was setting up.
+    /// (new branch + Conductor-style file copy + setup script), asks the daemon
+    /// to attach the agent runtime to the already-open provisional session, then
+    /// flushes any prompt the user queued while it was setting up.
     /// All errors are non-blocking: the provisional session is torn down and a
     /// toast surfaces, never the sheet.
     private func provisionAndAttachWorktree(
@@ -634,8 +633,7 @@ public final class SessionsModel: ObservableObject {
         repoKey: String,
         agent: AgentKind,
         model: String,
-        effort: ReasoningEffort,
-        tmux: TmuxControlClient
+        effort: ReasoningEffort
     ) {
         Task { @MainActor in
             var provisionedWorktree: WorktreeManager.ProvisionedWorktree?
@@ -654,11 +652,11 @@ public final class SessionsModel: ObservableObject {
                 )
                 provisionedWorktree = provisioned
                 let cwd = provisioned.path
-                // v27: drive codex via the daemon ACP harness (paneless) instead
-                // of a tmux pane. The daemon adopts the optimistic row (same
-                // sessionId) and reuses this Mac-provisioned worktree
-                // (existingWorkspacePath). Guard with a deadline so a wedged
-                // daemon/spawn doesn't leave the trail spinning forever.
+                // v27: drive codex via the daemon ACP/app-server harness. The
+                // daemon adopts the optimistic row (same sessionId) and reuses
+                // this Mac-provisioned worktree (existingWorkspacePath). Guard
+                // with a deadline so a wedged daemon/spawn doesn't leave the
+                // trail spinning forever.
                 guard let runtime = AppDelegate.runtime,
                       let port = runtime.agentControlServer.boundPort else {
                     throw SpawnError.missingBinary("Daemon not started — relaunch Clawdmeter.")
@@ -762,15 +760,15 @@ public final class SessionsModel: ObservableObject {
         )
     }
 
-    /// Collapse the spawn / worktree / tmux / shell error zoo into ONE human,
-    /// actionable line. Raw git/tmux/shell stderr — e.g. "fatal: Unable to
+    /// Collapse the spawn / worktree / shell error zoo into one human,
+    /// actionable line. Raw git/shell stderr — e.g. "fatal: Unable to
     /// read current working directory: Operation not permitted" or the
     /// "(…ShellError error 2.)" NSError fallback — must never reach the UI
     /// verbatim. Match the known low-level failures and say what to do next.
     /// Internal (not private) so `NewSessionMacSheet` can route its sheet
     /// errors through the same humanizer the quick-spawn toast uses.
     static func humanize(spawnError error: Error) -> String {
-        // Failures that look identical across git, tmux, and the agent CLIs
+        // Failures that look identical across git and the agent CLIs
         // are matched on the underlying stderr/text, regardless of the Swift
         // error type that wrapped them.
         func classify(_ raw: String) -> String? {
@@ -797,14 +795,6 @@ public final class SessionsModel: ObservableObject {
                 return "git wasn’t found. Install the Xcode command-line tools (run “xcode-select --install”) or Homebrew git, then try again."
             }
             return wt.errorDescription ?? "Couldn’t create the worktree."
-        case let tmux as TmuxControlClient.TmuxError:
-            switch tmux {
-            case .notStarted:           return "The terminal backend isn’t ready yet — try again in a moment."
-            case .serverExited:         return "The terminal backend stopped unexpectedly. Try again; if it persists, fully quit and reopen Continuum."
-            case .ptyClosed:            return "The terminal session closed unexpectedly. Try again."
-            case .commandFailed(let s): return classify(s) ?? "The terminal backend reported: \(s)"
-            case .invalidArgument(let s): return "Internal error talking to the terminal backend (\(s))."
-            }
         default:
             let desc = (error as NSError).localizedDescription
             return classify(desc) ?? "Couldn’t start the session. \(desc)"
@@ -857,7 +847,6 @@ public final class SessionsModel: ObservableObject {
 
     public let repoIndex: RepoIndex
     public let registry: AgentSessionRegistry
-    public let supervisor: TmuxSupervisor
     public let workspaceStore: WorkspaceStore
     public let repoEnvResolver: RepoEnvRuntimeResolver?
     private var refreshTask: Task<Void, Never>?
@@ -881,14 +870,10 @@ public final class SessionsModel: ObservableObject {
     /// selections) on every flip. Evicted alongside `chatStores` under the
     /// same LRU window so it stays bounded.
     private var composerStores: [UUID: ComposerStore] = [:]
-    /// The tmux pane id a session's chat store was last resolved against,
-    /// keyed by session id ("" = resolved against no live pane). Every respawn
-    /// (config swap, approve-plan, revive) assigns a NEW pane, so a changed
-    /// pane id is the cheap, can't-miss signal that the Codex rollout JSONL may
-    /// have rotated and the tailed file must be re-resolved. When the pane is
-    /// unchanged — the common tab-toggle case — we skip the synchronous
-    /// parent-walk + per-file stat scan `resolveSessionFileURL` runs, which on
-    /// every warm hit was the dominant main-thread stall when toggling tabs.
+    /// The legacy pane token a session's chat store was last resolved against,
+    /// keyed by session id ("" = no legacy pane metadata). Forced revalidation
+    /// handles runtime changes that can rotate JSONLs; otherwise we avoid the
+    /// synchronous parent-walk + per-file stat scan on warm tab toggles.
     private var lastResolvedPaneId: [UUID: String] = [:]
     /// Sessions whose tailed JSONL must be re-resolved on the next `chatStore`
     /// access regardless of pane id — set when a forced JSONL pin is applied
@@ -926,13 +911,11 @@ public final class SessionsModel: ObservableObject {
     public init(
         repoIndex: RepoIndex,
         registry: AgentSessionRegistry,
-        supervisor: TmuxSupervisor,
         workspaceStore: WorkspaceStore,
         repoEnvResolver: RepoEnvRuntimeResolver? = nil
     ) {
         self.repoIndex = repoIndex
         self.registry = registry
-        self.supervisor = supervisor
         self.workspaceStore = workspaceStore
         self.repoEnvResolver = repoEnvResolver
     }
@@ -1013,17 +996,12 @@ public final class SessionsModel: ObservableObject {
         }
         if let existing = chatStores[session.id] {
             touchLRU(session.id)
-            // Audit P1 fix: when the daemon spawns a fresh post-approve
-            // rollout (Codex `approve-plan` writes a new JSONL), the cached
-            // store keeps tailing the dead plan-mode file unless we swap it
-            // in place. But resolving on EVERY warm hit means a synchronous
+            // Audit P1 fix: when a runtime changes the tailed JSONL, the cached
+            // store can keep tailing the dead plan-mode file unless we swap it
+            // in place. Resolving on EVERY warm hit means a synchronous
             // parent-walk + per-file stat scan of ~/.claude/projects/<repo>/
-            // on every Code-tab flip — the dominant main-thread stall when
-            // toggling tabs. Every respawn (approve-plan, config swap,
-            // revive) assigns a new tmux pane, so a changed pane id (or an
-            // explicit pin via needsURLRevalidation) is the cheap can't-miss
-            // signal that the rollout may have rotated; an unchanged pane —
-            // the common toggle case — skips the scan entirely.
+            // on every Code-tab flip. Use forced revalidation, plus the legacy
+            // pane token for old persisted rows, to skip the common toggle scan.
             let paneToken = session.tmuxPaneId ?? ""
             let forcedRevalidation = needsURLRevalidation.remove(session.id) != nil
             if lastResolvedPaneId[session.id] != paneToken || forcedRevalidation {
@@ -1044,7 +1022,7 @@ public final class SessionsModel: ObservableObject {
         chatStores[session.id] = store
         daemonOwnedChatStoreIds.remove(session.id)
         chatStoreLRU.append(session.id)
-        // Record the pane the store was just resolved against so the next warm
+        // Record the token the store was just resolved against so the next warm
         // hit doesn't redundantly re-scan (see lastResolvedPaneId).
         needsURLRevalidation.remove(session.id)
         lastResolvedPaneId[session.id] = session.tmuxPaneId ?? ""
@@ -1421,8 +1399,8 @@ public final class SessionsModel: ObservableObject {
     func canOpenWorkspaceTerminalTab(from session: AgentSession) -> Bool {
         guard session.archivedAt == nil,
               WorkspaceKey.of(session) != nil,
-              let paneId = session.tmuxPaneId,
-              !paneId.isEmpty
+              session.tmuxPaneId == nil,
+              session.tmuxWindowId == nil
         else { return false }
         return true
     }
@@ -1595,8 +1573,8 @@ public final class SessionsModel: ObservableObject {
         /// signed in / has-no-project-for-this-repo. Carries the
         /// user-facing CTA string the composer surfaces inline.
         case antigravityNotReady(String)
-        /// tmux didn't create the pane in time — the control connection is
-        /// wedged. Surfaced (not hung) so the user can relaunch + retry.
+        /// Runtime spawn did not complete in time. Surfaced (not hung) so the
+        /// user can relaunch + retry.
         case spawnTimedOut
         public var errorDescription: String? {
             switch self {
@@ -1604,14 +1582,13 @@ public final class SessionsModel: ObservableObject {
             case .unsupportedMode(let m): return m
             case .antigravityNotReady(let m): return m
             case .spawnTimedOut:
-                return "Timed out starting the agent (tmux unresponsive). Quit and relaunch Clawdmeter, then try again."
+                return "Timed out starting the agent. Quit and relaunch Clawdmeter, then try again."
             }
         }
     }
 
-    /// Race an async op against a deadline. A wedged `tmux.newWindow` never
-    /// resumes its continuation (cooperative cancellation can't unstick a dead
-    /// PTY), so we abandon it and surface a timeout instead of hanging forever.
+    /// Race an async op against a deadline. If a runtime spawn never resumes its
+    /// continuation, abandon it and surface a timeout instead of hanging forever.
     private static func withSpawnTimeout<T: Sendable>(
         _ seconds: Double, _ op: @escaping @Sendable () async throws -> T
     ) async throws -> T {
@@ -1646,13 +1623,13 @@ public final class SessionsModel: ObservableObject {
 
     /// v27 Code-tab harness migration: spawn a paneless harness session
     /// (codex/cursor/gemini) by delegating to the daemon's `POST /sessions`
-    /// over the loopback, then adopt it into the open-state exactly like the
-    /// tmux path's tail. `existingWorkspacePath`/`sessionId` are set by the
+    /// over the loopback, then adopt it into the open-state. `existingWorkspacePath`/`sessionId` are set by the
     /// optimistic "+" path so the Mac-provisioned worktree + pre-minted row are
     /// reused; nil for the New Session sheet (the daemon provisions + mints).
     private func spawnHarnessSessionViaDaemon(
         repoPath: String,
         agent: AgentKind,
+        planMode: Bool,
         goal: String?,
         mode: SessionMode,
         model: String?,
@@ -1672,7 +1649,7 @@ public final class SessionsModel: ObservableObject {
             repoKey: repoPath,
             agent: agent,
             model: model,
-            planMode: false,
+            planMode: planMode,
             goal: goal,
             useWorktree: mode == .worktree,
             effort: effort,
@@ -1694,7 +1671,6 @@ public final class SessionsModel: ObservableObject {
         planMode: Bool,
         goal: String?,
         mode: SessionMode,
-        tmux: TmuxControlClient,
         resumeSessionId: String? = nil,
         model: String? = nil,
         effort: ReasoningEffort? = nil,
@@ -1704,9 +1680,9 @@ public final class SessionsModel: ObservableObject {
         // trust-gate UX (AutopilotState.trustRepo) before passing true.
         autopilot: Bool = false,
         pinnedJSONLURL: URL? = nil,
-        // v0.8.1 agy-migration — full first-prompt text for agentapi
-        // spawn. tmux-based spawn ignores this (the CLI's stdin gets the
-        // prompt via the post-spawn /send call), but Antigravity 2's
+        // v0.8.1 agy-migration: full first-prompt text for agentapi
+        // spawn. Direct PTY sessions receive the prompt via the post-spawn
+        // /send call, but Antigravity 2's
         // `agentapi new-conversation` requires the actual first turn at
         // spawn-time. Callers (EmptyStateCenteredComposer) pass the
         // composer's rendered body; nil falls back to `goal` for paths
@@ -1714,50 +1690,13 @@ public final class SessionsModel: ObservableObject {
         initialMessage: String? = nil
     ) async throws -> AgentSession {
         try assertProviderEnabled(agent)
-        // v27 Code-tab harness migration: route EVERY non-Claude Code spawn
-        // through the daemon's ACP harness (paneless codex/cursor/gemini) —
-        // tmux + agentapi are gone for non-Claude. Claude + OpenCode keep their
-        // own paths below. External "Continue here" resume is deprioritized: a
-        // resume of a codex JSONL opens a fresh harness session in the same
-        // worktree (true thread/resume is a fast-follow). This sits BEFORE the
-        // CLI preflight because Gemini (Antigravity) isn't a CLI binary.
-        if agent != .claude, agent != .opencode {
-            // Cursor preflight — the daemon's harness preflight doesn't
-            // auth-check cursor-agent, so do it here before provisioning.
-            if agent == .cursor {
-                if planMode, (resumeSessionId?.isEmpty ?? true) {
-                    throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
-                }
-                let cursorState = await CursorModelProbe.shared.currentState()
-                guard cursorState.binaryPath != nil else {
-                    throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
-                }
-                guard cursorState.authenticated else {
-                    throw SpawnError.missingBinary("Run cursor-agent login, then try again.")
-                }
-                if let model,
-                   !CursorModelCatalog.isAutoModel(model),
-                   !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
-                    throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
-                }
-            } else if agent != .gemini, let reason = AgentSpawner.preflight(agent: agent) {
-                throw SpawnError.missingBinary(reason)
-            }
-            return try await spawnHarnessSessionViaDaemon(
-                repoPath: repoPath, agent: agent, goal: goal, mode: mode,
-                model: model, effort: effort, existingWorkspacePath: nil, sessionId: nil
-            )
-        }
-        if agent == .cursor, planMode, (resumeSessionId?.isEmpty ?? true) {
-            throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
-        }
-        // Fail fast on missing CLIs rather than spawning tmux + the
-        // worktree only to error in the agent's pane (where the user
-        // can't easily see it without opening the terminal view).
-        if let reason = AgentSpawner.preflight(agent: agent) {
-            throw SpawnError.missingBinary(reason)
+        if resumeSessionId != nil {
+            throw SpawnError.unsupportedMode("Resume existing JSONL sessions through Continue Here.")
         }
         if agent == .cursor {
+            if planMode {
+                throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
+            }
             let cursorState = await CursorModelProbe.shared.currentState()
             guard cursorState.binaryPath != nil else {
                 throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
@@ -1770,113 +1709,17 @@ public final class SessionsModel: ObservableObject {
                !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
                 throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
             }
+        } else if agent != .gemini, agent != .opencode, let reason = AgentSpawner.preflight(agent: agent) {
+            throw SpawnError.missingBinary(reason)
         }
-        let effectivePlanMode = planMode
-        try await tmux.start()
-        var cwd = repoPath
-        var worktreePath: String? = nil
-        var provisioning: WorktreeProvisioningMetadata? = nil
-        var provisionalSessionId: UUID?
-        // Skip worktree creation for resumes — the CLI handles cwd from JSONL.
-        if mode == .worktree, resumeSessionId == nil {
-            // v0.7.9: city-named worktree + matching branch. Mint up
-            // front so the path slug + branch use the same name.
-            let sessionId = UUID()
-            provisionalSessionId = sessionId
-            let city = CityNamer.shared.cityName(for: sessionId)
-            let slug = WorktreeManager.slug(city: city)
-            do {
-                let provisioned = try await WorktreeManager.shared.provision(
-                    repoRoot: repoPath,
-                    slug: slug,
-                    branchName: slug,
-                    filesToCopy: filesToCopySettings(forRepoRoot: repoPath),
-                    setupScript: RepoSetupScriptStore.script(forRepoRoot: repoPath)
-                )
-                worktreePath = provisioned.path
-                provisioning = provisioned.metadata
-            } catch {
-                CityNamer.shared.release(sessionId)
-                throw error
-            }
-            cwd = worktreePath!
-        }
-        // Build argv per agent. Use direct argv-builders for the resume
-        // path so we can pass the CLI session id (the JSONL `sessionId`
-        // / payload `id`, NOT the Clawdmeter UUID — Codex P0 fix).
-        let argv: [String]
-        switch agent {
-        case .claude:
-            argv = AgentSpawner.claudeArgv(
-                model: model,
-                planMode: effectivePlanMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: resumeSessionId
-            ) ?? []
-        case .codex, .gemini, .opencode, .cursor:
-            // v27: every non-Claude provider is harness-driven (paneless) — the
-            // fork at the top of spawnSession returns before this switch, so
-            // these are unreachable. Kept only for exhaustiveness; Claude is the
-            // sole tmux argv path now.
-            argv = []
-        case .grok, .unknown:
-            // grok is ACP (no tmux argv); unknown is X3 forward-compat. Both
-            // fall through to the missingBinary throw below.
-            argv = []
-        }
-        guard !argv.isEmpty else {
-            await cleanupUnregisteredWorktree(
-                repoPath: repoPath,
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                provisionalSessionId: provisionalSessionId
-            )
-            throw SpawnError.missingBinary("Agent CLI not found on PATH: \(agent.rawValue). Configure in Settings -> Diagnostics.")
-        }
-        let window: TmuxControlClient.WindowRef
-        let resolvedEnv: RepoEnvResolvedEnvironment?
-        do {
-            resolvedEnv = try resolveRepoEnv(repoRoot: repoPath, cwd: cwd)
-            window = try await tmux.newWindow(cwd: cwd, child: argv, environment: resolvedEnv?.environment ?? [:])
-        } catch {
-            await cleanupUnregisteredWorktree(
-                repoPath: repoPath,
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                provisionalSessionId: provisionalSessionId
-            )
-            throw error
-        }
-        let session = try await registry.create(
-            repoKey: repoPath,
-            repoDisplayName: (repoPath as NSString).lastPathComponent,
-            agent: agent,
-            model: model,
-            goal: goal,
-            worktreePath: worktreePath,
-            provisioning: provisioning,
-            tmuxWindowId: window.windowId,
-            tmuxPaneId: window.paneId,
-            planMode: effectivePlanMode,
-            mode: mode,
-            effort: effort,
-            ownsWorktree: worktreePath != nil,
-            envSetId: resolvedEnv?.set?.id,
-            envSetName: resolvedEnv?.set?.name,
-            id: provisionalSessionId ?? UUID()
+        _ = acceptEdits
+        _ = autopilot
+        _ = pinnedJSONLURL
+        _ = initialMessage
+        return try await spawnHarnessSessionViaDaemon(
+            repoPath: repoPath, agent: agent, planMode: planMode, goal: goal, mode: mode,
+            model: model, effort: effort, existingWorkspacePath: nil, sessionId: nil
         )
-        if let pinned = pinnedJSONLURL {
-            forcedChatStoreURLs[session.id] = pinned
-            needsURLRevalidation.insert(session.id)
-        }
-        recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
-        expandedRepoKeys.insert(repoPath)
-        draftWorkspaceTab = nil
-        openSessionId = session.id
-        await self.refresh()
-        return session
     }
 
     /// Spawn a sibling code session inside an existing workspace/worktree.
@@ -1890,7 +1733,6 @@ public final class SessionsModel: ObservableObject {
         planMode: Bool,
         goal: String?,
         mode: SessionMode,
-        tmux: TmuxControlClient,
         model: String? = nil,
         effort: ReasoningEffort? = nil,
         acceptEdits: Bool = false,
@@ -1904,11 +1746,20 @@ public final class SessionsModel: ObservableObject {
             workspacePath: workspacePath,
             mode: mode
         )
-        // v27 Code-tab harness migration: route non-Claude into the EXISTING
-        // worktree via the daemon harness (reuse the worktree — existingWorkspace
-        // tells the daemon to skip provisioning — daemon creates the row).
-        // Claude + OpenCode keep their existing paths below.
-        if agent != .claude, agent != .opencode {
+        if agent == .opencode {
+            return try await spawnOpencodeSessionInExistingWorkspace(
+                repoPath: repoPath,
+                workspacePath: workspacePath,
+                goal: goal,
+                mode: mode,
+                model: model,
+                effort: effort,
+                inheritedContextSourceIds: inheritedContextSourceIds
+            )
+        }
+        // Route into the EXISTING worktree via the daemon (reuse the worktree —
+        // existingWorkspace tells the daemon to skip provisioning).
+        do {
             if agent == .cursor {
                 if planMode {
                     throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
@@ -1929,91 +1780,18 @@ public final class SessionsModel: ObservableObject {
                 throw SpawnError.missingBinary(reason)
             }
             let session = try await spawnHarnessSessionViaDaemon(
-                repoPath: repoPath, agent: agent, goal: goal, mode: mode,
+                repoPath: repoPath, agent: agent, planMode: planMode, goal: goal, mode: mode,
                 model: model, effort: effort, existingWorkspacePath: workspacePath, sessionId: nil
             )
             try await registry.setInheritedContextSources(sessionId: session.id, sourceIds: inheritedContextSourceIds)
             return registry.session(id: session.id) ?? session
+        } catch {
+            _ = paths
+            _ = acceptEdits
+            _ = autopilot
+            _ = initialMessage
+            throw error
         }
-        if agent == .opencode {
-            return try await spawnOpencodeSessionInExistingWorkspace(
-                repoPath: repoPath,
-                workspacePath: workspacePath,
-                goal: goal,
-                mode: mode,
-                model: model,
-                effort: effort,
-                inheritedContextSourceIds: inheritedContextSourceIds
-            )
-        }
-        if agent == .cursor, planMode {
-            throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
-        }
-        if let reason = AgentSpawner.preflight(agent: agent) {
-            throw SpawnError.missingBinary(reason)
-        }
-        if agent == .cursor {
-            let cursorState = await CursorModelProbe.shared.currentState()
-            guard cursorState.binaryPath != nil else {
-                throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
-            }
-            guard cursorState.authenticated else {
-                throw SpawnError.missingBinary("Run cursor-agent login, then try again.")
-            }
-            if let model,
-               !CursorModelCatalog.isAutoModel(model),
-               !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
-                throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
-            }
-        }
-
-        try await tmux.start()
-        let cwd = paths.cwd
-        let argv: [String]
-        switch agent {
-        case .claude:
-            argv = AgentSpawner.claudeArgv(
-                model: model,
-                planMode: planMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: nil
-            ) ?? []
-        case .codex, .cursor, .gemini, .opencode, .grok, .unknown:
-            // v27: non-Claude providers are harness-driven (paneless) — the fork
-            // at the top returns before this switch, so these are unreachable.
-            // Kept for exhaustiveness; Claude is the sole tmux argv path now.
-            argv = []
-        }
-        guard !argv.isEmpty else {
-            throw SpawnError.missingBinary("Agent CLI not found on PATH: \(agent.rawValue). Configure in Settings -> Diagnostics.")
-        }
-        let resolvedEnv = try resolveRepoEnv(repoRoot: repoPath, cwd: cwd)
-        let window = try await tmux.newWindow(cwd: cwd, child: argv, environment: resolvedEnv?.environment ?? [:])
-        let session = try await registry.create(
-            repoKey: repoPath,
-            repoDisplayName: (repoPath as NSString).lastPathComponent,
-            agent: agent,
-            model: model,
-            goal: goal,
-            worktreePath: paths.worktreePath,
-            tmuxWindowId: window.windowId,
-            tmuxPaneId: window.paneId,
-            planMode: planMode,
-            mode: mode,
-            effort: effort,
-            inheritedContextSourceIds: inheritedContextSourceIds,
-            ownsWorktree: false,
-            envSetId: resolvedEnv?.set?.id,
-            envSetName: resolvedEnv?.set?.name
-        )
-        expandedRepoKeys.insert(repoPath)
-        draftWorkspaceTab = nil
-        openOutsideJSONLPath = nil
-        openSessionId = session.id
-        await self.refresh()
-        return session
     }
 
     static func existingWorkspaceRecordPaths(
@@ -2122,8 +1900,8 @@ public final class SessionsModel: ObservableObject {
 
 
     /// Promote the currently-open read-only synthetic session into a live
-    /// Clawdmeter-owned session by spawning a fresh tmux pane with the
-    /// CLI's `--resume`/`resume` flag. Returns the new live AgentSession,
+    /// Clawdmeter-owned session by resuming through the provider's current
+    /// runtime. Returns the new live AgentSession,
     /// or nil if the JSONL can't be resumed (caller surfaces the failure
     /// in the composer's inline error banner).
     ///
@@ -2169,19 +1947,22 @@ public final class SessionsModel: ObservableObject {
         // path needed to resume the CLI.
         let syntheticRepoKey = synthetic.effectiveCwd
         guard !syntheticRepoKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard let port = runtime.agentControlServer.boundPort else { return nil }
         do {
-            let session = try await spawnSession(
-                repoPath: syntheticRepoKey,
-                agent: synthetic.agent,
-                planMode: false,
-                goal: synthetic.goal,
-                mode: .local,
-                tmux: runtime.tmuxClient,
-                resumeSessionId: cliSessionId,
-                model: modelDefault,
-                effort: defaults.effort,
-                pinnedJSONLURL: jsonlURL
+            let sender = MacComposerSender(
+                port: Int(port),
+                token: runtime.agentControlServer.localLoopbackToken
             )
+            let response = try await sender.continueReadOnly(
+                ContinueReadOnlyRequest(
+                    jsonlPath: jsonlURL.path,
+                    repoKey: syntheticRepoKey,
+                    agent: synthetic.agent
+                )
+            )
+            guard let session = registry.session(id: response.sessionId) else { return nil }
+            forcedChatStoreURLs[session.id] = jsonlURL
+            needsURLRevalidation.insert(session.id)
             // Migrate open-state away from the synthetic; clean up the
             // synthetic entry so the chat-store cache doesn't keep two
             // entries pointing at the same JSONL.
@@ -2204,9 +1985,8 @@ public final class SessionsModel: ObservableObject {
     }
 
     /// Wave A: turn a read-only Recent JSONL row into a live continuable
-    /// session. Parses the CLI session id from the JSONL header and spawns
-    /// a fresh tmux pane with `--resume <cli-id>` (Claude) or
-    /// `resume <cli-id>` (Codex). Falls back to the read-only view if the
+    /// session. Parses the CLI session id from the JSONL header and resumes
+    /// through the provider's current runtime. Falls back to the read-only view if the
     /// JSONL has no usable id.
     @discardableResult
     public func continueOutsideSession(
@@ -2226,17 +2006,25 @@ public final class SessionsModel: ObservableObject {
             return nil
         }
         guard let runtime = AppDelegate.runtime else { return nil }
+        guard let port = runtime.agentControlServer.boundPort else { return nil }
         do {
-            let session = try await spawnSession(
-                repoPath: repoKey,
-                agent: recent.provider,
-                planMode: false,
-                goal: recent.firstPrompt,
-                mode: .local,
-                tmux: runtime.tmuxClient,
-                resumeSessionId: cliSessionId,
-                pinnedJSONLURL: jsonlURL
+            let sender = MacComposerSender(
+                port: Int(port),
+                token: runtime.agentControlServer.localLoopbackToken
             )
+            let response = try await sender.continueReadOnly(
+                ContinueReadOnlyRequest(
+                    jsonlPath: jsonlURL.path,
+                    repoKey: repoKey,
+                    agent: recent.provider
+                )
+            )
+            guard let session = registry.session(id: response.sessionId) else {
+                openOutsideSession(recent: recent, repoKey: repoKey, repoDisplayName: repoDisplayName)
+                return nil
+            }
+            forcedChatStoreURLs[session.id] = jsonlURL
+            needsURLRevalidation.insert(session.id)
             // Migrate open-state away from the synthetic read-only row.
             openOutsideJSONLPath = nil
             openSessionId = session.id
@@ -2247,99 +2035,14 @@ public final class SessionsModel: ObservableObject {
         }
     }
 
-    /// G2: switch a live session's mode (Local ↔ Worktree). Kills the
-    /// running agent, optionally creates/destroys a worktree, then re-spawns
-    /// the agent in the new cwd. Caller owns the D13 overlay around this.
+    /// G2: switch a live session's mode (Local ↔ Worktree) through the active
+    /// direct runtime.
     public func switchMode(sessionId: UUID, to newMode: SessionMode) async {
-        guard let runtime = AppDelegate.runtime,
-              let session = registry.session(id: sessionId)
-        else { return }
+        guard let session = registry.session(id: sessionId) else { return }
         guard newMode != session.mode, newMode != .cloud else { return }
-        // v0.8: mode-switch is a code-session concept (Local ↔ Worktree
-        // both require a git repo). Chat sessions don't expose the
-        // chip, so this is unreachable for them — guard for type safety.
-        guard session.kind == .code, let sessionRepoKey = session.repoKey else { return }
-        // Pick the new cwd.
-        var newCwd = sessionRepoKey
-        var newWorktree: String? = nil
-        var newProvisioning: WorktreeProvisioningMetadata? = nil
-        switch newMode {
-        case .worktree:
-            // v0.7.9: reuse the session's already-assigned city for
-            // its worktree branch. Mid-session swap → same city as
-            // the sidebar label so user mental model stays consistent.
-            let city = CityNamer.shared.cityName(for: session.id)
-            let slug = WorktreeManager.slug(city: city)
-            do {
-                let provisioned = try await WorktreeManager.shared.provision(
-                    repoRoot: sessionRepoKey,
-                    slug: slug,
-                    branchName: slug,
-                    filesToCopy: filesToCopySettings(forRepoRoot: sessionRepoKey),
-                    setupScript: RepoSetupScriptStore.script(forRepoRoot: sessionRepoKey)
-                )
-                newWorktree = provisioned.path
-                newProvisioning = provisioned.metadata
-                newCwd = provisioned.path
-            } catch {
-                // Couldn't create worktree — bail without changing state.
-                return
-            }
-        case .local:
-            // Leaving worktree: keep the existing worktree on disk; the
-            // multi-gate GC handles cleanup when the session is deleted.
-            newWorktree = nil
-        case .cloud:
-            return
-        }
-        // Re-spawn.
-        let argv = AgentSpawner.argv(for: NewSessionRequest(
-            repoKey: sessionRepoKey,
-            agent: session.agent,
-            model: session.model,
-            planMode: session.status == .planning,
-            goal: session.goal,
-            useWorktree: newMode == .worktree
-        ), workspacePath: newCwd)
-        do {
-            guard !argv.isEmpty else {
-                await cleanupUnregisteredWorktree(
-                    repoPath: sessionRepoKey,
-                    worktreePath: newWorktree,
-                    provisioning: newProvisioning,
-                    provisionalSessionId: nil
-                )
-                return
-            }
-            let resolvedEnv = try resolveRepoEnv(session: session, cwd: newCwd)
-            if let windowId = session.tmuxWindowId {
-                try? await runtime.tmuxClient.killWindow(windowId)
-            }
-            let newWindow = try await runtime.tmuxClient.newWindow(
-                cwd: newCwd,
-                child: argv,
-                environment: resolvedEnv?.environment ?? [:]
-            )
-            try await registry.updateRuntime(
-                id: sessionId,
-                worktreePath: newWorktree,
-                provisioning: .some(newProvisioning),
-                runtimeCwd: .some(newCwd),
-                tmuxWindowId: newWindow.windowId,
-                tmuxPaneId: newWindow.paneId,
-                mode: newMode,
-                ownsWorktree: newMode == .worktree && newWorktree != nil
-            )
-        } catch {
-            await cleanupUnregisteredWorktree(
-                repoPath: sessionRepoKey,
-                worktreePath: newWorktree,
-                provisioning: newProvisioning,
-                provisionalSessionId: nil
-            )
-            // Spawn failed — surface via lastError once we plumb it; for now,
-            // session status stays at degraded by the supervisor.
-        }
+        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
+        let result = await changer.swap(sessionId: sessionId, newMode: newMode)
+        surfaceSwap(result, succeeded: "Mode updated", failed: "Couldn't change mode")
     }
 
     /// Sessions v2 Phase 1: swap the model on a live session. Wraps
@@ -2371,10 +2074,8 @@ public final class SessionsModel: ObservableObject {
     }
 
     public func switchModel(sessionId: UUID, to entry: ModelCatalogEntry, effort: ReasoningEffort? = nil) async {
-        guard let runtime = AppDelegate.runtime else { return }
         let changer = SessionConfigChanger(
             registry: registry,
-            tmux: runtime.tmuxClient,
             repoEnvResolver: repoEnvResolver
         )
         let modelToUse = entry.cliAlias ?? entry.id
@@ -2384,10 +2085,8 @@ public final class SessionsModel: ObservableObject {
 
     /// Sessions v2 Phase 1: swap the effort dial mid-session.
     public func switchEffort(sessionId: UUID, to effort: ReasoningEffort) async {
-        guard let runtime = AppDelegate.runtime else { return }
         let changer = SessionConfigChanger(
             registry: registry,
-            tmux: runtime.tmuxClient,
             repoEnvResolver: repoEnvResolver
         )
         let result = await changer.swap(sessionId: sessionId, newEffort: .some(effort))
@@ -2396,10 +2095,8 @@ public final class SessionsModel: ObservableObject {
 
     /// Sessions v2 Phase 1: toggle plan/code mid-session (Claude only).
     public func switchPlanMode(sessionId: UUID, planMode: Bool) async {
-        guard let runtime = AppDelegate.runtime else { return }
         let changer = SessionConfigChanger(
             registry: registry,
-            tmux: runtime.tmuxClient,
             repoEnvResolver: repoEnvResolver
         )
         let result = await changer.swap(sessionId: sessionId, newPlanMode: planMode)
@@ -2408,16 +2105,11 @@ public final class SessionsModel: ObservableObject {
                     failed: "Couldn't change mode")
     }
 
-    /// Revive a degraded session: respawn its agent into a fresh tmux pane
-    /// (same config + resume) when the recorded pane died (server restart).
-    /// The terminal reconnects automatically once the registry's tmuxPaneId
-    /// updates.
+    /// Revive a degraded session through its direct runtime.
     @discardableResult
     public func revive(sessionId: UUID) async -> Bool {
-        guard let runtime = AppDelegate.runtime else { return false }
         let changer = SessionConfigChanger(
             registry: registry,
-            tmux: runtime.tmuxClient,
             repoEnvResolver: repoEnvResolver
         )
         if case .swapped = await changer.revive(sessionId: sessionId) { return true }
@@ -2430,7 +2122,6 @@ public final class SessionsModel: ObservableObject {
     /// this — by the time we reach here, AutopilotState.trustRepo has
     /// already been recorded for that path.
     public func setPermissionMode(sessionId: UUID, to newMode: PermissionMode) async {
-        guard let runtime = AppDelegate.runtime else { return }
         // Update the Mac-side stores so the next respawn picks up the
         // right argv. Order matters: write state first, then respawn —
         // SessionConfigChanger reads the stores when building newArgv.
@@ -2456,7 +2147,6 @@ public final class SessionsModel: ObservableObject {
         }
         let changer = SessionConfigChanger(
             registry: registry,
-            tmux: runtime.tmuxClient,
             repoEnvResolver: repoEnvResolver
         )
         let result = await changer.swap(sessionId: sessionId, newPlanMode: newMode == .plan)
@@ -2474,12 +2164,11 @@ public final class SessionsModel: ObservableObject {
             try? await registry.delete(id: id)
             return
         }
-        // v27: tear down the harness bridge (stdio child / gRPC channel) for
-        // paneless codex/cursor/gemini/grok sessions — registry.delete alone
-        // would leak the driver child. No-op for tmux (Claude) sessions.
+        // Tear down live runtime state before removing the registry row.
         await AppDelegate.runtime?.agentControlServer.teardownHarnessSession(id)
-        if let runtime = AppDelegate.runtime, let windowId = session.tmuxWindowId {
-            do { try await runtime.tmuxClient.killWindow(windowId) } catch {}
+        await ClaudePtyRegistry.shared.suspend(id)
+        for pane in session.terminalPanes {
+            await TerminalPtyRegistry.shared.kill(id: pane.paneId)
         }
         // v0.8 REV-DELETE: code sessions go through WorktreeManager; chat
         // sessions get ChatCwdCleaner in Phase 4. Guard here so Phase 2
@@ -2501,49 +2190,23 @@ public final class SessionsModel: ObservableObject {
 
     /// Spawn a child session linked to the parent via `parentSessionId`.
     /// The child runs in the same cwd as the parent (worktree-aware) but
-    /// uses a fresh tmux window + JSONL. The sidebar nests it under the
-    /// parent row.
+    /// uses the daemon-owned direct runtime.
     @discardableResult
     public func spawnSubchat(parentId: UUID) async -> AgentSession? {
-        guard let runtime = AppDelegate.runtime,
-              let parent = registry.session(id: parentId)
-        else { return nil }
+        guard let parent = registry.session(id: parentId) else { return nil }
         // v0.8: sub-chats are a code-session-only feature (G17 nested
         // threaded rows). Chat-tab sessions don't carry sub-chats.
         guard parent.kind == .code, let parentRepoKey = parent.repoKey else { return nil }
-        try? await runtime.tmuxClient.start()
-        let cwd = parent.effectiveCwd
-        let argv = AgentSpawner.argv(for: NewSessionRequest(
-            repoKey: parentRepoKey,
-            agent: parent.agent,
-            model: parent.model,
-            planMode: false,
-            goal: nil,
-            useWorktree: parent.mode == .worktree
-        ), workspacePath: cwd)
         do {
-            guard !argv.isEmpty else { return nil }
-            let resolvedEnv = try resolveRepoEnv(session: parent, cwd: cwd)
-            let window = try await runtime.tmuxClient.newWindow(
-                cwd: cwd,
-                child: argv,
-                environment: resolvedEnv?.environment ?? [:]
-            )
-            let child = try await registry.create(
-                repoKey: parentRepoKey,
-                repoDisplayName: parent.repoDisplayName,
+            let child = try await spawnSessionInExistingWorkspace(
+                repoPath: parentRepoKey,
+                workspacePath: parent.effectiveCwd,
                 agent: parent.agent,
-                model: parent.model,
-                goal: nil,
-                worktreePath: parent.worktreePath,
-                tmuxWindowId: window.windowId,
-                tmuxPaneId: window.paneId,
                 planMode: false,
+                goal: nil,
                 mode: parent.mode,
-                parentSessionId: parentId,
-                ownsWorktree: false,
-                envSetId: parent.envSetId,
-                envSetName: parent.envSetName
+                model: parent.model,
+                effort: parent.effort
             )
             openSessionId = child.id
             await refresh()
@@ -2555,93 +2218,51 @@ public final class SessionsModel: ObservableObject {
 
     // MARK: - G12 multi-terminal
 
-    /// Spawn a new shell pane in the session's tmux window and add a
-    /// TerminalPaneRef to the registry. Returns the new pane id.
+    /// Spawn a new direct shell terminal and add a TerminalPaneRef to the registry.
     @discardableResult
     public func addTerminalPane(sessionId: UUID) async -> String? {
-        guard let runtime = AppDelegate.runtime,
-              let session = registry.session(id: sessionId),
-              let windowId = session.tmuxWindowId
-        else { return nil }
-        let cwd = session.effectiveCwd
+        guard let session = registry.session(id: sessionId),
+              session.tmuxPaneId == nil,
+              session.tmuxWindowId == nil else { return nil }
         do {
-            let paneId = try await runtime.tmuxClient.splitWindow(
-                windowId: windowId, cwd: cwd, horizontal: false
+            let host = try await TerminalPtyRegistry.shared.spawnShell(
+                cwd: session.effectiveCwd,
+                title: "Pane \(session.terminalPanes.count + 2)"
             )
             let ref = TerminalPaneRef(
-                paneId: paneId,
+                paneId: host.id.uuidString,
                 title: "Pane \(session.terminalPanes.count + 2)",
                 isPrimary: false
             )
             try await registry.addTerminalPane(sessionId: sessionId, pane: ref)
-            return paneId
+            return ref.paneId
         } catch {
             return nil
         }
     }
 
-    /// Close one terminal pane (non-primary). Sends `kill-pane` to tmux
-    /// and removes the registry entry.
+    /// Close one terminal pane (non-primary).
     public func closeTerminalPane(sessionId: UUID, paneRef: TerminalPaneRef) async {
-        guard !paneRef.isPrimary,
-              let runtime = AppDelegate.runtime
-        else { return }
-        try? await runtime.tmuxClient.killPane(paneRef.paneId)
+        guard !paneRef.isPrimary else { return }
+        await TerminalPtyRegistry.shared.kill(id: paneRef.paneId)
         try? await registry.removeTerminalPane(sessionId: sessionId, paneRefId: paneRef.id)
     }
 
     public func approvePlan(id: UUID) async {
         guard let runtime = AppDelegate.runtime,
               let session = registry.session(id: id),
-              let windowId = session.tmuxWindowId,
+              let port = runtime.agentControlServer.boundPort,
               session.status == .planning,
               (session.planText?.isEmpty == false || session.agent == .codex)
         else { return }
-        var windowKilled = false
         do {
-            // Cursor approve-plan goes through the ACP bridge (daemon), not this
-            // tmux respawn path — only Claude/Codex CLI reach here.
-            let providerResumeId = session.id.uuidString
-            let argv = AgentSpawner.respawnArgv(
-                agent: session.agent,
-                resumeSessionId: providerResumeId,
-                model: session.model,
-                planMode: false,
-                effort: session.effort,
-                autopilot: false,
-                workspacePath: session.effectiveCwd
+            let sender = MacComposerSender(
+                port: Int(port),
+                token: runtime.agentControlServer.localLoopbackToken
             )
-            guard !argv.isEmpty else {
-                WorkspaceFeedback.failure("Can't approve plan", detail: "Couldn't build the relaunch command for this agent.")
-                return
-            }
-            let cwd = session.effectiveCwd
-            let resolvedEnv = try resolveRepoEnv(session: session, cwd: cwd)
-            try await runtime.tmuxClient.killWindow(windowId)
-            windowKilled = true
-            let window = try await runtime.tmuxClient.newWindow(
-                cwd: cwd,
-                child: argv,
-                environment: resolvedEnv?.environment ?? [:]
-            )
-            try await registry.updateRuntime(
-                id: id,
-                worktreePath: session.worktreePath,
-                tmuxWindowId: window.windowId,
-                tmuxPaneId: window.paneId,
-                mode: session.mode,
-                ownsWorktree: session.ownsWorktree
-            )
-            try await registry.markPlanApproved(id: id)
-            try await registry.updateStatus(id: id, status: .running)
+            try await sender.approvePlan(sessionId: id)
             WorkspaceFeedback.success("Plan approved — running")
         } catch {
-            if windowKilled {
-                // The plan-mode pane is already dead; flag degraded so the user
-                // gets the Revive affordance instead of a session pointed at a
-                // killed window.
-                try? await registry.updateStatus(id: id, status: .degraded)
-            }
             WorkspaceFeedback.failure("Couldn't approve the plan", detail: error.localizedDescription)
         }
     }

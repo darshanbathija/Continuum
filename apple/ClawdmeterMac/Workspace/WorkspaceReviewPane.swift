@@ -145,7 +145,7 @@ struct WorkspaceReviewPane: View {
         }
     }
 
-    /// Live tmux terminal in the review pane. Reuses the same
+    /// Live direct PTY terminal in the review pane. Reuses the same
     /// `TerminalTabContainer` that the Cmd+T overlay shows, but inline
     /// so the user can keep the chat and the raw shell side-by-side
     /// without juggling a sheet.

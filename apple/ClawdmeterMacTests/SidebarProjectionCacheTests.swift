@@ -608,11 +608,9 @@ final class SidebarProjectionCacheTests: XCTestCase {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let registry = AgentSessionRegistry(storeURL: directory.appendingPathComponent("sessions.json"))
-        let tmux = TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false"))
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
-            supervisor: TmuxSupervisor(tmux: tmux, registry: registry),
             workspaceStore: Self.makeWorkspaceStore(in: directory)
         )
         let now = Date(timeIntervalSince1970: 1_900_000_000)
@@ -655,11 +653,9 @@ final class SidebarProjectionCacheTests: XCTestCase {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let registry = AgentSessionRegistry(storeURL: directory.appendingPathComponent("sessions.json"))
-        let tmux = TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false"))
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
-            supervisor: TmuxSupervisor(tmux: tmux, registry: registry),
             workspaceStore: Self.makeWorkspaceStore(in: directory)
         )
         let recent = Self.recent(
@@ -685,11 +681,9 @@ final class SidebarProjectionCacheTests: XCTestCase {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let registry = AgentSessionRegistry(storeURL: directory.appendingPathComponent("sessions.json"))
-        let tmux = TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false"))
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
-            supervisor: TmuxSupervisor(tmux: tmux, registry: registry),
             workspaceStore: Self.makeWorkspaceStore(in: directory)
         )
         model.expandedRepoKeys = ["/Users/dev/existing"]

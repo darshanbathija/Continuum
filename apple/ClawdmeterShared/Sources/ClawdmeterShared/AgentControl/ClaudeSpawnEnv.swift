@@ -11,10 +11,8 @@ import Foundation
 /// key in `~/.zshrc` / launchd / the GUI app's inherited env is enough to
 /// silently switch billing.
 ///
-/// **Pre-existing leak this also fixes.** The tmux path inherits the tmux
-/// *server's* environment (started from the GUI app's env), so today's Claude
-/// panes already bill against an exported key, not the subscription pool. The
-/// PTY host routes every spawn through `sanitized(...)`, closing that leak too.
+/// The PTY host routes every spawn through `sanitized(...)` so an inherited
+/// launchd or shell environment cannot silently switch billing modes.
 ///
 /// Pure (`[String: String] -> [String: String]`) so it is unit-testable
 /// without a process spawn, and lives in the shared package so the test runs

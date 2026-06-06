@@ -391,9 +391,9 @@ public final class MobileCommandOutbox: ObservableObject {
                 idempotencyKey: envelope.idempotencyKey
             ) != nil
         case .permissionResponse:
-            // ACP harness + tmux/SDK permission prompts: a queued permission
-            // response dispatches for real (the daemon's ACP request waits
-            // indefinitely, so a delayed delivery still unblocks the agent).
+            // Runtime permission prompts: a queued permission response dispatches
+            // for real (the daemon's ACP request waits indefinitely, so a delayed
+            // delivery still unblocks the agent).
             // Returns the real HTTP outcome so an offline response reschedules
             // instead of being silently acknowledged.
             guard let body = try? decoder.decode(PermissionRespondRequest.self, from: payloadData) else { return false }

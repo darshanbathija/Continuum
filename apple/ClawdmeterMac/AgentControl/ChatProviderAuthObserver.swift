@@ -71,8 +71,7 @@ public actor ChatProviderAuthObserver {
         _ = errorString
     }
 
-    /// Codex SDK sidecar stderr hook — call from CodexSubscriptionRelay's
-    /// stderr drain when a `{type:"error", code:"auth"}` line surfaces.
+    /// Legacy Codex SDK auth marker retained for old diagnostics payloads.
     public func recordCodexSDKAuthError(sessionId: UUID?, message: String?) async {
         authObserverLogger.warning("Codex SDK auth error — flipping probe to authenticated=false")
         await ChatProviderProbe.shared.setAuthOverride(

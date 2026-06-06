@@ -96,11 +96,11 @@ binary spawned as a child process; each owns its own network egress;
 
 | Provider | Egress owner | What Continuum does |
 | --- | --- | --- |
-| Claude Code (`claude` CLI) | Anthropic | Spawns `claude` in tmux, reads JSONL output, reads local auth state where allowed. Has no visibility into Claude's wire calls to Anthropic. |
-| Codex CLI / SDK | OpenAI | Spawns `codex` (CLI mode) or runs Codex SDK chat path. Reads session JSONL. No visibility into Codex's wire calls. |
+| Claude Code (`claude` CLI) | Anthropic | Spawns `claude` in a direct per-session PTY, reads JSONL output, reads local auth state where allowed. Has no visibility into Claude's wire calls to Anthropic. |
+| Codex app-server harness | OpenAI | Starts local Codex harness sessions and reads session JSONL. No visibility into Codex's wire calls. |
 | OpenCode (`opencode serve`) | Whichever upstream providers the user has configured via `opencode auth login` — often OpenRouter, Anthropic, OpenAI | Continuum consumes OpenCode's SSE locally, sends prompts through OpenCode's HTTP API on localhost. Has no visibility into OpenCode's upstream wire calls. |
 | Cursor | Anysphere | Spawns Cursor-backed sessions. No visibility into Cursor's wire calls. |
-| Antigravity / Gemini | Google | Talks to Antigravity's `agentapi` / language-server. Reads conversation DB + brain-dir state. No visibility into Antigravity's upstream wire calls. |
+| Antigravity / Gemini | Google | Starts the headless `agy` harness. Reads conversation DB + brain-dir state. No visibility into Antigravity's upstream wire calls. |
 
 Each provider has its own privacy policy. The user installs each
 provider CLI separately and grants it credentials separately;
@@ -141,7 +141,7 @@ never crosses any network boundary Continuum controls:
   primary checkouts — all local. Repo identity normalization collapses
   these into the same analytics row locally; the normalized identifier
   does not leave the device.
-- **Session metadata.** Session ids, model selections, tmux pane state,
+- **Session metadata.** Session ids, model selections, terminal pane ids,
   per-session pinning, archive flags — all local. Continuum keeps a
   registry of sessions but does not sync it to any cloud.
 - **JSONL ingest state.** The `IncrementalJSONLIngest` actor's

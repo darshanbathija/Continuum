@@ -2258,7 +2258,7 @@ private struct ReviewPane: View {
         } else if isDemo {
             ReviewTerm()
         } else if let transcript = previewTranscript {
-            // v0.22.33: JSONL preview — there's no live tmux to attach
+            // v0.22.33: JSONL preview — there's no live runtime to attach
             // to, but the rollout has every Bash/shell tool call + its
             // output stored. Replay them as a terminal-shaped scroll
             // so the user sees the agent's actual command history.
@@ -2545,7 +2545,7 @@ private struct JsonlPRTab: View {
 }
 
 /// v0.22.33: Term tab content for JSONL preview mode. There's no live
-/// tmux to attach to in preview, but the transcript records every
+/// runtime to attach to in preview, but the transcript records every
 /// shell command the agent ran (Bash / shell / exec tool calls) along
 /// with the output. Render them as a terminal-shaped scroll: prompt
 /// + command + output, monospaced, chronological. Better than the

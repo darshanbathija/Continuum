@@ -1,13 +1,13 @@
 import Foundation
 
-/// Resolves the `PATH` that spawned agent panes run with.
+/// Resolves the `PATH` that spawned agent processes run with.
 ///
 /// **Why this exists:** Continuum is a GUI app launched by launchd/Finder, so
 /// it inherits only launchd's minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`).
-/// tmux panes we spawn for agents inherit that PATH, so the agent's own
+/// Directly spawned agents inherit that PATH, so the agent's own
 /// tooling can't be found — most visibly, Claude Code's `node`-based
 /// SessionStart hooks fail with `node: command not found` because Homebrew's
-/// `/opt/homebrew/bin` isn't on the inherited PATH. (`claude`/`codex`/`tmux`
+/// `/opt/homebrew/bin` isn't on the inherited PATH. (`claude`/`codex`
 /// themselves still launch because `ShellRunner.locateBinary` resolves them by
 /// absolute path — but the hooks the agent runs rely on PATH.)
 ///

@@ -699,7 +699,7 @@ struct CenterThread: View {
             chatStore: model.chatStore(for: session),
             onRetryPending: { Task { await performPendingRetry() } }
         )
-        // Read-only synthetic sessions have no live tmux pane to respawn,
+        // Read-only synthetic sessions have no live runtime to reconfigure,
         // so we skip the swap-on-change handlers. The model/effort chips
         // still update the local ComposerStore state for visual feedback,
         // but no async respawn fires until the user actually sends —
@@ -714,7 +714,7 @@ struct CenterThread: View {
             lastModelChipSessionId = session.id
             // v27: harness Code sessions (codex/cursor/gemini) have no
             // mid-session reconfigure in v1 — the AgentDriver spawns with the
-            // agent's defaults, so the chip is cosmetic. Skip the (tmux-only)
+            // agent's defaults, so the chip is cosmetic. Skip the PTY-only
             // SessionConfigChanger swap so it doesn't fail with a toast.
             guard !isRepoint, !isReadOnly, !isHarnessDriven, let new, new != session.model else { return }
             if let entry = catalog.entry(forId: new) {
@@ -925,9 +925,8 @@ struct CenterThread: View {
                 ))
                 return
             }
-            // Match EmptyStateCenteredComposer's pane-readiness wait — tmux
-            // needs a beat to wire up the pane and the CLI to swallow the
-            // resume argv before paste-buffer hits.
+            // Match EmptyStateCenteredComposer's readiness wait: the CLI needs
+            // a beat to swallow the resume argv before the first prompt hits.
             try? await Task.sleep(nanoseconds: 600_000_000)
             promotedReadOnlyTarget = live
             target = live
@@ -1089,8 +1088,8 @@ struct CenterThread: View {
         guard !queued.isEmpty else { return }
         let sender = MacComposerSender(port: port, token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? ""))
         for (index, entry) in queued.enumerated() {
-            // Bodies in the offline queue were captured pre-trim, so
-            // re-add the terminal newline tmux paste-buffer requires.
+            // Bodies in the offline queue were captured pre-trim, so re-add the
+            // terminal newline the prompt submitter expects.
             let body = entry.body.isEmpty ? "\n" : entry.body + "\n"
             do {
                 try await sender.send(sessionId: target.id, body: body, asFollowUp: true)
@@ -1308,7 +1307,6 @@ struct CenterThread: View {
             composerStore.autopilotEnabled = enable
             let changer = SessionConfigChanger(
                 registry: model.registry,
-                tmux: runtime.tmuxClient,
                 repoEnvResolver: runtime.repoEnvRuntimeResolver
             )
             _ = await changer.swap(sessionId: session.id)
@@ -1390,10 +1388,9 @@ struct CenterThread: View {
         return entry.supportsEffort
     }
 
-    /// v27: true when this Code session is driven by a live harness bridge
-    /// (paneless codex/cursor/gemini) rather than a tmux pane. Gates the
-    /// mid-session config chips (no driver reconfigure in v1) + first-send
-    /// readiness.
+    /// v27: true when this Code session is driven by a live harness bridge.
+    /// Gates the mid-session config chips (no driver reconfigure in v1) and
+    /// first-send readiness.
     private var isHarnessDriven: Bool {
         AppDelegate.runtime?.agentControlServer.isHarnessLive(session.id) == true
     }
@@ -1406,13 +1403,15 @@ struct CenterThread: View {
             browserComments: recovery.browserComments,
             error: recovery.autoSendWhenReady ? nil : recovery.error
         )
-        // Auto-flush a prompt queued while the "+" session was provisioning —
-        // only once it's actually ready. Ready = a tmux pane attached (Claude)
-        // OR a live harness bridge driving it (v27 paneless codex/cursor/
-        // gemini). If the ready signal raced ahead of the session update, the
-        // draft is safely restored to the composer for a manual send.
+        // Auto-flush a prompt queued while the "+" session was provisioning,
+        // once the direct PTY/harness can accept it. If the ready signal raced
+        // ahead of the session update, the draft is safely restored to the
+        // composer for a manual send.
         let harnessReady = AppDelegate.runtime?.agentControlServer.isHarnessLive(session.id) == true
-        if recovery.autoSendWhenReady, session.tmuxPaneId != nil || harnessReady {
+        let claudePtyReady = session.agent == .claude
+            && session.tmuxPaneId == nil
+            && session.tmuxWindowId == nil
+        if recovery.autoSendWhenReady, claudePtyReady || harnessReady {
             Task { await performBoundSend() }
         }
     }

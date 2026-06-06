@@ -16,7 +16,7 @@ private let shellLogger = Logger(subsystem: "com.clawdmeter.mac", category: "She
 /// - Defends against shell injection if a future caller passes a path or
 ///   filename with `;`, `$()`, backticks, etc. The bytes go directly to
 ///   `execve` — no shell interprets them.
-/// - Centralizes the boilerplate so tmux/git/tailscale callers don't each
+    /// - Centralizes the boilerplate so git/tailscale/provider callers don't each
 ///   reinvent stdout/stderr piping, exit-code checking, and error mapping.
 ///
 /// The actor wrapper serializes shell-outs that share a tty / fd resource;
@@ -46,10 +46,9 @@ public actor ShellRunner {
 
         // Without LocalizedError, `localizedDescription` collapses to the
         // useless "The operation couldn’t be completed. (…ShellError error 2.)"
-        // — which is exactly what leaked into the UI as "tmux_spawn_failed:
-        // …ShellError error 2". Every caller that surfaces a ShellError via
-        // `error.localizedDescription` (tmux spawn, frontier slot reasons,
-        // chat-cwd create) now gets a message that names the failure + the
+        // — which used to leak opaque enum names into the UI. Every caller that
+        // surfaces a ShellError via `error.localizedDescription` (frontier slot
+        // reasons, chat-cwd create) now gets a message that names the failure + the
         // process's own stderr.
         public var errorDescription: String? {
             switch self {
@@ -80,7 +79,7 @@ public actor ShellRunner {
     ///   - environment: `nil` inherits ours.
     ///   - timeout: kill the child if it hasn't exited by then. Defaults
     ///     to 30s — long enough for `git worktree add` on a fresh clone,
-    ///     short enough that a hung tmux command surfaces fast.
+    ///     short enough that a hung subprocess surfaces fast.
     @discardableResult
     public func run(
         executable: String,
@@ -277,7 +276,7 @@ public actor ShellRunner {
     ///
     /// Bundled is preferred over the env override so an inherited or
     /// attacker-set `CLAWDMETER_BIN_<NAME>` can't redirect a
-    /// security-sensitive binary (tmux, etc.) to an arbitrary path. The
+    /// security-sensitive binary to an arbitrary path. The
     /// env override is retained in Debug builds for dev convenience.
     /// UserDefaults stays first because it requires an explicit Settings
     /// action — user-consented.
@@ -292,11 +291,9 @@ public actor ShellRunner {
            FileManager.default.isExecutableFile(atPath: override) {
             return override
         }
-        // 2. App-bundled vendor binary. This is the production path for
-        // app-owned infrastructure such as tmux; users should not need
-        // Homebrew just to start a session. Bundled is checked BEFORE
-        // the env override so a hostile env var can't replace a
-        // security-sensitive binary the app ships with.
+        // 2. App-bundled vendor binary. Bundled is checked BEFORE the env
+        // override so a hostile env var can't replace a security-sensitive
+        // binary the app ships with.
         if let resourceURL = Bundle.main.resourceURL {
             let bundledCandidates = [
                 resourceURL
@@ -319,7 +316,7 @@ public actor ShellRunner {
         }
         // 3. Environment override — DEBUG builds only. In Release the
         // env override would let a hostile parent process redirect
-        // tmux/claude/etc. to an attacker-controlled path; user-explicit
+        // claude/codex/etc. to an attacker-controlled path; user-explicit
         // overrides go through UserDefaults instead.
         #if DEBUG
         let envKey = "CLAWDMETER_BIN_\(name.uppercased())"
