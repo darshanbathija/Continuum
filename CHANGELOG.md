@@ -4,6 +4,18 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.5 build 205] - 2026-06-06 - Disable external Claude session discovery (`darshanbathija/stop-claude-hi-spam`)
+
+### Fixed
+
+- The Code sidebar now ignores stale `discoverParallelSessions` opt-ins and only shows managed repos plus Continuum-owned sessions, so prior outside-session discovery cannot reintroduce external Claude sessions into the app.
+- Removed the "Discover parallel sessions" sidebar action that could scan `~/.claude` and `~/.codex` again after the user had already seen unexpected Claude `hi` sessions.
+- Added regression coverage proving external session discovery cannot be re-enabled through the persisted UserDefaults key or setter.
+
+### Changed
+
+- Bumps `VERSION` 0.31.4 -> 0.31.5, `MARKETING_VERSION` 0.31.4 -> 0.31.5, and `CURRENT_PROJECT_VERSION` 204 -> 205.
+
 ## [0.31.4 build 204] - 2026-06-06 - Stop Claude background prompt polling (`darshanbathija/stop-claude-hi-spam`)
 
 ### Fixed
