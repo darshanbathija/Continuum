@@ -84,12 +84,8 @@ public struct IOSAnalyticsView: View {
                 .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 14)
 
                 if let snapshot = usageModel.analyticsSnapshot {
+                    let providers = visibleProviders(in: snapshot)
                     let totalUSD = totalCost(in: snapshot, window: window)
-                    let claudeUSD = providerCost(snapshot, .claude, window)
-                    let codexUSD = providerCost(snapshot, .codex, window)
-                    let geminiUSD = providerCost(snapshot, .gemini, window)
-                    let opencodeUSD = providerCost(snapshot, .opencode, window)
-                    let grokUSD = providerCost(snapshot, .grok, window)
 
                     // Total card
                     TahoeGlass(radius: 8, tone: .raised) {
@@ -114,11 +110,9 @@ public struct IOSAnalyticsView: View {
                                 .padding(.top, 16)
 
                             HStack(spacing: 8) {
-                                providerStat(.claude, formatUSD(claudeUSD))
-                                providerStat(.codex,  formatUSD(codexUSD))
-                                providerStat(.gemini, formatUSD(geminiUSD))
-                                providerStat(.opencode, formatUSD(opencodeUSD))
-                                providerStat(.grok, formatUSD(grokUSD))
+                                ForEach(providers) { provider in
+                                    providerStat(provider, formatUSD(providerCost(snapshot, provider, window)))
+                                }
                             }
                             .padding(.top, 16)
                         }
@@ -239,12 +233,7 @@ public struct IOSAnalyticsView: View {
     }
 
     private func totalCost(in s: UsageHistorySnapshot, window: UsageHistorySnapshot.Window) -> Double {
-        providerCost(s, .claude, window)
-            + providerCost(s, .codex, window)
-            + providerCost(s, .gemini, window)
-            + providerCost(s, .opencode, window)
-            + providerCost(s, .cursor, window)
-            + providerCost(s, .grok, window)
+        visibleProviders(in: s).reduce(0) { $0 + providerCost(s, $1, window) }
     }
 
     private func mapProvider(_ p: TahoeProvider) -> UsageRecord.Provider {
@@ -271,7 +260,7 @@ public struct IOSAnalyticsView: View {
 
     private func mergedByRepo(_ s: UsageHistorySnapshot, window: UsageHistorySnapshot.Window) -> [MergedRepoRow] {
         var bag: [String: (c: Double, x: Double, g: Double, o: Double, u: Double, k: Double)] = [:]
-        for prov in [UsageRecord.Provider.claude, .codex, .gemini, .opencode, .cursor, .grok] {
+        for prov in visibleProviders(in: s).map(mapProvider) {
             let rows = s.totals(for: prov).window(window).byRepo
             for row in rows {
                 let key = row.repo  // RepoKey is a typealias for String
@@ -303,6 +292,15 @@ public struct IOSAnalyticsView: View {
         .sorted { $0.total > $1.total }
         .prefix(8)
         .map { $0 }
+    }
+
+    private func visibleProviders(in snapshot: UsageHistorySnapshot) -> [TahoeProvider] {
+        let all = TahoeProvider.allCases.filter {
+            ProviderRegistry.descriptor(id: $0.rawValue)?.capabilities.contains(.mobileMirror) ?? false
+        }
+        guard let enabledProviderIDs = snapshot.enabledProviderIDs else { return all }
+        let enabled = Set(enabledProviderIDs.map { ProviderRegistry.rootProviderID(for: $0) })
+        return all.filter { enabled.contains(ProviderRegistry.rootProviderID(for: $0.rawValue)) }
     }
 
     private func displayName(forRepo key: String) -> String {
@@ -465,6 +463,17 @@ private struct IOSTokensByModelSection: View {
     /// Map a raw model name to a provider family for grouping. Matches the Mac
     /// `TokensByModelSection.family(for:)` so both platforms bucket identically.
     static func family(for model: String) -> String {
+        if let providerID = UsageHistorySnapshot.modelProviderID(forModelKey: model) {
+            switch providerID {
+            case "claude": return "Claude"
+            case "codex": return "OpenAI"
+            case "gemini": return "Gemini"
+            case "cursor": return "Cursor"
+            case "grok": return "Grok"
+            case "opencode": return "OpenCode"
+            default: break
+            }
+        }
         let m = model.lowercased()
         if m.hasPrefix("claude") || m == "opus" || m == "sonnet" || m == "haiku" { return "Claude" }
         if m.hasPrefix("gpt") || m.hasPrefix("chatgpt") || m.hasPrefix("o1") || m.hasPrefix("o3") || m.hasPrefix("o4") || m.contains("codex") { return "OpenAI" }
@@ -483,7 +492,7 @@ private struct IOSTokensByModelSection: View {
             var sum = TokenTotals.zero
             for (_, tot) in models { sum += tot }
             let sorted = models.sorted { $0.1.totalTokens > $1.1.totalTokens }
-                .map { (name: $0.0, totals: $0.1) }
+                .map { (name: UsageHistorySnapshot.displayModelName(forModelKey: $0.0), totals: $0.1) }
             return Family(id: fam, total: sum, models: sorted)
         }
         .sorted { $0.total.totalTokens > $1.total.totalTokens }
@@ -497,6 +506,7 @@ private struct IOSTokensByModelSection: View {
         case "OpenAI": return TahoeProvider.codex.glow.color
         case "Gemini": return TahoeProvider.gemini.glow.color
         case "Grok":   return TahoeProvider.grok.glow.color
+        case "OpenCode": return TahoeProvider.opencode.glow.color
         default:        return t.fg3                                      // "Other"
         }
     }

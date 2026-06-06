@@ -4,6 +4,26 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.9 build 209] - 2026-06-07 - Provider opt-in onboarding (`darshanbathija/provider-opt-in-onboarding`)
+
+### Added
+
+- Adds a shared provider registry and opt-in helpers so canonical provider ids, root instance filtering, capabilities, and effective provider selection stay consistent across Mac, shared DTOs, iOS, watchOS, and widgets.
+- Adds provider-gated onboarding that requires at least one selected provider while keeping readiness/auth errors inside each selected provider's normal surfaces.
+- Adds provider-enable envelopes to `/usage`, `/analytics`, `/models`, `/chat-providers`, watch/iOS mirrors, and widget/cache payloads while preserving legacy all-provider behavior when older payloads omit the envelope.
+
+### Changed
+
+- Filters Chat, Code, Usage, menu bar, widgets, XPC, iOS, and watchOS surfaces to render enabled providers only, with disabled defaults/history preserved on disk and restored when re-enabled.
+- Routes provider toggles through `ProviderEnablement.setEnabled` and refreshes active Chat/Code/Usage stores through the shared enablement notification.
+- Uses effective provider selections for chat vendors, model catalogs, session launchers, quick-spawn flows, usage totals, analytics legends, live cards, and mobile/watch widgets.
+
+### Fixed
+
+- Prevents explicit zero-provider envelopes from falling back to legacy Claude/Codex UI in chat vendor scope and shared analytics totals.
+- Keeps disabled provider requests rejected at daemon send/spawn boundaries while returning empty enabled-provider state for no-provider `/usage`, `/analytics`, and `/models` responses.
+- Bumps `VERSION` 0.31.8 -> 0.31.9, `MARKETING_VERSION` 0.31.8 -> 0.31.9, and `CURRENT_PROJECT_VERSION` 208 -> 209.
+
 ## [0.31.8 build 208] - 2026-06-07 - Stop synthetic provider prompts (`darshanbathija/stop-hi-ping-waste`)
 
 ### Fixed

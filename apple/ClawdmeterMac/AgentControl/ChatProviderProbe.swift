@@ -106,6 +106,7 @@ public actor ChatProviderProbe {
             geminiEnabled: Bool,
             opencodeEnabled: Bool,
             cursorEnabled: Bool,
+            grokEnabled: Bool,
             claudeAvailable: Bool,
             codexAvailable: Bool,
             agyHeadlessAvailable: Bool,
@@ -114,13 +115,15 @@ public actor ChatProviderProbe {
             opencodeOpenRouterAuthAvailable: Bool,
             opencodeEnvironmentAuthAvailable: Bool,
             openRouterModelState: OpenRouterModelProbeState,
-            cursorState: CursorModelProbeState
+            cursorState: CursorModelProbeState,
+            grokAvailable: Bool
         ) = await Task.detached {
             let claudeEnabled = ProviderEnablement.isEnabled("claude")
             let codexEnabled = ProviderEnablement.isEnabled("codex")
             let geminiEnabled = ProviderEnablement.isEnabled("gemini")
             let opencodeEnabled = ProviderEnablement.isEnabled("opencode")
             let cursorEnabled = ProviderEnablement.isEnabled("cursor")
+            let grokEnabled = ProviderEnablement.isEnabled("grok")
             let claudeAvailable = claudeEnabled && ShellRunner.locateBinary("claude") != nil
             let codexAvailable = codexEnabled && ShellRunner.locateBinary("codex") != nil
             // Headless `agy` CLI (Antigravity 2.0) is the DEFAULT Gemini drive path
@@ -183,12 +186,14 @@ public actor ChatProviderProbe {
             let cursorState = cursorEnabled
                 ? await CursorModelProbe.shared.passiveState()
                 : disabledCursorState
+            let grokAvailable = grokEnabled && ShellRunner.locateBinary("grok") != nil
             return (
                 claudeEnabled,
                 codexEnabled,
                 geminiEnabled,
                 opencodeEnabled,
                 cursorEnabled,
+                grokEnabled,
                 claudeAvailable,
                 codexAvailable,
                 agyHeadlessAvailable,
@@ -197,7 +202,8 @@ public actor ChatProviderProbe {
                 opencodeOpenRouterAuthAvailable,
                 opencodeEnvironmentAuthAvailable,
                 openRouterModelState,
-                cursorState
+                cursorState,
+                grokAvailable
             )
         }.value
 
@@ -227,6 +233,7 @@ public actor ChatProviderProbe {
             key: "cursor",
             fallback: probes.cursorState.authenticated
         )
+        let (grokAuth, grokReason) = resolveAuth(key: "grok", fallback: probes.grokAvailable)
         let opencodeDefaultReason: String? = {
             if !probes.opencodeEnabled { return "Provider disabled" }
             if !probes.opencodeAvailable { return "opencode CLI not installed" }
@@ -239,7 +246,7 @@ public actor ChatProviderProbe {
             return nil
         }()
 
-        let response = ChatProvidersResponse(providers: [
+        let entries = [
             ChatProviderEntry(
                 provider: .claude,
                 available: probes.claudeAvailable,
@@ -280,7 +287,19 @@ public actor ChatProviderProbe {
                 lastProbedAt: now,
                 reason: cursorReason ?? probes.cursorState.reason
             ),
-        ])
+            ChatProviderEntry(
+                provider: .grok,
+                available: probes.grokAvailable,
+                authenticated: grokAuth,
+                capabilityProbePassed: probes.grokAvailable && grokAuth,
+                lastProbedAt: now,
+                reason: grokReason ?? (probes.grokAvailable ? nil : (probes.grokEnabled ? "grok binary not on PATH" : "Provider disabled"))
+            ),
+        ].filter { ProviderRegistry.isEnabled(agentKind: $0.provider) }
+        let response = ChatProvidersResponse(
+            providers: entries,
+            enabledProviderIDs: ProviderEnablement.enabledProviderIDs(for: .chat)
+        )
         cache = CacheEntry(response: response, computedAt: now)
         probeLogger.info("probe completed: claude=\(probes.claudeAvailable, privacy: .public) codex=\(probes.codexAvailable, privacy: .public) geminiAgy=\(probes.agyHeadlessAvailable, privacy: .public) opencode=\(probes.opencodeAvailable, privacy: .public) cursor=\((probes.cursorState.binaryPath != nil), privacy: .public)")
         return response

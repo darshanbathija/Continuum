@@ -554,9 +554,16 @@ public final class SessionsModel: ObservableObject {
             )
             return
         }
-        let agent: AgentKind = .codex
-        let modelId = "gpt-5.5"
-        let effort: ReasoningEffort = .max
+        let catalog = ModelCatalog.bundled.filteredToEnabledProviders(for: .code)
+        guard let agent = ProviderRegistry.firstEnabledProvider(for: .code)?.agentKind,
+              let modelId = Self.quickSpawnModelId(for: agent, catalog: catalog) else {
+            Self.postQuickSpawnFailureToast(
+                title: "No provider enabled",
+                detail: "Enable a provider in Settings → Providers before starting a session."
+            )
+            return
+        }
+        let effort = Self.quickSpawnEffort(for: agent, modelId: modelId, catalog: catalog)
         let sessionId = UUID()
         // INSTANT (<250ms): expand the repo + create an optimistic provisional
         // session (no worktree/pane yet) and open it, so the composer is usable
@@ -617,7 +624,7 @@ public final class SessionsModel: ObservableObject {
         repoKey: String,
         agent: AgentKind,
         model: String,
-        effort: ReasoningEffort
+        effort: ReasoningEffort?
     ) {
         Task { @MainActor in
             var provisionedWorktree: WorktreeManager.ProvisionedWorktree?
@@ -742,6 +749,31 @@ public final class SessionsModel: ObservableObject {
             object: nil,
             userInfo: ["toast": toast]
         )
+    }
+
+    private static func quickSpawnModelId(for agent: AgentKind, catalog: ModelCatalog) -> String? {
+        let defaults = ProviderDefaultsStore()
+        if let vendor = ChatVendor.migrated(from: agent),
+           let model = defaults.modelId(for: vendor, catalog: catalog) {
+            return model
+        }
+        return catalog.entries(for: agent).first?.id
+    }
+
+    private static func quickSpawnEffort(
+        for agent: AgentKind,
+        modelId: String,
+        catalog: ModelCatalog
+    ) -> ReasoningEffort? {
+        if let entry = catalog.entry(forId: modelId), !entry.supportsEffort {
+            return nil
+        }
+        let defaults = ProviderDefaultsStore()
+        if let vendor = ChatVendor.migrated(from: agent),
+           let effort = defaults.effort(for: vendor, catalog: catalog) {
+            return effort
+        }
+        return ComposerStore.ChipDefaults.for(agent: agent, catalog: catalog).effort
     }
 
     /// Collapse the spawn / worktree / shell error zoo into one human,

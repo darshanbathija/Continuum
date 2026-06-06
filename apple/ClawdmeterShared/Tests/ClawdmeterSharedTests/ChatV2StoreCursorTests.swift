@@ -25,10 +25,29 @@ final class ChatV2StoreCursorTests: XCTestCase {
 
         let store = ChatV2Store(defaults: defaults)
 
+        XCTAssertEqual(store.selectedVendors, [])
+        XCTAssertEqual(store.selectedProvider, .codex)
+
+        store.applyEnabledVendorScope([.cursor, .openrouter])
         XCTAssertEqual(store.selectedVendors, [.cursor, .openrouter])
         XCTAssertEqual(store.selectedProvider, .cursor)
         XCTAssertEqual(store.model(for: .cursor), CursorModelCatalog.autoModelId)
         XCTAssertEqual(store.model(for: .openrouter), "anthropic/claude-sonnet-4.6")
+    }
+
+    @MainActor
+    func test_explicitEmptyProviderScopeKeepsChatWithoutSelection() async {
+        let suiteName = "ChatV2StoreEmptyScope.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set([ChatVendor.chatgpt.rawValue], forKey: "clawdmeter.chatv2.vendors")
+        let store = ChatV2Store(defaults: defaults)
+
+        store.applyEnabledVendorScope([])
+
+        XCTAssertTrue(store.selectedVendors.isEmpty)
+        XCTAssertEqual(store.selectedVendorCount, 0)
     }
 
     @MainActor

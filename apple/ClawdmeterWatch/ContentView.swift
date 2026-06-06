@@ -18,20 +18,24 @@ struct ContentView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                if let usage = model.usage {
-                    meter(usage: usage)
-                } else if model.needsReauth {
-                    reauthState
-                } else if !model.hasAnyToken {
-                    emptyState
-                } else {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                        Text("Connecting…")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                if model.isProviderEnabled("claude") {
+                    if let usage = model.usage {
+                        meter(usage: usage)
+                    } else if model.needsReauth {
+                        reauthState
+                    } else if !model.hasAnyToken {
+                        emptyState
+                    } else {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Connecting…")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else if model.codexUsage == nil && model.geminiUsage == nil {
+                    providerDisabledState
                 }
 
                 if let codex = model.codexUsage {
@@ -172,6 +176,18 @@ struct ContentView: View {
             Text("Reconnect")
                 .font(.headline)
             Text("Token expired. Re-authenticate on the iPhone or Mac.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var providerDisabledState: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Providers")
+                .font(.headline)
+            Text("Enable a provider in Continuum on your Mac.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

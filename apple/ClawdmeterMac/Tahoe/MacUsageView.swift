@@ -27,6 +27,7 @@ public struct MacUsageView: View {
     /// behind an explicit "Get access from your Mac" tap. Mirrors the persisted
     /// flag; flipped locally so the view swaps in the charts on grant.
     @State private var usageAccessGranted = ProviderEnablement.usageDataAccessGranted
+    @State private var enabledProviderIDs = ProviderEnablement.enabledProviderIDs()
 
     public init(
         data: TahoeLiveBindings = .demo,
@@ -49,23 +50,28 @@ public struct MacUsageView: View {
     public var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                HStack(spacing: 14) {
-                    ProviderColumn(provider: .claude, row: data.claude, model: claudeModel)
-                    ProviderColumn(provider: .codex,  row: data.codex,  model: codexModel)
-                    ProviderColumn(provider: .gemini, row: data.gemini, model: geminiModel)
-                    ProviderColumn(provider: .cursor, row: data.cursor, model: cursorModel)
-                    ProviderColumn(provider: .grok, row: data.grok, model: grokModel)
+                if liveColumns.isEmpty {
+                    noProvidersCTA
+                        .padding(.horizontal, 6).padding(.bottom, 14)
+                } else {
+                    HStack(spacing: 14) {
+                        ForEach(liveColumns) { column in
+                            ProviderColumn(provider: column.provider, row: column.row, model: column.model)
+                        }
+                    }
+                    .padding(.horizontal, 6).padding(.bottom, 14)
                 }
-                .padding(.horizontal, 6).padding(.bottom, 14)
 
                 if usageAccessGranted {
-                    // PR #31 chunk 3 (A2): OpenCode dollar-cost row.
-                    // Renders as a single full-width strip beneath the 3
-                    // provider columns because OpenCode doesn't have a 5h
-                    // rolling quota — only dollar totals.
-                    OpencodeDollarRow(usageHistory: usageHistoryStore)
-                        .padding(.horizontal, 6).padding(.bottom, 18)
-                    if ProviderEnablement.isEnabled("grok") || usageHistoryStore?.snapshot?.byProvider[.grok] != nil {
+                    if ProviderRegistry.isVisible(id: "opencode", capability: .historicalUsage) {
+                        // PR #31 chunk 3 (A2): OpenCode dollar-cost row.
+                        // Renders as a single full-width strip beneath the live
+                        // provider columns because OpenCode doesn't have a 5h
+                        // rolling quota — only dollar totals.
+                        OpencodeDollarRow(usageHistory: usageHistoryStore)
+                            .padding(.horizontal, 6).padding(.bottom, 18)
+                    }
+                    if ProviderRegistry.isVisible(id: "grok", capability: .historicalUsage) {
                         GrokUsageRow(usageHistory: usageHistoryStore)
                             .padding(.horizontal, 6).padding(.bottom, 18)
                     }
@@ -89,6 +95,45 @@ public struct MacUsageView: View {
             }
             .padding(.vertical, 6)
         }
+        .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
+            enabledProviderIDs = ProviderEnablement.enabledProviderIDs()
+        }
+    }
+
+    private struct LiveColumn: Identifiable {
+        let provider: TahoeProvider
+        let row: TahoeLiveRow
+        let model: AppModel?
+        var id: TahoeProvider { provider }
+    }
+
+    private var liveColumns: [LiveColumn] {
+        [
+            LiveColumn(provider: .claude, row: data.claude, model: claudeModel),
+            LiveColumn(provider: .codex, row: data.codex, model: codexModel),
+            LiveColumn(provider: .gemini, row: data.gemini, model: geminiModel),
+            LiveColumn(provider: .cursor, row: data.cursor, model: cursorModel),
+            LiveColumn(provider: .grok, row: data.grok, model: grokModel),
+        ].filter { enabledProviderIDs.contains(ProviderRegistry.rootProviderID(for: $0.provider.rawValue)) }
+    }
+
+    private var noProvidersCTA: some View {
+        TahoeGlass(radius: 8, tone: .panel) {
+            VStack(spacing: 10) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                Text("Enable a provider in Settings")
+                    .font(TahoeFont.body(15, weight: .bold))
+                    .foregroundStyle(t.fg)
+                Text("Usage appears after at least one provider is turned on.")
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg3)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(28)
+            .frame(maxWidth: .infinity)
+        }
     }
 
     /// "Get access from your Mac" — shown until the user grants Usage data
@@ -103,7 +148,7 @@ public struct MacUsageView: View {
                 Text("Get access from your Mac")
                     .font(TahoeFont.body(15, weight: .bold))
                     .foregroundStyle(t.fg)
-                Text("Spend + token analytics read usage data written by Claude Code, Codex, Antigravity, OpenCode, Cursor, and Grok on this Mac. Grant access to see your usage here — macOS will ask once.")
+                Text("Spend + token analytics read usage data written by \(enabledAnalyticsProviderText) on this Mac. Grant access to see your usage here — macOS will ask once.")
                     .font(TahoeFont.body(11.5))
                     .foregroundStyle(t.fg3)
                     .multilineTextAlignment(.center)
@@ -125,6 +170,13 @@ public struct MacUsageView: View {
             .padding(28)
             .frame(maxWidth: .infinity)
         }
+    }
+
+    private var enabledAnalyticsProviderText: String {
+        let names = ProviderRegistry.enabledProviders(for: .historicalUsage).map(\.displayName)
+        guard !names.isEmpty else { return "enabled providers" }
+        if names.count == 1 { return names[0] }
+        return names.dropLast().joined(separator: ", ") + ", and " + names[names.count - 1]
     }
 }
 
@@ -148,6 +200,17 @@ private struct TokensByModelSection: View {
 
     /// Map a raw model name to a provider family for grouping.
     static func family(for model: String) -> String {
+        if let providerID = UsageHistorySnapshot.modelProviderID(forModelKey: model) {
+            switch providerID {
+            case "claude": return "Claude"
+            case "codex": return "OpenAI"
+            case "gemini": return "Gemini"
+            case "cursor": return "Cursor"
+            case "grok": return "Grok"
+            case "opencode": return "OpenCode"
+            default: break
+            }
+        }
         let m = model.lowercased()
         if m.hasPrefix("cursor/") || m.hasPrefix("cursor-") || m == "cursor" { return "Cursor" }
         if m.hasPrefix("claude") || m == "opus" || m == "sonnet" || m == "haiku" { return "Claude" }
@@ -158,6 +221,8 @@ private struct TokensByModelSection: View {
     }
 
     static func displayModel(_ model: String) -> String {
+        let stripped = UsageHistorySnapshot.displayModelName(forModelKey: model)
+        if stripped != model { return stripped }
         if model.lowercased().hasPrefix("cursor/") {
             return String(model.dropFirst("cursor/".count))
         }
@@ -189,6 +254,7 @@ private struct TokensByModelSection: View {
         case "Gemini": return TahoeProvider.gemini.dot
         case "Grok":   return TahoeProvider.grok.dot
         case "Cursor": return TahoeProvider.cursor.dot
+        case "OpenCode": return TahoeProvider.opencode.dot
         default:        return t.fg3                                      // "Other"
         }
     }
@@ -196,7 +262,7 @@ private struct TokensByModelSection: View {
     var body: some View {
         let byModel: [String: TokenTotals] = {
             guard let snapshot = usageHistoryStore?.snapshot else { return [:] }
-            return AnalyticsRangeAdapter.tokensByModel(snapshot: snapshot, range: range)
+            return AnalyticsRangeAdapter.tokensByModel(snapshot: snapshot.filteredToEnabledProviders(), range: range)
         }()
         let fams = families(from: byModel)
         let grand = fams.reduce(0) { $0 + $1.total.totalTokens }
@@ -522,7 +588,7 @@ private struct AnalyticsRow: View {
         // Build from the live snapshot when available, otherwise fall
         // back to the canned demo so Previews still render.
         if let snapshot = usageHistoryStore?.snapshot {
-            return AnalyticsRangeAdapter.rangeData(snapshot: snapshot, range: range)
+            return AnalyticsRangeAdapter.rangeData(snapshot: snapshot.filteredToEnabledProviders(), range: range)
         }
         return TahoeDemo.ranges[range] ?? TahoeDemo.ranges["7d"]!
     }
@@ -569,7 +635,8 @@ private struct AnalyticsRow: View {
             }
             .padding(.horizontal, 14)
 
-            if let snapshot = usageHistoryStore?.snapshot,
+            if ProviderRegistry.isVisible(id: "grok", capability: .historicalUsage),
+               let snapshot = usageHistoryStore?.snapshot?.filteredToEnabledProviders(),
                let grokActivity = GrokAnalyticsActivity(snapshot: snapshot, range: range) {
                 GrokAnalyticsActivityStrip(activity: grokActivity)
                     .padding(.horizontal, 14)
@@ -580,7 +647,11 @@ private struct AnalyticsRow: View {
 }
 
 private enum UsageAnalyticsProvider {
-    static let order = UsageRecord.Provider.analyticsDisplayOrder
+    static var order: [UsageRecord.Provider] {
+        UsageRecord.Provider.analyticsDisplayOrder.filter {
+            ProviderRegistry.isVisible(id: $0.rawValue, capability: .historicalUsage)
+        }
+    }
 
     static var stackOrder: [UsageRecord.Provider] {
         Array(order.reversed())

@@ -463,9 +463,11 @@ public enum FrontierChildStatus: String, Codable, Hashable, Sendable, CaseIterab
 /// legacy Codex backend values remain decode-compatible on older payloads.
 public struct ChatProvidersResponse: Codable, Sendable {
     public let providers: [ChatProviderEntry]
+    public let enabledProviderIDs: [String]?
 
-    public init(providers: [ChatProviderEntry]) {
+    public init(providers: [ChatProviderEntry], enabledProviderIDs: [String]? = nil) {
         self.providers = providers
+        self.enabledProviderIDs = enabledProviderIDs
     }
 }
 

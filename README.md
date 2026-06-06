@@ -12,7 +12,7 @@ At a high level, Continuum does three jobs:
 - Runs and controls local coding-agent sessions from Mac, iPhone, and Watch.
 - Keeps chat, code, usage, device pairing, diagnostics, and provider setup in one app.
 
-Current source version: `0.31.6` (`apple/project.yml` build `206`).
+Current source version: `0.31.9` (`apple/project.yml` build `209`).
 
 ## What ships
 

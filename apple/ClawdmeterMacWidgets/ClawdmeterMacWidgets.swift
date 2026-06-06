@@ -204,7 +204,7 @@ struct ProviderWidgetView: View {
             Text("—")
                 .font(.system(size: 32, weight: .bold))
                 .foregroundStyle(.tertiary)
-            Text("Open Continuum")
+            Text(ProviderEnablement.isEnabled(entry.providerID) ? "Open Continuum" : "Enable in Continuum → Providers")
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
         }

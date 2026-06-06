@@ -49,6 +49,8 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
     /// working without changes.
     public let didReceiveUsageByProvider = PassthroughSubject<[String: UsageData], Never>()
 
+    public let didReceiveEnabledProviderIDs = PassthroughSubject<[String]?, Never>()
+
     private var session: WCSession? {
         WCSession.isSupported() ? WCSession.default : nil
     }
@@ -64,6 +66,8 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
     /// alongside the legacy single `usage` field so v5 watches keep
     /// reading the Claude snapshot through the old path.
     private var pendingUsageByProvider: [String: UsageData] = [:]
+    private var pendingEnabledProviderIDs: [String]?
+    private var pendingEnabledProviderIDsSeen = false
 
     private override init() {
         super.init()
@@ -119,6 +123,16 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
 #endif
     }
 
+    public func pushEnabledProviderIDs(_ ids: [String]?) {
+#if os(iOS)
+        queueLock.lock()
+        pendingEnabledProviderIDs = ids
+        pendingEnabledProviderIDsSeen = true
+        queueLock.unlock()
+        sendPending()
+#endif
+    }
+
 #if os(iOS)
     /// Flush whatever's queued. Tries `updateApplicationContext` first
     /// (overwriting latest-wins) and falls back to `transferUserInfo` when
@@ -132,6 +146,8 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
         let tokenSeen = pendingTokenSeen
         let usage = pendingUsage
         let byProvider = pendingUsageByProvider
+        let enabledProviderIDs = pendingEnabledProviderIDs
+        let enabledProviderIDsSeen = pendingEnabledProviderIDsSeen
         queueLock.unlock()
 
         guard let session, session.activationState == .activated else {
@@ -168,6 +184,11 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
                 payload["usageByProvider"] = encodedByProvider
                 payload["usageByProviderPushedAt"] = Date().timeIntervalSince1970
             }
+        }
+        if enabledProviderIDsSeen {
+            payload["enabledProviderIDs"] = enabledProviderIDs ?? []
+            payload["enabledProviderIDsPresent"] = enabledProviderIDs != nil
+            payload["enabledProviderIDsPushedAt"] = Date().timeIntervalSince1970
         }
         guard !payload.isEmpty else { return }
 
@@ -244,6 +265,11 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
     }
 
     private func handleContext(_ ctx: [String: Any]) {
+        if let raw = ctx["enabledProviderIDs"] as? [String] {
+            let present = (ctx["enabledProviderIDsPresent"] as? Bool) ?? true
+            let ids: [String]? = present ? raw : nil
+            DispatchQueue.main.async { self.didReceiveEnabledProviderIDs.send(ids) }
+        }
         if let token = ctx["token"] as? String {
             let payload: String? = token.isEmpty ? nil : token
             logger.info("rx token len=\(token.count, privacy: .public)")

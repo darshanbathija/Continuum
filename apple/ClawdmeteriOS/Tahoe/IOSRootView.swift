@@ -194,6 +194,7 @@ public struct IOSRootView: View {
             case .live:
                 IOSLiveView(
                     data: live,
+                    enabledProviderIDs: usageModel.enabledProviderIDs,
                     onRefresh: { await agentClient.refreshAll() },
                     onOpenSettings: { settingsPresented = true },
                     agentClient: agentClient

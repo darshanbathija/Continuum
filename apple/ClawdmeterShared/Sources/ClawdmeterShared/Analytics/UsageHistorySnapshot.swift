@@ -57,6 +57,9 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
     /// `contextWindowTokens`). This is a real percentage limit surfaced by the
     /// Grok CLI, distinct from account/monthly quota.
     public let grokContextLimit: GrokCLIUsageParser.ContextLimit?
+    /// Optional provider opt-in envelope. Missing means legacy all-provider
+    /// behavior for older Mac/iOS/watch pairings.
+    public let enabledProviderIDs: [String]?
 
     public init(
         byProvider: [UsageRecord.Provider: ProviderTotals],
@@ -66,7 +69,8 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         unpricedModelTokens: [String: TokenTotals],
         tokensByModel: [String: TokenTotals] = [:],
         byDayByModel: [Date: [String: TokenTotals]] = [:],
-        grokContextLimit: GrokCLIUsageParser.ContextLimit? = nil
+        grokContextLimit: GrokCLIUsageParser.ContextLimit? = nil,
+        enabledProviderIDs: [String]? = nil
     ) {
         self.byProvider = byProvider
         self.computedAt = computedAt
@@ -76,6 +80,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         self.tokensByModel = tokensByModel
         self.byDayByModel = byDayByModel
         self.grokContextLimit = grokContextLimit
+        self.enabledProviderIDs = enabledProviderIDs
     }
 
     /// Windowed per-model token totals for the tokens-by-model section (token
@@ -132,7 +137,103 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
     )
 
     public func totals(for provider: UsageRecord.Provider) -> ProviderTotals {
-        byProvider[provider] ?? .empty
+        if let enabledProviderIDs {
+            let enabled = Set(enabledProviderIDs.map { ProviderRegistry.rootProviderID(for: $0) })
+            if !enabled.contains(ProviderRegistry.rootProviderID(for: provider.rawValue)) {
+                return .empty
+            }
+        }
+        return byProvider[provider] ?? .empty
+    }
+
+    public func filteredToEnabledProviders() -> UsageHistorySnapshot {
+        filtered(toEnabledProviderIDs: ProviderEnablement.enabledProviderIDs(for: .historicalUsage))
+    }
+
+    public func filtered(toEnabledProviderIDs enabledIDs: [String]) -> UsageHistorySnapshot {
+        let enabled = Set(enabledIDs.map { ProviderRegistry.rootProviderID(for: $0) })
+        let allProvidersEnabled = Set(ProviderRegistry.allProviderIDs).isSubset(of: enabled)
+        let filteredProviders = byProvider.filter { provider, _ in
+            enabled.contains(ProviderRegistry.rootProviderID(for: provider.rawValue))
+        }
+        return UsageHistorySnapshot(
+            byProvider: filteredProviders,
+            computedAt: computedAt,
+            sequenceNumber: sequenceNumber,
+            sessionCount: allProvidersEnabled
+                ? sessionCount
+                : filteredProviders.values.map(\.allTime.totals.requestCount).reduce(0, +),
+            unpricedModelTokens: Self.filterModelTotals(unpricedModelTokens, enabledProviderIDs: enabled),
+            tokensByModel: Self.filterModelTotals(tokensByModel, enabledProviderIDs: enabled),
+            byDayByModel: byDayByModel
+                .mapValues { Self.filterModelTotals($0, enabledProviderIDs: enabled) }
+                .filter { !$0.value.isEmpty },
+            grokContextLimit: enabled.contains("grok") ? grokContextLimit : nil,
+            enabledProviderIDs: enabledIDs
+        )
+    }
+
+    public static func modelProviderID(forModelKey modelKey: String) -> String? {
+        let lower = modelKey.lowercased()
+        if let separator = lower.firstIndex(of: ":") {
+            let prefix = String(lower[..<separator])
+            if ProviderRegistry.descriptor(id: prefix) != nil {
+                return prefix
+            }
+        }
+        if lower.hasPrefix("cursor/") || lower.hasPrefix("cursor-") || lower == "cursor" {
+            return "cursor"
+        }
+        if lower.hasPrefix("claude") || lower == "opus" || lower == "sonnet" || lower == "haiku" {
+            return "claude"
+        }
+        if lower.hasPrefix("gpt") || lower.hasPrefix("chatgpt") || lower.hasPrefix("o1") || lower.hasPrefix("o3") || lower.hasPrefix("o4") || lower.contains("codex") {
+            return "codex"
+        }
+        if lower.hasPrefix("gemini") || lower.hasPrefix("gemma") {
+            return "gemini"
+        }
+        if lower.hasPrefix("grok") || lower.hasPrefix("xai/") || lower.contains("/grok") {
+            return "grok"
+        }
+        let openRouterProviderPrefixes = [
+            "anthropic/",
+            "openai/",
+            "google/",
+            "deepseek/",
+            "moonshotai/",
+            "mistralai/",
+            "qwen/",
+            "meta-llama/",
+            "nvidia/",
+            "opencode/",
+        ]
+        if openRouterProviderPrefixes.contains(where: { lower.hasPrefix($0) })
+            || lower.contains("/deepseek")
+            || lower.contains("/kimi")
+            || lower.contains("/nemotron") {
+            return "opencode"
+        }
+        return nil
+    }
+
+    public static func displayModelName(forModelKey modelKey: String) -> String {
+        guard let separator = modelKey.firstIndex(of: ":") else { return modelKey }
+        let prefix = String(modelKey[..<separator]).lowercased()
+        guard ProviderRegistry.descriptor(id: prefix) != nil else { return modelKey }
+        return String(modelKey[modelKey.index(after: separator)...])
+    }
+
+    private static func filterModelTotals(
+        _ totals: [String: TokenTotals],
+        enabledProviderIDs enabled: Set<String>
+    ) -> [String: TokenTotals] {
+        let allEnabled = Set(ProviderRegistry.allProviderIDs).isSubset(of: enabled)
+        if allEnabled { return totals }
+        return totals.filter { model, _ in
+            guard let providerID = modelProviderID(forModelKey: model) else { return false }
+            return enabled.contains(providerID)
+        }
     }
 
     // MARK: - Codable
@@ -153,6 +254,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         case tokensByModel
         case byDayByModel
         case grokContextLimit
+        case enabledProviderIDs
         // Legacy v8 fields, retained for backward-compat decode.
         case claude
         case codex
@@ -167,6 +269,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         self.tokensByModel = (try c.decodeIfPresent([String: TokenTotals].self, forKey: .tokensByModel)) ?? [:]
         self.byDayByModel = (try c.decodeIfPresent([Date: [String: TokenTotals]].self, forKey: .byDayByModel)) ?? [:]
         self.grokContextLimit = try c.decodeIfPresent(GrokCLIUsageParser.ContextLimit.self, forKey: .grokContextLimit)
+        self.enabledProviderIDs = try c.decodeIfPresent([String].self, forKey: .enabledProviderIDs)
 
         // Prefer the new byProvider shape. Unknown provider raw values
         // (future-client snapshots) are dropped silently.
@@ -200,6 +303,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         try c.encode(tokensByModel, forKey: .tokensByModel)
         try c.encode(byDayByModel, forKey: .byDayByModel)
         try c.encodeIfPresent(grokContextLimit, forKey: .grokContextLimit)
+        try c.encodeIfPresent(enabledProviderIDs, forKey: .enabledProviderIDs)
         // Write the new byProvider dict (canonical) AND the legacy
         // claude/codex fields (for one release of overlap, so a v5 reader
         // can still pick up totals from a v6 writer's snapshot).

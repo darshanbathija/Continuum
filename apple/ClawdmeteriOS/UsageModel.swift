@@ -50,6 +50,9 @@ public final class UsageModel: ObservableObject {
     /// KV. `nil` until the Mac has run with the iCloud entitlement live.
     /// Drives the iOS Analytics tab. Plan A19.
     @Published public private(set) var analyticsSnapshot: UsageHistorySnapshot?
+    /// Latest provider opt-in envelope from the paired Mac daemon. Nil means
+    /// legacy all-provider behavior for older Mac builds.
+    @Published public private(set) var enabledProviderIDs: [String]?
 
     private var poller: UsagePoller?
     private var clockTimer: Timer?
@@ -94,25 +97,37 @@ public final class UsageModel: ObservableObject {
         configurePollerIfTokenPresent()
         observeAppLifecycle()
         startClock()
+        enabledProviderIDs = UsageStore.readEnabledProviderIDs()
         observeCloudMirror()
         // Push whatever token we have to the paired Apple Watch so it can
         // poll on its own. iCloud Keychain doesn't reliably reach watchOS
         // (especially on simulators) so WatchConnectivity is the safety net.
         WatchTokenBridge.shared.pushToken(tokenProvider.currentAccessToken)
+        WatchTokenBridge.shared.pushEnabledProviderIDs(enabledProviderIDs)
     }
 
     /// Pull whatever Codex snapshot iCloud currently has, then subscribe
     /// for live updates pushed from the Mac. iCloud KV's
     /// `didChangeExternallyNotification` fires when a remote write lands.
     private func observeCloudMirror() {
-        codexSnapshot = UsageCloudMirror.shared.readSnapshot(providerID: "codex")
         analyticsSnapshot = UsageCloudMirror.shared.readAnalyticsSnapshot()
+        if let analyticsSnapshot {
+            applyEnabledProviderIDs(analyticsSnapshot.enabledProviderIDs)
+        }
+        codexSnapshot = isProviderEnabled("codex")
+            ? UsageCloudMirror.shared.readSnapshot(providerID: "codex")
+            : nil
         UsageCloudMirror.shared.didUpdate
             .sink { [weak self] providerID in
                 guard let self else { return }
                 if providerID == "codex" {
                     let snap = UsageCloudMirror.shared.readSnapshot(providerID: "codex")
                     Task { @MainActor in
+                        guard self.isProviderEnabled("codex") else {
+                            self.codexSnapshot = nil
+                            UsageStore.reloadWidgets(providerID: "codex")
+                            return
+                        }
                         self.codexSnapshot = snap
                         if let snap {
                             UsageStore.write(snap.usage, providerID: "codex", displayName: snap.displayName)
@@ -127,6 +142,7 @@ public final class UsageModel: ObservableObject {
                         // clobber a fresh value with a stale one.
                         if let snap, snap.computedAt > (self.analyticsSnapshot?.computedAt ?? .distantPast) {
                             self.analyticsSnapshot = snap
+                            self.applyEnabledProviderIDs(snap.enabledProviderIDs)
                         }
                     }
                 }
@@ -172,6 +188,7 @@ public final class UsageModel: ObservableObject {
         async let analyticsPayload = client.fetchAnalytics()
 
         if let usage = await usagePayload {
+            applyEnabledProviderIDs(usage.enabledProviderIDs)
             // Codex: prefer the v6 dict + per-provider fallback shape;
             // legacy `usage.codex` field is still populated by the server
             // and the `usageData(for:)` helper handles fallback per X1.
@@ -223,6 +240,7 @@ public final class UsageModel: ObservableObject {
             // Plan A19 monotonic guard: only accept newer snapshots.
             if snap.computedAt > (analyticsSnapshot?.computedAt ?? .distantPast) {
                 analyticsSnapshot = snap
+                applyEnabledProviderIDs(snap.enabledProviderIDs)
             }
         }
     }
@@ -365,6 +383,11 @@ public final class UsageModel: ObservableObject {
     private func consume(_ event: UsagePoller.Event) {
         switch event {
         case .usage(let u):
+            guard isProviderEnabled("claude") else {
+                usage = nil
+                UsageStore.reloadWidgets(providerID: "claude")
+                return
+            }
             usage = u
             lastError = nil
             needsReauth = false
@@ -383,6 +406,31 @@ public final class UsageModel: ObservableObject {
         case .predictorWarning(let level):
             logger.notice("Predictor warning level: \(level.rawValue) min")
         }
+    }
+
+    private func applyEnabledProviderIDs(_ ids: [String]?) {
+        enabledProviderIDs = ids
+        UsageStore.writeEnabledProviderIDs(ids)
+        UsageStore.reloadWidgets()
+        WatchTokenBridge.shared.pushEnabledProviderIDs(ids)
+
+        guard let enabledRoots = enabledProviderRoots(ids) else { return }
+        if !enabledRoots.contains("claude") { usage = nil }
+        if !enabledRoots.contains("codex") { codexSnapshot = nil }
+        if !enabledRoots.contains("gemini") { geminiSnapshot = nil }
+        if !enabledRoots.contains("cursor") { cursorSnapshot = nil }
+    }
+
+    private func isProviderEnabled(_ providerID: String) -> Bool {
+        guard let enabledRoots = enabledProviderRoots(enabledProviderIDs ?? UsageStore.readEnabledProviderIDs()) else {
+            return true
+        }
+        return enabledRoots.contains(ProviderRegistry.rootProviderID(for: providerID))
+    }
+
+    private func enabledProviderRoots(_ ids: [String]?) -> Set<String>? {
+        guard let ids else { return nil }
+        return Set(ids.map { ProviderRegistry.rootProviderID(for: $0) })
     }
 
     // MARK: - Lifecycle

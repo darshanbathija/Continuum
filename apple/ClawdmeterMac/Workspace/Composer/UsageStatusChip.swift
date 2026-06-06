@@ -29,7 +29,7 @@ struct ModelEffortChip: View {
     @Binding var selectedModelId: String?
     @Binding var selectedEffort: ReasoningEffort?
     let modelSupportsEffort: Bool
-    var enabledVendors: [ChatVendor] = ChatV2Store.defaultChatVendorOrder
+    var enabledVendors: [ChatVendor] = ProviderEnablement.enabledChatVendors()
     /// v0.29.31: when the rich picker's rail switches to another vendor, map
     /// that vendor back to its AgentKind so the host can align the session's
     /// agent. Lets the model picker subsume provider selection (the separate
@@ -98,7 +98,7 @@ struct ModelEffortChip: View {
             // "Effort" footer button below so users can still re-pick
             // effort without re-picking model.
             ComposerModelPicker(
-                initialVendor: ChatVendor.migrated(from: agent) ?? .chatgpt,
+                initialVendor: initialPickerVendor,
                 store: pickerScratchStore,
                 defaultsStore: providerDefaults,
                 catalog: catalog,
@@ -123,6 +123,14 @@ struct ModelEffortChip: View {
             return "\(info.modelDisplay) · \(effort)"
         }
         return info.modelDisplay
+    }
+
+    private var initialPickerVendor: ChatVendor {
+        if let migrated = ChatVendor.migrated(from: agent),
+           enabledVendors.contains(migrated) {
+            return migrated
+        }
+        return enabledVendors.first ?? .chatgpt
     }
 
     private func cycleEffort(direction: Int) {

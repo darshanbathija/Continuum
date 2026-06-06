@@ -1425,7 +1425,25 @@ public final class AgentControlServer {
         if ProviderEnablement.isEnabled("opencode") {
             catalog = catalog.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
         }
-        return catalog
+        let enabledIDs = ProviderEnablement.enabledProviderIDs(for: .code)
+        let readyModelProviderIDs = enabledIDs.filter { id in
+            let root = ProviderRegistry.rootProviderID(for: id)
+            if root == "grok" {
+                return ShellRunner.locateBinary("grok") != nil
+            }
+            return true
+        }
+        let filtered = catalog.filtered(toEnabledProviderIDs: readyModelProviderIDs)
+        return ModelCatalog(
+            claude: filtered.claude,
+            codex: filtered.codex,
+            gemini: filtered.gemini,
+            opencode: filtered.opencode,
+            cursor: filtered.cursor,
+            grok: filtered.grok,
+            enabledProviderIDs: enabledIDs,
+            updatedAt: filtered.updatedAt
+        )
     }
 
     private func handleGetModels(connection: NWConnection) async {
@@ -4438,16 +4456,23 @@ public final class AgentControlServer {
         // clients read legacy; v6+ prefer dict with per-provider fallback
         // to legacy. Servers always emit both while wireVersion == 6
         // (legacy fields removed at v7, future v0.8).
+        let enabledProviderIDs = ProviderEnablement.enabledProviderIDs(for: .liveUsage)
         var dict: [String: UsageData] = [:]
-        if let c = claudeModel?.usage { dict["claude"] = c }
-        if let x = codexModel?.usage  { dict["codex"]  = x }
-        if let g = geminiModel?.usage { dict["gemini"] = g }
-        if let cursor = cursorModel?.usage { dict["cursor"] = cursor }
-        if let grok = grokModel?.usage { dict["grok"] = grok }
+        if ProviderRegistry.isVisible(id: "claude", capability: .liveUsage),
+           let c = claudeModel?.usage { dict["claude"] = c }
+        if ProviderRegistry.isVisible(id: "codex", capability: .liveUsage),
+           let x = codexModel?.usage { dict["codex"] = x }
+        if ProviderRegistry.isVisible(id: "gemini", capability: .liveUsage),
+           let g = geminiModel?.usage { dict["gemini"] = g }
+        if ProviderRegistry.isVisible(id: "cursor", capability: .liveUsage),
+           let cursor = cursorModel?.usage { dict["cursor"] = cursor }
+        if ProviderRegistry.isVisible(id: "grok", capability: .liveUsage),
+           let grok = grokModel?.usage { dict["grok"] = grok }
         let payload = UsageEnvelope(
-            claude: claudeModel?.usage,
-            codex: codexModel?.usage,
+            claude: ProviderRegistry.isVisible(id: "claude", capability: .liveUsage) ? claudeModel?.usage : nil,
+            codex: ProviderRegistry.isVisible(id: "codex", capability: .liveUsage) ? codexModel?.usage : nil,
             usage: dict,
+            enabledProviderIDs: enabledProviderIDs,
             lastChecked: Date()
         )
         let encoder = JSONEncoder()
@@ -4464,7 +4489,7 @@ public final class AgentControlServer {
     /// totals + daily chart + by-repo split. Replaces iCloud KV sync
     /// for users without a paid Apple Developer account.
     private func handleGetAnalytics(connection: NWConnection) {
-        let snapshot = usageHistory?.snapshot ?? UsageHistorySnapshot.empty
+        let snapshot = (usageHistory?.snapshot ?? UsageHistorySnapshot.empty).filteredToEnabledProviders()
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let body = try? encoder.encode(snapshot) {

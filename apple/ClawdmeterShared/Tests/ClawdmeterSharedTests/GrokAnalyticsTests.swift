@@ -39,6 +39,39 @@ final class GrokAnalyticsTests: XCTestCase {
             .requests("3 reqs")
         )
     }
+
+    @available(macOS 13, iOS 16, *)
+    func test_totalsGridVisibleProvidersHonorsEnabledProviderEnvelope() {
+        let legacy = UsageHistorySnapshot(
+            byProvider: [:],
+            computedAt: Date(timeIntervalSince1970: 1_715_000_000),
+            sequenceNumber: 1,
+            sessionCount: 0,
+            unpricedModelTokens: [:],
+            enabledProviderIDs: nil
+        )
+        XCTAssertEqual(AnalyticsTotalsGrid.visibleProviders(for: legacy), [.claude, .codex])
+
+        let noProviders = UsageHistorySnapshot(
+            byProvider: [:],
+            computedAt: Date(timeIntervalSince1970: 1_715_000_000),
+            sequenceNumber: 1,
+            sessionCount: 0,
+            unpricedModelTokens: [:],
+            enabledProviderIDs: []
+        )
+        XCTAssertEqual(AnalyticsTotalsGrid.visibleProviders(for: noProviders), [])
+
+        let codexOnly = UsageHistorySnapshot(
+            byProvider: [:],
+            computedAt: Date(timeIntervalSince1970: 1_715_000_000),
+            sequenceNumber: 1,
+            sessionCount: 0,
+            unpricedModelTokens: [:],
+            enabledProviderIDs: ["codex"]
+        )
+        XCTAssertEqual(AnalyticsTotalsGrid.visibleProviders(for: codexOnly), [.codex])
+    }
 #endif
 
     func test_grokLedgerPreservesExplicitTotalTokenRemainder() throws {

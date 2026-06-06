@@ -68,15 +68,7 @@ struct iOSModelPicker: View {
     /// to keep the picker exhaustive over `AgentKind` — adding a 4th provider
     /// only requires extending this one switch.
     fileprivate static func entries(for agent: AgentKind, in catalog: ModelCatalog) -> [ModelCatalogEntry] {
-        switch agent {
-        case .claude: return catalog.claude
-        case .codex:  return catalog.codex
-        case .gemini: return catalog.gemini
-        case .opencode: return catalog.opencode
-        case .cursor: return catalog.cursor
-        case .grok: return catalog.grok
-        case .unknown: return []  // X3: no catalog slice for forward-compat unknown
-        }
+        catalog.entries(for: agent)
     }
 
     fileprivate static func sectionTitle(for agent: AgentKind) -> String {

@@ -8,19 +8,22 @@ struct SessionLauncherAvailability: Equatable {
     var geminiEnabled: Bool
     var opencodeReady: Bool
     var cursorReady: Bool
+    var grokReady: Bool
 
     init(
         claudeEnabled: Bool = false,
         codexEnabled: Bool = false,
         geminiEnabled: Bool = false,
         opencodeReady: Bool = false,
-        cursorReady: Bool = false
+        cursorReady: Bool = false,
+        grokReady: Bool = false
     ) {
         self.claudeEnabled = claudeEnabled
         self.codexEnabled = codexEnabled
         self.geminiEnabled = geminiEnabled
         self.opencodeReady = opencodeReady
         self.cursorReady = cursorReady
+        self.grokReady = grokReady
     }
 }
 
@@ -61,6 +64,9 @@ final class SessionLauncherModel: ObservableObject {
         if availability.cursorReady {
             agents.append(.cursor)
         }
+        if availability.grokReady {
+            agents.append(.grok)
+        }
         return agents
     }
 
@@ -70,9 +76,11 @@ final class SessionLauncherModel: ObservableObject {
         let geminiEnabled = ProviderEnablement.isEnabled("gemini")
         let opencodeEnabled = ProviderEnablement.isEnabled("opencode")
         let cursorEnabled = ProviderEnablement.isEnabled("cursor")
+        let grokEnabled = ProviderEnablement.isEnabled("grok")
 
         var opencodeReady = false
         var cursorReady = false
+        var grokReady = false
         var nextCatalog = ModelCatalog.bundled
 
         if opencodeEnabled {
@@ -88,13 +96,18 @@ final class SessionLauncherModel: ObservableObject {
             cursorReady = cursorState.binaryPath != nil && cursorState.authenticated
         }
 
-        modelCatalog = nextCatalog
+        if grokEnabled {
+            grokReady = ShellRunner.locateBinary("grok") != nil
+        }
+
+        modelCatalog = nextCatalog.filteredToEnabledProviders(for: .code)
         availability = SessionLauncherAvailability(
             claudeEnabled: claudeEnabled,
             codexEnabled: codexEnabled,
             geminiEnabled: geminiEnabled,
             opencodeReady: opencodeReady,
-            cursorReady: cursorReady
+            cursorReady: cursorReady,
+            grokReady: grokReady
         )
     }
 

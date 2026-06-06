@@ -10,7 +10,7 @@ import Foundation
 // reconnecting client can request `?since=<seq>` and replay missed events.
 // Per E2: these DTOs are Sendable so they cross actor / NIO event loop
 // boundaries without copies tripping the type checker.
-
+//
 // Domain DTO definitions live in ProtocolDTOs/*.swift. The split keeps
 // the public type names and JSON wire shapes unchanged while making each
 // protocol area navigable on its own.

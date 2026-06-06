@@ -166,6 +166,10 @@ public struct ModelCatalog: Codable, Sendable {
     /// xAI Grok models (wire v26). ACP agents advertise models at `initialize`,
     /// so this is the bundled fallback used until a live list is fetched.
     public let grok: [ModelCatalogEntry]
+    /// Optional provider-enable envelope. Missing means legacy all-provider
+    /// behavior for older Macs/iOS builds; an empty array is an explicit
+    /// zero-provider state.
+    public let enabledProviderIDs: [String]?
     public let updatedAt: Date
 
     public init(
@@ -175,6 +179,7 @@ public struct ModelCatalog: Codable, Sendable {
         opencode: [ModelCatalogEntry] = [],
         cursor: [ModelCatalogEntry] = [],
         grok: [ModelCatalogEntry] = [],
+        enabledProviderIDs: [String]? = nil,
         updatedAt: Date
     ) {
         self.claude = claude
@@ -183,6 +188,7 @@ public struct ModelCatalog: Codable, Sendable {
         self.opencode = opencode
         self.cursor = cursor
         self.grok = grok
+        self.enabledProviderIDs = enabledProviderIDs
         self.updatedAt = updatedAt
     }
 
@@ -253,12 +259,9 @@ public struct ModelCatalog: Codable, Sendable {
 
     /// Resolve a model id to a catalog entry across all providers.
     public func entry(forId id: String) -> ModelCatalogEntry? {
-        claude.first(where: { $0.id == id || $0.cliAlias == id })
-            ?? codex.first(where: { $0.id == id || $0.cliAlias == id })
-            ?? gemini.first(where: { $0.id == id || $0.cliAlias == id })
-            ?? opencode.first(where: { $0.id == id || $0.cliAlias == id })
-            ?? cursor.first(where: { $0.id == id || $0.cliAlias == id })
-            ?? grok.first(where: { $0.id == id || $0.cliAlias == id })
+        AgentKind.allCases.lazy
+            .flatMap { entries(for: $0) }
+            .first { $0.id == id || $0.cliAlias == id }
     }
 
     /// Provider-indexed catalog used by Code V2 pickers. The legacy arrays
@@ -266,16 +269,23 @@ public struct ModelCatalog: Codable, Sendable {
     /// shape clients should prefer.
     public var byProvider: [String: [ModelCatalogEntry]] {
         [
-            AgentKind.claude.rawValue: claude,
-            AgentKind.codex.rawValue: codex,
-            AgentKind.gemini.rawValue: gemini,
-            AgentKind.opencode.rawValue: opencode,
-            AgentKind.cursor.rawValue: cursor,
-            AgentKind.grok.rawValue: grok,
+            AgentKind.claude.rawValue: entries(for: .claude),
+            AgentKind.codex.rawValue: entries(for: .codex),
+            AgentKind.gemini.rawValue: entries(for: .gemini),
+            AgentKind.opencode.rawValue: entries(for: .opencode),
+            AgentKind.cursor.rawValue: entries(for: .cursor),
+            AgentKind.grok.rawValue: entries(for: .grok),
         ]
     }
 
     public func entries(for provider: AgentKind) -> [ModelCatalogEntry] {
+        guard provider != .unknown else { return [] }
+        if let enabledProviderIDs {
+            let enabled = Set(enabledProviderIDs.map { ProviderRegistry.rootProviderID(for: $0) })
+            guard enabled.contains(ProviderRegistry.rootProviderID(for: provider.rawValue)) else {
+                return []
+            }
+        }
         switch provider {
         case .claude: return claude
         case .codex: return codex
@@ -295,6 +305,7 @@ public struct ModelCatalog: Codable, Sendable {
             opencode: opencode,
             cursor: cursor,
             grok: grok,
+            enabledProviderIDs: enabledProviderIDs,
             updatedAt: Date()
         )
     }
@@ -307,7 +318,29 @@ public struct ModelCatalog: Codable, Sendable {
             opencode: opencode,
             cursor: cursor,
             grok: grok,
+            enabledProviderIDs: enabledProviderIDs,
             updatedAt: Date()
+        )
+    }
+
+    public func filteredToEnabledProviders(for capability: ProviderCapability = .code) -> ModelCatalog {
+        filtered(toEnabledProviderIDs: ProviderEnablement.enabledProviderIDs(for: capability))
+    }
+
+    public func filtered(toEnabledProviderIDs enabledIDs: [String]) -> ModelCatalog {
+        let enabled = Set(enabledIDs.map { ProviderRegistry.rootProviderID(for: $0) })
+        func allowed(_ provider: AgentKind) -> Bool {
+            enabled.contains(ProviderRegistry.rootProviderID(for: provider.rawValue))
+        }
+        return ModelCatalog(
+            claude: allowed(.claude) ? claude : [],
+            codex: allowed(.codex) ? codex : [],
+            gemini: allowed(.gemini) ? gemini : [],
+            opencode: allowed(.opencode) ? opencode : [],
+            cursor: allowed(.cursor) ? cursor : [],
+            grok: allowed(.grok) ? grok : [],
+            enabledProviderIDs: enabledIDs,
+            updatedAt: updatedAt
         )
     }
 
@@ -318,7 +351,7 @@ public struct ModelCatalog: Codable, Sendable {
     /// Codable throws on missing keys; decodeIfPresent + default returns
     /// an empty Gemini array.
     private enum CodingKeys: String, CodingKey {
-        case claude, codex, gemini, opencode, cursor, grok, updatedAt
+        case claude, codex, gemini, opencode, cursor, grok, enabledProviderIDs, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -329,6 +362,7 @@ public struct ModelCatalog: Codable, Sendable {
         self.opencode = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .opencode) ?? []
         self.cursor = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .cursor) ?? []
         self.grok = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .grok) ?? []
+        self.enabledProviderIDs = try c.decodeIfPresent([String].self, forKey: .enabledProviderIDs)
         self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
     }
 
@@ -340,6 +374,7 @@ public struct ModelCatalog: Codable, Sendable {
         try c.encode(opencode, forKey: .opencode)
         try c.encode(cursor, forKey: .cursor)
         try c.encode(grok, forKey: .grok)
+        try c.encodeIfPresent(enabledProviderIDs, forKey: .enabledProviderIDs)
         try c.encode(updatedAt, forKey: .updatedAt)
     }
 }

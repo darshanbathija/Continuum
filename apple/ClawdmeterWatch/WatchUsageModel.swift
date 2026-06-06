@@ -45,6 +45,9 @@ public final class WatchUsageModel: ObservableObject {
     /// — Watch falls back to the legacy `usage` field (Claude only). v6+
     /// iPhones drive the Codex + Gemini meters via this dict.
     @Published public private(set) var usageByProvider: [String: UsageData] = [:]
+    /// Provider opt-in envelope mirrored from the iPhone/Mac. Nil means legacy
+    /// all-provider behavior for older phone/Mac builds.
+    @Published public private(set) var enabledProviderIDs: [String]? = UsageStore.readEnabledProviderIDs()
 
     private var poller: UsagePoller?
     private var cancellables = Set<AnyCancellable>()
@@ -95,6 +98,12 @@ public final class WatchUsageModel: ObservableObject {
     private func consume(_ event: UsagePoller.Event) {
         switch event {
         case .usage(let u):
+            guard isProviderEnabled("claude") else {
+                usage = nil
+                receivingFromPhone = false
+                UsageStore.reloadWidgets(providerID: "claude")
+                return
+            }
             usage = u
             lastError = nil
             needsReauth = false
@@ -126,6 +135,15 @@ public final class WatchUsageModel: ObservableObject {
     // MARK: - WatchConnectivity ingress
 
     private func observeWatchConnectivity() {
+        WatchTokenBridge.shared.didReceiveEnabledProviderIDs
+            .sink { [weak self] ids in
+                guard let self else { return }
+                Task { @MainActor in
+                    self.applyEnabledProviderIDs(ids)
+                }
+            }
+            .store(in: &cancellables)
+
         WatchTokenBridge.shared.didReceiveToken
             .sink { [weak self] token in
                 guard let self else { return }
@@ -148,11 +166,17 @@ public final class WatchUsageModel: ObservableObject {
             .sink { [weak self] usage in
                 guard let self else { return }
                 Task { @MainActor in
+                    guard self.isProviderEnabled("claude") else {
+                        self.usage = nil
+                        self.receivingFromPhone = false
+                        UsageStore.reloadWidgets(providerID: "claude")
+                        return
+                    }
                     // Phone-forwarded snapshot trumps our (possibly stale)
                     // local poller result when we don't have our own token.
-	                    if self.tokenProvider.hasToken == false {
-	                        self.usage = usage
-	                        self.receivingFromPhone = true
+                    if self.tokenProvider.hasToken == false {
+                        self.usage = usage
+                        self.receivingFromPhone = true
                     } else {
                         // We have our own token; only adopt the phone's
                         // snapshot if it's newer than ours.
@@ -164,12 +188,12 @@ public final class WatchUsageModel: ObservableObject {
                         } else {
                             self.usage = usage
                             self.receivingFromPhone = true
-	                        }
-	                    }
-	                    UsageStore.write(usage, providerID: "claude", displayName: "Claude")
-	                    UsageStore.reloadWidgets(providerID: "claude")
-	                }
-	            }
+                        }
+                    }
+                    UsageStore.write(usage, providerID: "claude", displayName: "Claude")
+                    UsageStore.reloadWidgets(providerID: "claude")
+                }
+            }
             .store(in: &cancellables)
 
         // v6+ multi-provider channel. Mirrors each per-provider snapshot
@@ -180,8 +204,9 @@ public final class WatchUsageModel: ObservableObject {
             .sink { [weak self] dict in
                 guard let self else { return }
                 Task { @MainActor in
-                    self.usageByProvider = dict
-                    for (id, snap) in dict {
+                    let filtered = self.filterEnabledUsage(dict)
+                    self.usageByProvider = filtered
+                    for (id, snap) in filtered {
                         let display = self.displayName(for: id)
                         UsageStore.write(snap, providerID: id, displayName: display)
                         UsageStore.reloadWidgets(providerID: id)
@@ -200,8 +225,40 @@ public final class WatchUsageModel: ObservableObject {
         }
     }
 
-    public var codexUsage: UsageData? { usageByProvider["codex"] }
-    public var geminiUsage: UsageData? { usageByProvider["gemini"] }
+    public var codexUsage: UsageData? { isProviderEnabled("codex") ? usageByProvider["codex"] : nil }
+    public var geminiUsage: UsageData? { isProviderEnabled("gemini") ? usageByProvider["gemini"] : nil }
+
+    public func isProviderEnabled(_ providerID: String) -> Bool {
+        guard let enabledRoots = enabledProviderRoots(enabledProviderIDs) else { return true }
+        return enabledRoots.contains(ProviderRegistry.rootProviderID(for: providerID))
+    }
+
+    private func applyEnabledProviderIDs(_ ids: [String]?) {
+        enabledProviderIDs = ids
+        UsageStore.writeEnabledProviderIDs(ids)
+        UsageStore.reloadWidgets()
+
+        guard let enabledRoots = enabledProviderRoots(ids) else { return }
+        if !enabledRoots.contains("claude") {
+            usage = nil
+            receivingFromPhone = false
+        }
+        usageByProvider = usageByProvider.filter { id, _ in
+            enabledRoots.contains(ProviderRegistry.rootProviderID(for: id))
+        }
+    }
+
+    private func filterEnabledUsage(_ dict: [String: UsageData]) -> [String: UsageData] {
+        guard let enabledRoots = enabledProviderRoots(enabledProviderIDs) else { return dict }
+        return dict.filter { id, _ in
+            enabledRoots.contains(ProviderRegistry.rootProviderID(for: id))
+        }
+    }
+
+    private func enabledProviderRoots(_ ids: [String]?) -> Set<String>? {
+        guard let ids else { return nil }
+        return Set(ids.map { ProviderRegistry.rootProviderID(for: $0) })
+    }
 
     /// One-shot copy of the shared-keychain token (if any) into the local
     /// keychain. Saves us a round-trip when iCloud Keychain DOES happen to

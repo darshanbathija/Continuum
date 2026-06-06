@@ -46,7 +46,7 @@ public struct ComposerModelPicker: View {
     public let initialVendor: ChatVendor
 
     /// Vendors the picker should expose in the rail. Caller filters by any
-    /// Settings → Providers gate. Defaults to all `ChatVendor.allCases`.
+    /// Settings → Providers gate; the fallback is also enablement-aware.
     public let enabledVendors: [ChatVendor]
 
     /// Model catalog. Defaults to the bundled catalog.
@@ -94,7 +94,7 @@ public struct ComposerModelPicker: View {
         store: ChatV2Store,
         defaultsStore: ProviderDefaultsStore,
         catalog: ModelCatalog = .bundled,
-        enabledVendors: [ChatVendor] = ChatVendor.allCases,
+        enabledVendors: [ChatVendor] = ProviderEnablement.enabledChatVendors(),
         mode: SelectionMode = .single,
         vendorAvailability: ((ChatVendor) -> Bool)? = nil,
         vendorUnavailableReason: ((ChatVendor) -> String?)? = nil,
@@ -111,7 +111,10 @@ public struct ComposerModelPicker: View {
         self.vendorUnavailableReason = vendorUnavailableReason
         self.onClose = onClose
         self.onSelectModel = onSelectModel
-        self._activeRail = State(initialValue: .vendor(initialVendor))
+        let active: RailKey = enabledVendors.contains(initialVendor)
+            ? .vendor(initialVendor)
+            : .favorites
+        self._activeRail = State(initialValue: active)
     }
 
     // MARK: - Body
