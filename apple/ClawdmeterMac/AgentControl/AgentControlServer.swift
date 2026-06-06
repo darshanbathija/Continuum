@@ -2160,7 +2160,7 @@ public final class AgentControlServer {
             let decision: String
             let source: String?
         }
-        let body = request.body ?? Data()
+        let body = request.body
         guard let payload = try? JSONDecoder().decode(DecidePayload.self, from: body),
               let decision = SidecarAskCoordinator.Decision(rawValue: payload.decision)
         else {
@@ -5051,7 +5051,7 @@ public final class AgentControlServer {
             let trustGate = AutopilotState.shared.isRepoTrusted(req.repoKey)
                 ? RepoTrustGate(repoRoot: req.repoKey, sessionCwd: cwd)
                 : nil
-            let auditFs: (@Sendable (String, String, Bool) async -> Void)? = trustGate == nil ? nil : { op, path, allowed in
+            let auditFs: (@Sendable (String, String, Bool) async -> Void)? = trustGate == nil ? nil : { @Sendable op, path, allowed in
                 serverLogger.info("acp fs \(op, privacy: .public) allowed=\(allowed, privacy: .public) path=\(MobileCommandPayloadHasher.hex(Data(path.utf8)), privacy: .public)")
             }
             await handleSpawnHarnessSession(
@@ -6082,7 +6082,7 @@ public final class AgentControlServer {
             mode: .local
         )
 
-        guard var sessionReq = await OpencodeProcessManager.shared.makeAuthorizedRequest(
+        guard var sessionReq = OpencodeProcessManager.shared.makeAuthorizedRequest(
             path: "/session",
             directory: chatCwd
         ) else {
@@ -6828,7 +6828,7 @@ public final class AgentControlServer {
                 tmuxPaneId: nil,
                 mode: .local
             )
-            guard var request = await OpencodeProcessManager.shared.makeAuthorizedRequest(
+            guard var request = OpencodeProcessManager.shared.makeAuthorizedRequest(
                 path: "/session",
                 directory: chatCwd
             ) else {
@@ -6951,7 +6951,7 @@ public final class AgentControlServer {
             ])
         }
         // Resolve the opencode session id.
-        guard let opencodeID = await OpencodeSSEAdapter.shared.opencodeSessionId(for: session.id) else {
+        guard let opencodeID = OpencodeSSEAdapter.shared.opencodeSessionId(for: session.id) else {
             serverLogger.warning("opencode send: no session-id mapping for \(session.id.uuidString, privacy: .public)")
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
@@ -6961,7 +6961,7 @@ public final class AgentControlServer {
             return
         }
         // Build the upstream POST.
-        guard var req = await OpencodeProcessManager.shared.makeAuthorizedRequest(
+        guard var req = OpencodeProcessManager.shared.makeAuthorizedRequest(
             path: "/session/\(opencodeID)/message",
             directory: session.effectiveCwd
         ) else {
@@ -7033,14 +7033,14 @@ public final class AgentControlServer {
                 )
             ])
         }
-        guard let opencodeID = await OpencodeSSEAdapter.shared.opencodeSessionId(for: session.id) else {
+        guard let opencodeID = OpencodeSSEAdapter.shared.opencodeSessionId(for: session.id) else {
             throw NSError(
                 domain: "AgentControlServer.OpenCode",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "opencode_session_not_registered"]
             )
         }
-        guard var req = await OpencodeProcessManager.shared.makeAuthorizedRequest(
+        guard var req = OpencodeProcessManager.shared.makeAuthorizedRequest(
             path: "/session/\(opencodeID)/message",
             directory: session.effectiveCwd
         ) else {
@@ -7137,7 +7137,7 @@ public final class AgentControlServer {
             if captured.contains("Do you trust the contents") {
                 if await isVerifiedOwnedWorktree(session) {
                     serverLogger.info("chat warmup: auto-trusting Codex owned worktree for \(session.id.uuidString, privacy: .public)")
-                    try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
+                    _ = try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     return
                 }
@@ -7185,7 +7185,7 @@ public final class AgentControlServer {
                 if chosen == "no" {
                     return
                 }
-                try? await tmux.command(["send-keys", "-t", paneId] + (dispatch[chosen] ?? ["Down", "Up", "Enter"]))
+                _ = try? await tmux.command(["send-keys", "-t", paneId] + (dispatch[chosen] ?? ["Down", "Up", "Enter"]))
                 // Give the CLI 3s to finish dismissing + start MCP init.
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
@@ -7213,7 +7213,6 @@ public final class AgentControlServer {
                     || s.localizedCaseInsensitiveContains("Is this a project you created")
                     || s.contains("Do you trust")
             }
-            var claudeAccepted = false
             var claudeReady = false
             // Poll fast (0.6s) so we detect the composer the moment it renders
             // instead of waiting out a coarse interval — shaves seconds off the
@@ -7223,8 +7222,7 @@ public final class AgentControlServer {
                 let cap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
                 if isClaudeTrustPrompt(cap) {
                     serverLogger.info("chat warmup: auto-accepting Claude trust prompt for \(session.id.uuidString, privacy: .public)")
-                    try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
-                    claudeAccepted = true
+                    _ = try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
                     // Don't break — keep polling for the composer so we settle on
                     // real readiness, not a fixed guess after the keypress.
                     continue
@@ -7296,7 +7294,7 @@ public final class AgentControlServer {
         // doesn't block the user clicking on the Mac.
         let captureSessionId = session.id
         let captureTitle = prompt.title
-        let captureHeader = prompt.header ?? "Permission required"
+        let captureHeader = prompt.header
         Task.detached {
             let body = APNSPushBody(
                 kind: "permissionPrompt",

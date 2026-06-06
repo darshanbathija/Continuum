@@ -1275,14 +1275,24 @@ public actor WorktreeManager {
         try process.run()
         stdin.fileHandleForWriting.write(input)
         try? stdin.fileHandleForWriting.close()
-        process.waitUntilExit()
-        outDone.wait()
-        errDone.wait()
+        await Task.detached(priority: .utility) {
+            Self.waitForProcessAndReaders(process: process, outDone: outDone, errDone: errDone)
+        }.value
         return ShellRunner.Result(
             exitStatus: process.terminationStatus,
             stdout: outBox.data,
             stderr: errBox.data
         )
+    }
+
+    private nonisolated static func waitForProcessAndReaders(
+        process: Process,
+        outDone: DispatchSemaphore,
+        errDone: DispatchSemaphore
+    ) {
+        process.waitUntilExit()
+        outDone.wait()
+        errDone.wait()
     }
 
     private func cloneOrCopyItem(source: URL, destination: URL) throws {

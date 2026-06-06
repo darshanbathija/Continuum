@@ -227,6 +227,7 @@ public actor ChatProviderProbe {
 
         let (claudeAuth, claudeReason) = resolveAuth(key: "claude", fallback: probes.claudeAvailable)
         let (codexSDKAuth, codexSDKReason) = resolveAuth(key: "codex:sdk", fallback: probes.codexSDKAvailable)
+        _ = (codexSDKAuth, codexSDKReason)
         let (codexCLIAuth, codexCLIReason) = resolveAuth(key: "codex:cli", fallback: probes.codexAvailable)
         // Gemini drives headlessly via `agy` (DEFAULT, app closed) OR the live
         // Antigravity language-server (legacy gRPC fallback). Either makes it usable.

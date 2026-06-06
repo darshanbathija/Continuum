@@ -329,7 +329,7 @@ struct MeterLabels: View {
                 Text("Session")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                (Text("Resets ") + Text(resetDate, style: .relative))
+                Text("Resets \(resetDate, style: .relative)")
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
             }
@@ -338,7 +338,7 @@ struct MeterLabels: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .padding(.top, 2)
-            (Text("Resets ") + Text(weeklyDate, style: .relative))
+            Text("Resets \(weeklyDate, style: .relative)")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()

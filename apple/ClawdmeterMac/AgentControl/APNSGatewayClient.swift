@@ -2,11 +2,7 @@ import Foundation
 import ClawdmeterShared
 import OSLog
 import Security
-#if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
-#endif
 
 private let gatewayLogger = Logger(subsystem: "com.clawdmeter.mac", category: "APNSGatewayClient")
 
@@ -472,8 +468,8 @@ public actor APNSGatewayPushCoordinator {
     /// APNS payload (defense against threat #14 protocol-confusion).
     ///
     /// Source of the relay K (in order):
-    ///   1. `RelayPairingStore.loadSymmetricKey()` — Keychain on Darwin,
-    ///      file on Linux. This is the production source.
+    ///   1. `RelayPairingStore.loadSymmetricKey()` — Keychain on Apple
+    ///      platforms. This is the production source.
     ///   2. The record's `derivedSymmetricKeyBase64URL` — present when the
     ///      caller wrote the record via `save(record:symmetricKey:)`. We
     ///      use this as a fallback for the SPM-host test target where the

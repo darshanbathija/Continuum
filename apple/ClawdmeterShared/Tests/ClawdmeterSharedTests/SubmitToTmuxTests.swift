@@ -66,11 +66,10 @@ final class SubmitToTmuxTests: XCTestCase {
         }
     }
 
-    // MARK: - Cross-platform parity invariant
+    // MARK: - Determinism invariant
 
-    /// The whole point of SubmitToTmux is that Mac and Linux daemons produce
-    /// byte-identical strategies for the same input. This test is the
-    /// regression gate.
+    /// The Mac daemon must produce byte-identical strategies for the same input.
+    /// This test is the regression gate.
     func testStrategyIsDeterministicAcrossInputs() {
         let cases: [(text: String, followUp: Bool)] = [
             ("hello", false),

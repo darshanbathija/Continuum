@@ -23,16 +23,12 @@
 //   sig = base64( HMAC-SHA256(RELAY_BEARER_SIGNING_KEY,
 //                             "optout:" + sessionId + ":" + deviceToken) )
 //
-// Cross-platform: CryptoKit on Darwin, swift-crypto on Linux. The Worker
-// uses the Web Crypto API, but the underlying HMAC-SHA256 + base64 are
-// the same primitives, so the cross-impl tests confirm byte parity.
+// The Worker uses the Web Crypto API, while Apple clients use CryptoKit. The
+// underlying HMAC-SHA256 + base64 primitives are the same, so cross-impl tests
+// confirm byte parity.
 
 import Foundation
-#if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
-#endif
 
 /// Token issuer + opt-out signature helper. Stateless; the signing key is
 /// passed in by the caller (held by Mac code in the pairing record).

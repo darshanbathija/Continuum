@@ -52,11 +52,7 @@ import ClawdmeterShared
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
-#endif
 
 private let iosRelayLogger = Logger(subsystem: "com.clawdmeter.ios", category: "Relay")
 

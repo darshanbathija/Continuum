@@ -82,7 +82,7 @@ final class ACPClientTests: XCTestCase {
         await conn.setOnNotification { method, params in await box.record(method, params) }
 
         let full = #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"café"}}}}"# + "\n"
-        var bytes = Array(full.utf8)
+        let bytes = Array(full.utf8)
         // split into 3 arbitrary chunks (mid-token + mid-line)
         let c1 = Data(bytes[0..<10]); let c2 = Data(bytes[10..<40]); let c3 = Data(bytes[40...])
         await conn.feed(c1)

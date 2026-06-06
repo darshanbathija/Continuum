@@ -1,7 +1,4 @@
 import XCTest
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
 @testable import ClawdmeterShared
 
 /// Tests `AnthropicSource` against a `URLProtocol`-based mock.

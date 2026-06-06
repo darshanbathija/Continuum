@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import OSLog
+import CryptoKit
 import ClawdmeterShared
 
 private let iosPairingLogger = Logger(subsystem: "com.clawdmeter.ios", category: "RelayPairing")
@@ -178,18 +179,8 @@ public final class IOSRelayPairingService: ObservableObject {
 
 // MARK: - CryptoKit shim
 
-#if canImport(CryptoKit)
-import CryptoKit
 private struct CryptoKitSHA256 {
     private var hasher = SHA256()
     mutating func update(data: Data) { hasher.update(data: data) }
     func finalizeBytes() -> [UInt8] { Array(hasher.finalize()) }
 }
-#else
-import Crypto
-private struct CryptoKitSHA256 {
-    private var hasher = SHA256()
-    mutating func update(data: Data) { hasher.update(data: data) }
-    func finalizeBytes() -> [UInt8] { Array(hasher.finalize()) }
-}
-#endif

@@ -2095,10 +2095,10 @@ public struct WorkspaceAllowListResponse: Codable, Sendable {
     }
 }
 
-/// Typed error surface for the Add-Repo flow. Used by Mac UI (LocalizedError
-/// conformance lives on the Mac side in `RepoOnboardingError+Localized.swift`)
-/// AND by iOS (decoded from non-2xx daemon response bodies). Conforms to
-/// `Codable` + `Error` here in shared so both surfaces see the same shape.
+/// Typed error surface for the Add-Repo flow. Used by Mac UI and by iOS
+/// (decoded from non-2xx daemon response bodies). Conforms to `Codable`,
+/// `Error`, and `LocalizedError` here in shared so both surfaces see and
+/// display the same shape.
 public enum RepoOnboardingError: Error, Codable, Sendable, Equatable {
     case pathMissing
     case notADirectory
@@ -2167,6 +2167,59 @@ public enum RepoOnboardingError: Error, Codable, Sendable, Equatable {
             try c.encode(Kind.pathNotAllowed, forKey: .kind)
             try c.encode(reason, forKey: .reason)
         }
+    }
+}
+
+extension RepoOnboardingError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .pathMissing:
+            return "Folder doesn't exist"
+        case .notADirectory:
+            return "Selected path isn't a folder"
+        case .alreadyRegistered:
+            return "Already in your projects"
+        case .notAGitRepo:
+            return "Folder isn't a git repository"
+        case .ghAuthFailed:
+            return "GitHub authentication failed"
+        case .cloneFailed(let stderr):
+            return "Clone failed: \(firstLine(stderr))"
+        case .gitInitFailed(let stderr):
+            return "git init failed: \(firstLine(stderr))"
+        case .persistenceFailed(let message):
+            return "Couldn't save workspace: \(message)"
+        case .pathNotAllowed(let reason):
+            return "Path not allowed: \(reason)"
+        }
+    }
+
+    public var recoverySuggestion: String? {
+        switch self {
+        case .pathMissing:
+            return "Pick a different folder."
+        case .notADirectory:
+            return "Select a folder, not a file."
+        case .alreadyRegistered:
+            return "Open it from the sidebar."
+        case .notAGitRepo:
+            return "Run `git init` in the folder, or pick a different one."
+        case .ghAuthFailed:
+            return "Run `gh auth login` in Terminal and try again."
+        case .cloneFailed:
+            return "Check the URL and your network, then retry."
+        case .gitInitFailed:
+            return "Make sure the parent folder is writable."
+        case .persistenceFailed:
+            return "Restart Clawdmeter and try again."
+        case .pathNotAllowed:
+            return "Pick a folder under your configured default-parent."
+        }
+    }
+
+    private func firstLine(_ s: String) -> String {
+        s.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+            .first.map(String.init) ?? s
     }
 }
 

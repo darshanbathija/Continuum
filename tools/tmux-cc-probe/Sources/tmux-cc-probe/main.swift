@@ -16,8 +16,8 @@ import TmuxControlMode
 // Run: `cd tools/tmux-cc-probe && swift run tmux-cc-probe`
 
 // P1-Tools-1: don't hardcode the Apple Silicon Homebrew path — that
-// breaks on Intel Macs (/usr/local/bin/tmux), MacPorts, Linux, Nix, and
-// any setup where the user has put tmux elsewhere on $PATH. Try $TMUX_BIN
+// breaks on Intel Macs (/usr/local/bin/tmux), MacPorts, Nix, and any
+// setup where the user has put tmux elsewhere on $PATH. Try $TMUX_BIN
 // override first, then $PATH lookup, then a small allowlist of known
 // install locations.
 let tmuxBinary: String = {

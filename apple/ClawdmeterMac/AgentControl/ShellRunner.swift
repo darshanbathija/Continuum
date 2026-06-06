@@ -219,17 +219,14 @@ public actor ShellRunner {
             }
             if Task.isCancelled {
                 // Best-effort drain so caller observation is consistent.
-                outDone.wait()
-                errDone.wait()
+                await Self.waitForReaders(outDone: outDone, errDone: errDone)
                 throw CancellationError()
             }
-            outDone.wait()
-            errDone.wait()
+            await Self.waitForReaders(outDone: outDone, errDone: errDone)
             throw ShellError.timedOut(after: timeout)
         }
 
-        outDone.wait()
-        errDone.wait()
+        await Self.waitForReaders(outDone: outDone, errDone: errDone)
 
         let result = Result(
             exitStatus: process.terminationStatus,
@@ -241,6 +238,23 @@ public actor ShellRunner {
             shellLogger.debug("\(executable, privacy: .public) \(arguments, privacy: .public) → exit \(result.exitStatus)")
         }
         return result
+    }
+
+    private nonisolated static func waitForReaders(
+        outDone: DispatchSemaphore,
+        errDone: DispatchSemaphore
+    ) async {
+        await Task.detached(priority: .utility) {
+            waitForReadersSynchronously(outDone: outDone, errDone: errDone)
+        }.value
+    }
+
+    private nonisolated static func waitForReadersSynchronously(
+        outDone: DispatchSemaphore,
+        errDone: DispatchSemaphore
+    ) {
+        outDone.wait()
+        errDone.wait()
     }
 
     /// Run a command and throw if exit status != 0.

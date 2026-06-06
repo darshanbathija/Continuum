@@ -101,7 +101,7 @@ final class UsagePollerTests: XCTestCase {
         )
     }
 
-    private final class ScriptedSource: AISource {
+    private final class ScriptedSource: AISource, @unchecked Sendable {
         enum Step {
             case succeed(UsageData)
             case fail(AISourceError)
@@ -123,7 +123,7 @@ final class UsagePollerTests: XCTestCase {
         func refreshCredentialsIfNeeded() async throws -> Bool { false }
     }
 
-    private final class AlwaysUnauthenticatedSource: AISource {
+    private final class AlwaysUnauthenticatedSource: AISource, @unchecked Sendable {
         let providerID = "test-401"
         let displayName = "Test 401"
         var isAuthenticated: Bool { true }

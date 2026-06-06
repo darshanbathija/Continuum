@@ -1,11 +1,11 @@
-#if os(macOS) || os(Linux)
+#if os(macOS)
 import Foundation
 
 /// A long-lived agent child process with piped stdin/stdout/stderr — the one
 /// genuinely-new transport primitive (neither `ShellRunner`, which waits for
 /// exit, nor `PseudoTerminal`, which is a tty, gives a persistent line-streamed
 /// child). Conforms to `AcpByteWriter` so it plugs straight into
-/// `NdjsonRpcConnection`. macOS/Linux only — iOS/Watch drive via the daemon.
+/// `NdjsonRpcConnection`. macOS only — iOS/Watch drive via the daemon.
 ///
 /// Lifecycle hardening (review A6 + the documented `ShellRunner` hang):
 /// `terminationHandler` is installed before `run()`, child exit fails in-flight

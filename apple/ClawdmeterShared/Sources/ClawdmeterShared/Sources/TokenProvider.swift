@@ -9,12 +9,9 @@ import Foundation
 /// - `PastedAnthropicTokenProvider` (macOS / iOS / watchOS) — Clawdmeter-owned,
 ///   iCloud-Keychain-synced entry used for normal Anthropic polling.
 /// - `CodexTokenProvider` (all Apple platforms) — Codex `auth.json` file reader.
-/// - `LinuxSecretServiceTokenProvider` (Linux) — `libsecret-1` D-Bus
-///   Secret Service API; falls back to `~/.config/clawdmeter/.token` chmod 0600
-///   when no Secret Service daemon is running (headless / server installs).
 ///
-/// The protocol itself is pure-Foundation and compiles on every platform Swift
-/// supports. The Linux Hummingbird daemon consumes implementations via `await`.
+/// The protocol itself is pure-Foundation and compiles across Continuum's
+/// Apple targets.
 public protocol TokenProvider: Sendable {
     /// The current access token, or `nil` if none cached. Reading is fast (in-memory).
     var currentAccessToken: String? { get }

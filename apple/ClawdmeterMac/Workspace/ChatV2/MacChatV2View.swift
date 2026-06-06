@@ -368,7 +368,7 @@ private struct Sidebar: View {
         }
     }
 
-    fileprivate static func computeGroupRows(_ sessions: [AgentSession]) -> [SidebarRow] {
+    nonisolated fileprivate static func computeGroupRows(_ sessions: [AgentSession]) -> [SidebarRow] {
         var seenGroups = Set<UUID>()
         var rows: [SidebarRow] = []
         for session in sessions.sorted(by: { $0.lastEventAt > $1.lastEventAt }) {

@@ -10,11 +10,7 @@
 // `resources: [.process("Fixtures")]` directive.
 
 import XCTest
-#if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
-#endif
 @testable import ClawdmeterShared
 
 final class RelayCodecCryptoTests: XCTestCase {

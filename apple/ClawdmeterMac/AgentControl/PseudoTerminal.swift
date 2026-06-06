@@ -1,15 +1,5 @@
 import Foundation
-#if canImport(Darwin)
 import Darwin
-#elseif canImport(Glibc)
-// On Linux: openpty(3) lives in libutil (not Glibc proper). The linux/
-// package adds a `CLibUtil` system-shim module map that exports
-// <pty.h> + `link "util"`. Phase 2's daemon move (T5) is what brings
-// this file into shared; until then `#elseif canImport(Glibc)` here
-// just documents the Linux story.
-import Glibc
-import CLibUtil
-#endif
 
 /// Minimal pseudo-terminal helper. Wraps `openpty(3)` and `forkpty`-style
 /// process spawning so we can run interactive subprocesses (like `tmux -CC`
@@ -144,7 +134,7 @@ public final class PseudoTerminal {
         // a file-action so it applies in the child only (no daemon-wide chdir
         // race). cwd-with-a-space is safe — no shell parsing involved.
         if let cwd {
-            _ = cwd.withCString { posix_spawn_file_actions_addchdir_np(&fileActions, $0) }
+            _ = cwd.withCString { posix_spawn_file_actions_addchdir(&fileActions, $0) }
         }
 
         // Dup slave fd to stdin (0), stdout (1), stderr (2)
