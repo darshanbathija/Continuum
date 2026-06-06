@@ -3,6 +3,10 @@ import XCTest
 
 final class AgentControlClientDesktopSyncTests: XCTestCase {
 
+    private final class SentBox {
+        var frames: [RelayMuxFrame] = []
+    }
+
     @MainActor
     func testSnapshotEventReplacesSessionsAndAdvancesCursor() async throws {
         let client = AgentControlClient()
@@ -86,6 +90,27 @@ final class AgentControlClientDesktopSyncTests: XCTestCase {
         XCTAssertEqual(client.desktopEventSyncLastSeq, 8)
     }
 
+    @MainActor
+    func testRelayEventSyncUnsubscribesStaleRelayBeforeDirectFallback() async {
+        let oldThreshold = AgentControlClient.desktopEventRelayStalenessThreshold
+        AgentControlClient.desktopEventRelayStalenessThreshold = 0.05
+        defer { AgentControlClient.desktopEventRelayStalenessThreshold = oldThreshold }
+
+        let sent = SentBox()
+        let mux = RelayMuxClient(send: { sent.frames.append($0) }, makeOpId: { "events-op" })
+        let client = AgentControlClient()
+        client.relayMux = mux
+
+        client.startDesktopEventSync()
+
+        let subscribed = await waitUntil { sent.frames.contains { $0.kind == .subscribe } }
+        XCTAssertTrue(subscribed, "desktop sync must subscribe over relay first")
+
+        let unsubscribed = await waitUntil { sent.frames.contains { $0.kind == .unsubscribe && $0.opId == "events-op" } }
+        XCTAssertTrue(unsubscribed, "a stale relay events stream must unsubscribe before fallback")
+        client.stopDesktopEventSync()
+    }
+
     private func makeSession(id: UUID, status: AgentSessionStatus, seq: UInt64) -> AgentSession {
         AgentSession(
             id: id,
@@ -114,5 +139,15 @@ final class AgentControlClientDesktopSyncTests: XCTestCase {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(value)
         return String(decoding: data, as: UTF8.self)
+    }
+
+    @MainActor
+    private func waitUntil(_ timeout: TimeInterval = 2, _ cond: @escaping () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if cond() { return true }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return cond()
     }
 }

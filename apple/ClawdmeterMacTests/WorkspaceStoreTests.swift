@@ -198,6 +198,20 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    func test_worktreeRemoveFailureReasonTreatsNonZeroExitAsSkipped() {
+        let failed = ShellRunner.Result(
+            exitStatus: 128,
+            stdout: Data(),
+            stderr: Data("fatal: not a git repository".utf8)
+        )
+
+        let reason = WorktreeManager.worktreeRemoveFailureReason(failed)
+
+        XCTAssertEqual(reason, "git worktree remove failed: fatal: not a git repository")
+        let ok = ShellRunner.Result(exitStatus: 0, stdout: Data(), stderr: Data())
+        XCTAssertNil(WorktreeManager.worktreeRemoveFailureReason(ok))
+    }
+
     func test_setProviderDefaults_updatesAndPersists() throws {
         let store = WorkspaceStore(storeURL: workspacesURL, sessionsURL: sessionsURL)
         let record = CodeWorkspaceRecord(

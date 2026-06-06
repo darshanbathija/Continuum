@@ -40,6 +40,12 @@ public final class UsageModel: ObservableObject {
     /// `/usage` response carrying a `gemini` entry.
     @Published public private(set) var geminiSnapshot: UsageStore.Snapshot?
 
+    /// Cursor snapshot mirrored from the paired Mac daemon's `/usage`
+    /// dict. Cursor usage is polled on the Mac from the Cursor Agent
+    /// account and mirrored to iOS widgets/watch through the same
+    /// provider-keyed path as Gemini.
+    @Published public private(set) var cursorSnapshot: UsageStore.Snapshot?
+
     /// Aggregated token-analytics snapshot mirrored from the Mac via iCloud
     /// KV. `nil` until the Mac has run with the iCloud entitlement live.
     /// Drives the iOS Analytics tab. Plan A19.
@@ -194,6 +200,17 @@ public final class UsageModel: ObservableObject {
                     usage: gemini,
                     stale: gemini.status == .unknown
                 )
+            }
+            if let cursor = usage.usageData(for: "cursor") {
+                cursorSnapshot = UsageStore.Snapshot(
+                    providerID: "cursor",
+                    displayName: "Cursor",
+                    usage: cursor,
+                    writtenAt: usage.lastChecked
+                )
+                UsageStore.write(cursor, providerID: "cursor", displayName: "Cursor")
+                UsageStore.reloadWidgets(providerID: "cursor")
+                WatchTokenBridge.shared.pushUsage(providerID: "cursor", cursor)
             }
         }
         if let snap = await analyticsPayload {

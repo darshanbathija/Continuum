@@ -143,6 +143,7 @@ struct PairingSettingsView: View {
         }
     }
 
+    @ViewBuilder
     private var relayUnpairedRow: some View {
         HStack {
             VStack(alignment: .leading, spacing: 6) {
@@ -155,9 +156,15 @@ struct PairingSettingsView: View {
             }
             Spacer()
             Button("Pair iPhone") {
-                pairingService.beginPairing()
+                Task { await pairingService.beginPairing() }
             }
             .keyboardShortcut(.defaultAction)
+        }
+        if let lastError = pairingService.lastError {
+            Text(lastError)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -196,7 +203,7 @@ struct PairingSettingsView: View {
                                 .foregroundStyle(.green)
                         }
                         Spacer()
-                        Button("Regenerate", action: { pairingService.beginPairing() })
+                        Button("Regenerate", action: { Task { await pairingService.beginPairing() } })
                     }
                     .padding(.top, 4)
                     if pairingService.phase == .readyButNotConnected {

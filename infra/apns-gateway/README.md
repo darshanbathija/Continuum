@@ -23,7 +23,7 @@ For the higher-level design + threat model, see [`../../docs/design/secure-relay
 {
   "deviceToken": "<64-hex-char APNS token>",
   "encryptedPayload": "<base64/base64url opaque ciphertext, max 3500 chars>",
-  "topic": "com.clawdmeter.mac",
+  "topic": "ai.continuum.ios",
   "sessionId": "<pairing-session-id, [A-Za-z0-9_-]{8,128}>",
   "senderMacFingerprint": "<64-hex SHA-256 of Mac pairing pubkey>",
   "priority": 10,
@@ -72,24 +72,27 @@ Returns `200 { ok: true, purged: true }` on success, `401` if the signature does
   "killSwitch": false,
   "apnsEndpoint": "https://api.push.apple.com",
   "topicEnv": "production",
+  "p8IssuedAtValid": true,
   "p8AgeSeconds": 1234567,
   "p8MaxAgeSeconds": 7776000,
   "p8Stale": false
 }
 ```
 
-Returns `503` instead of `200` when `p8Stale === true`. The rotation-drill CI job at `.github/workflows/deploy-apns-gateway.yml` polls this and fails the build to nag the operator.
+Returns `503` instead of `200` when `APNS_P8_ISSUED_AT` is missing/invalid/future or when `p8Stale === true`. The rotation-drill CI job at `.github/workflows/deploy-apns-gateway.yml` polls this and fails the build to nag the operator.
 
 ## Auth model (matches E2 relay)
 
-Bearer token = HMAC-SHA256, with the message bound to the pairing session id + Mac fingerprint:
+Bearer token = versioned HMAC-SHA256, with the message bound to the pairing session id, Mac fingerprint, issue time, and one-use nonce:
 
 ```
-token = base64url( HMAC-SHA256( RELAY_BEARER_SIGNING_KEY,
-                                "apns:" + sessionId + ":" + senderMacFingerprint ) )
+token = "v1." + issuedAtSeconds + "." + nonce + "." +
+        base64url( HMAC-SHA256( RELAY_BEARER_SIGNING_KEY,
+                                "apns:" + sessionId + ":" + senderMacFingerprint + ":" +
+                                issuedAtSeconds + ":" + nonce ) )
 ```
 
-`RELAY_BEARER_SIGNING_KEY` is shared between the relay Worker and this gateway, so the per-peer token issued to the Mac at pairing time (see design doc §4.1) authorizes BOTH the relay WebSocket open AND the APNS gateway POST. The Mac client derives the token locally with the same formula; it never stores the bearer long-term — it's regenerated per-request from the pairing key.
+`RELAY_BEARER_SIGNING_KEY` is shared between the relay Worker and this gateway, so the per-peer token issued to the Mac at pairing time (see design doc §4.1) authorizes BOTH the relay WebSocket open AND the APNS gateway POST. The Mac client derives a fresh short-lived bearer per request; the gateway rejects expired tokens and consumes each nonce once to prevent replay.
 
 The shape of `expectedTokenMessage` is exported from `src/auth.ts#expectedTokenMessage` for cross-impl parity tests with the Mac/iOS Swift client.
 
@@ -97,7 +100,7 @@ The shape of `expectedTokenMessage` is exported from `src/auth.ts#expectedTokenM
 
 | # | Invariant | Where |
 |---|---|---|
-| D21.1 | Per-device rate limit (60/h, configurable) | `src/rate-limit.ts` + `RATE_LIMIT_PER_HOUR` var |
+| D21.1 | Per verified sender identity rate limit (60/h, configurable) | `src/rate-limit.ts` + `RATE_LIMIT_PER_HOUR` var |
 | D21.2 | Audit log — `(ts, deviceTokenHash, sender-fingerprint, payload-size)`, **no plaintext** | `src/audit-log.ts` + `APNS_AUDIT_LOG` KV |
 | D21.3 | Schema validation rejects malformed POSTs | `src/schema.ts` |
 | D21.4 | Rotation playbook | [ROTATION.md](ROTATION.md) |
@@ -132,9 +135,10 @@ MIGHAgEAMBMGByqGSM49AgEG..."
 APNS_P8_ISSUED_AT="1700000000"
 APNS_KEY_ID="ABCD123456"
 APNS_TEAM_ID="WXYZ987654"
-APNS_TOPIC_PRODUCTION="com.clawdmeter.iphone"
-APNS_TOPIC_SANDBOX="com.clawdmeter.iphone.sandbox"
+APNS_TOPIC_PRODUCTION="ai.continuum.ios"
+APNS_TOPIC_SANDBOX="ai.continuum.ios"
 RELAY_BEARER_SIGNING_KEY="<32-byte base64>"
+APNS_BEARER_TTL_SECONDS="300"
 ```
 
 `.dev.vars` is in `.gitignore`. Never commit secrets.
@@ -159,7 +163,7 @@ CI gates: PRs touching `infra/apns-gateway/**` get a `wrangler deploy --dry-run`
 - `src/crypto-utils.ts` — Web Crypto helpers (no Node.js APIs)
 - `src/device-tokens.ts` — codex #5 hashed-token registry + tenant binding
 - `src/env.ts` — env binding types + accessors (kill-switch, rate-limit, TTLs)
-- `src/rate-limit.ts` — D21 per-device hourly counter
+- `src/rate-limit.ts` — D21 per verified sender identity hourly counter
 - `src/schema.ts` — hand-rolled request validators (no zod — zero deps in bundle)
 - `test/` — vitest suite covering every invariant above
 - `wrangler.toml` — Worker config (4 envs: dev / staging / production / canary)

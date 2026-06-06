@@ -38,7 +38,7 @@ public final class LiveActivityCoordinator: ObservableObject {
     /// Defaults to the running app's main-bundle id, which is the value
     /// Apple expects in `apns-topic` (suffix appended Mac-side).
     public var bundleId: String {
-        Bundle.main.bundleIdentifier ?? "com.clawdmeter.iOS"
+        Bundle.main.bundleIdentifier ?? "ai.continuum.ios"
     }
 
     public init() {}

@@ -516,6 +516,7 @@ enum MacRelayFixture {
     /// fixture's `iosHandshakePubkeyBytes` so the right one shows up
     /// on the wire.
     static let macHandshakePubkeyBytes: Data = Data(repeating: 0x55, count: 32)
+    static let testRelayOperatorSigningKey = Data("0123456789abcdef0123456789abcdef".utf8)
 
     static func defaultConfig(
         sid: String = "test-session-123456789abcdef",
@@ -525,14 +526,27 @@ enum MacRelayFixture {
         ttl: UInt64? = nil
     ) -> MacRelayClientConfig {
         let now = UInt64(Date().timeIntervalSince1970)
+        let resolvedTTL = ttl ?? (now + 900)
+        let macHash = MacRelayClientConfig.sha256Hex(macTok)
+        let iosHash = MacRelayClientConfig.sha256Hex(iosTok)
+        let proof = RelaySessionCreationProof.issue(
+            signingKey: testRelayOperatorSigningKey,
+            sessionId: sid,
+            macTokenHash: macHash,
+            iosTokenHash: iosHash,
+            ttlSeconds: resolvedTTL,
+            issuedAtSeconds: 1_700_000_000,
+            nonce: "relay_creation_nonce_123"
+        )
         return MacRelayClientConfig(
             sid: sid,
             macTok: macTok,
-            macTokHashHex: MacRelayClientConfig.sha256Hex(macTok),
-            iosTokHashHex: MacRelayClientConfig.sha256Hex(iosTok),
+            macTokHashHex: macHash,
+            iosTokHashHex: iosHash,
             relayUrl: relayUrl,
-            ttl: ttl ?? (now + 900),
-            ourPublicKeyBytes: macHandshakePubkeyBytes
+            ttl: resolvedTTL,
+            ourPublicKeyBytes: macHandshakePubkeyBytes,
+            creationProof: proof
         )
     }
 

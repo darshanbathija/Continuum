@@ -615,9 +615,14 @@ final class AppRuntime: ObservableObject {
                 return await dispatcher?.dispatch(inbound)
             }
         )
-        // Track B (review P0#2): on a fresh iOS (re)handshake, drop the bridge's
-        // stale loopback streams so the iOS resubscribe re-opens them.
-        client.onPeerReconnect = { [weak self] in self?.relaySubscriptionBridge?.shutdownAll() }
+        // Track B (P1-7): on a fresh iOS (re)handshake, repair active
+        // loopback streams immediately. iOS still resubscribes on its own
+        // reconnect path, but Mac-side reconnects should not wait for that.
+        client.onPeerReconnect = { [weak self] in
+            Task { @MainActor [weak self] in
+                await self?.relaySubscriptionBridge?.reopenLiveSubscriptions()
+            }
+        }
         relayClient = client
         client.start()
         runtimeLogger.info(
@@ -653,7 +658,13 @@ final class AppRuntime: ObservableObject {
         if let envelope,
            let dict = try? JSONSerialization.jsonObject(with: envelope) as? [String: Any] {
             status = dict["status"] as? Int ?? 502
-            if let s = dict["body"] as? String { body = Data(s.utf8) }
+            if let encoded = dict["bodyBase64"] as? String,
+               let decoded = Data(base64Encoded: encoded),
+               (dict["bodyLength"] as? Int).map({ $0 == decoded.count }) ?? true {
+                body = decoded
+            } else if let s = dict["body"] as? String {
+                body = Data(s.utf8)
+            }
         }
         await sendMuxResponse(opId: frame.opId, status: status, body: body)
     }

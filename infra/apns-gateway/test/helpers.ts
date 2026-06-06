@@ -111,13 +111,14 @@ const SIGNING_KEY_BYTES = new Uint8Array(32);
 crypto.getRandomValues(SIGNING_KEY_BYTES);
 const SIGNING_KEY_B64 = base64UrlEncode(SIGNING_KEY_BYTES);
 
-const TEST_TOPIC = "com.clawdmeter.mac";
+const TEST_TOPIC = "ai.continuum.ios";
 
 export interface MakeEnvOpts {
   killSwitch?: boolean;
   ratePerHour?: number;
+  bearerTtlSeconds?: number;
   topicEnv?: "sandbox" | "production";
-  p8IssuedAt?: number;
+  p8IssuedAt?: number | null;
 }
 
 export async function makeEnv(opts: MakeEnvOpts = {}): Promise<Env> {
@@ -129,6 +130,7 @@ export async function makeEnv(opts: MakeEnvOpts = {}): Promise<Env> {
     ENVIRONMENT: "development",
     LOG_LEVEL: "debug",
     RATE_LIMIT_PER_HOUR: String(opts.ratePerHour ?? 60),
+    APNS_BEARER_TTL_SECONDS: String(opts.bearerTtlSeconds ?? 300),
     APNS_ENDPOINT: "https://api.sandbox.push.apple.com",
     TOPIC_ENV: opts.topicEnv ?? "sandbox",
     APNS_DISABLED: opts.killSwitch ? "true" : "false",
@@ -136,10 +138,10 @@ export async function makeEnv(opts: MakeEnvOpts = {}): Promise<Env> {
     AUDIT_LOG_TTL_SECONDS: "7776000",
     P8_MAX_AGE_SECONDS: "7776000",
     APNS_P8_KEY: p8Pem,
-    APNS_P8_ISSUED_AT: String(opts.p8IssuedAt ?? issuedAt),
+    APNS_P8_ISSUED_AT: opts.p8IssuedAt === null ? "" : String(opts.p8IssuedAt ?? issuedAt),
     APNS_KEY_ID: "TESTKID123",
     APNS_TEAM_ID: "TESTTEAM01",
-    APNS_TOPIC_PRODUCTION: "com.clawdmeter.iphone",
+    APNS_TOPIC_PRODUCTION: "ai.continuum.ios",
     APNS_TOPIC_SANDBOX: TEST_TOPIC,
     RELAY_BEARER_SIGNING_KEY: SIGNING_KEY_B64,
   };

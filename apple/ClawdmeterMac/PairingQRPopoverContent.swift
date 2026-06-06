@@ -72,7 +72,7 @@ struct PairingQRPopoverContent: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Button(action: { pairingService.beginPairing() }) {
+            Button(action: { Task { await pairingService.beginPairing() } }) {
                 HStack(spacing: 6) {
                     Image(systemName: "qrcode")
                     Text("Pair iPhone")
@@ -82,6 +82,12 @@ struct PairingQRPopoverContent: View {
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
             .tint(terraCotta)
+            if let lastError = pairingService.lastError {
+                Text(lastError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -114,7 +120,7 @@ struct PairingQRPopoverContent: View {
                     .controlSize(.large)
                     .buttonStyle(.borderedProminent)
                     .tint(terraCotta)
-                    Button(action: { pairingService.beginPairing() }) {
+                    Button(action: { Task { await pairingService.beginPairing() } }) {
                         Image(systemName: "arrow.clockwise")
                     }
                     .controlSize(.large)

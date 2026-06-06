@@ -41,7 +41,7 @@ public struct ChimeSettings: Codable, Sendable {
     public var quietStartMinutes: Int
     public var quietEndMinutes: Int
 
-    public init(pack: ChimePack = .off, quietStartMinutes: Int = 22 * 60, quietEndMinutes: Int = 7 * 60) {
+    public init(pack: ChimePack = .bell, quietStartMinutes: Int = 22 * 60, quietEndMinutes: Int = 7 * 60) {
         self.pack = pack
         self.quietStartMinutes = quietStartMinutes
         self.quietEndMinutes = quietEndMinutes

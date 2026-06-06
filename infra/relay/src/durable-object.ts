@@ -38,6 +38,7 @@ import {
 import {
   extractBearerToken,
   validateBearer,
+  validateSessionCreationProof,
   isValidAuthBundle,
   type SessionAuthBundle,
   type PeerRole,
@@ -49,6 +50,8 @@ export interface RelayEnv {
   RELAY_AUDIT_LOG?: KVNamespace;
   RELAY_RATE_LIMIT?: KVNamespace;
   RELAY_OPERATOR_SIGNING_KEY?: string;
+  RELAY_BEARER_SIGNING_KEY?: string;
+  RELAY_CREATION_GRANT_TOKEN?: string;
   SESSION_TTL_SECONDS: string;
   LOG_LEVEL: string;
   ENVIRONMENT: string;
@@ -102,7 +105,7 @@ export class RelaySession {
       return this.handleConnect(request);
     }
     if (url.pathname === "/admin/stats" && request.method === "GET") {
-      return this.handleStats();
+      return this.handleStats(request);
     }
     return new Response("not found", { status: 404 });
   }
@@ -118,11 +121,13 @@ export class RelaySession {
       return new Response("missing bearer token", { status: 401 });
     }
 
+    const nowSeconds = Math.floor(Date.now() / 1000);
+
     // First-peer bootstrap: if no auth bundle is stored, the first peer must
-    // upload the (macTokenHash, iosTokenHash, ttlSeconds) tuple as
-    // `?bundle=<base64-json>` on connect. Subsequent connects just present
-    // their token. This means the QR generator (Mac at pairing time) does the
-    // upload; the relay never learns the raw tokens, only their hashes.
+    // upload the signed (macTokenHash, iosTokenHash, ttlSeconds, creation)
+    // bundle as `?bundle=<base64-json>` on connect. Subsequent connects just
+    // present their token. The relay never learns raw tokens, only their
+    // hashes, and the operator signature prevents arbitrary session creation.
     const existing = await this.loadState();
     let bundle: SessionAuthBundle;
     if (existing) {
@@ -145,9 +150,19 @@ export class RelaySession {
         return new Response("bundle param failed shape validation", { status: 400 });
       }
       bundle = decoded;
+      const creationAuth = await validateSessionCreationProof(
+        this.env.RELAY_OPERATOR_SIGNING_KEY,
+        request.headers.get("x-relay-session-id"),
+        bundle,
+        nowSeconds
+      );
+      if (!creationAuth.ok) {
+        return new Response(`session creation unauthorized: ${creationAuth.reason}`, {
+          status: creationAuth.status,
+        });
+      }
     }
 
-    const nowSeconds = Math.floor(Date.now() / 1000);
     const result = await validateBearer(token, bundle, nowSeconds);
     if (!result.ok) {
       return new Response(`auth failed: ${result.reason}`, { status: 403 });
@@ -229,12 +244,18 @@ export class RelaySession {
 
   /** Stats endpoint for tests + the README "no plaintext in logs" assertion.
    * Returns aggregate counts and the auth bundle hashes ONLY; no body content. */
-  private async handleStats(): Promise<Response> {
+  private async handleStats(request: Request): Promise<Response> {
+    const token = extractBearerToken(request);
+    if (!token) {
+      return new Response("missing bearer token", { status: 401 });
+    }
     const s = await this.loadState();
     if (!s) {
-      return new Response(JSON.stringify({ initialized: false }), {
-        headers: { "content-type": "application/json" },
-      });
+      return new Response("session not initialized", { status: 404 });
+    }
+    const result = await validateBearer(token, s.auth, Math.floor(Date.now() / 1000));
+    if (!result.ok) {
+      return new Response(`auth failed: ${result.reason}`, { status: 403 });
     }
     const liveSockets = this.state.getWebSockets();
     return new Response(

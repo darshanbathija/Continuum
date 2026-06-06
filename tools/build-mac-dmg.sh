@@ -69,9 +69,15 @@ VERSION="$(/usr/bin/xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
     -configuration Release -showBuildSettings 2>/dev/null \
     | awk -F' = ' '/MARKETING_VERSION/ {print $2; exit}' \
     | tr -d '[:space:]')"
-if [[ -z "$VERSION" ]]; then
+if [[ -z "$VERSION" || "$VERSION" == *'$('* ]]; then
   VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
-      apple/ClawdmeterMac/Info.plist 2>/dev/null || echo "0.1.0")"
+      apple/ClawdmeterMac/Info.plist 2>/dev/null || true)"
+fi
+if [[ -z "$VERSION" || "$VERSION" == *'$('* ]]; then
+  VERSION="$(awk -F'"' '/MARKETING_VERSION:/ {print $2; exit}' apple/project.yml | tr -d '[:space:]')"
+fi
+if [[ -z "$VERSION" || "$VERSION" == *'$('* ]]; then
+  VERSION="0.1.0"
 fi
 
 DMG_NAME="${APP_NAME}-${VERSION}-arm64.dmg"
@@ -105,6 +111,12 @@ echo "  signing:   $SIGN_MODE${DEVID_ID:+ ($DEVID_ID)}"
 echo "  notarize:  $([[ $NOTARIZE_READY == 1 && $SIGN_MODE == developerid ]] && echo yes || echo no)"
 echo ""
 
+if [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY != 1 && "${CLAWDMETER_ALLOW_UNNOTARIZED_DEVID:-0}" != "1" ]]; then
+  echo "✗ Developer ID signing was detected, but App Store Connect notarization env is incomplete." >&2
+  echo "  Source ~/.continuum-ci.env, or set CLAWDMETER_ALLOW_UNNOTARIZED_DEVID=1 for an explicit local-only build." >&2
+  exit 1
+fi
+
 # ────────────────────────────────────────────────────────────────────────
 # 1. Clean output dirs
 # ────────────────────────────────────────────────────────────────────────
@@ -121,6 +133,12 @@ if [[ "${CLAWDMETER_SKIP_BUNDLED_TMUX:-0}" != "1" ]]; then
   ./tools/download-bundled-tmux.sh
 else
   echo "⚠ Skipping bundled tmux download (CLAWDMETER_SKIP_BUNDLED_TMUX=1)"
+fi
+
+if [[ "${CLAWDMETER_SKIP_BUNDLED_OPENCODE:-0}" != "1" ]]; then
+  ./tools/download-bundled-opencode.sh
+else
+  echo "⚠ Skipping bundled opencode download (CLAWDMETER_SKIP_BUNDLED_OPENCODE=1)"
 fi
 
 # ────────────────────────────────────────────────────────────────────────
@@ -141,13 +159,13 @@ if [[ "$SIGN_MODE" == "developerid" ]]; then
         bundle exec fastlane run update_code_signing_settings \
           path:"Clawdmeter.xcodeproj" use_automatic_signing:false team_id:"$DEV_TEAM" \
           targets:"$tgt" code_sign_identity:"Developer ID Application" \
-          profile_name:"$prof" >/dev/null 2>&1 \
-          && echo "  ✓ $tgt → $prof" \
-          || echo "  ⚠ could not patch $tgt (is the '$prof' profile installed?)"
+          profile_name:"$prof" >/dev/null 2>&1
+        echo "  ✓ $tgt → $prof"
       done
     )
   else
-    echo "⚠ bundler/fastlane not found — cannot set manual signing; archive may fail on App Groups."
+    echo "✗ bundler/fastlane not found — cannot set manual Developer ID signing." >&2
+    exit 1
   fi
 fi
 
@@ -207,6 +225,19 @@ APP_PATH="$EXPORT_DIR/${APP_NAME}.app"
 [[ -d "$APP_PATH" ]] || { echo "✗ No .app produced"; exit 1; }
 echo "✓ App exported: $APP_PATH"
 
+REQUIRED_VENDOR_BINS=(
+  "$APP_PATH/Contents/Resources/Vendor/opencode/opencode"
+  "$APP_PATH/Contents/Resources/Vendor/tmux/bin/tmux"
+  "$APP_PATH/Contents/Resources/Vendor/uv/uv"
+)
+for BIN in "${REQUIRED_VENDOR_BINS[@]}"; do
+  if [[ ! -x "$BIN" ]]; then
+    echo "✗ Required bundled runtime missing or not executable: $BIN" >&2
+    echo "  Re-run without CLAWDMETER_SKIP_BUNDLED_* overrides." >&2
+    exit 1
+  fi
+done
+
 # ────────────────────────────────────────────────────────────────────────
 # 6. Re-sign the bundled helper binaries.
 #
@@ -247,16 +278,16 @@ if [[ -n "$SIGN_ID" ]]; then
   # tmux dylibs (glob — versions drift) + tmux binary: runtime, no entitlements.
   shopt -s nullglob
   for DYLIB in "$V/tmux/lib/"*.dylib; do
-    codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" "$TS_FLAG" "$DYLIB" 2>&1 | sed 's/^/    /' || echo "    ⚠ failed: $DYLIB"
+    codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" "$TS_FLAG" "$DYLIB" 2>&1 | sed 's/^/    /'
   done
   shopt -u nullglob
   for BIN in "$V/tmux/bin/tmux"; do
-    [[ -f "$BIN" ]] && { codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" "$TS_FLAG" "$BIN" 2>&1 | sed 's/^/    /' || echo "    ⚠ failed: $BIN"; }
+    [[ -f "$BIN" ]] && codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" "$TS_FLAG" "$BIN" 2>&1 | sed 's/^/    /'
   done
   # opencode + uv: runtime + disable-library-validation.
   for BIN in "$V/opencode/opencode" "$V/uv/uv"; do
     if [[ -f "$BIN" && -f "$HELPER_ENT" ]]; then
-      codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" --entitlements "$HELPER_ENT" "$TS_FLAG" "$BIN" 2>&1 | sed 's/^/    /' || echo "    ⚠ failed: $BIN"
+      codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" --entitlements "$HELPER_ENT" "$TS_FLAG" "$BIN" 2>&1 | sed 's/^/    /'
     fi
   done
   # Sparkle's nested helpers arrive ad-hoc signed from SwiftPM. Notarization
@@ -280,13 +311,14 @@ if [[ -n "$SIGN_ID" ]]; then
   OUTER_ENT="$(mktemp -t outer-ent.XXXXXX.plist)"
   sed "s|\$(AppIdentifierPrefix)|${DEV_TEAM}.|g" \
       "$REPO_ROOT/apple/ClawdmeterMac/ClawdmeterMac-Release.entitlements" > "$OUTER_ENT"
-  codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" --entitlements "$OUTER_ENT" "$TS_FLAG" "$APP_PATH" 2>&1 | sed 's/^/    /' || echo "    ⚠ outer codesign failed"
+  codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" --entitlements "$OUTER_ENT" "$TS_FLAG" "$APP_PATH" 2>&1 | sed 's/^/    /'
   rm -f "$OUTER_ENT"
 else
-  echo "⚠ Skipping helper re-sign — could not determine a signing identity"
+  echo "✗ Could not determine a signing identity for helper re-signing." >&2
+  exit 1
 fi
 
-codesign --verify --deep --strict "$APP_PATH" 2>&1 | head -3 || true
+codesign --verify --deep --strict "$APP_PATH" 2>&1 | head -3
 
 # ────────────────────────────────────────────────────────────────────────
 # 7. (Optional) staple the bare app bundle. The distributable artifact is the
@@ -302,9 +334,10 @@ if [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 && "${CLAWDMETER_SKI
   if xcrun notarytool submit "$APP_ZIP" \
        --key "$ASC_KEY_FILE" --key-id "$CLAWDMETER_ASC_KEY_ID" \
        --issuer "$CLAWDMETER_ASC_ISSUER_ID" --wait 2>&1 | tee "$BUILD_DIR/notarize-app.log" | grep -q "status: Accepted"; then
-    xcrun stapler staple "$APP_PATH" 2>&1 | sed 's/^/    /' || echo "    ⚠ app staple failed (ticket may still be online-verifiable)"
+    xcrun stapler staple "$APP_PATH" 2>&1 | sed 's/^/    /'
   else
-    echo "    ⚠ app notarization not Accepted — see $BUILD_DIR/notarize-app.log"
+    echo "✗ app notarization not Accepted — see $BUILD_DIR/notarize-app.log" >&2
+    exit 1
   fi
   rm -f "$APP_ZIP"
 elif [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 ]]; then
@@ -355,12 +388,14 @@ if [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 && "${CLAWDMETER_SKI
     xcrun stapler staple "$DMG_PATH" 2>&1 | sed 's/^/    /'
     echo "✓ DMG notarized + stapled"
   else
-    echo "⚠ DMG notarization not Accepted — see $BUILD_DIR/notarize-dmg.log"
+    echo "✗ DMG notarization not Accepted — see $BUILD_DIR/notarize-dmg.log" >&2
+    exit 1
   fi
 elif [[ "$SIGN_MODE" == "developerid" && "${CLAWDMETER_SKIP_BUILD_SCRIPT_NOTARIZATION:-0}" == "1" ]]; then
   echo "▸ Skipping build-script DMG notarization; release-mac.sh owns the notarization gate."
 elif [[ "$SIGN_MODE" == "developerid" ]]; then
-  echo "⚠ Developer ID signed but NOT notarized (no ASC API key env). Source ~/.continuum-ci.env to enable notarization."
+  echo "✗ Developer ID signed but NOT notarized." >&2
+  exit 1
 fi
 
 # ────────────────────────────────────────────────────────────────────────
@@ -369,16 +404,21 @@ fi
 
 echo "▸ Verifying DMG…"
 MOUNT_POINT=$(hdiutil attach -nobrowse -readonly "$DMG_PATH" 2>&1 | grep -o '/Volumes/[^ ]*' | head -1)
+[[ -n "$MOUNT_POINT" ]] || { echo "✗ DMG did not mount"; exit 1; }
+cleanup_mount() { hdiutil detach "$MOUNT_POINT" -quiet >/dev/null 2>&1 || true; }
+trap cleanup_mount EXIT
 if [[ -d "$MOUNT_POINT/${APP_NAME}.app" ]]; then
   echo "✓ DMG mounts and contains ${APP_NAME}.app"
-  codesign --verify --deep --strict "$MOUNT_POINT/${APP_NAME}.app" 2>&1 | head -2 || true
+  codesign --verify --deep --strict "$MOUNT_POINT/${APP_NAME}.app" 2>&1 | head -2
   if [[ "$SIGN_MODE" == "developerid" ]]; then
-    spctl -a -vvv -t exec "$MOUNT_POINT/${APP_NAME}.app" 2>&1 | head -2 || true
+    spctl -a -vvv -t exec "$MOUNT_POINT/${APP_NAME}.app" 2>&1 | head -2
   fi
 else
   echo "✗ DMG mounted but no ${APP_NAME}.app inside"
+  exit 1
 fi
 hdiutil detach "$MOUNT_POINT" -quiet
+trap - EXIT
 
 DMG_MB=$(( $(stat -f%z "$DMG_PATH") / 1024 / 1024 ))
 echo "✓ DMG size ${DMG_MB}MB"

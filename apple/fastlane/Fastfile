@@ -76,7 +76,7 @@ end
 # Mac DMG build
 # ---------------------------------------------------------------------
 
-desc "Package the Mac app into a local DMG. Sparkle publishing uses release_mac_sparkle."
+desc "Package the Mac app into a local DMG via tools/build-mac-dmg.sh. Sparkle publishing uses release_mac_sparkle."
 lane :build_mac_dmg do
   build = current_build_number
   market = current_marketing_version
@@ -195,8 +195,8 @@ lane :continuum_bootstrap_ids do
   specs = [
     ["ai.continuum.ios",          ios, "Continuum iOS"],
     ["ai.continuum.ios.widgets",  ios, "Continuum iOS Widgets"],
-    ["ai.continuum.watch",        ios, "Continuum Watch"],
-    ["ai.continuum.watch.widgets",ios, "Continuum Watch Widgets"],
+    ["ai.continuum.ios.watchkitapp",        ios, "Continuum Watch"],
+    ["ai.continuum.ios.watchkitapp.widgets",ios, "Continuum Watch Widgets"],
     ["ai.continuum.mac",          mac, "Continuum Mac"],
     ["ai.continuum.mac.widgets",  mac, "Continuum Mac Widgets"],
   ]

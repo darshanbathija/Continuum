@@ -134,7 +134,7 @@ describe("validatePushRequest", () => {
   it("accepts the production topic when TOPIC_ENV is production", async () => {
     const env = await makeEnv({ topicEnv: "production" });
     const r = validatePushRequest(
-      makePushBody({ topic: "com.clawdmeter.iphone" }),
+      makePushBody({ topic: "ai.continuum.ios" }),
       env,
     );
     expect(r.ok).toBe(true);

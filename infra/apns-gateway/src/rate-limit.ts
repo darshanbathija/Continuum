@@ -1,5 +1,6 @@
-// KV-backed per-device hourly counter (D21 mitigation suite). 60 pushes /
-// device / hour by default; configurable via RATE_LIMIT_PER_HOUR var.
+// KV-backed per-verified-identity hourly counter (D21 mitigation suite).
+// 60 pushes / pairing identity / hour by default; configurable via
+// RATE_LIMIT_PER_HOUR var.
 //
 // We bucket by floor(nowSeconds / 3600) so the counter rolls over cleanly
 // without needing a sliding-window store. Conservative — a burst at the
@@ -13,6 +14,7 @@
 
 import type { Env } from "./env.js";
 import { rateLimitPerHour } from "./env.js";
+import { sha256HexOfString } from "./crypto-utils.js";
 
 export interface RateLimitDecision {
   readonly allowed: boolean;
@@ -27,8 +29,15 @@ function bucketFor(nowSeconds: number): number {
   return Math.floor(nowSeconds / 3600);
 }
 
-function keyFor(deviceTokenHash: string, bucket: number): string {
-  return `rl:${deviceTokenHash}:${bucket}`;
+function keyFor(subjectHash: string, bucket: number): string {
+  return `rl:${subjectHash}:${bucket}`;
+}
+
+export async function rateLimitSubjectHash(
+  sessionId: string,
+  senderMacFingerprint: string,
+): Promise<string> {
+  return sha256HexOfString(`apns-rate-limit:${sessionId}:${senderMacFingerprint}`);
 }
 
 /**
@@ -38,12 +47,12 @@ function keyFor(deviceTokenHash: string, bucket: number): string {
  */
 export async function checkRateLimit(
   env: Env,
-  deviceTokenHash: string,
+  subjectHash: string,
   nowSeconds: number,
 ): Promise<RateLimitDecision> {
   const limit = rateLimitPerHour(env);
   const bucket = bucketFor(nowSeconds);
-  const key = keyFor(deviceTokenHash, bucket);
+  const key = keyFor(subjectHash, bucket);
 
   const existing = await env.APNS_RATE_LIMIT.get(key);
   const used = existing ? Number.parseInt(existing, 10) || 0 : 0;
@@ -67,12 +76,12 @@ export async function checkRateLimit(
  */
 export async function peekRateLimit(
   env: Env,
-  deviceTokenHash: string,
+  subjectHash: string,
   nowSeconds: number,
 ): Promise<RateLimitDecision> {
   const limit = rateLimitPerHour(env);
   const bucket = bucketFor(nowSeconds);
-  const key = keyFor(deviceTokenHash, bucket);
+  const key = keyFor(subjectHash, bucket);
   const existing = await env.APNS_RATE_LIMIT.get(key);
   const used = existing ? Number.parseInt(existing, 10) || 0 : 0;
   const resetSeconds = 3600 - (nowSeconds % 3600);

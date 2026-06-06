@@ -104,7 +104,18 @@ final class MacRelayClientReconnectTests: XCTestCase {
         // SHOULD NOT (the DO is initialized).
         let c0 = URLComponents(url: urls[0], resolvingAgainstBaseURL: false)
         let c1 = URLComponents(url: urls[1], resolvingAgainstBaseURL: false)
-        XCTAssertNotNil(c0?.queryItems?.first(where: { $0.name == "bundle" }))
+        let bundleParam = try XCTUnwrap(c0?.queryItems?.first(where: { $0.name == "bundle" })?.value)
+        let bundleData = try XCTUnwrap(Data(base64Encoded: bundleParam))
+        let bundleObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: bundleData) as? [String: Any]
+        )
+        let creation = try XCTUnwrap(bundleObject["creation"] as? [String: Any])
+        XCTAssertEqual(bundleObject["macTokenHash"] as? String, cfg.macTokHashHex)
+        XCTAssertEqual(bundleObject["iosTokenHash"] as? String, cfg.iosTokHashHex)
+        XCTAssertEqual((bundleObject["ttlSeconds"] as? NSNumber)?.uint64Value, cfg.ttl)
+        XCTAssertEqual((creation["issuedAtSeconds"] as? NSNumber)?.uint64Value, cfg.creationProof?.issuedAtSeconds)
+        XCTAssertEqual(creation["nonce"] as? String, cfg.creationProof?.nonce)
+        XCTAssertEqual(creation["signature"] as? String, cfg.creationProof?.signature)
         XCTAssertNil(c1?.queryItems?.first(where: { $0.name == "bundle" }))
         client.stop()
     }

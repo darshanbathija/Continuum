@@ -773,6 +773,22 @@ final class UsageHistoryTests: XCTestCase {
         XCTAssertGreaterThan(snapshot.gemini.allTime.totals.totalTokens, 0, "agy .db usage must contribute tokens to the gemini bucket")
     }
 
+    func test_opencodeEmbeddedCostSurvivesUnknownPricing() {
+        let record = UsageRecord(
+            provider: .opencode,
+            timestamp: Date(),
+            model: "unknown-opencode/byok-model",
+            tokens: TokenTotals(inputTokens: 100, outputTokens: 20, costUSD: Decimal(string: "0.0123")!),
+            repo: "/repo",
+            dedupKey: "opencode-message"
+        )
+
+        let resolved = UsageHistoryLoader.tokensWithResolvedCost(record)
+
+        XCTAssertEqual(resolved.tokens.costUSD, Decimal(string: "0.0123")!)
+        XCTAssertTrue(resolved.isPriced, "embedded OpenCode cost means the record should not be flagged unpriced")
+    }
+
     // MARK: - Helpers
 
     private func writeTempFile(name: String, lines: [String]) throws -> URL {

@@ -15,7 +15,8 @@ private let registryLogger = Logger(subsystem: "com.clawdmeter.mac", category: "
 /// Clawdmeter/sessions.json` for restart resilience.
 ///
 /// Sessions v2 (T41 audit): every mutation goes through the single `with()`
-/// helper so new fields (`effort`, `abPairSessionId`, `abPairDecidedAt`)
+/// helper so new fields (`effort`, `abPairSessionId`, `abPairDecidedAt`,
+/// `abPairWinnerSessionId`)
 /// propagate automatically. Adding a new field is a one-line change here
 /// instead of N parallel constructor calls.
 @MainActor
@@ -662,20 +663,24 @@ public final class AgentSessionRegistry: ObservableObject {
         guard winner == sessionId || winner == siblingId else {
             return .invalidWinner
         }
+        let sibling = session(id: siblingId)
         // Check both members for an existing decision (whichever was hit first).
+        if let decidedAt = s.abPairDecidedAt ?? sibling?.abPairDecidedAt,
+           let storedWinner = s.abPairWinnerSessionId ?? sibling?.abPairWinnerSessionId {
+            return .alreadyDecided(winner: storedWinner, decidedAt: decidedAt)
+        }
         if let decidedAt = s.abPairDecidedAt {
-            // Already decided — return that decision.
-            return .alreadyDecided(winner: s.abPairSessionId == winner ? siblingId : sessionId, decidedAt: decidedAt)
+            return .alreadyDecided(winner: sessionId, decidedAt: decidedAt)
         }
-        if let sibling = session(id: siblingId), let decidedAt = sibling.abPairDecidedAt {
-            return .alreadyDecided(winner: sibling.abPairSessionId == winner ? sessionId : siblingId, decidedAt: decidedAt)
+        if let sibling, let decidedAt = sibling.abPairDecidedAt {
+            return .alreadyDecided(winner: siblingId, decidedAt: decidedAt)
         }
-        // First write wins: stamp both with the timestamp.
-        let projectedA = with(s, abPairDecidedAt: .some(when))
+        // First write wins: stamp both with the timestamp and stored winner.
+        let projectedA = with(s, abPairDecidedAt: .some(when), abPairWinnerSessionId: .some(winner))
         try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: sessionId, session: projectedA)
         update(id: sessionId) { _ in projectedA }
         if let sib = session(id: siblingId) {
-            let projectedB = with(sib, abPairDecidedAt: .some(when))
+            let projectedB = with(sib, abPairDecidedAt: .some(when), abPairWinnerSessionId: .some(winner))
             try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: siblingId, session: projectedB)
             update(id: siblingId) { _ in projectedB }
         }
@@ -807,6 +812,7 @@ public final class AgentSessionRegistry: ObservableObject {
         effort: ReasoningEffort?? = nil,
         abPairSessionId: UUID?? = nil,
         abPairDecidedAt: Date?? = nil,
+        abPairWinnerSessionId: UUID?? = nil,
         customName: String?? = nil,
         claudeSessionId: String?? = nil,
         codexChatThreadId: String?? = nil,
@@ -853,6 +859,7 @@ public final class AgentSessionRegistry: ObservableObject {
             effort: Self.resolve(effort, fallback: s.effort),
             abPairSessionId: Self.resolve(abPairSessionId, fallback: s.abPairSessionId),
             abPairDecidedAt: Self.resolve(abPairDecidedAt, fallback: s.abPairDecidedAt),
+            abPairWinnerSessionId: Self.resolve(abPairWinnerSessionId, fallback: s.abPairWinnerSessionId),
             customName: Self.resolve(customName, fallback: s.customName),
             claudeSessionId: Self.resolve(claudeSessionId, fallback: s.claudeSessionId),
             // v0.8.0 schema v5 (chat-tab): preserve all chat fields

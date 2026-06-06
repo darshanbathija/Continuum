@@ -38,8 +38,15 @@ SRC="https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_con
 
 echo "Fetching $SRC..."
 RAW="$(mktemp)"
-trap 'rm -f "$RAW"' EXIT
+OUT_TMP="$(mktemp)"
+OVERRIDES_TMP="$(mktemp)"
+trap 'rm -f "$RAW" "$OUT_TMP" "$OVERRIDES_TMP"' EXIT
 curl -fsSL "$SRC" -o "$RAW"
+if [[ ! -s "$RAW" ]]; then
+  echo "Upstream pricing response was empty; leaving $OUT untouched." >&2
+  exit 1
+fi
+jq -e 'type == "object" and length > 0' "$RAW" >/dev/null
 
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -73,9 +80,17 @@ jq \
   # any override entry replaces the upstream entry wholesale; entries
   # that exist only in LiteLLM pass through; entries only in overrides
   # get added.
-  | . + ($overrides[0].overrides)
-  | { _meta: { source: $src, capturedAt: $ts, manualOverrides: $summary }, models: . }
-' "$RAW" > "$OUT"
+	  | . + ($overrides[0].overrides)
+	  | { _meta: { source: $src, capturedAt: $ts, manualOverrides: $summary }, models: . }
+' "$RAW" > "$OUT_TMP"
+
+jq -e '
+  type == "object"
+  and (.models | type == "object")
+  and (.models | length > 0)
+  and (._meta.source | type == "string")
+' "$OUT_TMP" >/dev/null
+mv "$OUT_TMP" "$OUT"
 
 KEYS=$(jq '.models | length' "$OUT")
 OVERRIDE_KEYS=$(jq '.overrides | length' "$OVERRIDES")
@@ -83,5 +98,6 @@ echo "Wrote $OUT ($KEYS models, including $OVERRIDE_KEYS manual overrides)"
 
 # Keep the bundled overrides copy (loaded by PricingUpdater's runtime daily
 # refresh) in sync with the canonical tools/pricing-overrides.json.
-cp "$OVERRIDES" "$REPO_ROOT/apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing-overrides.json"
+jq -e 'type == "object" and (.overrides | type == "object")' "$OVERRIDES" > "$OVERRIDES_TMP"
+mv "$OVERRIDES_TMP" "$REPO_ROOT/apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing-overrides.json"
 echo "Synced bundled overrides copy for runtime refresh."

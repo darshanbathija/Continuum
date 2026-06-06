@@ -75,6 +75,25 @@ final class OpencodeSSEAdapterTests: XCTestCase {
         OpencodeSSEAdapter.shared.handleEvent(type: "", properties: [:])
     }
 
+    func test_cleanStreamCompletionResetsReconnectFailures() {
+        let adapter = OpencodeSSEAdapter.shared
+        adapter.stop()
+        defer { adapter.stop() }
+
+        for _ in 0..<10 {
+            XCTAssertFalse(adapter.recordStreamFailureForTesting())
+        }
+        XCTAssertEqual(adapter.reconnectCountForTesting, 10)
+
+        adapter.recordCleanStreamCompletionForTesting()
+
+        XCTAssertEqual(adapter.reconnectCountForTesting, 0)
+        for _ in 0..<10 {
+            XCTAssertFalse(adapter.recordStreamFailureForTesting())
+        }
+        XCTAssertTrue(adapter.recordStreamFailureForTesting())
+    }
+
     func test_handleEvent_messageAddedWithoutRegistrationIsDropped() {
         // message.added for an unknown opencodeID logs + ignores. The
         // assertion is: doesn't crash, doesn't write a phantom event.

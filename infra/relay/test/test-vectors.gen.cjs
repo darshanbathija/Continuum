@@ -6,6 +6,7 @@
 // bug.
 
 const sodium = require("libsodium-wrappers-sumo");
+const crypto = require("node:crypto");
 const { writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 
@@ -211,10 +212,38 @@ const { join } = require("node:path");
   );
 
   // Session bundle base64-JSON
+  const sessionId = "session-bundle-001";
+  const bundleIssuedAtSeconds = 1735689300;
+  const bundleNonce = "creation_nonce_001";
+  const macTokenHash = hex(sodium.crypto_hash_sha256(new TextEncoder().encode("mac-token-001")));
+  const iosTokenHash = hex(sodium.crypto_hash_sha256(new TextEncoder().encode("ios-token-001")));
+  const bundleTTLSeconds = 1735689600;
+  const operatorSigningKey = Buffer.from("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=", "base64");
+  const creationMessage = [
+    "relay-create",
+    sessionId,
+    macTokenHash,
+    iosTokenHash,
+    String(bundleTTLSeconds),
+    String(bundleIssuedAtSeconds),
+    bundleNonce,
+  ].join(":");
+  const creationSignature = crypto
+    .createHmac("sha256", operatorSigningKey)
+    .update(creationMessage)
+    .digest("base64")
+    .replace(/=+$/, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
   const bundle = {
-    macTokenHash: hex(sodium.crypto_hash_sha256(new TextEncoder().encode("mac-token-001"))),
-    iosTokenHash: hex(sodium.crypto_hash_sha256(new TextEncoder().encode("ios-token-001"))),
-    ttlSeconds: 1735689600,
+    creation: {
+      issuedAtSeconds: bundleIssuedAtSeconds,
+      nonce: bundleNonce,
+      signature: creationSignature,
+    },
+    iosTokenHash,
+    macTokenHash,
+    ttlSeconds: bundleTTLSeconds,
   };
   const bundleJson = JSON.stringify(bundle);
   const bundleBase64 = Buffer.from(bundleJson, "utf-8").toString("base64");
@@ -226,9 +255,11 @@ const { join } = require("node:path");
         name: "session-bundle-001",
         kind: "session-bundle",
         description:
-          "Auth bundle the first peer presents on ?bundle=<base64-json>. Swift encodes identical fields.",
+          "Operator-signed auth bundle the first peer presents on ?bundle=<base64-json>. Swift encodes identical fields.",
+        session_id: sessionId,
         raw_mac_token_ascii: "mac-token-001",
         raw_ios_token_ascii: "ios-token-001",
+        creation_message: creationMessage,
         bundle_object: bundle,
         expected_bundle_json: bundleJson,
         expected_bundle_base64: bundleBase64,

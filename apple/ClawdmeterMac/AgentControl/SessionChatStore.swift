@@ -622,7 +622,7 @@ public final class SessionChatStore {
     /// also tracked so `stop()` cancels them; combined with the per-task
     /// generation check inside the ingest closure, this closes the
     /// "stop() doesn't stop all writers" race surfaced in /review.
-    @ObservationIgnored private var perLineIngestTasks: [Task<Void, Never>] = []
+    @ObservationIgnored private var perLineIngestTasks: [UUID: Task<Void, Never>] = [:]
 
     /// v0.8 NEW-E3: when true, `start()` skips JSONLTail + reverse-tail
     /// entirely. Only the commit task runs, which picks up
@@ -668,7 +668,7 @@ public final class SessionChatStore {
         tail = nil
         ingestTailTask?.cancel()
         ingestTailTask = nil
-        for task in perLineIngestTasks { task.cancel() }
+        for task in perLineIngestTasks.values { task.cancel() }
         perLineIngestTasks.removeAll()
         // Update URL and re-start the tail. parseGeneration bumps inside
         // start(), so any stale per-line ingests that survive the cancel
@@ -819,7 +819,7 @@ public final class SessionChatStore {
                     await staging.ingest(parsed)
                 }
                 Task { @MainActor [weak self] in
-                    self?.perLineIngestTasks.append(task)
+                    self?.trackPerLineIngestTask(task)
                 }
             }
             self.tail = tail
@@ -906,7 +906,7 @@ public final class SessionChatStore {
         // The generation guard inside each task is the primary defense;
         // explicit cancel just shortens the time window during which a
         // stopped store's queued ingests can still hit the actor.
-        for task in perLineIngestTasks { task.cancel() }
+        for task in perLineIngestTasks.values { task.cancel() }
         perLineIngestTasks.removeAll(keepingCapacity: false)
         tail?.stop()
         tail = nil
@@ -930,7 +930,25 @@ public final class SessionChatStore {
     /// cleanly, just one frame later than necessary).
     deinit {
         commitTask?.cancel()
+        ingestTailTask?.cancel()
+        for task in perLineIngestTasks.values { task.cancel() }
         tail?.stop()
+    }
+
+    private func trackPerLineIngestTask(_ task: Task<Void, Never>, id: UUID = UUID()) {
+        perLineIngestTasks[id] = task
+        Task { @MainActor [weak self] in
+            await task.value
+            self?.perLineIngestTasks.removeValue(forKey: id)
+        }
+    }
+
+    internal var perLineIngestTaskCountForTesting: Int {
+        perLineIngestTasks.count
+    }
+
+    internal func trackPerLineIngestTaskForTesting(_ task: Task<Void, Never>) {
+        trackPerLineIngestTask(task)
     }
 
     /// C2 test-only — write `snapshot` directly with a synthetic

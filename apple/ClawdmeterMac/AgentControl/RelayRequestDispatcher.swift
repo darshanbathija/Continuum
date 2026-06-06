@@ -110,11 +110,9 @@ public final class RelayRequestDispatcher {
             // Wrap the loopback response in a small JSON envelope so the
             // iPhone can disambiguate "200 with empty body" from "503
             // unreachable" without parsing HTTP headers it never sees.
-            let envelope: [String: Any] = [
-                "status": status,
-                "body": String(data: data, encoding: .utf8) ?? "",
-            ]
-            return try? JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
+            // Carry bytes as base64 so artifact/binary responses don't
+            // corrupt through a UTF-8 string round-trip.
+            return Self.responseEnvelope(status: status, body: data)
         } catch {
             dispatcherLogger.warning(
                 "Loopback dispatch failed for \(method, privacy: .public) \(rawPath, privacy: .public): \(error.localizedDescription, privacy: .public)"
@@ -136,11 +134,22 @@ public final class RelayRequestDispatcher {
     }
 
     static func errorEnvelope(status: Int, message: String) -> Data {
-        let envelope: [String: Any] = [
+        responseEnvelope(status: status, body: Data(), error: message)
+    }
+
+    static func responseEnvelope(status: Int, body: Data, error: String? = nil) -> Data {
+        var envelope: [String: Any] = [
             "status": status,
-            "body": "",
-            "error": message,
+            "bodyBase64": body.base64EncodedString(),
+            "bodyLength": body.count,
         ]
+        if let text = String(data: body, encoding: .utf8) {
+            envelope["body"] = text
+        }
+        if let error {
+            envelope["error"] = error
+            envelope["body"] = ""
+        }
         return (try? JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])) ?? Data()
     }
 }

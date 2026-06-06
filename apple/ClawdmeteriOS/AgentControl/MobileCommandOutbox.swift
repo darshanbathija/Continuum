@@ -19,7 +19,7 @@ private let outboxLogger = Logger(subsystem: "com.clawdmeter.ios", category: "Mo
 ///   notification so the UI can mirror.
 /// - On transient failure (network error / 5xx) → keep in queue, retry
 ///   with exponential backoff: `[1s, 4s, 15s, 60s, 5min, 30min]`.
-/// - On terminal failure (4xx other than 429) → mark `.failed`, leave
+/// - On terminal failure (4xx other than 409/429) → mark `.failed`, leave
 ///   in the failed list, surface to UI so the user can retry/cancel.
 ///
 /// The outbox shares its persistence schema with no on-disk migration —
@@ -96,11 +96,12 @@ public final class MobileCommandOutbox: ObservableObject {
         )
     }
 
-    public func enqueueApprovePlan(sessionId: UUID) {
+    public func enqueueApprovePlan(sessionId: UUID, idempotencyKey: String? = nil) {
         enqueue(
             kind: .approve,
             sessionId: sessionId,
-            payload: InterruptRequest(idempotencyKey: "")
+            payload: InterruptRequest(idempotencyKey: ""),
+            idempotencyKey: idempotencyKey
         )
     }
 
@@ -198,9 +199,20 @@ public final class MobileCommandOutbox: ObservableObject {
     private func enqueue<Body: Encodable>(
         kind: MobileCommandKind,
         sessionId: UUID,
-        payload: Body
+        payload: Body,
+        idempotencyKey requestedIdempotencyKey: String? = nil
     ) {
-        let key = UUID().uuidString
+        let requestedKey = requestedIdempotencyKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key: String
+        if let requestedKey, !requestedKey.isEmpty {
+            key = requestedKey
+        } else {
+            key = UUID().uuidString
+        }
+        guard !inflight.contains(key),
+              !pending.contains(where: { $0.idempotencyKey == key }),
+              !failed.contains(where: { $0.idempotencyKey == key })
+        else { return }
         let payloadString = encodePayload(payload, idempotencyKey: key)
         let envelope = MobileCommandEnvelope(
             idempotencyKey: key,
@@ -251,6 +263,8 @@ public final class MobileCommandOutbox: ObservableObject {
         retryTasks.removeValue(forKey: envelope.idempotencyKey)
         if success {
             markAcknowledged(envelope)
+        } else if isTerminalClientFailure() {
+            markFailed(envelope, retryCount: envelope.retryCount)
         } else {
             await reschedule(envelope)
         }
@@ -259,6 +273,7 @@ public final class MobileCommandOutbox: ObservableObject {
     /// Calls the matching `AgentControlClient` method for this envelope.
     /// Returns true on success, false on retryable failure.
     private func dispatch(_ envelope: MobileCommandEnvelope) async -> Bool {
+        client.clearLastHTTPStatusCode()
         guard let payloadData = envelope.payload.data(using: .utf8) else { return false }
         let decoder = JSONDecoder()
         // Workspace-onboarding commands are workspace-level — no sessionId.
@@ -352,6 +367,14 @@ public final class MobileCommandOutbox: ObservableObject {
                 baseBranch: body.baseBranch,
                 idempotencyKey: envelope.idempotencyKey
             ) != nil
+        case .reviewPR:
+            guard let body = try? decoder.decode(PRReviewRequest.self, from: payloadData) else { return false }
+            return await client.reviewPR(
+                sessionId: sessionId,
+                action: body.action,
+                body: body.body,
+                idempotencyKey: envelope.idempotencyKey
+            ) != nil
         case .mergePR:
             guard let body = try? decoder.decode(MergePRRequest.self, from: payloadData) else { return false }
             return await client.merge(
@@ -416,24 +439,37 @@ public final class MobileCommandOutbox: ObservableObject {
         persist()
     }
 
+    private func isTerminalClientFailure() -> Bool {
+        guard let status = client.lastHTTPStatusCode else { return false }
+        return (400..<500).contains(status) && status != 409 && status != 429
+    }
+
+    private func markFailed(_ envelope: MobileCommandEnvelope, retryCount: Int) {
+        let failedEnvelope = MobileCommandEnvelope(
+            idempotencyKey: envelope.idempotencyKey,
+            deviceId: envelope.deviceId,
+            sessionId: envelope.sessionId,
+            kind: envelope.kind,
+            status: .failed,
+            createdAt: envelope.createdAt,
+            lastAttemptAt: Date(),
+            retryCount: retryCount,
+            payload: envelope.payload
+        )
+        pending.removeAll { $0.idempotencyKey == envelope.idempotencyKey }
+        if let idx = failed.firstIndex(where: { $0.idempotencyKey == envelope.idempotencyKey }) {
+            failed[idx] = failedEnvelope
+        } else {
+            failed.append(failedEnvelope)
+        }
+        persist()
+    }
+
     private func reschedule(_ envelope: MobileCommandEnvelope) async {
         let nextRetryCount = envelope.retryCount + 1
         // Exceeded backoff schedule → mark as failed permanently.
         guard nextRetryCount <= retrySchedule.count else {
-            let failedEnvelope = MobileCommandEnvelope(
-                idempotencyKey: envelope.idempotencyKey,
-                deviceId: envelope.deviceId,
-                sessionId: envelope.sessionId,
-                kind: envelope.kind,
-                status: .failed,
-                createdAt: envelope.createdAt,
-                lastAttemptAt: Date(),
-                retryCount: nextRetryCount,
-                payload: envelope.payload
-            )
-            pending.removeAll { $0.idempotencyKey == envelope.idempotencyKey }
-            failed.append(failedEnvelope)
-            persist()
+            markFailed(envelope, retryCount: nextRetryCount)
             return
         }
         let delay = retrySchedule[nextRetryCount - 1]

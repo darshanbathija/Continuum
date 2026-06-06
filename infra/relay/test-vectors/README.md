@@ -24,7 +24,7 @@ The TypeScript test suite consumes these fixtures via `test-vectors.test.ts`. Th
 | [`xchacha20-poly1305-001.json`](xchacha20-poly1305-001.json) | XChaCha20-Poly1305 AEAD: fixed key + nonce + plaintext → expected ciphertext (incl. 16-byte tag) |
 | [`xchacha20-poly1305-roundtrip-001.json`](xchacha20-poly1305-roundtrip-001.json) | Same key + nonce + ciphertext → expected plaintext (decryption direction) |
 | [`envelope-header-001.json`](envelope-header-001.json) | Canonical envelope header serialization — must be byte-exact across impls (JSON key ordering) |
-| [`session-bundle-001.json`](session-bundle-001.json) | Auth bundle base64-JSON encoding — what the first peer presents on `?bundle=` |
+| [`session-bundle-001.json`](session-bundle-001.json) | Operator-signed auth bundle base64-JSON encoding — what the first peer presents on `?bundle=` |
 | [`tampered-ciphertext-001.json`](tampered-ciphertext-001.json) | Negative test: flipping a byte in the ciphertext MUST cause decryption to fail (AEAD integrity) |
 
 ## Format notes

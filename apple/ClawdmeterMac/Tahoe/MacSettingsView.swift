@@ -20,6 +20,7 @@ public struct MacSettingsView: View {
     @ObservedObject var geminiModel: AppModel
     @ObservedObject var presentationStore: SessionPresentationStore
     @Binding private var requestedSection: String?
+    @StateObject private var chimePlayer = ChimeAudioPlayer.shared
     /// v0.22.9: runtime threaded in so the consolidated settings page
     /// can embed PairingSettingsView (needs AppRuntime for the daemon
     /// + pairing token shape). Optional so Previews don't have to
@@ -336,6 +337,16 @@ public struct MacSettingsView: View {
                 TahoeToggleView(on: notificationPreferenceBinding(\.playChimes))
             }
             TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Chime pack", hint: "Choose the completion sound used by in-app chimes.") {
+                Picker("Chime pack", selection: chimePackBinding) {
+                    ForEach(ChimePack.allCases, id: \.self) { pack in
+                        Text(pack.displayName).tag(pack)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 180)
+            }
+            TahoeHair().padding(.vertical, 14)
             SettingsRow(label: "Show sensitive previews", hint: "Include prompt and transcript snippets in notification previews.") {
                 TahoeToggleView(on: notificationPreferenceBinding(\.sensitivePreviews))
             }
@@ -348,6 +359,13 @@ public struct MacSettingsView: View {
                 .controlSize(.small)
             }
         }
+    }
+
+    private var chimePackBinding: Binding<ChimePack> {
+        Binding(
+            get: { chimePlayer.settings.pack },
+            set: { chimePlayer.settings.pack = $0 }
+        )
     }
 
     @ViewBuilder

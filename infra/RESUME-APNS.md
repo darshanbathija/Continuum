@@ -34,12 +34,13 @@ wiring**, gated on two account-holder actions.
    ```
 4. **Secrets** (`wrangler secret put … --env staging|production`, values via
    stdin/prompt — never on argv):
-   - `APNS_P8_KEY_SANDBOX` / `APNS_P8_KEY_PRODUCTION` = the new `.p8` PEM
+   - `APNS_P8_KEY` = the new `.p8` PEM
+   - `APNS_P8_ISSUED_AT` = Unix seconds when the `.p8` was issued/imported
    - `APNS_KEY_ID` = the 10-char Key ID
    - `APNS_TEAM_ID` = `LRL8MRH6B4`
-   - `APNS_TOPIC_PRODUCTION` = `ai.continuum.ios`  (was com.clawdmeter.iphone)
+   - `APNS_TOPIC_PRODUCTION` = `ai.continuum.ios`
    - `APNS_TOPIC_SANDBOX` = `ai.continuum.ios`
-   - relay: `RELAY_OPERATOR_SIGNING_KEY` (32 random bytes b64)
+   - relay: `RELAY_OPERATOR_SIGNING_KEY` (32 random bytes b64); operator Macs that mint relay sessions need the matching `CLAWDMETER_RELAY_OPERATOR_SIGNING_KEY`
    - the shared `RELAY_BEARER_SIGNING_KEY` that the Mac daemon uses to auth to the gateway
 5. `npx wrangler deploy --env staging` (sandbox APNS) → smoke `/health` → then `--env production`.
 6. Point the Mac/iOS build-time gateway URL at the deployed Worker host.

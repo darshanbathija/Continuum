@@ -5,6 +5,131 @@ import ClawdmeterShared
 
 private let relayPairingLogger = Logger(subsystem: "com.clawdmeter.mac", category: "RelayPairing")
 
+public struct RelayPairingCreationGrantRequest: Sendable {
+    public let sessionId: String
+    public let macTokenHash: String
+    public let iosTokenHash: String
+    public let ttlSeconds: UInt64
+    public let relayURL: String
+    public let senderMacFingerprint: String?
+
+    public init(
+        sessionId: String,
+        macTokenHash: String,
+        iosTokenHash: String,
+        ttlSeconds: UInt64,
+        relayURL: String,
+        senderMacFingerprint: String?
+    ) {
+        self.sessionId = sessionId
+        self.macTokenHash = macTokenHash
+        self.iosTokenHash = iosTokenHash
+        self.ttlSeconds = ttlSeconds
+        self.relayURL = relayURL
+        self.senderMacFingerprint = senderMacFingerprint
+    }
+}
+
+public struct RelayPairingCreationGrant: Codable, Sendable, Equatable {
+    public let creation: RelaySessionCreationProof
+    public let apnsSigningKey: String?
+
+    public init(creation: RelaySessionCreationProof, apnsSigningKey: String? = nil) {
+        self.creation = creation
+        self.apnsSigningKey = apnsSigningKey
+    }
+}
+
+public enum RelayPairingCreationGrantError: Error, LocalizedError, Equatable {
+    case malformedRelayURL
+    case missingGrantAuthorization
+    case badStatus(Int, String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .malformedRelayURL:
+            return "Relay URL is malformed."
+        case .missingGrantAuthorization:
+            return "Relay creation grant authorization is not configured."
+        case .badStatus(let status, let body):
+            if body.isEmpty { return "Relay returned HTTP \(status)." }
+            return "Relay returned HTTP \(status): \(body)"
+        }
+    }
+}
+
+public typealias RelayPairingCreationGrantProvider = (RelayPairingCreationGrantRequest) async throws -> RelayPairingCreationGrant
+
+public struct RelayPairingCreationGrantClient {
+    private struct Body: Encodable {
+        let macTokenHash: String
+        let iosTokenHash: String
+        let ttlSeconds: UInt64
+        let senderMacFingerprint: String?
+    }
+
+    private let urlSession: URLSession
+    private let authToken: String?
+
+    public init(
+        urlSession: URLSession = .shared,
+        authToken: String? = ProcessInfo.processInfo.environment["CLAWDMETER_RELAY_CREATION_GRANT_TOKEN"]
+    ) {
+        self.urlSession = urlSession
+        let trimmedToken = authToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.authToken = trimmedToken.isEmpty ? nil : trimmedToken
+    }
+
+    public func issueGrant(_ grantRequest: RelayPairingCreationGrantRequest) async throws -> RelayPairingCreationGrant {
+        guard let url = Self.creationGrantURL(
+            relayURL: grantRequest.relayURL,
+            sessionId: grantRequest.sessionId
+        ) else {
+            throw RelayPairingCreationGrantError.malformedRelayURL
+        }
+        guard let authToken else {
+            throw RelayPairingCreationGrantError.missingGrantAuthorization
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONEncoder().encode(Body(
+            macTokenHash: grantRequest.macTokenHash,
+            iosTokenHash: grantRequest.iosTokenHash,
+            ttlSeconds: grantRequest.ttlSeconds,
+            senderMacFingerprint: grantRequest.senderMacFingerprint
+        ))
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let body = String(data: data.prefix(512), encoding: .utf8) ?? ""
+            throw RelayPairingCreationGrantError.badStatus(status, body)
+        }
+        return try JSONDecoder().decode(RelayPairingCreationGrant.self, from: data)
+    }
+
+    static func creationGrantURL(relayURL: String, sessionId: String) -> URL? {
+        let trimmed = relayURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard var components = URLComponents(string: trimmed) else { return nil }
+        switch components.scheme {
+        case "wss":
+            components.scheme = "https"
+        case "ws":
+            components.scheme = "http"
+        default:
+            return nil
+        }
+        components.path = "/v1/relay/sessions/\(sessionId)/creation-grant"
+        components.query = nil
+        return components.url
+    }
+}
+
 /// E7 Mac-side state machine + bundle factory for relay pairing.
 ///
 /// Owns:
@@ -40,6 +165,10 @@ public final class RelayPairingService: ObservableObject {
     /// to this so secret material never accidentally leaks into views.
     @Published public private(set) var summary: RelayPairingSummary = .initial
 
+    /// Last grant/encoding error surfaced to Settings. Nil after a successful
+    /// generation or reset.
+    @Published public private(set) var lastError: String?
+
     /// The relay env the Mac currently targets. The Mac UI can flip this
     /// (defaults to `.staging` for E7).
     @Published public var environment: RelayEnvironment = .default {
@@ -65,27 +194,33 @@ public final class RelayPairingService: ObservableObject {
     /// handler).
     private let pairingStore: RelayPairingStore
     private let processEnv: [String: String]
+    private let creationGrantProvider: RelayPairingCreationGrantProvider
+    private let apnsSigningKeyProvider: APNSGatewaySigningKeyProvider?
 
     public init(
         pairingStore: RelayPairingStore = .shared,
-        processEnv: [String: String] = ProcessInfo.processInfo.environment
+        processEnv: [String: String] = ProcessInfo.processInfo.environment,
+        creationGrantProvider: RelayPairingCreationGrantProvider? = nil,
+        apnsSigningKeyProvider: APNSGatewaySigningKeyProvider? = .shared
     ) {
         self.pairingStore = pairingStore
         self.processEnv = processEnv
+        let grantClient = RelayPairingCreationGrantClient(
+            authToken: processEnv["CLAWDMETER_RELAY_CREATION_GRANT_TOKEN"]
+        )
+        self.creationGrantProvider = creationGrantProvider ?? { request in
+            try await grantClient.issueGrant(request)
+        }
+        self.apnsSigningKeyProvider = apnsSigningKeyProvider
     }
 
     // MARK: - Public API
 
-    /// User tapped "Pair iPhone" on the Mac. Generates the bundle.
-    ///
-    /// Synchronous because all the work — keypair gen, token gen, JSON
-    /// encode — is microsecond-scale. We deliberately do NOT call into
-    /// the relay Worker here; per E7 scope, the bundle exists locally
-    /// and the iPhone's first relay connect (E4) will tell the Worker
-    /// what sessionId + token pair to expect via the `?bundle=` param
-    /// (E2's first-peer-bootstrap, infra/relay/src/durable-object.ts).
-    public func beginPairing() {
+    /// User tapped "Pair iPhone" on the Mac. Generates the bundle and obtains
+    /// the relay Worker grant needed for first-connect session creation.
+    public func beginPairing() async {
         phase = .generatingBundle
+        lastError = nil
         relayPairingLogger.info("Beginning relay pairing bundle generation")
 
         let pair = RelayPairingKeyPair()
@@ -103,6 +238,35 @@ public final class RelayPairingService: ObservableObject {
         let relaySessionTTLSeconds: UInt64 = 30 * 24 * 60 * 60  // 30 days
         let ttl = UInt64(Date().timeIntervalSince1970) + relaySessionTTLSeconds
         let relayUrl = RelayEnvironment.resolvedRelayURL(env: environment, processEnv: processEnv)
+        let macTokenHash = MacRelayClientConfig.sha256Hex(macTok)
+        let iosTokenHash = MacRelayClientConfig.sha256Hex(iosTok)
+        let senderFingerprint = APNSSenderFingerprint.compute(macPublicKeyBase64URL: pair.publicKeyBase64URL)
+        let grant: RelayPairingCreationGrant
+        do {
+            grant = try await creationGrantProvider(RelayPairingCreationGrantRequest(
+                sessionId: sid,
+                macTokenHash: macTokenHash,
+                iosTokenHash: iosTokenHash,
+                ttlSeconds: ttl,
+                relayURL: relayUrl,
+                senderMacFingerprint: senderFingerprint
+            ))
+        } catch {
+            guard let fallbackSigningKey = RelaySessionCreationSigningKeyProvider.shared.signingKey() else {
+                relayPairingLogger.error("Failed to obtain relay creation grant: \(error.localizedDescription)")
+                self.lastError = error.localizedDescription
+                self.phase = .unpaired
+                return
+            }
+            relayPairingLogger.warning("Using local relay creation signing key fallback after grant failure: \(error.localizedDescription)")
+            grant = RelayPairingCreationGrant(creation: RelaySessionCreationProof.issue(
+                signingKey: fallbackSigningKey,
+                sessionId: sid,
+                macTokenHash: macTokenHash,
+                iosTokenHash: iosTokenHash,
+                ttlSeconds: ttl
+            ))
+        }
 
         let bundle = RelayPairingBundle(
             sid: sid,
@@ -110,7 +274,9 @@ public final class RelayPairingService: ObservableObject {
             iosTok: iosTok,
             ecdhPub: pair.publicKeyBase64URL,
             ttl: ttl,
-            relayUrl: relayUrl
+            relayUrl: relayUrl,
+            creationProof: grant.creation,
+            apnsSigningKey: grant.apnsSigningKey
         )
 
         let urlString: String
@@ -119,8 +285,11 @@ public final class RelayPairingService: ObservableObject {
         } catch {
             relayPairingLogger.error("Failed to encode bundle URL: \(error.localizedDescription)")
             self.phase = .unpaired
+            self.lastError = error.localizedDescription
             return
         }
+
+        persistAPNSSigningKeyFromGrant(grant)
 
         self.keypair = pair
         self.bundle = bundle
@@ -197,6 +366,7 @@ public final class RelayPairingService: ObservableObject {
         bundleURL = nil
         phase = .unpaired
         summary = .initial
+        lastError = nil
         // Drop the persisted record + symmetric key so the APNS gateway
         // path stops finding a stale pairing. E3/E4 re-write on next
         // successful pairing.
@@ -228,4 +398,18 @@ public final class RelayPairingService: ObservableObject {
     /// For unit tests only: directly read the keypair to verify the
     /// derived key against the iPhone-side derivation.
     public var keypairForTesting: RelayPairingKeyPair? { keypair }
+
+    private func persistAPNSSigningKeyFromGrant(_ grant: RelayPairingCreationGrant) {
+        guard let apnsSigningKey = grant.apnsSigningKey,
+              let decoded = RelayPairingBase64URL.decode(apnsSigningKey),
+              decoded.count >= 32 else {
+            return
+        }
+        do {
+            try apnsSigningKeyProvider?.saveFromPairing(decoded)
+            relayPairingLogger.info("APNS gateway signing key saved from pairing grant")
+        } catch {
+            relayPairingLogger.error("Failed to save APNS gateway signing key from pairing grant: \(error.localizedDescription)")
+        }
+    }
 }

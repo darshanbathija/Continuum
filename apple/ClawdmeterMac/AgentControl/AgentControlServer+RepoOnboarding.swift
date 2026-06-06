@@ -31,8 +31,7 @@ extension AgentControlServer {
         let req = (try? JSONDecoder().decode(OpenLocalFolderRequest.self, from: request.body))
             ?? OpenLocalFolderRequest()
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
-        if await !claimInFlight(key: req.idempotencyKey, on: connection) { return }
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
         defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
             if let key { await outbox.releaseInFlight(key) }
         } }
@@ -105,8 +104,7 @@ extension AgentControlServer {
             sendResponse(AgentControlServer.HTTPResponse.badRequest, on: connection); return
         }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
-        if await !claimInFlight(key: req.idempotencyKey, on: connection) { return }
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
         defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
             if let key { await outbox.releaseInFlight(key) }
         } }
@@ -166,8 +164,7 @@ extension AgentControlServer {
             sendResponse(AgentControlServer.HTTPResponse.badRequest, on: connection); return
         }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
-        if await !claimInFlight(key: req.idempotencyKey, on: connection) { return }
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
         defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
             if let key { await outbox.releaseInFlight(key) }
         } }
@@ -225,8 +222,7 @@ extension AgentControlServer {
         let req = (try? JSONDecoder().decode(WakeMacRequest.self, from: request.body))
             ?? WakeMacRequest()
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
-        if await !claimInFlight(key: req.idempotencyKey, on: connection) { return }
+        if await !beginIdempotentCommand(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
         defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
             if let key { await outbox.releaseInFlight(key) }
         } }
@@ -351,30 +347,6 @@ extension AgentControlServer {
             deniedSubpaths: PathAllowList.resolveDeniedSubpaths()
         )
         sendCodableValue(response, on: connection)
-    }
-
-    /// Try to reserve the `key` in `MobileCommandOutbox.inFlight`. Returns
-    /// true on success (caller proceeds with work + must release via the
-    /// defer above). Returns false AND emits a `409 Conflict` if another
-    /// concurrent request is already processing this key. nil/empty key
-    /// always wins reservation (no dedup possible).
-    private func claimInFlight(key: String?, on connection: NWConnection) async -> Bool {
-        guard let key, !key.isEmpty else { return true }
-        let reserved = await mobileCommandOutbox.tryReserveInFlight(key)
-        if !reserved {
-            let body = Data(#"{"error":"another-request-with-same-idempotency-key-is-in-flight"}"#.utf8)
-            sendResponse(
-                AgentControlServer.HTTPResponse(
-                    status: 409,
-                    reason: "Conflict",
-                    contentType: "application/json",
-                    body: body
-                ),
-                on: connection
-            )
-            return false
-        }
-        return true
     }
 
     // MARK: - Response helpers

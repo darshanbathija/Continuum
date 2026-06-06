@@ -28,7 +28,7 @@ struct ContentView: View {
         self.agentClient = agentClient
         self.outbox = outbox
         _notifManager = StateObject(wrappedValue: iOSNotificationManager(client: agentClient))
-        WatchPlanBridgeIOS.configure(client: agentClient)
+        WatchPlanBridgeIOS.configure(client: agentClient, outbox: outbox)
         model.wire(daemonClient: agentClient)
         LiveActivityCoordinator.shared.client = agentClient
         // Wire the iOS-side bridge so AgentControlClient.refreshSessions

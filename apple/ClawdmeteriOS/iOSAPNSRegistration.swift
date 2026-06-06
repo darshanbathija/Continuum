@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import UserNotifications
 import ClawdmeterShared
 import os
 
@@ -47,6 +48,14 @@ final class APNSDeviceTokenHolder: @unchecked Sendable {
 final class iOSAppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
         let hex = deviceToken.map { String(format: "%02hhx", $0) }.joined()
@@ -61,5 +70,94 @@ final class iOSAppDelegate: NSObject, UIApplicationDelegate {
         Logger(subsystem: "ai.continuum.ios", category: "APNS")
             .error("registerForRemoteNotifications failed: \(error.localizedDescription, privacy: .public)")
         // The D15 local-notification fallback (BGAppRefreshTask) still works.
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        Task {
+            let handled = await APNSRemotePushHandler.handle(userInfo: userInfo)
+            completionHandler(handled ? .newData : .noData)
+        }
+    }
+}
+
+extension iOSAppDelegate: UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        Task {
+            let handled = await APNSRemotePushHandler.handle(userInfo: notification.request.content.userInfo)
+            completionHandler(handled ? [] : [.banner, .sound])
+        }
+    }
+}
+
+enum APNSRemotePushHandler {
+    private static let log = Logger(subsystem: "ai.continuum.ios", category: "APNSRemotePush")
+
+    @discardableResult
+    static func handle(userInfo: [AnyHashable: Any]) async -> Bool {
+        guard let encryptedPayload = userInfo["cmEncrypted"] as? String else {
+            return false
+        }
+        guard let record = RelayPairingStore.shared.loadRecord(),
+              let relayKey = RelayPairingStore.shared.loadSymmetricKey(),
+              let payloadKey = APNSGatewayKey.derivePayloadKey(
+                relaySymmetricKey: relayKey,
+                sessionId: record.sid
+              ) else {
+            log.warning("APNS push ignored: no pairing payload key available")
+            return false
+        }
+        do {
+            let body = try APNSPayloadSealer.openJSON(
+                as: APNSPushBody.self,
+                wire: encryptedPayload,
+                keyBytes: payloadKey
+            )
+            return await postLocalNotification(body)
+        } catch {
+            log.warning("APNS push decrypt failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    @MainActor
+    private static func postLocalNotification(_ body: APNSPushBody) async -> Bool {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard settings.authorizationStatus == .authorized
+            || settings.authorizationStatus == .provisional
+            || settings.authorizationStatus == .ephemeral else {
+            return false
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = body.title
+        content.body = body.body
+        content.sound = .default
+        content.threadIdentifier = body.sessionId
+        content.userInfo = [
+            "sessionId": body.sessionId,
+            "kind": body.kind,
+            "triggerAt": body.triggerAt,
+            "source": "apns-gateway",
+        ]
+        let request = UNNotificationRequest(
+            identifier: "continuum.apns.\(body.kind).\(body.sessionId).\(body.triggerAt)",
+            content: content,
+            trigger: nil
+        )
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+            return true
+        } catch {
+            log.warning("Failed to enqueue decrypted APNS local notification: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
     }
 }

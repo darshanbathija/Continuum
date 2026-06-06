@@ -9,7 +9,7 @@ private let outboxLogger = Logger(subsystem: "com.clawdmeter.mac", category: "Mo
 ///
 /// Every write endpoint (`/sessions/:id/send`, `/approve-plan`,
 /// `/interrupt`, `/model`, `/effort`, `/mode`, `/autopilot`,
-/// `/ab-pair/pick-winner`, `/create-pr`, `/merge`) routes through this
+/// `/ab-pair/pick-winner`, `/create-pr`, `/review-pr`, `/merge`) routes through this
 /// actor when the request carries a `MobileCommandEnvelope.idempotencyKey`.
 ///
 /// Behavior:
@@ -104,6 +104,24 @@ public actor MobileCommandOutbox {
             return nil
         }
         return cached
+    }
+
+    public enum ReservationResult: Sendable {
+        case noKey
+        case cached(CachedEntry)
+        case inFlight
+        case reserved
+    }
+
+    /// Atomically checks for a cached receipt and reserves a fresh key.
+    /// Callers that receive `.reserved` must release the key from a defer
+    /// after recording or abandoning the command.
+    public func entryOrReserve(key: String?) -> ReservationResult {
+        guard let key, !key.isEmpty else { return .noKey }
+        if let cached = entry(forKey: key) { return .cached(cached) }
+        if inFlight.contains(key) { return .inFlight }
+        inFlight.insert(key)
+        return .reserved
     }
 
     // MARK: - Record

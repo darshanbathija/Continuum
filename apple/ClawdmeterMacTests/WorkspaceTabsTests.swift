@@ -229,20 +229,62 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.openSessionId, source.id)
     }
 
-    func test_markdownDocumentPathResolutionAllowsAbsoluteOutsideWorkspaceAndRejectsUnsafePaths() {
-        let cwd = "/Users/example/project"
+    func test_prepareNewSessionClearsWorkspaceTabSelections() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceSwitcherClearsTabs")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent("docs", isDirectory: true), withIntermediateDirectories: true)
+        let source = try await registry.create(
+            repoKey: repo.path,
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt",
+            goal: "source",
+            worktreePath: repo.path,
+            tmuxWindowId: "@1",
+            tmuxPaneId: "%1",
+            planMode: false,
+            mode: .worktree
+        )
+        model.openWorkspaceTerminalTab(from: source)
+        model.openWorkspaceDocumentTab(from: source, path: "docs/report.md")
+        XCTAssertNotNil(model.selectedWorkspaceDocumentTabId)
 
-        XCTAssertEqual(
-            AgentControlServer.standardizedMarkdownDocumentPath(
-                "/Users/example/.gstack/projects/report.md",
-                relativeTo: cwd
-            ),
-            "/Users/example/.gstack/projects/report.md"
+        model.prepareNewSession(in: repo.path)
+
+        XCTAssertEqual(model.selectedRepoKey, repo.path)
+        XCTAssertTrue(model.showingNewSessionSheet)
+        XCTAssertNil(model.openSessionId)
+        XCTAssertNil(model.openOutsideJSONLPath)
+        XCTAssertNil(model.selectedWorkspaceTerminalTabId)
+        XCTAssertNil(model.selectedWorkspaceDocumentTabId)
+    }
+
+    func test_markdownDocumentPathResolutionAllowsOnlyWorktreeOrGeneratedDocsRoots() {
+        let cwd = "/Users/example/project"
+        let home = "/Users/example"
+
+        let worktreeDoc = AgentControlServer.standardizedMarkdownDocumentPath("docs/report.md", relativeTo: cwd)
+        XCTAssertEqual(worktreeDoc, "/Users/example/project/docs/report.md")
+        XCTAssertTrue(AgentControlServer.isMarkdownDocumentPathAllowed(worktreeDoc!, relativeTo: cwd, homeDirectory: home))
+
+        let generatedDoc = AgentControlServer.standardizedMarkdownDocumentPath(
+            "/Users/example/.gstack/projects/report.md",
+            relativeTo: cwd
         )
-        XCTAssertEqual(
-            AgentControlServer.standardizedMarkdownDocumentPath("docs/report.md", relativeTo: cwd),
-            "/Users/example/project/docs/report.md"
+        XCTAssertEqual(generatedDoc, "/Users/example/.gstack/projects/report.md")
+        XCTAssertTrue(AgentControlServer.isMarkdownDocumentPathAllowed(generatedDoc!, relativeTo: cwd, homeDirectory: home))
+
+        let outsideDoc = AgentControlServer.standardizedMarkdownDocumentPath("/Users/example/secrets/report.md", relativeTo: cwd)
+        XCTAssertEqual(outsideDoc, "/Users/example/secrets/report.md")
+        XCTAssertFalse(AgentControlServer.isMarkdownDocumentPathAllowed(outsideDoc!, relativeTo: cwd, homeDirectory: home))
+
+        let extensionlessGeneratedDoc = AgentControlServer.standardizedMarkdownDocumentPath(
+            "/Users/example/.gstack/projects/secret",
+            relativeTo: cwd
         )
+        XCTAssertFalse(GeneratedArtifactDetector.isMarkdownPath(extensionlessGeneratedDoc!))
+
         XCTAssertEqual(
             AgentControlServer.standardizedMarkdownDocumentPath("~/.gstack/projects/report.md", relativeTo: cwd),
             NSString(string: "~/.gstack/projects/report.md").expandingTildeInPath
@@ -431,6 +473,58 @@ final class WorkspaceTabsTests: XCTestCase {
         let result = model.spawnSameWorkspaceChatTab(parentId: UUID())
         XCTAssertNil(result)
         XCTAssertEqual(model.draftWorkspaceTab?.id, before?.id)
+    }
+
+    func test_mobileCommandOutboxEntryOrReserveSerializesConcurrentSameKeyUntilRelease() async {
+        let outbox = MobileCommandOutbox()
+
+        switch await outbox.entryOrReserve(key: "send-key") {
+        case .reserved:
+            break
+        default:
+            XCTFail("first request should reserve a fresh key")
+        }
+
+        switch await outbox.entryOrReserve(key: "send-key") {
+        case .inFlight:
+            break
+        default:
+            XCTFail("second concurrent request must not execute")
+        }
+
+        await outbox.releaseInFlight("send-key")
+        _ = await outbox.record(
+            key: "send-key",
+            kind: .send,
+            responseBody: Data(#"{"ok":true}"#.utf8),
+            payloadHash: "abc"
+        )
+
+        switch await outbox.entryOrReserve(key: "send-key") {
+        case .cached(let entry):
+            XCTAssertEqual(entry.kind, .send)
+            XCTAssertEqual(entry.payloadHash, "abc")
+        default:
+            XCTFail("processed key should replay from cache")
+        }
+    }
+
+    func test_mobileCommandOutboxEntryOrReserveIgnoresMissingKey() async {
+        let outbox = MobileCommandOutbox()
+
+        switch await outbox.entryOrReserve(key: nil) {
+        case .noKey:
+            break
+        default:
+            XCTFail("nil key should not reserve")
+        }
+
+        switch await outbox.entryOrReserve(key: "") {
+        case .noKey:
+            break
+        default:
+            XCTFail("empty key should not reserve")
+        }
     }
 
     private static func makeIsolatedRegistry(_ name: String) throws -> (AgentSessionRegistry, URL) {

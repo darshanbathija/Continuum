@@ -67,9 +67,8 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
 
     private override init() {
         super.init()
-        if let s = session {
-            s.delegate = self
-            s.activate()
+        if session != nil {
+            WatchSessionDelegateMultiplexer.shared.register(self)
         }
     }
 

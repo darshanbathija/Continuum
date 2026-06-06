@@ -128,6 +128,22 @@ final class AgentControlProtocolTests: XCTestCase {
         XCTAssertEqual(decoded.id, "\(event.sessionId.uuidString):1024")
     }
 
+    func testAgentEventUnknownKindDecodesLeniently() throws {
+        let json = """
+        {
+          "eventSeq": 7,
+          "sessionId": "\(UUID().uuidString)",
+          "kind": "newDaemonOnlyKind",
+          "at": "2026-06-06T00:00:00Z",
+          "payload": "{}"
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(AgentEvent.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.kind, .unknown)
+    }
+
     func testNeedsAttentionResponseRoundTrip() throws {
         let now = Date()
         let events: [NotificationEvent] = [
@@ -203,6 +219,7 @@ final class AgentControlProtocolTests: XCTestCase {
         XCTAssertEqual(AgentEventKind.doneDetected.rawValue, "doneDetected")
         XCTAssertEqual(AgentEventKind.tmuxServerLost.rawValue, "tmuxServerLost")
         XCTAssertEqual(AgentEventKind.snapshot.rawValue, "snapshot")
+        XCTAssertEqual(AgentEventKind.unknown.rawValue, "unknown")
     }
 
     func testTerminalFrameTagWireValues() throws {

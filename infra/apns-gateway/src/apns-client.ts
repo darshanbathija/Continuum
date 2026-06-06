@@ -101,6 +101,7 @@ function buildApnsBody(p: ApnsSendParams): string {
       },
       sound: "default",
       "mutable-content": 1,
+      "content-available": 1,
     },
     cmEncrypted: p.encryptedPayload,
   });

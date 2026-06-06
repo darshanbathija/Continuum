@@ -95,6 +95,11 @@ public final class iOSChatStore: ObservableObject {
     /// reconnects.
     public static let foregroundResyncThreshold: TimeInterval = 30
 
+    /// Relay subscription watchdog. If the relay stream produces no frames
+    /// for this long, fall back through the existing direct WS/HTTP ladder
+    /// before retrying relay. Tests may lower this.
+    public static var relayStalenessThreshold: TimeInterval = 45
+
     public init(sessionId: UUID, client: AgentControlClient) {
         self.sessionId = sessionId
         self.client = client
@@ -172,17 +177,18 @@ public final class iOSChatStore: ObservableObject {
     // MARK: - Subscription loop
 
     private func runSubscriptionLoop() async {
-        // Track B (B1): if the relay is the default transport, drive the chat
-        // stream over the relay multiplex. The mux client + IOSRelayClient own
-        // reconnect (resubscribeAll replays the snapshot), so we subscribe once
-        // and park — no direct WS, no per-store backoff ladder. When the mux is
-        // nil (flag off / unpaired) this is skipped and the legacy loop below
-        // runs byte-identically.
-        if let mux = relayMux ?? IOSRelayClientCoordinator.shared.muxClient {
-            await runRelaySubscription(mux)
-            return
-        }
         while !Task.isCancelled {
+            // Track B (B1): when relay is the default transport, prefer it but
+            // don't strand the store forever if the mux stalls. A stale relay
+            // subscribe returns here, runs bounded HTTP repair cycles, then
+            // retries the best available transport.
+            if let mux = relayMux ?? IOSRelayClientCoordinator.shared.muxClient {
+                await runRelaySubscription(mux)
+                if Task.isCancelled { return }
+                await runHTTPFallbackCycles(reason: "relay-stale")
+                continue
+            }
+
             // P2-iOS-4: bail out completely when the client has been
             // deallocated (user unpaired, re-paired, or scene torn down).
             // The previous loop kept spinning forever in HTTP fallback
@@ -226,12 +232,14 @@ public final class iOSChatStore: ObservableObject {
     /// Track B (B1): drive the chat stream over the relay multiplex. Subscribe
     /// once with a `chat-subscribe` spec; the mux pushes each snapshot to the
     /// SAME `applyIncomingFrame` boundary the direct WS uses (so shell/detail
-    /// dispatch is byte-identical). Park until cancelled, then unsubscribe; the
-    /// mux + IOSRelayClient handle reconnect via `resubscribeAll`.
+    /// dispatch is byte-identical). Park until cancelled or stale, then
+    /// unsubscribe so the outer loop can exercise the legacy fallback ladder.
     private func runRelaySubscription(_ mux: RelayMuxClient) async {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         self.pendingShell = nil
+        var lastRelayFrameAt = Date()
+        var relayEnded = false
         let spec = RelaySubscribeSpec(
             op: "chat-subscribe",
             sessionId: sessionId.uuidString,
@@ -241,12 +249,26 @@ public final class iOSChatStore: ObservableObject {
             onFrame: { [weak self] data in
                 self?.applyIncomingFrame(data, decoder: decoder)
                 self?.lastFrameAt = Date()
+                lastRelayFrameAt = Date()
+            },
+            onEnd: {
+                relayEnded = true
+            },
+            onError: { error in
+                chatStoreLogger.debug("chat-subscribe relay error: \(error, privacy: .public)")
+                relayEnded = true
             }
         ))
         chatStoreLogger.info("chat-subscribe over relay opId=\(opId, privacy: .public) session=\(self.sessionId.uuidString, privacy: .public)")
-        // Frames arrive via onFrame; hold the stream open until cancelled.
+        // Frames arrive via onFrame; hold the stream open until cancelled,
+        // ended, or stale enough to try direct WS/HTTP repair.
         while !Task.isCancelled {
-            do { try await Task.sleep(nanoseconds: 5_000_000_000) }
+            if relayEnded { break }
+            if Date().timeIntervalSince(lastRelayFrameAt) >= Self.relayStalenessThreshold {
+                chatStoreLogger.warning("chat-subscribe relay stale; falling back to direct ladder")
+                break
+            }
+            do { try await Task.sleep(nanoseconds: 1_000_000_000) }
             catch { break }
         }
         await mux.unsubscribe(opId)

@@ -29,6 +29,7 @@ public final class SessionScheduler {
 
     /// Observer token for the registry's @Published change stream.
     private var observerTask: Task<Void, Never>?
+    private var inFlightFollowUps: Set<String> = []
 
     public init(registry: AgentSessionRegistry, tmuxClient: TmuxControlClient) {
         self.registry = registry
@@ -67,6 +68,7 @@ public final class SessionScheduler {
         let pending = registry.sessions.flatMap { session -> [(UUID, ScheduledFollowUp)] in
             session.scheduledFollowUps
                 .filter { $0.firedAt == nil }
+                .filter { !inFlightFollowUps.contains(Self.followUpDeliveryKey(sessionId: session.id, followUpId: $0.id)) }
                 .map { (session.id, $0) }
         }
         guard let next = pending.min(by: { $0.1.fireAt < $1.1.fireAt }) else {
@@ -75,13 +77,19 @@ public final class SessionScheduler {
         let delay = max(next.1.fireAt.timeIntervalSince(now), 0)
         if delay == 0 {
             schedulerLogger.info("Past-due follow-up; firing immediately")
-            Task { await self.fire(sessionId: next.0, followUpId: next.1.id) }
+            guard claimFollowUpDelivery(sessionId: next.0, followUpId: next.1.id) else { return }
+            Task { await self.fireClaimed(sessionId: next.0, followUpId: next.1.id) }
             return
         }
         let source = DispatchSource.makeTimerSource(queue: .main)
         source.schedule(deadline: .now() + delay)
         source.setEventHandler { [weak self] in
-            Task { await self?.fire(sessionId: next.0, followUpId: next.1.id) }
+            Task { @MainActor in
+                guard let self,
+                      self.claimFollowUpDelivery(sessionId: next.0, followUpId: next.1.id)
+                else { return }
+                await self.fireClaimed(sessionId: next.0, followUpId: next.1.id)
+            }
         }
         source.resume()
         timer = source
@@ -91,7 +99,10 @@ public final class SessionScheduler {
     /// Deliver one follow-up: pastes the prompt + newline into the session's
     /// primary tmux pane, then marks the registry entry as fired. Reschedule
     /// runs again automatically via the registry observer.
-    private func fire(sessionId: UUID, followUpId: UUID) async {
+    private func fireClaimed(sessionId: UUID, followUpId: UUID) async {
+        defer {
+            inFlightFollowUps.remove(Self.followUpDeliveryKey(sessionId: sessionId, followUpId: followUpId))
+        }
         guard let session = registry.session(id: sessionId) else {
             schedulerLogger.warning("fire: session missing — dropping follow-up")
             do {
@@ -165,5 +176,13 @@ public final class SessionScheduler {
         } catch {
             schedulerLogger.error("markFollowUpFired write-ahead failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func claimFollowUpDelivery(sessionId: UUID, followUpId: UUID) -> Bool {
+        inFlightFollowUps.insert(Self.followUpDeliveryKey(sessionId: sessionId, followUpId: followUpId)).inserted
+    }
+
+    private static func followUpDeliveryKey(sessionId: UUID, followUpId: UUID) -> String {
+        "\(sessionId.uuidString):\(followUpId.uuidString)"
     }
 }

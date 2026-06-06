@@ -1194,14 +1194,9 @@ public actor UsageHistoryLoader {
         let day = Calendar.current.startOfDay(for: record.timestamp)
         let repo = record.repo ?? RepoKey.unknown
 
-        // Compute cost.
-        let pricedByRateCard = Pricing.shared.isPriced(record.model)
-        let cost = record.tokens.costUSD > 0
-            ? record.tokens.costUSD
-            : Pricing.shared.cost(for: record.model, tokens: record.tokens)
-        var tokensWithCost = record.tokens
-        tokensWithCost.costUSD = cost
-        let isPriced = record.tokens.costUSD > 0 || pricedByRateCard
+        let priced = Self.tokensWithResolvedCost(record)
+        let tokensWithCost = priced.tokens
+        let isPriced = priced.isPriced
 
         // Track unpriced model tokens.
         if !isPriced && record.tokens.totalTokens > 0 {
@@ -1223,6 +1218,20 @@ public actor UsageHistoryLoader {
         var dayMap = byDayByRepo[day, default: [:]]
         dayMap[repo, default: .zero] += tokensWithCost
         byDayByRepo[day] = dayMap
+    }
+
+    internal nonisolated static func tokensWithResolvedCost(_ record: UsageRecord) -> (tokens: TokenTotals, isPriced: Bool) {
+        let computedCost = Pricing.shared.cost(for: record.model, tokens: record.tokens)
+        let embeddedCost = record.tokens.costUSD
+        var tokensWithCost = record.tokens
+        if computedCost > 0 {
+            tokensWithCost.costUSD = computedCost
+        } else if embeddedCost > 0 {
+            tokensWithCost.costUSD = embeddedCost
+        } else {
+            tokensWithCost.costUSD = 0
+        }
+        return (tokensWithCost, Pricing.shared.isPriced(record.model) || embeddedCost > 0)
     }
 
     /// Merge a per-file result into the cross-file rollup. Applies global

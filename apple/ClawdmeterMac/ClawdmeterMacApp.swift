@@ -520,12 +520,15 @@ private struct PoppedChatThread: View {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty,
               let runtime = AppDelegate.runtime,
-              let pane = session.tmuxPaneId ?? session.tmuxWindowId
+              let port = runtime.agentControlServer.boundPort
         else { return }
         composerText = ""
-        let bytes = Data((text + "\n").utf8)
+        let sender = MacComposerSender(
+            port: Int(port),
+            token: runtime.agentControlServer.localLoopbackToken
+        )
         Task {
-            try? await runtime.tmuxClient.pasteBytes(paneId: pane, bytes: bytes)
+            try? await sender.send(sessionId: session.id, body: text, asFollowUp: true)
         }
     }
 }

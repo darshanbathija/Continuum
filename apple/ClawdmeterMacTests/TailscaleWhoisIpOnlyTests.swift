@@ -1,4 +1,5 @@
 import XCTest
+import Network
 @testable import Clawdmeter
 
 /// v0.7.7 regression suite for `TailscaleWhois.ipOnly`. The textbook
@@ -15,6 +16,14 @@ final class TailscaleWhoisIpOnlyTests: XCTestCase {
         XCTAssertEqual(TailscaleWhois.ipOnly("[fd7a:115c:a1e0::1]:443"), "fd7a:115c:a1e0::1")
         XCTAssertEqual(TailscaleWhois.ipOnly("[::1]:80"), "::1")
         XCTAssertEqual(TailscaleWhois.ipOnly("[2001:db8::1]:9000"), "2001:db8::1")
+    }
+
+    @MainActor
+    func test_endpointStringBracketsIPv6HostPortForWhois() throws {
+        let address = try XCTUnwrap(IPv6Address("fd7a:115c:a1e0::1"))
+        let port = try XCTUnwrap(NWEndpoint.Port(rawValue: 443))
+        let endpoint = NWEndpoint.hostPort(host: .ipv6(address), port: port)
+        XCTAssertEqual(AgentControlServer.endpointString(endpoint), "[fd7a:115c:a1e0::1]:443")
     }
 
     // MARK: - IPv4

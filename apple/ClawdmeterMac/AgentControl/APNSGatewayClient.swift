@@ -1,6 +1,7 @@
 import Foundation
 import ClawdmeterShared
 import OSLog
+import Security
 #if canImport(CryptoKit)
 import CryptoKit
 #else
@@ -20,9 +21,8 @@ private let gatewayLogger = Logger(subsystem: "com.clawdmeter.mac", category: "A
 ///   4. We seal the `APNSPushBody` with the HKDF-derived per-pairing key
 ///      (info=`clawdmeter.apns.v1` per the design doc §4.4 sibling-key
 ///      derivation).
-///   5. We sign the per-peer bearer
-///      `HMAC-SHA256(RELAY_BEARER_SIGNING_KEY, "apns:" + sid + ":" +
-///      senderFingerprint)`.
+    ///   5. We sign a fresh per-peer bearer with issued-at + nonce, bound to
+    ///      `(sid, senderFingerprint)`.
 ///   6. POST `<gateway>/push` with `{deviceToken, encryptedPayload, topic,
 ///      sessionId, senderMacFingerprint, priority, pushType, ...}`.
 ///   7. On 200, record SLO timestamps to OSLog. On 410, purge the token.
@@ -219,7 +219,8 @@ public actor APNSGatewayClient {
         let bearer = APNSGatewayBearer.issueBearer(
             signingKey: input.signingKey,
             sessionId: input.sessionId,
-            senderMacFingerprint: input.senderMacFingerprint
+            senderMacFingerprint: input.senderMacFingerprint,
+            issuedAtSeconds: UInt64(started.timeIntervalSince1970)
         )
 
         // 3. Encode the request body.
@@ -524,12 +525,36 @@ public actor APNSGatewayPushCoordinator {
 public final class APNSGatewaySigningKeyProvider: @unchecked Sendable {
 
     public static let shared = APNSGatewaySigningKeyProvider()
+    public static let defaultKeychainService = "ai.continuum.apns.gateway.signing-key"
+    private static let keychainAccount = "default"
 
     private let lock = NSLock()
+    private let keychainService: String
+    private let processEnv: [String: String]
     private var stored: Data?
 
-    public init() {
-        // Pick up the env-var override on first use.
+    public enum StoreError: Error, LocalizedError {
+        case invalidKeyLength
+        case keychainError(OSStatus)
+
+        public var errorDescription: String? {
+            switch self {
+            case .invalidKeyLength:
+                return "APNS gateway signing key must be at least 32 bytes."
+            case .keychainError(let status):
+                return "Keychain error \(status)."
+            }
+        }
+    }
+
+    public init(
+        keychainService: String = APNSGatewaySigningKeyProvider.defaultKeychainService,
+        processEnv: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        self.keychainService = keychainService
+        self.processEnv = processEnv
+        // Production persistence wins; the env-var override is a dev fallback.
+        loadFromKeychainIfNeeded()
         loadFromEnvironmentIfNeeded()
     }
 
@@ -546,7 +571,24 @@ public final class APNSGatewaySigningKeyProvider: @unchecked Sendable {
         stored = key
     }
 
+    /// Production writer: called when pairing learns the shared gateway bearer
+    /// key from the relay. Persists to Keychain so APNS pushes survive app
+    /// relaunch without relying on `launchctl setenv`.
+    public func saveFromPairing(_ key: Data) throws {
+        guard key.count >= 32 else { throw StoreError.invalidKeyLength }
+        try storeInKeychain(key)
+        lock.lock()
+        stored = key
+        lock.unlock()
+    }
+
     public func clear() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: Self.keychainAccount,
+        ]
+        SecItemDelete(query as CFDictionary)
         lock.lock()
         defer { lock.unlock() }
         stored = nil
@@ -555,14 +597,30 @@ public final class APNSGatewaySigningKeyProvider: @unchecked Sendable {
     /// Persistence: the Mac learns the key over the relay during pairing
     /// (E3). For E6 we accept it via env var so the dev-mac path can fire
     /// pushes against `wrangler dev` without waiting for E3.
+    private func loadFromKeychainIfNeeded() {
+        lock.lock()
+        if stored != nil {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+
+        guard let data = loadFromKeychain() else { return }
+
+        lock.lock()
+        if stored == nil {
+            stored = data
+        }
+        lock.unlock()
+    }
+
     private func loadFromEnvironmentIfNeeded() {
         lock.lock()
         if stored != nil {
             lock.unlock()
             return
         }
-        let env = ProcessInfo.processInfo.environment
-        if let raw = env["CLAWDMETER_RELAY_BEARER_SIGNING_KEY"], !raw.isEmpty {
+        if let raw = processEnv["CLAWDMETER_RELAY_BEARER_SIGNING_KEY"], !raw.isEmpty {
             // Try base64 first, then hex.
             if let data = Data(base64Encoded: raw) {
                 stored = data
@@ -571,6 +629,43 @@ public final class APNSGatewaySigningKeyProvider: @unchecked Sendable {
             }
         }
         lock.unlock()
+    }
+
+    private func storeInKeychain(_ key: Data) throws {
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: Self.keychainAccount,
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+
+        let addQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: Self.keychainAccount,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
+            kSecValueData as String: key,
+        ]
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw StoreError.keychainError(status)
+        }
+    }
+
+    private func loadFromKeychain() -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: Self.keychainAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else {
+            return nil
+        }
+        return data
     }
 }
 

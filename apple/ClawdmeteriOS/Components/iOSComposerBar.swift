@@ -45,6 +45,7 @@ struct iOSComposerBar: View {
 
     let mode: Mode
     @ObservedObject var client: AgentControlClient
+    @ObservedObject var outbox: MobileCommandOutbox
     /// Notified when a `.outside` send promotes the session to live.
     /// Hosts use this to flip navigation / pop the read-only screen.
     var onPromoted: ((UUID) -> Void)? = nil
@@ -458,7 +459,7 @@ struct iOSComposerBar: View {
 
         switch mode {
         case .live(let session):
-            await client.sendPrompt(sessionId: session.id, text: composed, asFollowUp: true)
+            outbox.enqueueSend(sessionId: session.id, text: composed, asFollowUp: true)
             text = ""
             attachments.removeAll()
         case .outside(let recent, let repo):
@@ -520,7 +521,7 @@ struct iOSComposerBar: View {
                     body = trimmed
                 }
                 if !body.isEmpty {
-                    await client.sendPrompt(sessionId: newSessionId, text: body, asFollowUp: false)
+                    outbox.enqueueSend(sessionId: newSessionId, text: body, asFollowUp: false)
                 }
                 text = ""
                 attachments.removeAll()

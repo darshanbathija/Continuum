@@ -4,6 +4,20 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.3 build 203] - 2026-06-06 - Relay and APNS security hardening (`darshanbathija/security-fixes`)
+
+### Fixed
+
+- Relay pairing now provisions first-connect creation credentials from the signed pairing bundle and requires proof-bound session creation, closing the unauthenticated session-creation path.
+- The relay creation-grant route now requires its own operator bearer, so the Worker cannot be used as a public signing oracle for attacker-chosen sessions.
+- Desktop, iOS, and relay clients now bound request wait time and preserve offline mobile commands in the outbox instead of hanging indefinitely on relay misses.
+- APNS gateway bearer validation now accepts the relay-provisioned signing key path and rejects malformed or mismatched bearer tokens more strictly.
+
+### Changed
+
+- Adds focused relay/APNS/mobile outbox regression coverage and refreshes the release gates across relay, APNS gateway, shared Swift, Mac, iOS, and watchOS builds.
+- Bumps `VERSION` 0.31.2 -> 0.31.3, `MARKETING_VERSION` 0.31.2 -> 0.31.3, and `CURRENT_PROJECT_VERSION` 202 -> 203.
+
 ## [0.31.2 build 202] - 2026-06-06 - Browser Preview annotations (`darshanbathija/design-comments`)
 
 ### Added

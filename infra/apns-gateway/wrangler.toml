@@ -58,6 +58,7 @@ preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 ENVIRONMENT = "development"
 LOG_LEVEL = "info"
 RATE_LIMIT_PER_HOUR = "60"
+APNS_BEARER_TTL_SECONDS = "300"
 APNS_ENDPOINT = "https://api.sandbox.push.apple.com"
 TOPIC_ENV = "sandbox"
 APNS_DISABLED = "false"
@@ -97,6 +98,7 @@ id = "138c11709f114e9f9cac18891ef7292a"
 ENVIRONMENT = "staging"
 LOG_LEVEL = "debug"
 RATE_LIMIT_PER_HOUR = "60"
+APNS_BEARER_TTL_SECONDS = "300"
 APNS_ENDPOINT = "https://api.sandbox.push.apple.com"
 TOPIC_ENV = "sandbox"
 APNS_DISABLED = "false"
@@ -136,6 +138,7 @@ preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 ENVIRONMENT = "production"
 LOG_LEVEL = "info"
 RATE_LIMIT_PER_HOUR = "60"
+APNS_BEARER_TTL_SECONDS = "300"
 APNS_ENDPOINT = "https://api.push.apple.com"
 TOPIC_ENV = "production"
 APNS_DISABLED = "false"
@@ -173,6 +176,7 @@ preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 ENVIRONMENT = "canary"
 LOG_LEVEL = "debug"
 RATE_LIMIT_PER_HOUR = "60"
+APNS_BEARER_TTL_SECONDS = "300"
 APNS_ENDPOINT = "https://api.push.apple.com"
 TOPIC_ENV = "production"
 APNS_DISABLED = "false"
@@ -190,7 +194,7 @@ P8_MAX_AGE_SECONDS = "7776000"
 #                          rotation-drill CI job + GET /health endpoint.
 # APNS_KEY_ID            — 10-char Apple key id (JWT "kid")
 # APNS_TEAM_ID           — 10-char Apple Team ID (JWT "iss")
-# APNS_TOPIC_PRODUCTION  — production bundle id (e.g. com.clawdmeter.iphone)
+# APNS_TOPIC_PRODUCTION  — production bundle id (e.g. ai.continuum.ios)
 # APNS_TOPIC_SANDBOX     — sandbox bundle id
 # RELAY_BEARER_SIGNING_KEY — shared HMAC key used to verify pairing bearer
 #                          tokens (mirrors E2 relay's signing key — see

@@ -53,6 +53,7 @@ public final class RelaySubscriptionBridge {
     private struct Live {
         let conn: Conn
         let pump: Task<Void, Never>
+        let spec: RelaySubscribeSpec
         let policy: RelaySubPolicy
         let coalescer: SnapshotCoalescer?
     }
@@ -94,6 +95,20 @@ public final class RelaySubscriptionBridge {
         for opId in Array(live.keys) { closeSubscription(opId) }
     }
 
+    /// Re-open every active loopback stream using the same relay opId/spec.
+    /// Called when the Mac relay socket reconnects or validates a fresh iOS
+    /// handshake. This repairs streams without waiting for iOS to notice the
+    /// Mac-side reconnect and replay subscriptions.
+    public func reopenLiveSubscriptions() async {
+        let specs = live.mapValues(\.spec)
+        guard !specs.isEmpty else { return }
+        for (opId, spec) in specs {
+            bridgeLogger.info("re-open relay sub opId=\(opId, privacy: .public) (Mac reconnect)")
+            teardown(opId)
+            await openSubscription(opId: opId, spec: spec)
+        }
+    }
+
     public var liveCount: Int { live.count }
 
     // MARK: - Subscribe
@@ -113,6 +128,10 @@ public final class RelaySubscriptionBridge {
             await emitError(opId: opId, message: "malformed subscribe spec")
             return
         }
+        await openSubscription(opId: opId, spec: spec)
+    }
+
+    private func openSubscription(opId: String, spec: RelaySubscribeSpec) async {
         guard RelaySubAllowlist.isAllowed(spec.op) else {
             await emitError(opId: opId, message: "op not allowed: \(spec.op)")
             return
@@ -140,7 +159,7 @@ public final class RelaySubscriptionBridge {
             guard let self else { return }
             await self.pumpLoop(opId: opId)
         }
-        live[opId] = Live(conn: conn, pump: pump, policy: policy, coalescer: coalescer)
+        live[opId] = Live(conn: conn, pump: pump, spec: spec, policy: policy, coalescer: coalescer)
         bridgeLogger.info("opened relay sub opId=\(opId, privacy: .public) op=\(spec.op, privacy: .public) policy=\(String(describing: policy), privacy: .public)")
     }
 

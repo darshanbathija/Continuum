@@ -95,6 +95,16 @@ enum AttachmentStaging {
         return url
     }
 
+    static func cleanupPendingStagingDir(_ url: URL) {
+        guard let root = emptyStateStagingDir?.standardizedFileURL else { return }
+        let target = url.standardizedFileURL
+        let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        guard target.path.hasPrefix(rootPath) else { return }
+        if FileManager.default.fileExists(atPath: target.path) {
+            try? FileManager.default.removeItem(at: target)
+        }
+    }
+
     /// Copy one source URL into the destination dir, resolving symlinks at
     /// read-time. Returns the staged URL or throws.
     static func stage(source: URL, into destDir: URL, attachmentId: UUID) throws -> URL {

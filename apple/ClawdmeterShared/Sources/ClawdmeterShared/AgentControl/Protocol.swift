@@ -15,7 +15,7 @@ import Foundation
 
 /// Single source of truth for the wire-protocol revision. Bumped in lockstep
 /// with breaking shape changes. v3 adds: `effort`, `abPairSessionId`,
-/// `abPairDecidedAt` on `AgentSession`; `ReasoningEffort` + `ModelCatalog`
+/// `abPairDecidedAt`, `abPairWinnerSessionId` on `AgentSession`; `ReasoningEffort` + `ModelCatalog`
 /// + mid-session change endpoints + `WireChatSnapshot` + `HealthResponse`.
 ///
 /// iOS reads this on pair-test or session-list refresh and compares to its
@@ -1836,6 +1836,7 @@ public enum MobileCommandKind: String, Codable, Hashable, Sendable, CaseIterable
     case permissionResponse = "permission_response"
     case terminalInput = "terminal_input"
     case createPR = "create_pr"
+    case reviewPR = "review_pr"
     case mergePR = "merge_pr"
     /// v16: every write endpoint that the iOS outbox can issue gets a
     /// kind for audit/UX disambiguation.
@@ -2755,6 +2756,10 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// second request sees this populated and gets 409. `nil` until
     /// someone picks a winner; cleared on un-pair.
     public let abPairDecidedAt: Date?
+    /// Durable winner for the A/B-pair decision. Kept separate from
+    /// `abPairDecidedAt` because retries may claim a different winner after
+    /// the CAS lock is already set; callers must receive the stored winner.
+    public let abPairWinnerSessionId: UUID?
 
     /// v0.5.4: user-supplied display name. When set, replaces
     /// `repoDisplayName` in the sidebar row + chat header so the session
@@ -2888,6 +2893,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         effort: ReasoningEffort? = nil,
         abPairSessionId: UUID? = nil,
         abPairDecidedAt: Date? = nil,
+        abPairWinnerSessionId: UUID? = nil,
         customName: String? = nil,
         claudeSessionId: String? = nil,
         kind: SessionKind = .code,
@@ -2932,6 +2938,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.effort = effort
         self.abPairSessionId = abPairSessionId
         self.abPairDecidedAt = abPairDecidedAt
+        self.abPairWinnerSessionId = abPairWinnerSessionId
         self.customName = customName
         self.claudeSessionId = claudeSessionId
         self.kind = kind
@@ -2989,6 +2996,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.effort = (try? c.decodeIfPresent(ReasoningEffort.self, forKey: .effort)) ?? nil
         self.abPairSessionId = (try? c.decodeIfPresent(UUID.self, forKey: .abPairSessionId)) ?? nil
         self.abPairDecidedAt = (try? c.decodeIfPresent(Date.self, forKey: .abPairDecidedAt)) ?? nil
+        self.abPairWinnerSessionId = (try? c.decodeIfPresent(UUID.self, forKey: .abPairWinnerSessionId)) ?? nil
         // v0.5.4 schema addition: customName. Optional + decoder-tolerant
         // so v3 sessions.json files decode cleanly (the field just stays
         // nil).
@@ -3067,7 +3075,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              terminalPanes, scheduledFollowUps, parentSessionId,
              // v15 Code V2 control-plane fields.
              workspaceId, runtimeCwd, chatCwd, runtimeBinding, prMirrorState,
-             effort, abPairSessionId, abPairDecidedAt,
+             effort, abPairSessionId, abPairDecidedAt, abPairWinnerSessionId,
              customName,
              // v0.8.0 schema v5 (Chat tab).
              kind, frontierGroupId, frontierChildIndex,
@@ -4353,6 +4361,18 @@ public enum AgentEventKind: String, Codable, Hashable, Sendable {
     /// Snapshot frame for cursor reconnect (sent when client's `?since=<seq>`
     /// is older than the retention window).
     case snapshot
+    /// Forward-compatible fallback for event tags shipped by a newer daemon.
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = AgentEventKind(rawValue: raw) ?? .unknown
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 /// One structured event in the per-session event stream. Sent over the WS
