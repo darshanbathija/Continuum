@@ -246,9 +246,8 @@ final class AppRuntime: ObservableObject {
         if ProviderEnablement.isEnabled("claude") { claudeModel.start() }
         if ProviderEnablement.isEnabled("codex") { codexModel.start() }
         if ProviderEnablement.isEnabled("gemini") { geminiModel.start() }
-        // Cursor: the opt-in flag is the gate now (it supersedes the legacy
-        // cursorStartupPollingEnabled deferral — enabling Cursor means the user
-        // accepts its cursor-agent keychain prompt).
+        // Cursor: the opt-in flag is the gate now. Enabling Cursor means the
+        // user accepts its cursor-agent keychain prompt.
         if ProviderEnablement.isEnabled("cursor") {
             cursorModel.start()
         } else {
@@ -730,13 +729,6 @@ final class AppRuntime: ObservableObject {
         Task(priority: .utility) { @MainActor in
             await ChatProviderProbe.shared.invalidate()
         }
-    }
-
-    private static var cursorStartupPollingEnabled: Bool {
-        if let raw = ProcessInfo.processInfo.environment["CLAWDMETER_CURSOR_STARTUP_POLLING"] {
-            return raw == "1" || raw.lowercased() == "true" || raw.lowercased() == "yes"
-        }
-        return UserDefaults.standard.object(forKey: "clawdmeter.cursor.startupPolling.enabled") as? Bool ?? false
     }
 
     private static var isRunningUnderXCTest: Bool {

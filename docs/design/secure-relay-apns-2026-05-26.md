@@ -138,7 +138,7 @@ The APNS gateway sees:
 APNSRequest = {
   deviceTokenHash: bytes32       // SHA-256(deviceToken) for audit log; raw token follows
   deviceToken:     bytes32       // raw APNS device token (gateway needs it for the HTTP/2 :path)
-  bundleId:        string        // "com.clawdmeter.iphone" or "com.clawdmeter.watch"
+  bundleId:        string        // "ai.continuum.ios" or "ai.continuum.ios.watchkitapp"
   topic:           string        // APNS topic
   encryptedBody:   bytes         // ChaCha20-Poly1305 sealed { sessionId, kind, summary }
   nonce:           bytes24

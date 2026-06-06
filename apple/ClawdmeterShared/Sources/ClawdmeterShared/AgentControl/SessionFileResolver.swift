@@ -23,10 +23,10 @@ import Foundation
 ///    `~/.codex/sessions/` for the newly-created rollout whose
 ///    modification time falls within the session's activity window.
 ///
-/// Phase 0a of the WhatsApp-smooth pipeline used a simpler fallback
-/// (`DaemonChatStoreRegistry.newestCodexJSONL()` — global newest). Phase
-/// 0b replaces that with this resolver so Codex sessions keep continuity
-/// across `approve-plan` boundaries.
+/// Phase 0a of the WhatsApp-smooth pipeline used a simpler "global newest"
+/// Codex JSONL fallback. This resolver intentionally avoids that: if a
+/// rollout cannot be tied to the session's activity window, it returns nil
+/// rather than surfacing another session's transcript.
 public final class SessionFileResolver: @unchecked Sendable {
 
     private let codexSessionsRoot: URL
@@ -124,29 +124,6 @@ public final class SessionFileResolver: @unchecked Sendable {
         return codexLinks[sessionId]
     }
 
-    /// Public fallback for synthetic preview sessions (the Mac UI's
-    /// outside-Clawdmeter JSONL viewer + `/chat-snapshot` requests against
-    /// sessions whose identity can't be established). Returns the newest
-    /// `.jsonl` under `codexSessionsRoot`. Mirrors the pre-Phase-0b
-    /// `AgentControlServer.newestCodexJSONL()` behavior.
-    public func findNewestCodexRollout() -> URL? {
-        guard let enumerator = FileManager.default.enumerator(
-            at: codexSessionsRoot,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else { return nil }
-        var newest: URL?
-        var newestDate = Date.distantPast
-        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            if date > newestDate {
-                newestDate = date
-                newest = url
-            }
-        }
-        return newest
-    }
-
     // MARK: - Internals
 
     private func resolveCodex(session: AgentSession) -> URL? {
@@ -179,10 +156,7 @@ public final class SessionFileResolver: @unchecked Sendable {
             return found
         }
 
-        // Fallback: newest rollout in dir (legacy behavior for synthetic
-        // preview sessions whose AgentSession identity doesn't map cleanly
-        // to a rollout file).
-        return findNewestCodexRollout()
+        return nil
     }
 
     /// Find the newest `.jsonl` in `codexSessionsRoot` whose modification

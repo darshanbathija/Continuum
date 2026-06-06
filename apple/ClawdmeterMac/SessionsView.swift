@@ -7,8 +7,8 @@ import ClawdmeterShared
 /// `SessionWorkspaceView`).
 ///
 /// The top-level `SessionsView` SwiftUI struct that used to live here was
-/// retired in v0.11 — the Tahoe `MacCodeView` is the only entry point
-/// into the IDE surface now. File name kept as `SessionsView.swift` for
+/// retired in v0.11 — `SessionWorkspaceView` is the production IDE surface
+/// now. File name kept as `SessionsView.swift` for
 /// minimal diff noise; effectively a `SessionsModel.swift`.
 
 // MARK: - New session sheet (Mac)
@@ -17,7 +17,7 @@ struct NewSessionMacSheet: View {
     @ObservedObject var model: SessionsModel
     @Environment(\.dismiss) private var dismiss
 
-    /// Pre-selected repo path (when MacCodeView's per-repo `+` button opens
+    /// Pre-selected repo path (when a repo-scoped `+` action opens
     /// the sheet, this is the repo's key so the picker lands on the right
     /// row without the user needing to choose). Nil opens the sheet with
     /// "(custom path)" selected, matching the previous behavior.
@@ -30,9 +30,6 @@ struct NewSessionMacSheet: View {
     @StateObject private var launcher = SessionLauncherModel()
     @State private var selectedModelId: String?
     @State private var selectedModelWasUserChosen = false
-    // v0.7.9: worktree by default. Local stays in the enum for
-    // back-compat but the mode chip is no longer in the New Session UI.
-    @State private var mode: SessionMode = .worktree
     @State private var isSpawning: Bool = false
     @State private var errorMessage: String?
     // Conductor parity: per-repo setup script run in each new worktree.
@@ -252,7 +249,7 @@ struct NewSessionMacSheet: View {
                 agent: agent,
                 planMode: agent == .cursor ? false : planMode,
                 goal: goal.isEmpty ? nil : goal,
-                mode: mode,
+                mode: .worktree,
                 tmux: runtime.tmuxClient,
                 model: selectedModel,
                 effort: supportsEffort(modelId: selectedModel) ? defaults.effort : nil
@@ -1704,23 +1701,18 @@ public final class SessionsModel: ObservableObject {
         // trust-gate UX (AutopilotState.trustRepo) before passing true.
         autopilot: Bool = false,
         pinnedJSONLURL: URL? = nil,
-        // v0.8.1 agy-migration — full first-prompt text for agentapi
-        // spawn. tmux-based spawn ignores this (the CLI's stdin gets the
-        // prompt via the post-spawn /send call), but Antigravity 2's
-        // `agentapi new-conversation` requires the actual first turn at
-        // spawn-time. Callers (EmptyStateCenteredComposer) pass the
-        // composer's rendered body; nil falls back to `goal` for paths
-        // that don't have a composer (resume flows, daemon-side spawns).
+        // Full first-prompt text for managed harness spawns. tmux-based
+        // Claude spawn ignores this; callers pass the composer's rendered
+        // body so non-Claude adapters can create the first turn in one step.
+        // nil falls back to `goal` for paths that don't have a composer
+        // (resume flows, daemon-side spawns).
         initialMessage: String? = nil
     ) async throws -> AgentSession {
         try assertProviderEnabled(agent)
-        // v27 Code-tab harness migration: route EVERY non-Claude Code spawn
-        // through the daemon's ACP harness (paneless codex/cursor/gemini) —
-        // tmux + agentapi are gone for non-Claude. Claude + OpenCode keep their
-        // own paths below. External "Continue here" resume is deprioritized: a
-        // resume of a codex JSONL opens a fresh harness session in the same
-        // worktree (true thread/resume is a fast-follow). This sits BEFORE the
-        // CLI preflight because Gemini (Antigravity) isn't a CLI binary.
+        // Route non-Claude/non-OpenCode Code spawns through managed adapters
+        // (Codex app-server, Cursor ACP, Gemini/Grok headless). These sessions
+        // do not require tmux argv preflight; each adapter owns its probe.
+        // OpenCode keeps its SSE manager path below, and Claude keeps tmux.
         if agent != .claude, agent != .opencode {
             // Cursor preflight — the daemon's harness preflight doesn't
             // auth-check cursor-agent, so do it here before provisioning.
@@ -1740,36 +1732,67 @@ public final class SessionsModel: ObservableObject {
                    !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
                     throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
                 }
-            } else if agent != .gemini, let reason = AgentSpawner.preflight(agent: agent) {
-                throw SpawnError.missingBinary(reason)
             }
             return try await spawnHarnessSessionViaDaemon(
                 repoPath: repoPath, agent: agent, goal: goal, mode: mode,
                 model: model, effort: effort, existingWorkspacePath: nil, sessionId: nil
             )
         }
-        if agent == .cursor, planMode, (resumeSessionId?.isEmpty ?? true) {
-            throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
+        if agent == .opencode {
+            var cwd = repoPath
+            var worktreePath: String? = nil
+            var provisioning: WorktreeProvisioningMetadata? = nil
+            var provisionalSessionId: UUID?
+            if mode == .worktree {
+                let sessionId = UUID()
+                provisionalSessionId = sessionId
+                let city = CityNamer.shared.cityName(for: sessionId)
+                let slug = WorktreeManager.slug(city: city)
+                do {
+                    let provisioned = try await WorktreeManager.shared.provision(
+                        repoRoot: repoPath,
+                        slug: slug,
+                        branchName: slug,
+                        filesToCopy: filesToCopySettings(forRepoRoot: repoPath),
+                        setupScript: RepoSetupScriptStore.script(forRepoRoot: repoPath)
+                    )
+                    worktreePath = provisioned.path
+                    provisioning = provisioned.metadata
+                    cwd = provisioned.path
+                } catch {
+                    CityNamer.shared.release(sessionId)
+                    throw error
+                }
+            }
+            do {
+                return try await spawnOpencodeSessionInExistingWorkspace(
+                    repoPath: repoPath,
+                    workspacePath: cwd,
+                    goal: goal,
+                    mode: mode,
+                    model: model,
+                    effort: effort,
+                    inheritedContextSourceIds: [],
+                    provisioning: provisioning,
+                    ownsWorktree: worktreePath != nil,
+                    sessionId: provisionalSessionId
+                )
+            } catch {
+                await cleanupUnregisteredWorktree(
+                    repoPath: repoPath,
+                    worktreePath: worktreePath,
+                    provisioning: provisioning,
+                    provisionalSessionId: provisionalSessionId
+                )
+                throw error
+            }
         }
         // Fail fast on missing CLIs rather than spawning tmux + the
         // worktree only to error in the agent's pane (where the user
-        // can't easily see it without opening the terminal view).
+        // can't easily see it without opening the terminal view). Only
+        // Claude reaches this tmux path.
         if let reason = AgentSpawner.preflight(agent: agent) {
             throw SpawnError.missingBinary(reason)
-        }
-        if agent == .cursor {
-            let cursorState = await CursorModelProbe.shared.currentState()
-            guard cursorState.binaryPath != nil else {
-                throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
-            }
-            guard cursorState.authenticated else {
-                throw SpawnError.missingBinary("Run cursor-agent login, then try again.")
-            }
-            if let model,
-               !CursorModelCatalog.isAutoModel(model),
-               !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
-                throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
-            }
         }
         let effectivePlanMode = planMode
         try await tmux.start()
@@ -1904,10 +1927,9 @@ public final class SessionsModel: ObservableObject {
             workspacePath: workspacePath,
             mode: mode
         )
-        // v27 Code-tab harness migration: route non-Claude into the EXISTING
-        // worktree via the daemon harness (reuse the worktree — existingWorkspace
-        // tells the daemon to skip provisioning — daemon creates the row).
-        // Claude + OpenCode keep their existing paths below.
+        // Route non-Claude/non-OpenCode sessions into the existing worktree via
+        // managed adapters. These sessions do not require tmux argv preflight;
+        // each adapter owns its probe. Claude + OpenCode keep explicit paths.
         if agent != .claude, agent != .opencode {
             if agent == .cursor {
                 if planMode {
@@ -1925,8 +1947,6 @@ public final class SessionsModel: ObservableObject {
                    !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
                     throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
                 }
-            } else if agent != .gemini, let reason = AgentSpawner.preflight(agent: agent) {
-                throw SpawnError.missingBinary(reason)
             }
             let session = try await spawnHarnessSessionViaDaemon(
                 repoPath: repoPath, agent: agent, goal: goal, mode: mode,
@@ -1946,25 +1966,8 @@ public final class SessionsModel: ObservableObject {
                 inheritedContextSourceIds: inheritedContextSourceIds
             )
         }
-        if agent == .cursor, planMode {
-            throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
-        }
         if let reason = AgentSpawner.preflight(agent: agent) {
             throw SpawnError.missingBinary(reason)
-        }
-        if agent == .cursor {
-            let cursorState = await CursorModelProbe.shared.currentState()
-            guard cursorState.binaryPath != nil else {
-                throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
-            }
-            guard cursorState.authenticated else {
-                throw SpawnError.missingBinary("Run cursor-agent login, then try again.")
-            }
-            if let model,
-               !CursorModelCatalog.isAutoModel(model),
-               !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
-                throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
-            }
         }
 
         try await tmux.start()
@@ -2035,7 +2038,10 @@ public final class SessionsModel: ObservableObject {
         mode: SessionMode,
         model: String?,
         effort: ReasoningEffort?,
-        inheritedContextSourceIds: [UUID]
+        inheritedContextSourceIds: [UUID],
+        provisioning: WorktreeProvisioningMetadata? = nil,
+        ownsWorktree: Bool = false,
+        sessionId: UUID? = nil
     ) async throws -> AgentSession {
         let paths = Self.existingWorkspaceRecordPaths(
             repoPath: repoPath,
@@ -2092,15 +2098,17 @@ public final class SessionsModel: ObservableObject {
             model: model,
             goal: goal,
             worktreePath: paths.worktreePath,
+            provisioning: provisioning,
             tmuxWindowId: nil,
             tmuxPaneId: nil,
             planMode: false,
             mode: mode,
             effort: effort,
             inheritedContextSourceIds: inheritedContextSourceIds,
-            ownsWorktree: false,
+            ownsWorktree: ownsWorktree,
             envSetId: resolvedEnv?.set?.id,
-            envSetName: resolvedEnv?.set?.name
+            envSetName: resolvedEnv?.set?.name,
+            id: sessionId ?? UUID()
         )
         OpencodeSSEAdapter.shared.register(
             clawdmeterID: session.id,
@@ -2112,6 +2120,7 @@ public final class SessionsModel: ObservableObject {
             kind: .sessionCreated,
             payload: ["repo": paths.cwd, "agent": "opencode", "opencodeID": opencodeID]
         )
+        recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
         expandedRepoKeys.insert(repoPath)
         draftWorkspaceTab = nil
         openOutsideJSONLPath = nil

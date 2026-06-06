@@ -1,13 +1,9 @@
 name: Deploy clawdmeter-apns-gateway
 
-# E0 scaffold (Phase 0). Source code lands in E5.
-#
 # Mirrors deploy-relay.yml. The APNS gateway is the higher-blast-radius
 # Worker (holds operator .p8) — production deploy is manual-only via
 # workflow_dispatch + required-reviewer approval on the gh "production"
 # environment.
-#
-# Plan reference: E0 from .claude/plans/study-this-codebase-crystalline-shore.md
 
 on:
   push:
@@ -51,17 +47,13 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install deps
         working-directory: infra/apns-gateway
-        # E0 ships without a lockfile (no source yet). E5 must add bun.lockb
-        # and this command will then enforce reproducibility automatically.
-        # Until then, the pinned wrangler version in package.json prevents
-        # supply-chain drift.
-        run: |
-          if [ -f bun.lockb ] || [ -f bun.lock ]; then
-            bun install --frozen-lockfile
-          else
-            echo "::warning::No lockfile present (E0 scaffold). Pinned wrangler version in package.json is the only supply-chain guard. E5 MUST commit bun.lockb."
-            bun install
-          fi
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        working-directory: infra/apns-gateway
+        run: bun run typecheck
+      - name: Tests
+        working-directory: infra/apns-gateway
+        run: bun run test
       - name: Dry-run deploy (staging)
         working-directory: infra/apns-gateway
         env:
@@ -90,22 +82,13 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install deps
         working-directory: infra/apns-gateway
-        run: |
-          if [ -f bun.lockb ] || [ -f bun.lock ]; then
-            bun install --frozen-lockfile
-          else
-            echo "::warning::No lockfile present. E5 MUST commit bun.lockb before this deploy job is allowed in production."
-            bun install
-          fi
+        run: bun install --frozen-lockfile
       - name: Deploy to staging
         working-directory: infra/apns-gateway
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: bunx wrangler@${WRANGLER_VERSION} deploy --env staging
-      - name: Smoke test (placeholder — real test lands in E5)
-        run: |
-          echo "::notice::E0 scaffold: smoke test placeholder. E5 will add a real APNS-sandbox send + delivery test"
 
   deploy-production:
     name: Deploy to production

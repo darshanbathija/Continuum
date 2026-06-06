@@ -2,17 +2,17 @@
 
 Continuum is a native desktop and mobile control surface for coding agents. It
 started as a Claude usage meter, but the current repo is broader: a Mac menu-bar
-meter, a Tahoe-style Mac workbench, iPhone and Apple Watch companions, a Linux
-desktop port, shared usage analytics, and adapters for Claude Code, Codex,
-Antigravity/Gemini, and OpenCode.
+meter, a Tahoe-style Mac workbench, iPhone and Apple Watch companions,
+experimental Linux scaffolding, shared usage analytics, and adapters for Claude
+Code, Codex, Antigravity/Gemini, and OpenCode.
 
 At a high level, Continuum does three jobs:
 
 - Shows live quota and spend for coding-agent providers.
-- Runs and controls local coding-agent sessions from Mac, iPhone, Watch, and Linux.
+- Runs and controls local coding-agent sessions from Mac, iPhone, and Watch.
 - Keeps chat, code, usage, device pairing, diagnostics, and provider setup in one app.
 
-Current source version: `0.29.23` (`apple/project.yml` build `162`).
+Current source version: `0.31.3` (`apple/project.yml` build `203`).
 
 ## What ships
 
@@ -22,7 +22,7 @@ Current source version: `0.29.23` (`apple/project.yml` build `162`).
 | **iPhone app** | Paired control plane for the Mac. Shows live provider status, analytics, chat/code sessions, new-session creation, plan approvals, diffs, terminal views, and Live Activities. |
 | **Apple Watch app** | Wrist view for live usage and sessions that need attention, including plan approval and interruption flows through the paired iPhone. |
 | **Widgets / complications** | iOS widgets, watchOS complications, and a Mac widget extension backed by the shared app-group cache. |
-| **Linux app** | Native Swift Linux desktop and daemon work under `linux/`, targeting Ubuntu/Zorin GNOME environments with AppIndicator, GTK4/libadwaita, WebKitGTK, VTE, libsecret, and the same shared analytics package. |
+| **Linux app** | Experimental Swift Linux scaffolding under `linux/`. Keep it compiling, but do not treat AppImage/deb, tray, daemon, or pairing docs as shipping until the stubs are replaced by real runtime code. |
 | **Shared package** | `apple/ClawdmeterShared` contains wire DTOs, analytics parsers, pricing, provider models, session protocol types, Tahoe UI primitives, and cross-platform tests. |
 | **Tools** | Build scripts, bundled runtime fetchers, Codex SDK shim, Antigravity Python sidecar skeleton, and tmux control-mode probes live under `tools/`. (Open Design bridge + plugin removed in v0.27.0.) |
 
@@ -198,17 +198,19 @@ swift build
 swift test
 ```
 
-Distribution packages from the repo root:
+Distribution packaging is intentionally quarantined while the Linux daemon and
+desktop binaries are still stubs. The scripts below are placeholders and should
+not be wired into release uploads until they produce real artifacts:
 
 ```bash
 ./tools/build-linux-appimage.sh
 ./tools/build-linux-deb.sh
 ```
 
-Install/user docs:
+Scaffolding docs:
 
-- `docs/linux/INSTALL.md`
-- `docs/linux/PAIRING.md`
+- `docs/linux/INSTALL.md` (not yet a shipping install guide)
+- `docs/linux/PAIRING.md` (design notes until the daemon is real)
 - `docs/linux/TROUBLESHOOTING.md`
 - `docs/linux/QA-CHECKLIST.md`
 
@@ -255,7 +257,7 @@ The repo has substantial XCTest coverage under:
 |   |-- opencode-research-2026-05-22.md     OpenCode integration research
 |   `-- button-wiring-audit.md              UI/backend wiring audit
 |-- tools/
-|   |-- build-*.sh                          DMG, AppImage, and .deb packaging
+|   |-- build-*.sh                          DMG and quarantined Linux packaging stubs
 |   |-- download-bundled-*.sh               vendored runtime staging
 |   |-- clawdmeter-codex-sdk/               Node Codex SDK bridge
 |   |-- clawdmeter-agents/                  Python Antigravity sidecar skeleton

@@ -34,6 +34,8 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: "2.9.2"
+  TmuxControlMode:
+    path: ../tools/tmux-control-mode-core
 
 targets:
   # ───────────────────────────────────────────────────────────────
@@ -98,6 +100,8 @@ targets:
         product: SwiftTerm
       - package: Sparkle
         product: Sparkle
+      - package: TmuxControlMode
+        product: TmuxControlMode
       - target: ClawdmeterMacWidgets
         embed: true
     preBuildScripts:

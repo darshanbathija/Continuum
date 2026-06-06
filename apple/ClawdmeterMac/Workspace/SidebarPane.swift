@@ -175,7 +175,7 @@ struct SidebarPane: View {
         .sheet(item: $comparisonPair) { pair in
             SessionComparisonSheet(pair: pair, model: model)
         }
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now in
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now in
             // Skip cosmetic freshness ticks while the window is inactive —
             // no visible relative-time/green-dot to refresh. (Same-window
             // hidden-tab gating needs an active-tab flag from MacRootView;

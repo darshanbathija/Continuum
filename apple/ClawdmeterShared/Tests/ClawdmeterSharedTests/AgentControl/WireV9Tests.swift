@@ -372,7 +372,7 @@ final class WireV9Tests: XCTestCase {
 
     // MARK: - ChatProvidersResponse
 
-    func test_chatProvidersResponse_withCodexSubRows() throws {
+    func test_chatProvidersResponse_withCurrentProviderRows() throws {
         let now = Date()
         let resp = ChatProvidersResponse(providers: [
             ChatProviderEntry(
@@ -381,19 +381,14 @@ final class WireV9Tests: XCTestCase {
                 lastProbedAt: now
             ),
             ChatProviderEntry(
-                provider: .codex, codexBackend: .sdk,
-                available: true, authenticated: true, capabilityProbePassed: true,
-                lastProbedAt: now
-            ),
-            ChatProviderEntry(
-                provider: .codex, codexBackend: .cli,
+                provider: .codex,
                 available: true, authenticated: true, capabilityProbePassed: true,
                 lastProbedAt: now
             ),
             ChatProviderEntry(
                 provider: .gemini,
-                available: false, authenticated: false, capabilityProbePassed: false,
-                reason: "v0.9"
+                available: true, authenticated: true, capabilityProbePassed: true,
+                lastProbedAt: now
             ),
         ])
         let encoder = JSONEncoder()
@@ -401,8 +396,9 @@ final class WireV9Tests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode(ChatProvidersResponse.self, from: encoder.encode(resp))
-        XCTAssertEqual(decoded.providers.count, 4)
-        XCTAssertEqual(decoded.providers[3].provider, .gemini)
-        XCTAssertEqual(decoded.providers[3].reason, "v0.9")
+        XCTAssertEqual(decoded.providers.count, 3)
+        XCTAssertEqual(decoded.providers[1].provider, .codex)
+        XCTAssertNil(decoded.providers[1].codexBackend)
+        XCTAssertEqual(decoded.providers[2].provider, .gemini)
     }
 }

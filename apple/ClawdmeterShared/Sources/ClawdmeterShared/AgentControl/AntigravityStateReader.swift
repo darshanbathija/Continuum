@@ -22,9 +22,8 @@
 //   - `migrate_convos_into_projects` (enum: `MIGRATION_STATUS_{PENDING,COMPLETED}`)
 //
 // The opaque model token resolves to a display name (`gemini-3.5-flash`)
-// via a lookup map. When the map doesn't know the token, callers can fall
-// back to `LanguageServerClient.currentModel()` (Commit 8) which queries
-// the running Electron app, or render the raw token.
+// via a lookup map. When the map doesn't know the token, callers render
+// the raw token.
 
 import Foundation
 
@@ -129,8 +128,8 @@ public enum AntigravityStateReader {
 
     /// Resolves an opaque model token (e.g. `MODEL_PLACEHOLDER_M133`) into
     /// a human-readable name (e.g. `gemini-3.5-flash`). Returns nil if
-    /// we don't know the mapping — the caller should fall back to either
-    /// the raw token or `LanguageServerClient.currentModel()`.
+    /// we don't know the mapping — the caller should fall back to the raw
+    /// token.
     ///
     /// Mapping derived from Antigravity 2.0.0's bundled `agy-node` source
     /// (Electron resources, `enum_to_display.js`). Update this map when

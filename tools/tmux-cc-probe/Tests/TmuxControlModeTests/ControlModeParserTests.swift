@@ -17,6 +17,21 @@ final class ControlModeParserTests: XCTestCase {
         XCTAssertEqual(frames[2], .error(timestamp: 1747327892, number: 18, flags: 1))
     }
 
+    func testCommandResponseBodyLinesArePreserved() {
+        var p = ControlModeParser()
+        p.feed("%begin 1747327891 17 1\n".utf8)
+        p.feed("@12\n".utf8)
+        p.feed("%end 1747327891 17 1\n".utf8)
+        XCTAssertEqual(
+            p.drainFrames(),
+            [
+                .begin(timestamp: 1747327891, number: 17, flags: 1),
+                .body(line: "@12"),
+                .end(timestamp: 1747327891, number: 17, flags: 1),
+            ]
+        )
+    }
+
     // MARK: - Octal-escape decoding (Phase 0 criterion #3 + #4)
 
     func testOctalDecodeBackslash() {

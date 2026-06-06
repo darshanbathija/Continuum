@@ -14,13 +14,6 @@ private let authObserverLogger = Logger(subsystem: "com.clawdmeter.mac", categor
 ///   2. **Codex JSONL `payload.error`**: Codex CLI rollouts include
 ///      `{payload: {error: "token-expired" | "invalid_token", ...}}`
 ///      response_item rows when the ChatGPT auth header is stale.
-///   3. **Codex SDK sidecar stderr**: the Node sidecar emits
-///      `{"type": "error", "code": "auth"}` text on stderr when the
-///      `~/.codex/auth.json` `chatgpt_account_id` is missing/invalid.
-///   4. **Antigravity agentapi 401**: `lsClient.sendMessage` throws
-///      `.rpcError("HTTP 401: auth required")` when the LS rejects
-///      the CSRF token (typically: Antigravity wasn't logged in).
-///
 /// This observer doesn't run a full scanner — it offers `record(...)`
 /// hooks the existing ingest/send paths call when they encounter one
 /// of the signals above. Each hook:
@@ -63,38 +56,12 @@ public actor ChatProviderAuthObserver {
         guard isAuthError(errorString) else { return }
         authObserverLogger.warning("Codex CLI auth error=\(errorString, privacy: .public) — flipping probe to authenticated=false")
         await ChatProviderProbe.shared.setAuthOverride(
-            providerKey: "codex:cli",
+            providerKey: "codex",
             authenticated: false,
             reason: "Codex ChatGPT auth expired — run `codex` in Terminal and re-sign-in."
         )
         _ = sessionId
         _ = errorString
-    }
-
-    /// Codex SDK sidecar stderr hook — call from CodexSubscriptionRelay's
-    /// stderr drain when a `{type:"error", code:"auth"}` line surfaces.
-    public func recordCodexSDKAuthError(sessionId: UUID?, message: String?) async {
-        authObserverLogger.warning("Codex SDK auth error — flipping probe to authenticated=false")
-        await ChatProviderProbe.shared.setAuthOverride(
-            providerKey: "codex:sdk",
-            authenticated: false,
-                reason: message ?? "Codex SDK auth expired — toggle SDK mode off + on in Settings → Advanced → Runtime setup."
-        )
-        _ = sessionId
-    }
-
-    /// Antigravity agentapi 401 hook — call from
-    /// `AgentControlServer.sendAntigravityMessage` catch on
-    /// `LanguageServerClientError.rpcError(...)` when the message
-    /// contains "401" or "auth".
-    public func recordAntigravityAuthError(sessionId: UUID?, message: String?) async {
-        authObserverLogger.warning("Antigravity agentapi auth error — flipping probe to authenticated=false")
-        await ChatProviderProbe.shared.setAuthOverride(
-            providerKey: "gemini",
-            authenticated: false,
-            reason: message ?? "Antigravity 2 not signed in — open the app and sign back into Google."
-        )
-        _ = sessionId
     }
 
     /// Manual clear (e.g. user clicked "Try again" after re-auth in

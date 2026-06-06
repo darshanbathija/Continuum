@@ -5,20 +5,13 @@
 // `agy-node` was misread as the agent CLI — Phase 0 proved it's a 152-byte
 // shim that runs Antigravity's bundled Node runtime, NOT an agent CLI.
 //
-// v0.8.x agy-migration: we drop the agy-node anchor and add three new
-// concerns the agentapi spawn path needs:
+// v0.8.x agy-migration: we drop the agy-node anchor and keep the filesystem
+// probes needed by disk observation and provider availability:
 //
 //   1. Locate the `language_server` binary across known install layouts
 //      (Antigravity has moved it before; defensive multi-path probe).
 //   2. Check OAuth credential validity via `~/.gemini/oauth_creds.json`
-//      (no OAuth → every agentapi RPC fails with `not logged into Antigravity`).
-//   3. `preflight(forRepoKey:)` composes install + OAuth + LS liveness +
-//      project resolution into a single `InstallStatus` the spawn path
-//      consumes verbatim.
-//
-// LS liveness + project resolution are dependencies; this module accepts
-// them as injected closures so the shared package stays Mac-process-free
-// (no pgrep/lsof here — those live in LanguageServerClient).
+//      (used by availability/Settings probes).
 //
 // Mac-only: Antigravity Electron, `~/.gemini/antigravity/`, and the
 // language_server binary only exist on macOS. iOS reads Plan data via
@@ -29,7 +22,7 @@
 import Foundation
 
 /// Result of an `AntigravityInstall.detect()` probe — pure filesystem
-/// presence check. Composes into `InstallStatus` via `preflight`.
+/// presence check.
 public enum AntigravityInstall: Equatable, Sendable {
     /// Antigravity 2 is installed. All core anchors exist.
     case installed(Installed)
@@ -47,8 +40,7 @@ public enum AntigravityInstall: Equatable, Sendable {
         /// but `locateLanguageServer()` probes 4 candidate paths.
         public let languageServerURL: URL
         /// Best-effort: "is the Electron app running right now?" — true when
-        /// the transient `logs/<TS>/ls-main.log` dir exists. Authoritative
-        /// liveness is `LanguageServerClient.discoverLive()` (Mac daemon).
+        /// the transient `logs/<TS>/ls-main.log` dir exists.
         public let hasRunningServer: Bool
         /// Version string read from `Contents/Info.plist`. Nil on read fail.
         public let appVersion: String?
@@ -83,37 +75,6 @@ public enum AntigravityOAuthStatus: Equatable, Sendable {
     /// not-signed-in; surfaces same CTA as `.missing` but logs the
     /// distinction in OSLog for triage.
     case malformed
-}
-
-// MARK: - Preflight composition (D7)
-
-/// Composed runtime status for `agent: .gemini` spawn. The spawn dispatch
-/// in `SessionsView` switches on this to decide:
-///
-///   - `.ready` → spawn `agentapi new-conversation` via the resolved
-///     project_id + live LS env.
-///   - `.appOnlyNotRunning` → surface "Open Antigravity 2 to start" CTA
-///     with launch button (D4 hard-stop: no v0.42 chat fallback).
-///   - `.installedNotSignedIn` → "Sign into Antigravity 2 first" CTA.
-///   - `.noProjectForRepo` → "Open this repo in Antigravity 2 first" CTA.
-///   - `.absent` → "Install Antigravity 2 from antigravity.google" CTA.
-public enum AntigravityInstallStatus: Equatable, Sendable {
-    /// Everything reachable + project mapped. Spawn proceeds.
-    case ready(
-        install: AntigravityInstall.Installed,
-        projectId: String
-    )
-    /// App installed + signed in, but `language_server` process is not
-    /// running. User clicks "Open Antigravity" CTA.
-    case appOnlyNotRunning(install: AntigravityInstall.Installed)
-    /// App installed but no Antigravity OAuth credential found. Most
-    /// common first-time state. CTA: "Sign in to Antigravity 2".
-    case installedNotSignedIn(install: AntigravityInstall.Installed)
-    /// App running + signed in, but no Antigravity project matches this
-    /// `session.repoKey`. CTA: "Open this repo in Antigravity 2 first".
-    case noProjectForRepo(install: AntigravityInstall.Installed)
-    /// No Antigravity install at all. CTA: install from antigravity.google.
-    case absent
 }
 
 extension AntigravityInstall {
@@ -216,62 +177,12 @@ extension AntigravityInstall {
         return .malformed
     }
 
-    /// Composed preflight check for a Gemini spawn. Combines install
-    /// detection, OAuth credential presence, language_server liveness,
-    /// and Antigravity-project lookup for the session's repoKey.
-    ///
-    /// Dependencies are injected as closures so the shared package stays
-    /// Mac-process-free:
-    ///   - `isLanguageServerLive` — typically wraps
-    ///     `LanguageServerClient.discoverLive() != nil`. Tests pass a
-    ///     stub.
-    ///   - `resolveProject` — typically wraps
-    ///     `AntigravityProjectResolver.shared.resolve(forRepoKey:)`.
-    public static func preflight(
-        forRepoKey repoKey: String,
-        isLanguageServerLive: () async -> Bool,
-        resolveProject: (String) async -> String?,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        applicationsRoot: URL = URL(fileURLWithPath: "/Applications"),
-        fileManager: FileManager = .default
-    ) async -> AntigravityInstallStatus {
-        // Step 1: app must be on disk at all.
-        let install = detect(
-            homeDirectory: homeDirectory,
-            applicationsRoot: applicationsRoot,
-            fileManager: fileManager
-        )
-        guard case .installed(let installed) = install else {
-            return .absent
-        }
-
-        // Step 2: OAuth must be present (best-effort; rotation invalidates
-        // on the server side but we'd see that as an RPC error later).
-        let oauth = checkOAuthValidity(homeDirectory: homeDirectory, fileManager: fileManager)
-        guard oauth == .valid else {
-            return .installedNotSignedIn(install: installed)
-        }
-
-        // Step 3: language_server must be running (Antigravity.app open).
-        // D4 hard-stop: no v0.42 chat fallback when LS isn't live.
-        guard await isLanguageServerLive() else {
-            return .appOnlyNotRunning(install: installed)
-        }
-
-        // Step 4: an Antigravity project must map to session.repoKey.
-        guard let projectId = await resolveProject(repoKey) else {
-            return .noProjectForRepo(install: installed)
-        }
-
-        return .ready(install: installed, projectId: projectId)
-    }
-
     /// Coarse running-server proxy: true if `appDataDir/logs/` contains at
     /// least one subdirectory with an `ls-main.log` file. Antigravity
     /// creates a fresh `logs/<UNIXTS>/` subdir on every launch and writes
     /// `ls-main.log` immediately. The dir persists after quit (Antigravity
     /// doesn't sweep), so this is a "has-been-launched" signal more than
-    /// "currently running" — for the latter, use `LanguageServerClient`.
+    /// "currently running".
     static func detectRunningServer(appDataDir: URL, fileManager: FileManager) -> Bool {
         let logsDir = appDataDir.appendingPathComponent("logs", isDirectory: true)
         guard let entries = try? fileManager.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: nil) else {

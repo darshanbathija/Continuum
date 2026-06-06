@@ -67,9 +67,9 @@ public final class DaemonChatStoreRegistry {
 
     /// File-URL resolver, injected. AppRuntime wires in the Phase 0b
     /// `SessionFileResolver` (with Codex respawn-lineage tracking) via a
-    /// closure that delegates to it. The default fallback exists for
-    /// tests and pre-Phase-0b back-compat — it mirrors the legacy
-    /// `AgentControlServer.handleGetChatSnapshot` path-resolution rules.
+    /// closure that delegates to it. The default fallback is intentionally
+    /// conservative so tests do not bind non-Claude sessions to an unrelated
+    /// global-newest Codex rollout.
     private let resolveURL: @MainActor (UUID, AgentSession) -> URL?
 
     public init(
@@ -266,55 +266,24 @@ public final class DaemonChatStoreRegistry {
 
     // MARK: - Default file-URL resolution
 
-    /// Phase 0a default. Mirrors `AgentControlServer.handleGetChatSnapshot`'s
-    /// existing path-resolution rules. Phase 0b replaces this with a real
-    /// `SessionFileResolver` that tracks Codex respawn lineage so
-    /// `approve-plan` doesn't break continuity.
-    ///
-    /// v0.8.0 agy-migration: Gemini sessions spawned via Antigravity 2's
-    /// agentapi don't have JSONL files at all — chat state lives in a
-    /// SQLite WAL at ~/.gemini/antigravity/conversations/<id>.db. We
-    /// surface that URL here so future SessionChatStore work (v0.8.1+
-    /// ingest path) can consume `AntigravityConversationDB` (T6) instead
-    /// of trying to JSONL-parse a binary database.
+    /// Default test resolver. Production injects `SessionFileResolver`.
+    /// Non-Claude sessions return nil here instead of falling back to the
+    /// newest Codex JSONL on the machine, which could belong to any repo or
+    /// chat and render the wrong transcript.
     @MainActor
     public static func defaultResolveURL(sessionId: UUID, session: AgentSession) -> URL? {
         let cwd = session.effectiveCwd
         if session.agent == .claude {
             return SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
-        } else {
-            return Self.newestCodexJSONL()
         }
-    }
-
-    /// Same logic as `AgentControlServer.newestCodexJSONL()` — kept here so
-    /// the registry's default resolver doesn't reach across the server's
-    /// private API. Phase 0b replaces this entirely.
-    nonisolated public static func newestCodexJSONL() -> URL? {
-        let sessionsDir = ClawdmeterRealHome.url()
-            .appendingPathComponent(".codex/sessions", isDirectory: true)
-        guard let enumerator = FileManager.default.enumerator(
-            at: sessionsDir,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else { return nil }
-        var newest: URL?
-        var newestDate = Date.distantPast
-        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            if date > newestDate {
-                newestDate = date
-                newest = url
-            }
-        }
-        return newest
+        return nil
     }
 
     /// v0.8 QA F1: find the newest Codex rollout whose `session_meta.cwd`
     /// matches `cwd` AND whose mtime is >= `after`. This isolates a
     /// chat-mode Codex CLI session's rollout from any other Codex
-    /// activity on the machine — without this, `newestCodexJSONL()`
-    /// surfaces ANY codex run's transcript (concurrent chat, another
+    /// activity on the machine — a global newest-file fallback would
+    /// surface ANY codex run's transcript (concurrent chat, another
     /// worktree, manual `codex` in Terminal). Returns nil when no
     /// rollout for this session exists yet (e.g. before the user's first
     /// prompt processes).
@@ -373,28 +342,12 @@ public final class DaemonChatStoreRegistry {
     private func createStore(for session: AgentSession) -> SessionChatStore? {
         // v0.8 chat sessions: route by backend.
         //
-        // - Codex SDK chat → sdkOnly store, populated by CodexSDKEventIngestor.
-        //   No JSONLTail (the SDK doesn't write JSONL).
         // - Claude chat (CLI) → JSONLTail at exact encoded chat-cwd path. The
         //   chat-cwd is `<AppSupport>/chat-sessions/<sessionUUID>/`, unique per
         //   session, so the encoded `~/.claude/projects/-Users-..-chat-sessions-<UUID>/`
         //   directory contains only this chat's JSONLs — no fuzzy parent walk
         //   needed and no risk of surfacing unrelated transcripts.
-        // - Codex CLI chat → newest rollout JSONL via the legacy default
-        //   resolver (good enough for v0.8; the CLI writes to
-        //   `~/.codex/sessions/<date>/rollout-...jsonl` keyed by date/uuid).
         if session.kind == .chat {
-            // Codex SDK: sdkOnly (no JSONL exists). v0.9.x.1 replays the
-            // disk-backed SDK transcript mirror so chat history survives
-            // idle-eviction — without this, every 5-min idle wipes the
-            // visible thread even though the SDK server-side thread is
-            // still resumable via op:"resume" with the persisted threadId.
-            if session.agent == .codex && session.codexChatBackend == .sdk {
-                let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
-                store.start()
-                SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
-                return store
-            }
             // Claude chat (CLI): point JSONLTail at the encoded chat-cwd dir.
             // The dir-name encoding mirrors Claude's `/` → `-`, `_` → `-`,
             // ` ` → `-` rule (see SessionChatStore.encodeCwd). Picking the
@@ -459,8 +412,8 @@ public final class DaemonChatStoreRegistry {
             return store
         }
         // v27 Code-tab harness migration: paneless harness-driven Code sessions
-        // (cursor/grok always; gemini always — headless `agy` by default, gRPC
-        // Cascade when its flag is on; codex via app-server when its flag is on)
+        // (cursor/grok always; gemini always via headless `agy`; codex always
+        // via app-server)
         // are fed by the AcpHarnessBridge through `appendSDKMessages` — there is
         // NO JSONL to tail. Use an sdkOnly store. Distinguished from a LEGACY tmux
         // Code session (real pane + JSONL) by the absence of a tmux pane, so old
@@ -470,7 +423,7 @@ public final class DaemonChatStoreRegistry {
            session.agent == .cursor
              || session.agent == .grok
              || session.agent == .gemini
-             || (session.agent == .codex && AgentControlServer.codexAppServerEnabled) {
+             || session.agent == .codex {
             let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
             store.start()
             SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)

@@ -6,7 +6,7 @@ import ClawdmeterShared
 /// live agent CLI:
 ///   • Part 1 — each provider's chat turn ROUTES to the correct backend
 ///     (SessionCommandRouter is the single source of truth the send handler
-///     uses), covering all six providers + the legacy/kill-switch variants.
+///     uses), covering all six providers.
 ///   • Part 2 — the HARNESS send path (shared by codex / grok / cursor / gemini
 ///     chat) actually delivers the prompt to the driver AND streams the reply
 ///     into the chat store, via a fake driver (no binary).
@@ -35,8 +35,6 @@ final class ChatSendPerProviderTests: XCTestCase {
     func test_send_codexChat_routesToHarnessByDefault() {
         // Harness default: codexChatBackend nil + a live bridge → app-server harness.
         XCTAssertEqual(chatRoute(agent: .codex, hasLiveBridge: true), .harnessBridge)
-        // Kill-switch legacy: codexChatBackend .sdk (no bridge) → SDK relay.
-        XCTAssertEqual(chatRoute(agent: .codex, codexBackend: .sdk), .codexSDK)
     }
 
     func test_send_geminiChat_routesToHarnessByDefault() {

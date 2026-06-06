@@ -4,34 +4,17 @@ import ClawdmeterShared
 
 private let interruptLogger = Logger(subsystem: "com.clawdmeter.mac", category: "SessionInterrupt")
 
-/// v0.23 (Chat V2): per-backend dispatch for `POST /sessions/:id/interrupt`.
+/// Tmux fallback for `POST /sessions/:id/interrupt`.
 ///
-/// Pre-V2, `AgentControlServer.handleInterrupt` hard-required a tmux
-/// pane id and 404'd otherwise. That's fine for Claude CLI but breaks
-/// Stop on Codex SDK chat (Node sidecar — no tmux) and Gemini chat
-/// (Antigravity agentapi — no tmux). Codex's outside-voice review
-/// (audit P0 #2) flagged this — the V2 composer's Stop button is
-/// supposed to work for all three providers. Without this dispatcher,
-/// clicking Stop on a non-tmux session would 404 silently and the user
-/// would think the UI was broken.
-///
-/// The dispatcher routes by session backend, NOT by `tmuxPaneId`
-/// presence (a session can theoretically be a chat with no pane and
-/// still be CLI-mode, e.g. transient spawn failure). Source of truth:
-///   - `session.agent == .codex && session.codexChatBackend == .sdk`
-///     → SDK sidecar cancel via `CodexSubscriptionRelay`.
-///   - Anything else (Claude tmux, Codex CLI, opencode, unknown)
-///     → tmux ESC.
-///
-/// (Harness-driven sessions — agy/gemini, ACP cursor/grok, codex app-server —
-/// are interrupted upstream via the bridge in `handleInterrupt` before this
-/// dispatcher's tmux fallback is reached.)
+/// Harness-driven sessions (Codex app-server, Gemini/Grok headless, Cursor
+/// ACP) are interrupted upstream via the bridge in `handleInterrupt` before
+/// this dispatcher is reached. This fallback only covers sessions with a pane,
+/// primarily Claude tmux and older retained tmux sessions.
 ///
 /// **Cancel semantics**: the dispatcher only returns `.interrupted`
-/// after it dispatches a real upstream cancel path (SDK relay stop,
-/// agentapi ingestor stop, or tmux ESC). If a backend has no known
-/// cancel route, callers get `.notSupported` and must not report
-/// success to mobile.
+/// after it dispatches a real upstream cancel path. If a backend has no known
+/// cancel route, callers get `.notSupported` and must not report success to
+/// mobile.
 ///
 /// **Lifecycle transitions emitted on success**: the dispatcher flips
 /// the session's `currentTurnState` to `.interrupted` via

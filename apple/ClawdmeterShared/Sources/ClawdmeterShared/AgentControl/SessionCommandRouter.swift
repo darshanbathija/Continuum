@@ -6,9 +6,8 @@ import Foundation
 // Why this exists: AgentControlServer's write handlers (handleSendPrompt,
 // handleInterrupt, handlePermissionRespond) each re-derive "which backend owns
 // this session" inline, in a fixed branch order. The branch order is load-
-// bearing — e.g. a Codex *SDK chat* must reach the relay before the generic
-// tmux paneId guard, and a *live ACP bridge* must win over the legacy tmux
-// path even for an old session that predates the harness. Spreading that
+// bearing — e.g. a *live ACP bridge* must win over the legacy tmux path even
+// for an old session that predates the harness. Spreading that
 // precedence across three handlers makes it easy for a future edit to reorder
 // one and not the others. This type captures the precedence in one pure,
 // unit-tested place so the handlers can ask instead of re-deriving.
@@ -29,9 +28,6 @@ import Foundation
 /// The backend transport that owns a given command for a session. Each case
 /// names the path the daemon dispatches a send/interrupt/permission down.
 public enum SessionCommandRoute: String, Hashable, Sendable, CaseIterable {
-    /// Codex SDK chat relay (`CodexSubscriptionRelay`). No tmux pane; sends go
-    /// through the SDK ingestor, interrupt is `AbortController.abort()`.
-    case codexSDK
     /// OpenCode `opencode serve` HTTP + SSE. Sends POST to
     /// `/session/<id>/message`; the reply streams back over SSE.
     case opencodeServe
@@ -55,7 +51,7 @@ public enum SessionCommandRoute: String, Hashable, Sendable, CaseIterable {
     /// cases each of these before the tmux paneId guard.
     public var isPaneless: Bool {
         switch self {
-        case .codexSDK, .opencodeServe, .harnessBridge, .claudePty:
+        case .opencodeServe, .harnessBridge, .claudePty:
             return true
         case .tmux:
             return false
@@ -124,32 +120,24 @@ public struct SessionCommandRouter: Sendable {
     /// Resolve the owning backend for a send-style command. The branch ORDER
     /// below is identical to `handleSendPrompt`'s; do not reorder without
     /// re-checking that handler:
-    ///   1. Codex SDK chat         (kind == .chat && agent == .codex && backend == .sdk)
-    ///   2. OpenCode               (agent == .opencode)
-    ///   3. Live ACP/headless bridge (hasLiveBridge — Grok/Cursor/Codex-app-server/Gemini-agy)
-    ///   4. tmux                    (fall-through; also where a dead-bridge ACP
+    ///   1. OpenCode               (agent == .opencode)
+    ///   2. Live ACP/headless bridge (hasLiveBridge — Grok/Cursor/Codex-app-server/Gemini-agy)
+    ///   3. tmux                    (fall-through; also where a dead-bridge ACP
     ///                               session lands today before its 503 error
     ///                               path fires — see `acpExpectedButNoBridge`)
     public static func resolve(_ ctx: SessionContext) -> SessionCommandRoute {
-        // 1. Codex SDK chat relay. The three-way conjunction is exactly the
-        //    daemon's detection: SDK chat sessions have no tmux pane.
-        if ctx.kind == .chat
-            && ctx.agent == .codex
-            && ctx.codexChatBackend == .sdk {
-            return .codexSDK
-        }
-        // 3. OpenCode. Agent-kind alone — opencode always routes to serve.
+        // 1. OpenCode. Agent-kind alone — opencode always routes to serve.
         if ctx.agent == .opencode {
             return .opencodeServe
         }
-        // 4. Live ACP harness bridge (Grok, Cursor). Keyed off the bridge
+        // 2. Live ACP harness bridge (Grok, Cursor). Keyed off the bridge
         //    registry, agent-agnostic: a session with a live bridge wins over
         //    tmux even if it predates the harness. A dead bridge does NOT match
         //    here (the daemon returns 503 separately) — see the instance method.
         if ctx.hasLiveBridge {
             return .harnessBridge
         }
-        // 4.5 Track A: Claude session-drive over a per-session PTY, gated by
+        // 2.5 Track A: Claude session-drive over a per-session PTY, gated by
         //     the flag. Sits just above the tmux fall-through so Claude leaves
         //     tmux ONLY when enabled; everything else (Codex-CLI, dead-bridge
         //     ACP back-compat) still falls through to tmux unchanged.
@@ -162,7 +150,7 @@ public struct SessionCommandRouter: Sendable {
             && !ctx.hasTmuxPane {
             return .claudePty
         }
-        // 5. Fall-through: the kept Claude / Codex-CLI tmux path. Back-compat —
+        // 3. Fall-through: the kept Claude / Codex-CLI tmux path. Back-compat —
         //    an old cursor_cli session with no live bridge lands here, matching
         //    the daemon's behavior before the harness shipped.
         return .tmux

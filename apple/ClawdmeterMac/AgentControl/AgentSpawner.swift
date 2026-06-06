@@ -115,12 +115,9 @@ public enum AgentSpawner {
                 autopilot: autopilot
             ) ?? []
         case .codex, .gemini, .cursor, .opencode, .grok:
-            // v27: every non-Claude provider is ACP-harness-driven (paneless) —
-            // codex via app-server, cursor via cursor-agent ACP, gemini via the
-            // Cascade gRPC driver, grok headless, opencode via its SSE manager.
-            // None take a tmux argv; the Mac fork + daemon route them to the
-            // AcpHarnessBridge before this builder is reached. Only Claude spawns
-            // via tmux.
+            // Non-Claude providers are managed outside tmux: Codex through
+            // app-server, Cursor through ACP, Gemini/Grok through headless
+            // harnesses, and OpenCode through its SSE manager.
             return []
         case .unknown:
             // X3: forward-compat unknown agent — no argv builder. Caller
@@ -129,24 +126,9 @@ public enum AgentSpawner {
         }
     }
 
-    /// v0.8 chat-tab kind-aware dispatch. Branches on `session.kind`:
-    /// - `.code`: identical to the NewSessionRequest path above (existing
-    ///   code-session behavior).
-    /// - `.chat`: forces `planMode = true` for Claude/Codex CLI, ignores
-    ///   autopilot, and produces the appropriate per-agent argv.
-    ///
-    /// **Codex SDK chat** (`session.codexChatBackend == .sdk`) returns an
-    /// empty array — the SDK path is handled by `CodexSubscriptionRelay`
-    /// directly in Phase 4.5, not through tmux argv. Callers must
-    /// detect this case (`session.agent == .codex && session.kind == .chat
-    /// && session.codexChatBackend == .sdk`) and route to the relay
-    /// instead of spawning a tmux pane.
-    ///
-    /// **Gemini chat** returns an empty array in v0.8 — the gemini CLI
-    /// is being replaced by Antigravity (agy) in a parallel thread; the
-    /// Chat tab spawn path lands in v0.9. The /chat-sessions route
-    /// handler surfaces 501 Not Implemented for `agent == .gemini` chat
-    /// requests.
+    /// Build argv for a persisted session. Claude is the only remaining
+    /// tmux-backed provider; all non-Claude sessions return empty argv so
+    /// callers route them through their managed adapters.
     public static func argv(for session: AgentSession, autopilot: Bool = false) -> [String] {
         // Chat sessions always run in plan-mode regardless of stored
         // request flags — that's the safety wedge for v0.8.
@@ -171,9 +153,8 @@ public enum AgentSpawner {
                 deepResearch: session.deepResearch
             ) ?? []
         case (.codex, _), (.gemini, _), (.cursor, _), (.opencode, _), (.grok, _):
-            // v27: every non-Claude provider is ACP-harness-driven (paneless) —
-            // no tmux argv. The Mac fork + daemon route them to the
-            // AcpHarnessBridge before this builder is reached. Only Claude tmux.
+            // Managed transports do not have tmux argv. Keep this empty so
+            // accidental argv-based spawns fail closed at the caller.
             return []
         case (.unknown, _):
             // X3: forward-compat unknown kind — no argv. Caller surfaces
@@ -182,10 +163,9 @@ public enum AgentSpawner {
         }
     }
 
-    /// Build argv for re-spawning an existing session with new config
-    /// (model/effort/mode/plan swap). Uses `--resume` for Claude and
-    /// `codex resume <id>` for Codex to preserve chat history (D12).
-    /// The caller still needs the D13 overlay flow to handle the visual gap.
+    /// Build argv for re-spawning an existing Claude tmux session with new
+    /// config (model/effort/mode/plan swap). Managed transports rebuild their
+    /// adapter instead of respawning via argv.
     public static func respawnArgv(
         agent: AgentKind,
         resumeSessionId: String,
@@ -217,20 +197,6 @@ public enum AgentSpawner {
         }
     }
 
-    /// Best-effort: locate the agent binaries at app launch and verify
-    /// they exist. Returns the user-visible reason if either is missing.
-    public static func preflight() -> String? {
-        var missing: [String] = []
-        if ShellRunner.locateBinary("claude") == nil {
-            missing.append("claude")
-        }
-        if ShellRunner.locateBinary("codex") == nil {
-            missing.append("codex")
-        }
-        if missing.isEmpty { return nil }
-        return "Agent CLI not found on PATH: \(missing.joined(separator: ", ")). Configure in Settings → Diagnostics."
-    }
-
     /// Locate the Cursor Agent CLI: prefer `cursor-agent`, fall back to `agent`.
     /// Returns nil when neither is on PATH. Used by the cursor preflight +
     /// ChatProviderProbe. (The tmux argv builder that also used it is gone — v27
@@ -239,14 +205,9 @@ public enum AgentSpawner {
         ShellRunner.locateBinary("cursor-agent") ?? ShellRunner.locateBinary("agent")
     }
 
-    /// Agent-specific preflight for starting a single selected runtime.
+    /// Argv preflight for starting a tmux-backed runtime.
     public static func preflight(agent: AgentKind) -> String? {
-        if agent == .cursor {
-            if cursorBinaryPath() == nil {
-                return "Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings → Diagnostics."
-            }
-            return nil
-        }
+        guard agent == .claude else { return nil }
         let binary = agent.rawValue
         if ShellRunner.locateBinary(binary) == nil {
             return "Agent CLI not found on PATH: \(binary). Configure in Settings → Diagnostics."

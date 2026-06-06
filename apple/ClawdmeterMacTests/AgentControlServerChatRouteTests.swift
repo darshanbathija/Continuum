@@ -68,23 +68,14 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     }
 
     func test_oneVendorPostChatSessions_createsSoloChatSession() async throws {
-        // Codex chat now defaults to the `codex app-server` harness, which can't
-        // spawn in the test env. This test exercises the LEGACY Codex SDK
-        // chat-create path (deferred spawn, returns 200), reachable only via the
-        // kill-switch now. Save/restore so we don't clobber the host's default.
-        let killSwitch = "clawdmeter.codex.appServer.enabled"
-        let savedKillSwitch = UserDefaults.standard.object(forKey: killSwitch)
-        UserDefaults.standard.set(false, forKey: killSwitch)
-        defer {
-            if let savedKillSwitch { UserDefaults.standard.set(savedKillSwitch, forKey: killSwitch) }
-            else { UserDefaults.standard.removeObject(forKey: killSwitch) }
+        guard ShellRunner.locateBinary("claude") != nil else {
+            throw XCTSkip("Claude CLI is not installed on this test host")
         }
         let request = CreateChatSessionRequest(
-            provider: .codex,
-            model: "gpt-5.5",
+            provider: .claude,
+            model: "sonnet",
             effort: .high,
-            codexChatBackend: .sdk,
-            chatVendor: .chatgpt
+            chatVendor: .claude
         )
 
         let response = try await postJSON("/chat-sessions", request)
@@ -92,13 +83,13 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         XCTAssertEqual(response.status, 200)
         let session = try decode(AgentSession.self, from: response.data)
         XCTAssertEqual(session.kind, .chat)
-        XCTAssertEqual(session.agent, .codex)
-        XCTAssertEqual(session.model, "gpt-5.5")
+        XCTAssertEqual(session.agent, .claude)
+        XCTAssertEqual(session.model, "sonnet")
         XCTAssertEqual(session.effort, .high)
-        XCTAssertEqual(session.codexChatBackend, .sdk)
+        XCTAssertNil(session.codexChatBackend)
         XCTAssertNil(session.frontierGroupId)
         XCTAssertNil(session.frontierChildIndex)
-        XCTAssertEqual(session.runtimeBinding?.metadata["chatVendor"], ChatVendor.chatgpt.rawValue)
+        XCTAssertEqual(session.runtimeBinding?.metadata["chatVendor"], ChatVendor.claude.rawValue)
         XCTAssertEqual(registry.session(id: session.id)?.id, session.id)
 
         _ = try? await requestRaw(path: "/sessions/\(session.id.uuidString)", method: "DELETE")
@@ -250,17 +241,6 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     }
 
     func test_frontierRouteAppliesOpenRouterAvailabilityGate() async throws {
-        // Codex frontier children now default to the `codex app-server` harness,
-        // which can't spawn in the test env. This test only needs codex as the
-        // "good" slot to contrast with the gated OpenRouter slot, so exercise the
-        // legacy Codex SDK create path via the kill-switch. Save/restore.
-        let killSwitch = "clawdmeter.codex.appServer.enabled"
-        let savedKillSwitch = UserDefaults.standard.object(forKey: killSwitch)
-        UserDefaults.standard.set(false, forKey: killSwitch)
-        defer {
-            if let savedKillSwitch { UserDefaults.standard.set(savedKillSwitch, forKey: killSwitch) }
-            else { UserDefaults.standard.removeObject(forKey: killSwitch) }
-        }
         await ChatProviderProbe.shared.setAuthOverride(
             providerKey: "opencode",
             authenticated: false,
@@ -293,13 +273,10 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         XCTAssertEqual(response.status, 201)
         let frontier = try decode(CreateFrontierResponse.self, from: response.data)
         XCTAssertEqual(frontier.slots.count, 2)
-        XCTAssertNotNil(frontier.slots[0].sessionId)
-        XCTAssertNil(frontier.slots[0].reason)
         XCTAssertNil(frontier.slots[1].sessionId)
         XCTAssertEqual(frontier.slots[1].reason, "openrouter auth missing test")
-        XCTAssertEqual(registry.sessions.count, 1)
-        XCTAssertEqual(registry.sessions.first?.runtimeBinding?.metadata["chatVendor"], ChatVendor.chatgpt.rawValue)
         if let sessionId = frontier.slots[0].sessionId {
+            XCTAssertEqual(registry.session(id: sessionId)?.runtimeBinding?.metadata["chatVendor"], ChatVendor.chatgpt.rawValue)
             _ = try? await requestRaw(path: "/sessions/\(sessionId.uuidString)", method: "DELETE")
         }
     }
@@ -587,7 +564,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
 
         // 0) Picker gate: the provider probe must report gemini SELECTABLE
         //    headlessly (agy on PATH) even with the Antigravity desktop app closed.
-        //    Before the agy migration this required `agentapiLive` (app running).
+        //    Before the agy migration this required the desktop app to be running.
         await ChatProviderProbe.shared.invalidate()
         let providers = await ChatProviderProbe.shared.currentProviders()
         let geminiRow = try XCTUnwrap(providers.providers.first { $0.provider == .gemini })

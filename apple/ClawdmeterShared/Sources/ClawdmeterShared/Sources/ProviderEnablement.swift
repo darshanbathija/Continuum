@@ -23,8 +23,7 @@ public enum ProviderEnablement {
 
     /// Whether `id` (e.g. "claude", "cursor") is enabled. An env override
     /// `CLAWDMETER_PROVIDER_<ID>_ENABLED` wins (CI / power users); otherwise the
-    /// persisted flag, defaulting to **false** (opt-in). Mirrors the existing
-    /// `cursorStartupPollingEnabled` reader in AppRuntime.
+    /// persisted flag, defaulting to **false** (opt-in).
     public static func isEnabled(_ id: String) -> Bool {
         let env = "CLAWDMETER_PROVIDER_\(id.uppercased())_ENABLED"
         if let raw = ProcessInfo.processInfo.environment[env] {
@@ -82,5 +81,5 @@ public enum ProviderEnablement {
     }
 
     /// Providers surfaced in onboarding + Settings toggles, in display order.
-    public static let allProviderIds: [String] = ["claude", "codex", "gemini", "cursor", "opencode", "grok"]
+    public static let allProviderIds: [String] = ProviderDescriptor.settingsOrder.map(\.id)
 }

@@ -1,4 +1,5 @@
 import Foundation
+import TmuxControlMode
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -478,6 +479,58 @@ public actor TmuxControlClient {
             "-H",  // hex-encoded literal input
             hex,
         ])
+    }
+
+    /// Send literal bytes through a short-lived tmux client instead of the
+    /// long-running control-mode client. Claude Code's current TUI accepts
+    /// this path but can ignore the equivalent `send-keys` issued inside
+    /// control mode; keep the fallback explicit for that provider.
+    public func sendKeysUsingFreshClient(paneId: String, bytes: Data) async throws {
+        try Self.validateArgs([paneId])
+        let hex = bytes.map { String(format: "%02x", $0) }.joined()
+        try await ShellRunner.shared.runOrThrow(
+            executable: configuration.tmuxBinary,
+            arguments: [
+                "-L", configuration.socketName,
+                "send-keys",
+                "-l",
+                "-t", paneId,
+                "-H", hex,
+            ],
+            timeout: 5
+        )
+    }
+
+    /// Send short single-line text through a short-lived tmux client using
+    /// tmux's normal key path. Claude Code's current remote-control composer
+    /// accepts this path but can ignore hex-literal `send-keys -l -H` input.
+    public func sendTextUsingFreshClient(paneId: String, text: String) async throws {
+        try Self.validateArgs([paneId, text])
+        try await ShellRunner.shared.runOrThrow(
+            executable: configuration.tmuxBinary,
+            arguments: [
+                "-L", configuration.socketName,
+                "send-keys",
+                "-t", paneId,
+                "--", text,
+            ],
+            timeout: 5
+        )
+    }
+
+    /// Send a named key such as `Enter` through a short-lived tmux client.
+    public func sendKeyUsingFreshClient(paneId: String, key: String) async throws {
+        try Self.validateArgs([paneId, key])
+        try await ShellRunner.shared.runOrThrow(
+            executable: configuration.tmuxBinary,
+            arguments: [
+                "-L", configuration.socketName,
+                "send-keys",
+                "-t", paneId,
+                key,
+            ],
+            timeout: 5
+        )
     }
 
     /// Send a large or escape-rich payload via tmux's paste buffer.

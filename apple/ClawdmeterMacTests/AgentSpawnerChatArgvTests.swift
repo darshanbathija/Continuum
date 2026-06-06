@@ -5,16 +5,11 @@ import ClawdmeterShared
 /// v0.8 Phase 3 regression: lock the kind-aware dispatch of
 /// `AgentSpawner.argv(for: AgentSession)`. Verifies:
 /// - chat + claude → plan-mode argv with --permission-mode plan
-/// - chat + codex (CLI backend) → -s read-only argv
-/// - chat + codex (SDK backend) → empty (relay handles spawn)
-/// - chat + gemini → empty (deferred to v0.9)
-/// - code sessions retain prior behavior
+/// - non-Claude providers → empty argv because managed adapters own transport
+/// - code sessions retain Claude tmux behavior
 ///
 /// These tests run inside the Mac XCTest target because AgentSpawner
-/// is Mac-side; ShellRunner.locateBinary requires the agent binaries
-/// to be discoverable. CI environment has claude/codex/gemini binaries
-/// available; if missing, the helpers return empty array and the
-/// "argv is empty" assertions for missing-binary cases trigger.
+/// is Mac-side; only Claude requires a CLI binary for these argv contracts.
 final class AgentSpawnerChatArgvTests: XCTestCase {
 
     // MARK: - Helpers
@@ -82,64 +77,46 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
                        "chat session must force plan mode regardless of stored flags")
     }
 
-    // MARK: - Chat + Codex (CLI backend)
+    // MARK: - Managed non-Claude transports
 
-    func test_chatCodexCLI_emitsReadOnlySandbox() throws {
-        try XCTSkipIf(ShellRunner.locateBinary("codex") == nil,
-                      "codex binary unavailable on PATH; CI skip")
-        let session = makeChatSession(agent: .codex, codexBackend: .cli, model: "gpt-5.5")
-        let argv = AgentSpawner.argv(for: session)
-        XCTAssertFalse(argv.isEmpty)
-        XCTAssertEqual(argv.last(2), ["-s", "read-only"],
-                       "chat-codex with CLI backend must use --sandbox read-only")
+    func test_nonClaudeChatSessions_returnEmptyArgvForManagedAdapters() {
+        let cases: [(AgentKind, CodexChatBackend?, String?)] = [
+            (.codex, nil, "gpt-5.5"),
+            (.codex, .sdk, "gpt-5.5"),
+            (.codex, .cli, "gpt-5.5"),
+            (.gemini, nil, "gemini-3-pro"),
+            (.cursor, nil, CursorModelCatalog.autoModelId),
+            (.opencode, nil, "anthropic/claude-sonnet-4.6"),
+            (.grok, nil, "grok-code-fast-1")
+        ]
+        for (agent, backend, model) in cases {
+            let session = makeChatSession(agent: agent, codexBackend: backend, model: model)
+            XCTAssertTrue(
+                AgentSpawner.argv(for: session).isEmpty,
+                "\(agent.rawValue) chat should be routed through its managed adapter, not tmux argv"
+            )
+        }
     }
 
-    // MARK: - Chat + Codex (SDK backend)
-
-    func test_chatCodexSDK_returnsEmptyArgv() {
-        // SDK backend = caller routes to CodexSubscriptionRelay, not tmux.
-        // Empty argv is the contract signal.
-        let session = makeChatSession(agent: .codex, codexBackend: .sdk, model: "gpt-5.5")
-        let argv = AgentSpawner.argv(for: session)
-        XCTAssertTrue(argv.isEmpty, "SDK chat backend bypasses argv-based tmux spawn")
-    }
-
-    func test_chatCodexSDK_default_returnsEmptyArgv() {
-        // No backend set on the session = treat as SDK per RE1 default.
-        // (Daemon should pin the backend at spawn time; this guards the
-        // accidental-nil path.)
-        let session = makeChatSession(agent: .codex, codexBackend: nil)
-        let argv = AgentSpawner.argv(for: session)
-        // Falls through to CLI path when backend not pinned — defensive
-        // behavior so we never silently route to an unpinned backend.
-        // (Real spawn flow always pins; this asserts the fallthrough.)
-        XCTAssertFalse(argv.isEmpty,
-                       "no pinned backend falls through to CLI argv (safe default)")
-    }
-
-    // MARK: - Chat + Gemini (deferred to v0.9)
-
-    func test_chatGemini_returnsEmptyArgv() {
-        // v0.8: gemini chat returns empty argv (route handler surfaces 501).
-        // v0.9 brings the Antigravity-via-agy spawn path.
-        let session = makeChatSession(agent: .gemini, model: "gemini-3-pro")
-        let argv = AgentSpawner.argv(for: session)
-        XCTAssertTrue(argv.isEmpty,
-                      "Gemini chat is deferred to v0.9 — argv contract is empty in v0.8")
-    }
-
-    func test_codeCodexPassesPreparedWorkingDirectory() throws {
-        try XCTSkipIf(ShellRunner.locateBinary("codex") == nil,
-                      "codex binary unavailable on PATH; CI skip")
-        let session = makeCodeSession(
-            agent: .codex,
-            model: "gpt-5.5",
-            worktreePath: "/Users/foo/repo/.claude/worktrees/oslo"
-        )
-        let argv = AgentSpawner.argv(for: session)
-        XCTAssertFalse(argv.isEmpty)
-        XCTAssertTrue(argv.containsInOrder(["-C", "/Users/foo/repo/.claude/worktrees/oslo"]))
-        XCTAssertTrue(argv.containsInOrder(["--model", "gpt-5.5"]))
+    func test_nonClaudeCodeSessions_returnEmptyArgvForManagedAdapters() {
+        let cases: [(AgentKind, String?)] = [
+            (.codex, "gpt-5.5"),
+            (.gemini, "gemini-3-pro"),
+            (.cursor, CursorModelCatalog.autoModelId),
+            (.opencode, "anthropic/claude-sonnet-4.6"),
+            (.grok, "grok-code-fast-1")
+        ]
+        for (agent, model) in cases {
+            let session = makeCodeSession(
+                agent: agent,
+                model: model,
+                worktreePath: "/Users/foo/repo/.claude/worktrees/oslo"
+            )
+            XCTAssertTrue(
+                AgentSpawner.argv(for: session).isEmpty,
+                "\(agent.rawValue) code should be routed through its managed adapter, not tmux argv"
+            )
+        }
     }
 
     // MARK: - Code sessions unchanged
@@ -155,71 +132,41 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
                        "code session in .running status should not force plan-mode flag")
     }
 
-    // MARK: - Cursor
-
-    func test_cursorCodeSession_passesWorkspaceAndModel() throws {
-        try XCTSkipIf(AgentSpawner.cursorBinaryPath() == nil,
-                      "cursor-agent/agent binary unavailable on PATH; CI skip")
-        let session = makeCodeSession(agent: .cursor, model: "claude-4-sonnet")
-        let argv = AgentSpawner.argv(for: session)
-        XCTAssertFalse(argv.isEmpty)
-        XCTAssertTrue(argv.containsInOrder(["--workspace", "/Users/foo/repo"]))
-        XCTAssertTrue(argv.containsInOrder(["--model", "claude-4-sonnet"]))
+    func test_nonClaudeNewSessionRequests_returnEmptyArgvForManagedAdapters() {
+        let agents: [AgentKind] = [.codex, .gemini, .cursor, .opencode, .grok]
+        for agent in agents {
+            let request = NewSessionRequest(
+                repoKey: "/Users/foo/repo",
+                agent: agent,
+                model: nil,
+                planMode: true,
+                useWorktree: true
+            )
+            let argv = AgentSpawner.argv(for: request, workspacePath: "/Users/foo/repo/.claude/worktrees/oslo")
+            XCTAssertTrue(
+                argv.isEmpty,
+                "\(agent.rawValue) new sessions should be routed through their managed adapter, not tmux argv"
+            )
+        }
     }
 
-    func test_cursorAutoModel_doesNotPassModelFlag() throws {
-        try XCTSkipIf(AgentSpawner.cursorBinaryPath() == nil,
-                      "cursor-agent/agent binary unavailable on PATH; CI skip")
-        let session = makeCodeSession(agent: .cursor, model: CursorModelCatalog.autoModelId)
-        let argv = AgentSpawner.argv(for: session)
-        XCTAssertFalse(argv.isEmpty)
-        XCTAssertFalse(argv.contains("--model"))
-        XCTAssertTrue(argv.containsInOrder(["--workspace", "/Users/foo/repo"]))
-    }
-
-    func test_cursorNewSessionRequest_ignoresPlanModeUntilResumeIdsExist() throws {
-        try XCTSkipIf(AgentSpawner.cursorBinaryPath() == nil,
-                      "cursor-agent/agent binary unavailable on PATH; CI skip")
-        let request = NewSessionRequest(
-            repoKey: "/Users/foo/repo",
-            agent: .cursor,
-            model: "gpt-5",
-            planMode: true,
-            useWorktree: true
-        )
-        let argv = AgentSpawner.argv(for: request, workspacePath: "/Users/foo/repo/.claude/worktrees/oslo")
-        XCTAssertFalse(argv.isEmpty)
-        XCTAssertTrue(argv.containsInOrder(["--workspace", "/Users/foo/repo/.claude/worktrees/oslo"]))
-        XCTAssertFalse(argv.containsInOrder(["--mode", "plan"]))
-    }
-
-    func test_cursorChatSession_doesNotUsePlanModeUntilResumeIdsExist() throws {
-        try XCTSkipIf(AgentSpawner.cursorBinaryPath() == nil,
-                      "cursor-agent/agent binary unavailable on PATH; CI skip")
-        let session = makeChatSession(agent: .cursor, model: "gpt-5")
-        let argv = AgentSpawner.argv(for: session)
-        XCTAssertFalse(argv.isEmpty)
-        XCTAssertTrue(argv.containsInOrder(["--workspace", session.effectiveCwd]))
-        XCTAssertFalse(argv.containsInOrder(["--mode", "plan"]))
-    }
-
-    func test_cursorRespawnUsesResumeAndWorkspace() throws {
-        try XCTSkipIf(AgentSpawner.cursorBinaryPath() == nil,
-                      "cursor-agent/agent binary unavailable on PATH; CI skip")
-        let argv = AgentSpawner.respawnArgv(
-            agent: .cursor,
-            resumeSessionId: "cursor-chat-123",
-            model: "gpt-5",
-            planMode: true,
-            effort: nil,
-            autopilot: false,
-            workspacePath: "/Users/foo/repo"
-        )
-        XCTAssertFalse(argv.isEmpty)
-        XCTAssertTrue(argv.containsInOrder(["--workspace", "/Users/foo/repo"]))
-        XCTAssertTrue(argv.containsInOrder(["--resume", "cursor-chat-123"]))
-        XCTAssertTrue(argv.containsInOrder(["--model", "gpt-5"]))
-        XCTAssertTrue(argv.containsInOrder(["--mode", "plan"]))
+    func test_nonClaudeRespawn_returnsEmptyArgvForManagedAdapters() {
+        let agents: [AgentKind] = [.codex, .gemini, .cursor, .opencode, .grok]
+        for agent in agents {
+            let argv = AgentSpawner.respawnArgv(
+                agent: agent,
+                resumeSessionId: "\(agent.rawValue)-session-123",
+                model: nil,
+                planMode: true,
+                effort: nil,
+                autopilot: false,
+                workspacePath: "/Users/foo/repo"
+            )
+            XCTAssertTrue(
+                argv.isEmpty,
+                "\(agent.rawValue) respawn should rebuild its managed adapter, not tmux argv"
+            )
+        }
     }
 }
 
@@ -230,17 +177,5 @@ private extension Array {
     func last(_ n: Int) -> [Element] {
         guard count >= n else { return self }
         return Array(suffix(n))
-    }
-}
-
-private extension Array where Element: Equatable {
-    func containsInOrder(_ needle: [Element]) -> Bool {
-        guard !needle.isEmpty, count >= needle.count else { return false }
-        for start in indices {
-            let end = index(start, offsetBy: needle.count, limitedBy: endIndex)
-            guard let end, end <= endIndex else { continue }
-            if Array(self[start..<end]) == needle { return true }
-        }
-        return false
     }
 }

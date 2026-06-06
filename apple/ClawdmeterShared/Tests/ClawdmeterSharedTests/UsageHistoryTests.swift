@@ -789,6 +789,23 @@ final class UsageHistoryTests: XCTestCase {
         XCTAssertTrue(resolved.isPriced, "embedded OpenCode cost means the record should not be flagged unpriced")
     }
 
+    func test_pricedModelUsesRateCardBeforeEmbeddedCost() {
+        let embedded = Decimal(string: "0.0001")!
+        let record = UsageRecord(
+            provider: .codex,
+            timestamp: Date(),
+            model: "gpt-5.5",
+            tokens: TokenTotals(inputTokens: 20_000, outputTokens: 2_000, costUSD: embedded),
+            repo: "/repo",
+            dedupKey: "codex-priced-message"
+        )
+
+        let resolved = UsageHistoryLoader.tokensWithResolvedCost(record)
+
+        XCTAssertGreaterThan(resolved.tokens.costUSD, embedded)
+        XCTAssertTrue(resolved.isPriced)
+    }
+
     // MARK: - Helpers
 
     private func writeTempFile(name: String, lines: [String]) throws -> URL {

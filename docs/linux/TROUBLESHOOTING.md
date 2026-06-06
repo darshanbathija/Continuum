@@ -1,5 +1,8 @@
 # Linux troubleshooting
 
+Status: future troubleshooting notes. The Linux app and daemon are still
+scaffolding, not supported release artifacts.
+
 ## "Tray icon doesn't appear" on stock GNOME
 
 **Symptom**: launching Continuum from the GNOME Activities overview

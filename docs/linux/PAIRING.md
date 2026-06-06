@@ -1,5 +1,9 @@
 # Pairing your iPhone with Continuum for Linux
 
+Status: design/acceptance notes only. The Linux daemon and pairing UI are not
+shipping yet; use this document as the target behavior for the future real
+implementation, not as current install instructions.
+
 Continuum for Linux pairs to the iPhone app over **Tailscale**. Same
 mechanism as the Mac: scan a QR, share a per-device bearer token, the
 iPhone speaks to the Linux daemon at `http://100.x.x.x:21731`.

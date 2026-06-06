@@ -57,7 +57,7 @@ forwards the push to Apple's HTTP/2 APNS endpoint. The gateway sees:
 - The SHA-256 hash of the iPhone's APNS device token (the raw token
   reaches the Worker only as the request body; it is hashed before
   any KV write or log line).
-- The bundle id (`com.clawdmeter.iphone`, `com.clawdmeter.watch`).
+- The bundle id (`ai.continuum.ios`, `ai.continuum.ios.watchkitapp`).
 - The APNS topic.
 - The byte length of the encrypted payload.
 - The SHA-256 fingerprint of the sender Mac daemon's pairing public

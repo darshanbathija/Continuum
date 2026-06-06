@@ -19,10 +19,9 @@
 
 import Foundation
 
-/// Top-level facade. Every reader (Plan pane, AntigravityUsageParser,
-/// LanguageServerClient orchestration) talks through this. Implementations
-/// are async because SDK mode involves an out-of-process sidecar; Disk
-/// mode resolves immediately.
+/// Top-level facade. Plan panes, analytics, and usage readers talk through
+/// this. Implementations are async because SDK mode involves an out-of-process
+/// sidecar; Disk mode resolves immediately.
 public protocol AntigravityObservation: Sendable {
 
     /// Best-effort: is the underlying data source actually usable right

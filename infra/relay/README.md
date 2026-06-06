@@ -143,7 +143,7 @@ The TS suite verifies the vectors via `test/test-vectors.test.ts` (runs in the N
 
 ```bash
 cd infra/relay
-bun install     # or npm install
+bun install
 bun run dev     # wrangler dev — http://localhost:8787
 ```
 

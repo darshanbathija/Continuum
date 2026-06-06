@@ -1,5 +1,9 @@
 # Linux Manual QA Checklist
 
+Status: future release gate. The Linux packaging jobs are quarantined while the
+daemon/tray binaries remain stubs, so this checklist is not required for normal
+Mac/iOS releases.
+
 This document is the **release gate** for every Linux build. Container CI
 (see `.github/workflows/linux.yml`) verifies that the artifacts compile,
 install, and respond to `--version`. It **cannot** verify the actual UI

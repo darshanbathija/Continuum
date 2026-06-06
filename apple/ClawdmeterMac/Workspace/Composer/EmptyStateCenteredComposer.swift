@@ -273,11 +273,10 @@ struct EmptyStateCenteredComposer: View {
         do {
             let selectedSourceIds = revalidatedInheritedSourceIds()
             let unavailableSourceIds = unavailableInheritedSourceIds(validSourceIds: selectedSourceIds)
-            // v0.8.1 agy-migration: stage attachments BEFORE spawn so
-            // Antigravity 2's `agentapi new-conversation` receives the
-            // user's actual full prompt (incl. attachment refs), not the
-            // 80-char `goal` slice. tmux-based sessions restage below into
-            // the final per-session/worktree directory before /send.
+            // Stage attachments before spawn so managed adapters receive the
+            // user's actual full prompt (including attachment refs), not the
+            // 80-char `goal` slice. tmux-based sessions restage below into the
+            // final per-session/worktree directory before /send.
             var stagedPaths: [URL] = []
             var pendingStagingDir: URL?
             defer {

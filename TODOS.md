@@ -76,7 +76,7 @@
   `gemini-3.1-pro-thinking`. If a frontier-Pro session uses extended
   thinking the model name might be `gemini-3.1-pro-thinking` and
   fall through Pricing as unknown.
-- **Cleanup**: add the entry to `tools/pricing-overrides.json` with
+- **Cleanup**: add the entry to `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing-overrides.json` with
   same rate card as `gemini-3.1-pro` (Google bills thinking tokens at
   the output rate, not a separate rate). Re-run `tools/refresh-pricing.sh`.
 

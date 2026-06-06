@@ -5,9 +5,9 @@ import XCTest
 /// extraction of the per-backend precedence that `AgentControlServer`'s
 /// handleSendPrompt / handleInterrupt / handlePermissionRespond inline. Each
 /// test pins one branch of the daemon's existing `if` ladder, and the
-/// precedence tests prove the ORDER is preserved (a Codex SDK chat must not
-/// fall into tmux; a live ACP bridge must win over the legacy tmux path; an
-/// old cursor_cli session with NO bridge must still reach tmux — back-compat).
+/// precedence tests prove the ORDER is preserved (a live ACP bridge must win
+/// over the legacy tmux path; an old cursor_cli session with NO bridge must
+/// still reach tmux — back-compat).
 final class SessionCommandRouterTests: XCTestCase {
 
     // Convenience builder so each test reads as just the axes that matter.
@@ -50,11 +50,9 @@ final class SessionCommandRouterTests: XCTestCase {
     }
 
     func testFlagDoesNotDivertNonClaude() {
-        // The flag only moves Claude. Codex CLI / opencode / SDK are untouched.
+        // The flag only moves Claude. Codex CLI / opencode are untouched.
         XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
             agent: .codex, kind: .chat, codexChatBackend: .cli, claudePtyEnabled: true)), .tmux)
-        XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
-            agent: .codex, kind: .chat, codexChatBackend: .sdk, claudePtyEnabled: true)), .codexSDK)
         XCTAssertEqual(SessionCommandRouter.resolve(SessionCommandRouter.SessionContext(
             agent: .opencode, kind: .code, claudePtyEnabled: true)), .opencodeServe)
     }
@@ -95,13 +93,6 @@ final class SessionCommandRouterTests: XCTestCase {
         )
     }
 
-    func testCodexSDKChatResolvesCodexSDK() {
-        XCTAssertEqual(
-            SessionCommandRouter.resolve(ctx(agent: .codex, kind: .chat, codexChatBackend: .sdk)),
-            .codexSDK
-        )
-    }
-
     func testOpencodeResolvesOpencodeServe() {
         XCTAssertEqual(SessionCommandRouter.resolve(ctx(agent: .opencode)), .opencodeServe)
     }
@@ -132,15 +123,6 @@ final class SessionCommandRouterTests: XCTestCase {
     }
 
     // MARK: precedence (order is load-bearing)
-
-    func testCodexSDKChatBeatsTmux() {
-        // The SDK-chat branch is BEFORE the tmux paneId guard in the daemon.
-        // Even though a Codex chat could in principle have a pane, the SDK
-        // backend must short-circuit to the relay first.
-        let route = SessionCommandRouter.resolve(ctx(agent: .codex, kind: .chat, codexChatBackend: .sdk))
-        XCTAssertEqual(route, .codexSDK)
-        XCTAssertNotEqual(route, .tmux)
-    }
 
     func testLiveBridgeBeatsTmuxForAcpSession() {
         // A cursor session driven over ACP with a live bridge → harnessBridge,
@@ -203,7 +185,6 @@ final class SessionCommandRouterTests: XCTestCase {
 
     func testPanelessFlagMatchesDaemonPaneExpectations() {
         // The short-circuit backends have no tmux pane; only .tmux does.
-        XCTAssertTrue(SessionCommandRoute.codexSDK.isPaneless)
         XCTAssertTrue(SessionCommandRoute.opencodeServe.isPaneless)
         XCTAssertTrue(SessionCommandRoute.harnessBridge.isPaneless)
         XCTAssertFalse(SessionCommandRoute.tmux.isPaneless)

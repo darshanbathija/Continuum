@@ -13,7 +13,7 @@
 # in every random provider LiteLLM tracks.
 #
 # Override merge (added 2026-05-23): after filtering LiteLLM, we apply
-# entries from `tools/pricing-overrides.json` on top. Overrides win.
+# entries from the bundled shared `pricing-overrides.json` on top. Overrides win.
 # This exists because:
 #   - Google's I/O 2026 (2026-05-19) announced gemini-3.5-flash at $1.50/$9
 #     and gemini-3.1-pro at $2/$12. LiteLLM may not have shipped these
@@ -33,7 +33,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$REPO_ROOT/apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing.json"
-OVERRIDES="$REPO_ROOT/tools/pricing-overrides.json"
+OVERRIDES="$REPO_ROOT/apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing-overrides.json"
 SRC="https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 
 echo "Fetching $SRC..."
@@ -52,7 +52,7 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Build the manual-overrides summary line from the override keys so the
 # audit trail in pricing.json's _meta block stays in sync with whatever
-# tools/pricing-overrides.json carries.
+# bundled pricing-overrides.json carries.
 OVERRIDE_SUMMARY="$(jq -r '
   .overrides
   | to_entries
@@ -96,8 +96,8 @@ KEYS=$(jq '.models | length' "$OUT")
 OVERRIDE_KEYS=$(jq '.overrides | length' "$OVERRIDES")
 echo "Wrote $OUT ($KEYS models, including $OVERRIDE_KEYS manual overrides)"
 
-# Keep the bundled overrides copy (loaded by PricingUpdater's runtime daily
-# refresh) in sync with the canonical tools/pricing-overrides.json.
+# Validate the bundled overrides copy loaded by PricingUpdater's runtime daily
+# refresh.
 jq -e 'type == "object" and (.overrides | type == "object")' "$OVERRIDES" > "$OVERRIDES_TMP"
-mv "$OVERRIDES_TMP" "$REPO_ROOT/apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing-overrides.json"
-echo "Synced bundled overrides copy for runtime refresh."
+mv "$OVERRIDES_TMP" "$OVERRIDES"
+echo "Validated bundled overrides copy for runtime refresh."
