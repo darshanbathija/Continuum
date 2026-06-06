@@ -26,13 +26,17 @@ final class MacComposerSender {
 
     enum Error: Swift.Error, LocalizedError {
         case badURL
-        case http(status: Int, retryAfter: Int?)
+        case http(status: Int, retryAfter: Int?, detail: String?)
         case transport(String)
 
         var errorDescription: String? {
             switch self {
             case .badURL: return "Bad daemon URL"
-            case .http(let s, _): return "Daemon HTTP \(s)"
+            case .http(let s, _, let detail):
+                if let detail, !detail.isEmpty {
+                    return "Daemon HTTP \(s): \(detail)"
+                }
+                return "Daemon HTTP \(s)"
             case .transport(let m): return m
             }
         }
@@ -149,11 +153,25 @@ final class MacComposerSender {
             let (data, response) = try await URLSession.shared.data(for: req)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 let retry = http.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init)
-                throw Error.http(status: http.statusCode, retryAfter: retry)
+                throw Error.http(status: http.statusCode, retryAfter: retry, detail: Self.errorDetail(from: data))
             }
             return data
         } catch let urlError as URLError {
             throw Error.transport(urlError.localizedDescription)
         }
+    }
+
+    private static func errorDetail(from data: Data) -> String? {
+        guard !data.isEmpty else { return nil }
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            for key in ["detail", "cta", "reason", "error", "hint"] {
+                if let value = object[key] as? String, !value.isEmpty {
+                    return value
+                }
+            }
+        }
+        let raw = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.isEmpty ? nil : raw
     }
 }

@@ -813,7 +813,7 @@ struct CenterThread: View {
             try await sender.send(sessionId: target.id, body: body, asFollowUp: true)
             workbenchState.removeQueuedSend(id: draft.id)
             composerStore.endSend()
-        } catch MacComposerSender.Error.http(let status, let retry) {
+        } catch MacComposerSender.Error.http(let status, let retry, _) {
             switch status {
             case 401: composerStore.endSend(error: .unauthorized)
             case 404: composerStore.endSend(error: .sessionGone)
@@ -1000,7 +1000,7 @@ struct CenterThread: View {
             // A13: drain any messages that piled up while the daemon was
             // offline — now that one send succeeded, the daemon is reachable.
             await drainOfflineQueueIfAny(target: target, port: Int(port))
-        } catch MacComposerSender.Error.http(let status, let retry) {
+        } catch MacComposerSender.Error.http(let status, let retry, _) {
             finishBoundSendWithError(
                 sendError(forHTTPStatus: status, retryAfter: retry),
                 promotedTarget: promotedReadOnlyTarget,
@@ -1312,7 +1312,7 @@ struct CenterThread: View {
                 repoEnvResolver: runtime.repoEnvRuntimeResolver
             )
             _ = await changer.swap(sessionId: session.id)
-        } catch MacComposerSender.Error.http(let status, _) where status == 403 {
+        } catch MacComposerSender.Error.http(let status, _, _) where status == 403 {
             composerStore.endSend(error: .daemonError(message: "Repo not trusted for autopilot. (You can grant trust from this dialog.)"))
         } catch {
             composerStore.endSend(error: .daemonError(message: "Autopilot toggle failed: \(error.localizedDescription)"))
