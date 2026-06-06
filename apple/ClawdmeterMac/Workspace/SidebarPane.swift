@@ -27,14 +27,6 @@ struct SidebarPane: View {
     /// repos at the top. Tapping the History row expands the list.
     @AppStorage("clawdmeter.sidebar.historyExpanded") private var historyExpanded: Bool = false
 
-    /// v0.29.33: opt-in to filesystem session discovery. Default false → the
-    /// sidebar shows only Managed (explicitly-added) repos and RepoIndex does
-    /// NO ~/.claude / ~/.codex / folder scan, so opening Code triggers no
-    /// folder/cross-app permission prompt. The "Discover parallel sessions"
-    /// button flips this shared key (RepoIndex reads the same UserDefaults
-    /// key via ProviderEnablement) and refreshes → status-quo discovery.
-    @AppStorage("clawdmeter.code.discoverParallelSessions") private var discoverParallelSessions: Bool = false
-
     /// v0.5.4: rename sheet state. v0.5.9: split into a dedicated bool
     /// + data target — the `Binding(get:set:)` pattern for `isPresented:`
     /// didn't reliably trigger alert presentation; the canonical pattern
@@ -485,13 +477,6 @@ struct SidebarPane: View {
                     } else {
                         filteredEmptyState
                     }
-                    // Sits under the Managed repos (or the empty state). Off by
-                    // default; tapping opts in to full filesystem discovery for
-                    // this and future launches. Until then nothing reads
-                    // ~/.claude / ~/.codex or scans user folders.
-                    if !discoverParallelSessions {
-                        discoverSessionsButton
-                    }
                 }
                 .padding(.vertical, 6)
                 .background(
@@ -632,42 +617,6 @@ struct SidebarPane: View {
                 }
             }
         }
-    }
-
-    /// v0.29.33: opt-in CTA shown under "Managed" when discovery is off.
-    /// Tapping flips the shared `clawdmeter.code.discoverParallelSessions`
-    /// key (RepoIndex reads it via ProviderEnablement) and refreshes, so the
-    /// "Active outside Clawdmeter" / "History" sections populate from
-    /// ~/.claude + ~/.codex exactly like the prior behavior. The folder /
-    /// cross-app prompts then fire with clear user intent, not on launch.
-    private var discoverSessionsButton: some View {
-        Button(action: {
-            discoverParallelSessions = true   // @AppStorage writes the shared key
-            Task { await model.refresh() }
-        }) {
-            HStack(spacing: 8) {
-                TahoeIcon("search", size: 11)
-                    .foregroundStyle(t.accent)
-                    .frame(width: 12)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Discover parallel sessions")
-                        .font(TahoeFont.body(11.5, weight: .semibold))
-                        .foregroundStyle(t.fg)
-                    Text("Find Claude & Codex sessions outside your added repos")
-                        .font(TahoeFont.body(9.5))
-                        .foregroundStyle(t.fg3)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 6)
-        }
-        .buttonStyle(PressableButtonStyle())
-        .help("Scan ~/.claude and ~/.codex for recent sessions. Folder/data access is requested only when you tap this.")
     }
 
     /// Collapsed-by-default "History" row. Looks like a sidebar item so
