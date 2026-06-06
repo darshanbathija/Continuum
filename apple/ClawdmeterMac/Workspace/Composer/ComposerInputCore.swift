@@ -48,10 +48,9 @@ struct ComposerInputCore: View {
     var showApprovePlan: Bool = false
     /// True when the bound session is actively running (drives stop button).
     var sessionIsRunning: Bool = false
-    /// True when the bound view is a synthetic read-only Recent-JSONL row.
-    /// The composer still renders, but the send path implicitly promotes
-    /// the synthetic to a live `--resume` spawn before posting. Hides
-    /// autopilot + approve-plan chips because the synthetic has no pane.
+    /// True when the bound view is a read-only transcript. The composer
+    /// still renders in a disabled state and hides action chips that require
+    /// a live pane.
     var isReadOnly: Bool = false
 
     @StateObject private var dictation = SpeechDictation()
@@ -73,7 +72,7 @@ struct ComposerInputCore: View {
     @ObservedObject private var insertionInbox = ComposerInsertionInbox.shared
     /// Optional: when set, MentionPicker uses these as the source of
     /// suggestions (parent passes session-derived sources + open sessions).
-    var mentionSourceProvider: () -> (sessions: [AgentSession], sourceEntries: [SourceEntry], recents: [RecentSession]) = { ([], [], []) }
+    var mentionSourceProvider: () -> (sessions: [AgentSession], sourceEntries: [SourceEntry]) = { ([], []) }
     /// Optional: structured context + plan-usage data for the right-side
     /// status chip. When nil the chip is hidden.
     var usageStatus: UsageStatusInfo?
@@ -188,11 +187,10 @@ struct ComposerInputCore: View {
                 .transition(.opacity)
                 .zIndex(2)
             } else if showingMentions {
-                let triple = mentionSourceProvider()
+                let sources = mentionSourceProvider()
                 MentionPicker(
-                    openSessions: triple.sessions,
-                    sourceEntries: triple.sourceEntries,
-                    recentJSONLs: triple.recents,
+                    openSessions: sources.sessions,
+                    sourceEntries: sources.sourceEntries,
                     query: $mentionQuery,
                     onSelect: applyMentionSelection,
                     onDismiss: { showingMentions = false }
@@ -328,8 +326,6 @@ struct ComposerInputCore: View {
             replacement = "@session:\(s.id.uuidString) "
         case .file(let path, _):
             replacement = "@\(path) "
-        case .recent(let r):
-            replacement = "@\(r.path) "
         }
         // Replace only the contiguous "@<query>" token, not through end-of-text:
         // replacing to endIndex clobbered anything the user had typed after the

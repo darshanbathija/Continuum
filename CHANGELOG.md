@@ -4,6 +4,22 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.5 build 205] - 2026-06-06 - Strip external session noise from Code (`darshanbathija/session-noise`)
+
+### Removed
+
+- Code sidebar session discovery no longer scans Claude/Codex external CLI roots or configured scan roots for recent JSONLs.
+- Removes visible outside-session surfaces from the Mac Code tab, including Active outside sections, collapsed History rows, Discover parallel sessions copy, read-only outside JSONL opening, Continue here, and external JSONL rename affordances.
+- Removes external recent JSONL mention suggestions from the composer while keeping open Continuum sessions and cited files.
+- Removes iOS continuation entry points that were only reachable through repo recent sessions.
+
+### Changed
+
+- Repo snapshots are now produced from `WorkspaceStore` and Continuum-owned session state, with `recentSessions: []` kept for wire compatibility.
+- Backward-compatible endpoints for read-only continuation and JSONL alias rename remain inert without visible UI entry points.
+- Live Cursor drive tests now skip cleanly when the local Cursor account reports agent usage exhaustion.
+- Bumps `VERSION` 0.31.4 -> 0.31.5, `MARKETING_VERSION` 0.31.4 -> 0.31.5, and `CURRENT_PROJECT_VERSION` 204 -> 205.
+
 ## [0.31.4 build 204] - 2026-06-06 - Stop Claude background prompt polling (`darshanbathija/stop-claude-hi-spam`)
 
 ### Fixed

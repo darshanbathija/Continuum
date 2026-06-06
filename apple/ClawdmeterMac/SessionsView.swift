@@ -57,7 +57,6 @@ struct NewSessionMacSheet: View {
                     ForEach(model.repos, id: \.key) { repo in
                         let suffix: String = {
                             if repo.liveSessionCount > 0 { return "  • live" }
-                            if !repo.recentSessions.isEmpty { return "  • \(repo.recentSessions.count) recent" }
                             return ""
                         }()
                         Text("\(repo.displayName)\(suffix)").tag(repo.key)
@@ -411,20 +410,10 @@ public final class SessionsModel: ObservableObject {
     @Published var workspaceDocumentTabs: [WorkspaceDocumentTab] = []
     @Published var selectedWorkspaceDocumentTabId: UUID?
 
-    /// When the user opens an outside-Clawdmeter session (any JSONL in the
-    /// recent-activity window), we synthesize a read-only AgentSession.
-    /// Keyed by the JSONL absolute path so each recent row is its own
-    /// distinct synthetic session.
-    @Published public var openOutsideJSONLPath: String?
-    private var syntheticOutsideSessions: [String: AgentSession] = [:]
-    /// Per-synthetic-session URL pin. Drives `chatStore(for:)` to tail this
-    /// exact JSONL instead of falling back to `resolveSessionFileURL`'s
-    /// newest-wins logic.
+    /// Per-session URL pin. Drives `chatStore(for:)` to tail the exact JSONL
+    /// created for a Continuum-owned session instead of falling back to
+    /// `resolveSessionFileURL`'s newest-wins logic.
     private var forcedChatStoreURLs: [UUID: URL] = [:]
-    /// JSONL paths opened as read-only external sessions. These use the
-    /// same forced tailing path as first-party pinned stores, but must not
-    /// count as Clawdmeter-owned for sidebar dedupe.
-    private var externalForcedJSONLPaths: Set<String> = []
 
     /// Sidebar search query (G6). Filters repos + sessions by displayName,
     /// goal, and message body substring. Empty = no filter.
@@ -437,24 +426,12 @@ public final class SessionsModel: ObservableObject {
     private var pendingFirstSendRecoveries: [UUID: PendingFirstSendRecovery] = [:]
 
     /// Currently surfaced as a session in the workspace's center pane.
-    /// Resolves the registry first, then synthetic outside-Clawdmeter
-    /// sessions as a fallback.
     public var openSession: AgentSession? {
         if let id = openSessionId,
            let s = registry.sessions.first(where: { $0.id == id }) {
             return s
         }
-        if let path = openOutsideJSONLPath,
-           let s = syntheticOutsideSessions[path] {
-            return s
-        }
         return nil
-    }
-
-    /// True when the currently-open session is a synthetic outside-
-    /// Clawdmeter one. The center pane disables composer + actions.
-    public var openSessionIsReadOnly: Bool {
-        openOutsideJSONLPath != nil && openSessionId == nil
     }
 
     var selectedWorkspaceTerminalTab: WorkspaceTerminalTab? {
@@ -483,62 +460,15 @@ public final class SessionsModel: ObservableObject {
         return tab
     }
 
-    /// Open a specific outside-Clawdmeter JSONL as a read-only chat. Each
-    /// JSONL gets its own synthetic AgentSession, so flipping between
-    /// recent rows in the sidebar doesn't share state.
-    public func openOutsideSession(recent: RecentSession, repoKey: String, repoDisplayName: String) {
-        let url = URL(fileURLWithPath: recent.path)
-        let path = recent.path
-        if let existing = syntheticOutsideSessions[path] {
-            draftWorkspaceTab = nil
-            selectedWorkspaceTerminalTabId = nil
-            selectedWorkspaceDocumentTabId = nil
-            openOutsideJSONLPath = path
-            openSessionId = nil
-            forcedChatStoreURLs[existing.id] = url
-            needsURLRevalidation.insert(existing.id)
-            externalForcedJSONLPaths.insert(Self.canonicalJSONLPath(path))
-            return
-        }
-        let synth = AgentSession(
-            id: UUID(),
-            repoKey: nil,
-            repoDisplayName: repoDisplayName,
-            agent: recent.provider,
-            model: nil,
-            goal: nil,
-            worktreePath: nil,
-            tmuxWindowId: nil,
-            tmuxPaneId: nil,
-            status: .running,
-            planText: nil,
-            createdAt: recent.lastModified,
-            lastEventAt: recent.lastModified,
-            lastEventSeq: 0,
-            runtimeCwd: repoKey
-        )
-        syntheticOutsideSessions[path] = synth
-        forcedChatStoreURLs[synth.id] = url
-        needsURLRevalidation.insert(synth.id)
-        externalForcedJSONLPaths.insert(Self.canonicalJSONLPath(path))
-        draftWorkspaceTab = nil
-        selectedWorkspaceTerminalTabId = nil
-        selectedWorkspaceDocumentTabId = nil
-        openOutsideJSONLPath = path
-        openSessionId = nil
-    }
-
     public func closeChatView() {
         openSessionId = nil
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
-        openOutsideJSONLPath = nil
     }
 
     public func prepareNewSession(in repoKey: String?) {
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
-        openOutsideJSONLPath = nil
         openSessionId = nil
         selectedRepoKey = repoKey
         showingNewSessionSheet = true
@@ -891,9 +821,9 @@ public final class SessionsModel: ObservableObject {
     /// every warm hit was the dominant main-thread stall when toggling tabs.
     private var lastResolvedPaneId: [UUID: String] = [:]
     /// Sessions whose tailed JSONL must be re-resolved on the next `chatStore`
-    /// access regardless of pane id — set when a forced JSONL pin is applied
-    /// (continue-here / resume / synthetic-read-only) so the override takes
-    /// effect immediately even though the pane id may be unchanged.
+    /// access regardless of pane id. This is set when a Continuum-owned
+    /// forced JSONL pin is applied so the override takes effect immediately
+    /// even though the pane id may be unchanged.
     private var needsURLRevalidation: Set<UUID> = []
     /// Sessions explicitly protected from LRU eviction. The main
     /// workspace's currently-open session is always protected; popped-out
@@ -952,10 +882,9 @@ public final class SessionsModel: ObservableObject {
         )
     }()
 
-    /// Get or create the chat store for a session. If the session is one of
-    /// our synthetic outside-Clawdmeter ones, route through the pinned URL
-    /// the caller registered via `openOutsideSession(...)`; otherwise fall
-    /// back to "newest JSONL under the repo's project dir".
+    /// Get or create the chat store for a session. Continuum-owned sessions
+    /// may pin the exact JSONL they spawned; otherwise this falls back to
+    /// "newest JSONL under the repo's project dir".
     /// On cache hit, the id is bumped to the tail of the LRU. On miss, the
     /// new store is created, started, and any over-cap entries are evicted
     /// via `evictExcessChatStores()` (which calls `stop()` to cancel each
@@ -1056,22 +985,16 @@ public final class SessionsModel: ObservableObject {
         var paths = Set<String>()
         for url in forcedChatStoreURLs.values {
             let path = Self.canonicalJSONLPath(url.path)
-            if !externalForcedJSONLPaths.contains(path) {
-                paths.insert(path)
-            }
+            paths.insert(path)
         }
         for store in chatStores.values where !store.isSDKOnly {
             let path = Self.canonicalJSONLPath(store.currentFileURL.path)
-            if !externalForcedJSONLPaths.contains(path) {
-                paths.insert(path)
-            }
+            paths.insert(path)
         }
         if let daemonPaths = AppDelegate.runtime?.agentControlServer.ownedSessionJSONLPaths {
             for daemonPath in daemonPaths {
                 let path = Self.canonicalJSONLPath(daemonPath)
-                if !externalForcedJSONLPaths.contains(path) {
-                    paths.insert(path)
-                }
+                paths.insert(path)
             }
         }
         return paths
@@ -1222,21 +1145,9 @@ public final class SessionsModel: ObservableObject {
         guard !q.isEmpty else { return repos }
         return repos.filter { repo in
             if repo.displayName.lowercased().contains(q) { return true }
-            if repo.recentSessions.contains(where: { Self.recentMatchesSearch($0, repo: repo, query: q) }) {
-                return true
-            }
             let matches = filter(sessions: sessions(for: repo.key, includeArchived: showArchived))
             return !matches.isEmpty
         }
-    }
-
-    private nonisolated static func recentMatchesSearch(_ recent: RecentSession, repo: AgentRepo, query: String) -> Bool {
-        if repo.displayName.lowercased().contains(query) { return true }
-        if recent.path.lowercased().contains(query) { return true }
-        if let title = recent.firstPrompt?.lowercased(), title.contains(query) { return true }
-        if let alias = recent.customName?.lowercased(), alias.contains(query) { return true }
-        if AgentKindUI.displayName(for: recent.provider).lowercased().contains(query) { return true }
-        return false
     }
 
     /// G8 keyboard nav: flat list of sessions visible in the sidebar, in
@@ -1294,7 +1205,6 @@ public final class SessionsModel: ObservableObject {
         draftWorkspaceTab = nil
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
-        openOutsideJSONLPath = nil
         openSessionId = session.id
     }
 
@@ -1304,7 +1214,6 @@ public final class SessionsModel: ObservableObject {
         // strip until the user closes it (X) or it's consumed by a spawn.
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
-        openOutsideJSONLPath = nil
         openSessionId = session.id
     }
 
@@ -1313,7 +1222,6 @@ public final class SessionsModel: ObservableObject {
         guard draftWorkspaceTab != nil else { return }
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
-        openOutsideJSONLPath = nil
         openSessionId = nil
     }
 
@@ -1331,7 +1239,6 @@ public final class SessionsModel: ObservableObject {
             modelId: defaults.modelId,
             effort: defaults.effort
         )
-        openOutsideJSONLPath = nil
         openSessionId = nil
     }
 
@@ -1434,7 +1341,6 @@ public final class SessionsModel: ObservableObject {
               sessionKey == tab.workspaceKey
         else { return }
         draftWorkspaceTab = nil
-        openOutsideJSONLPath = nil
         openSessionId = tab.sessionId
         selectedWorkspaceDocumentTabId = nil
         selectedWorkspaceTerminalTabId = tab.id
@@ -1503,7 +1409,6 @@ public final class SessionsModel: ObservableObject {
               sessionKey == tab.workspaceKey
         else { return }
         draftWorkspaceTab = nil
-        openOutsideJSONLPath = nil
         openSessionId = tab.sessionId
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = tab.id
@@ -1565,9 +1470,7 @@ public final class SessionsModel: ObservableObject {
         self.repos = snapshot
         let canonical = SessionSidebarGrouper.canonicalizeRepos(snapshot)
         for repo in canonical.repos {
-            if !sessions(for: repo.key, aliases: canonical.keyAliases, includeArchived: false).isEmpty
-                || repo.liveSessionCount > 0
-                || !repo.recentSessions.isEmpty {
+            if !sessions(for: repo.key, aliases: canonical.keyAliases, includeArchived: false).isEmpty {
                 expandedRepoKeys.insert(repo.key)
             }
         }
@@ -1717,10 +1620,8 @@ public final class SessionsModel: ObservableObject {
         // v27 Code-tab harness migration: route EVERY non-Claude Code spawn
         // through the daemon's ACP harness (paneless codex/cursor/gemini) —
         // tmux + agentapi are gone for non-Claude. Claude + OpenCode keep their
-        // own paths below. External "Continue here" resume is deprioritized: a
-        // resume of a codex JSONL opens a fresh harness session in the same
-        // worktree (true thread/resume is a fast-follow). This sits BEFORE the
-        // CLI preflight because Gemini (Antigravity) isn't a CLI binary.
+        // own paths below. This sits BEFORE the CLI preflight because Gemini
+        // (Antigravity) isn't a CLI binary.
         if agent != .claude, agent != .opencode {
             // Cursor preflight — the daemon's harness preflight doesn't
             // auth-check cursor-agent, so do it here before provisioning.
@@ -2010,7 +1911,6 @@ public final class SessionsModel: ObservableObject {
         )
         expandedRepoKeys.insert(repoPath)
         draftWorkspaceTab = nil
-        openOutsideJSONLPath = nil
         openSessionId = session.id
         await self.refresh()
         return session
@@ -2114,137 +2014,9 @@ public final class SessionsModel: ObservableObject {
         )
         expandedRepoKeys.insert(repoPath)
         draftWorkspaceTab = nil
-        openOutsideJSONLPath = nil
         openSessionId = session.id
         await self.refresh()
         return registry.session(id: session.id) ?? session
-    }
-
-
-    /// Promote the currently-open read-only synthetic session into a live
-    /// Clawdmeter-owned session by spawning a fresh tmux pane with the
-    /// CLI's `--resume`/`resume` flag. Returns the new live AgentSession,
-    /// or nil if the JSONL can't be resumed (caller surfaces the failure
-    /// in the composer's inline error banner).
-    ///
-    /// Used by the send-triggers-continue flow: in read-only mode the
-    /// composer is always visible; sending invokes this helper, then
-    /// posts the user's prompt to the now-live session. Avoids needing
-    /// the user to find the right-click context menu (which had silent
-    /// failure modes when the JSONL parser couldn't pull out the CLI id).
-    @discardableResult
-    public func continueCurrentReadOnly() async -> AgentSession? {
-        guard let path = openOutsideJSONLPath,
-              let synthetic = syntheticOutsideSessions[path]
-        else { return nil }
-        let jsonlURL = URL(fileURLWithPath: path)
-        let provider: JSONLSessionId.Provider = (synthetic.agent == .codex) ? .codex : .claude
-        guard let cliSessionId = JSONLSessionId.extract(from: jsonlURL, provider: provider) else {
-            return nil
-        }
-        guard let runtime = AppDelegate.runtime else { return nil }
-        // Continued sessions inherit the same Opus 4.7 1M + Max defaults
-        // as freshly-created ones (per Claude Code's standard).
-        let defaults = ComposerStore.ChipDefaults.default
-        let modelDefault: String?
-        switch synthetic.agent {
-        case .claude: modelDefault = defaults.modelId
-        case .codex:  modelDefault = ModelCatalog.bundled.codex.first?.id
-        case .gemini: modelDefault = ModelCatalog.bundled.gemini.first?.id
-        case .opencode:
-            // PR #29: no JSONL outside-source for OpenCode (state lives
-            // inside `opencode serve` shared process memory).
-            return nil
-        case .cursor:
-            // Cursor imported-session resume requires a real Cursor chat id.
-            // The JSONL importer cannot prove that yet, so leave imported
-            // Cursor rows read-only until the Cursor importer lands.
-            return nil
-        case .grok, .unknown:
-            // grok (ACP) has no JSONL outside-source; unknown is X3.
-            return nil
-        }
-        // Synthetic outside sessions keep repoKey nil so WorkspaceKey never
-        // treats them as first-party, but runtimeCwd still carries the repo
-        // path needed to resume the CLI.
-        let syntheticRepoKey = synthetic.effectiveCwd
-        guard !syntheticRepoKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        do {
-            let session = try await spawnSession(
-                repoPath: syntheticRepoKey,
-                agent: synthetic.agent,
-                planMode: false,
-                goal: synthetic.goal,
-                mode: .local,
-                tmux: runtime.tmuxClient,
-                resumeSessionId: cliSessionId,
-                model: modelDefault,
-                effort: defaults.effort,
-                pinnedJSONLURL: jsonlURL
-            )
-            // Migrate open-state away from the synthetic; clean up the
-            // synthetic entry so the chat-store cache doesn't keep two
-            // entries pointing at the same JSONL.
-            openOutsideJSONLPath = nil
-            openSessionId = session.id
-            syntheticOutsideSessions.removeValue(forKey: path)
-            return session
-        } catch {
-            return nil
-        }
-    }
-
-    /// v0.5.10: set or clear a custom display name for a Recent JSONL row.
-    /// Writes directly to the in-process alias store (no HTTP loopback
-    /// needed on the Mac side), then asks `RepoIndex` to rebuild so the
-    /// sidebar reflects the new name without waiting for the 60s tick.
-    public func renameJSONLAlias(path: String, name: String?) {
-        JSONLAliasStore.shared.setAlias(path: path, name: name)
-        Task { [repoIndex] in await repoIndex.refresh() }
-    }
-
-    /// Wave A: turn a read-only Recent JSONL row into a live continuable
-    /// session. Parses the CLI session id from the JSONL header and spawns
-    /// a fresh tmux pane with `--resume <cli-id>` (Claude) or
-    /// `resume <cli-id>` (Codex). Falls back to the read-only view if the
-    /// JSONL has no usable id.
-    @discardableResult
-    public func continueOutsideSession(
-        recent: RecentSession,
-        repoKey: String,
-        repoDisplayName: String
-    ) async -> AgentSession? {
-        let jsonlURL = URL(fileURLWithPath: recent.path)
-        guard recent.provider == .claude || recent.provider == .codex else {
-            openOutsideSession(recent: recent, repoKey: repoKey, repoDisplayName: repoDisplayName)
-            return nil
-        }
-        let provider: JSONLSessionId.Provider = (recent.provider == .codex) ? .codex : .claude
-        guard let cliSessionId = JSONLSessionId.extract(from: jsonlURL, provider: provider) else {
-            // No id → keep the read-only synthetic session open.
-            openOutsideSession(recent: recent, repoKey: repoKey, repoDisplayName: repoDisplayName)
-            return nil
-        }
-        guard let runtime = AppDelegate.runtime else { return nil }
-        do {
-            let session = try await spawnSession(
-                repoPath: repoKey,
-                agent: recent.provider,
-                planMode: false,
-                goal: recent.firstPrompt,
-                mode: .local,
-                tmux: runtime.tmuxClient,
-                resumeSessionId: cliSessionId,
-                pinnedJSONLURL: jsonlURL
-            )
-            // Migrate open-state away from the synthetic read-only row.
-            openOutsideJSONLPath = nil
-            openSessionId = session.id
-            return session
-        } catch {
-            openOutsideSession(recent: recent, repoKey: repoKey, repoDisplayName: repoDisplayName)
-            return nil
-        }
     }
 
     /// G2: switch a live session's mode (Local ↔ Worktree). Kills the

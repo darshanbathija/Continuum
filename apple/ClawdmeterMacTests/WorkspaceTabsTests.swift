@@ -255,7 +255,6 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.selectedRepoKey, repo.path)
         XCTAssertTrue(model.showingNewSessionSheet)
         XCTAssertNil(model.openSessionId)
-        XCTAssertNil(model.openOutsideJSONLPath)
         XCTAssertNil(model.selectedWorkspaceTerminalTabId)
         XCTAssertNil(model.selectedWorkspaceDocumentTabId)
     }
