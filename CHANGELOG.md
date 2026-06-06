@@ -4,7 +4,7 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
-## [0.31.3 build 203] - 2026-06-06 - Relay and APNS security hardening (`darshanbathija/security-fixes`)
+## [0.31.3 build 203] - 2026-06-06 - Relay/APNS hardening, chat launch, and updater fixes (`darshanbathija/security-fixes`, `darshanbathija/fix-bugs`)
 
 ### Fixed
 
@@ -12,6 +12,11 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 - The relay creation-grant route now requires its own operator bearer, so the Worker cannot be used as a public signing oracle for attacker-chosen sessions.
 - Desktop, iOS, and relay clients now bound request wait time and preserve offline mobile commands in the outbox instead of hanging indefinitely on relay misses.
 - APNS gateway bearer validation now accepts the relay-provisioned signing key path and rejects malformed or mismatched bearer tokens more strictly.
+- Chat V2 broadcast can start Codex from GUI-launched Continuum builds by resolving the real `codex` CLI path and passing a login-shell PATH into ACP stdio children.
+- Chat V2 broadcast can start Claude without getting blocked behind Claude Code's first-run trust prompt by pre-trusting the per-chat scratch folder before spawning.
+- ACP startup failures now surface actionable messages, including agent process exits and child stderr, instead of opaque `ClawdmeterShared.ACPError error 1` text.
+- The Updates surface now uses Continuum's top-right popover for manual checks instead of also showing Sparkle's centered "You're up to date" dialog.
+- The Update button still hands off to Sparkle immediately when a probe finds a release, instead of being swallowed by the manual-check debounce.
 
 ### Changed
 
