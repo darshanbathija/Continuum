@@ -76,7 +76,12 @@ final class AgentControlServerChatRouteTests: XCTestCase {
 
         let response = try await postJSON(
             "/sessions/\(session.id.uuidString)/send",
-            SendPromptRequest(text: "old sdk path", asFollowUp: false, idempotencyKey: UUID().uuidString)
+            SendPromptRequest(
+                text: "old sdk path",
+                asFollowUp: false,
+                idempotencyKey: UUID().uuidString,
+                origin: .userComposer
+            )
         )
 
         XCTAssertEqual(response.status, 410)
@@ -117,6 +122,29 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         XCTAssertEqual(clientSnapshot?.phase, .awaitingApproval)
     }
 
+    func test_sendWithoutOriginBlocksBeforeProviderRoute() async throws {
+        let session = try await registry.createChat(
+            provider: .claude,
+            model: "sonnet",
+            chatCwd: tempDir.path,
+            effort: .high,
+            chatVendor: .claude,
+            billingProvider: "claude"
+        )
+
+        let response = try await requestRaw(
+            path: "/sessions/\(session.id.uuidString)/send",
+            method: "POST",
+            body: Data(#"{"text":"please inspect the failing test","asFollowUp":false,"idempotencyKey":"legacy-origin-test"}"#.utf8)
+        )
+
+        XCTAssertEqual(response.status, 403)
+        let object = try XCTUnwrap(jsonObject(response.data))
+        XCTAssertEqual(object["error"] as? String, "provider_prompt_blocked")
+        XCTAssertEqual(object["reason"] as? String, "legacy_prompt_origin_blocked")
+        XCTAssertEqual(object["origin"] as? String, ProviderPromptOrigin.legacyClient.rawValue)
+    }
+
     func test_sendToLegacyPaneBackedSessionReturnsRetired410() async throws {
         let session = try await registry.create(
             repoKey: tempDir.path,
@@ -133,7 +161,12 @@ final class AgentControlServerChatRouteTests: XCTestCase {
 
         let response = try await postJSON(
             "/sessions/\(session.id.uuidString)/send",
-            SendPromptRequest(text: "should retire", asFollowUp: false, idempotencyKey: UUID().uuidString)
+            SendPromptRequest(
+                text: "should retire",
+                asFollowUp: false,
+                idempotencyKey: UUID().uuidString,
+                origin: .userComposer
+            )
         )
 
         XCTAssertEqual(response.status, 410)
@@ -327,7 +360,12 @@ final class AgentControlServerChatRouteTests: XCTestCase {
 
             let send = try await postJSON(
                 "/sessions/\(session.id.uuidString)/send",
-                SendPromptRequest(text: "stale harness prompt", asFollowUp: false, idempotencyKey: UUID().uuidString)
+                SendPromptRequest(
+                    text: "stale harness prompt",
+                    asFollowUp: false,
+                    idempotencyKey: UUID().uuidString,
+                    origin: .userComposer
+                )
             )
             XCTAssertEqual(send.status, 503, "\(agent.rawValue): \(bodySnippet(send.data))")
             XCTAssertEqual(try XCTUnwrap(jsonObject(send.data))["error"] as? String, "acp_session_not_live")
@@ -683,7 +721,9 @@ final class AgentControlServerChatRouteTests: XCTestCase {
             SendPromptRequest(
                 text: "Reply with exactly: ok",
                 asFollowUp: false,
-                idempotencyKey: "openrouter-live-\(UUID().uuidString)"
+                idempotencyKey: "openrouter-live-\(UUID().uuidString)",
+                origin: .liveProviderTest,
+                clientIntentId: UUID().uuidString
             ),
             timeout: 35
         )
@@ -833,17 +873,19 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         _ = try XCTUnwrap(registry.session(id: geminiId))
 
         // 3) Broadcast one prompt; assert the gemini child streams a real reply.
-        //    The prompt itself contains "PONG" once (echoed as the user bubble), so
-        //    requiring ≥2 occurrences proves the ASSISTANT replied (not just the echo).
-        let sendReq = FrontierSendRequest(text: "Reply with the single word PONG and nothing else.")
+        let expectedToken = "CONTINUUM_LIVE_OK_\(UUID().uuidString.replacingOccurrences(of: "-", with: "_"))"
+        let sendReq = FrontierSendRequest(
+            text: "Reply with the token \(expectedToken) and no other text.",
+            origin: .liveProviderTest,
+            clientIntentId: UUID().uuidString
+        )
         let sendResp = try await postJSON(
             "/chat-sessions/frontier/\(group.groupId.uuidString)/send", sendReq, timeout: 30)
         XCTAssertTrue([200, 202].contains(sendResp.status),
                       "frontier send status \(sendResp.status): \(bodySnippet(sendResp.data))")
 
-        // The frontier child does NOT echo the user prompt into its store, so the
-        // only "PONG" comes from the assistant. Require an assistantText item AND
-        // PONG present — proving the agy-driven child produced a real reply.
+        // The frontier child does NOT echo the user prompt into its store, so
+        // the token comes from the assistant.
         var geminiReplied = false
         var lastSnapshot = "<none>"
         for _ in 0..<150 {  // ~30s; agy --print typically replies in ~8-13s
@@ -851,7 +893,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
                 path: "/sessions/\(geminiId.uuidString)/chat-snapshot", method: "GET")
             if snap.status == 200, let s = String(data: snap.data, encoding: .utf8) {
                 lastSnapshot = s
-                if s.contains("\"kind\":\"assistantText\"") && s.uppercased().contains("PONG") {
+                if s.contains("\"kind\":\"assistantText\"") && s.contains(expectedToken) {
                     geminiReplied = true
                     break
                 }
@@ -1007,6 +1049,10 @@ final class AgentControlServerChatRouteTests: XCTestCase {
             ProcessInfo.processInfo.environment["CLAWDMETER_LIVE_PROVIDER_TESTS"] == "1"
                 || liveProviderRouteSentinelExists(),
             "Set CLAWDMETER_LIVE_PROVIDER_TESTS=1 or create .context/run-live-provider-route-tests to run live provider route smoke tests"
+        )
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["CLAWDMETER_ALLOW_PROVIDER_SPEND"] == "1",
+            "Set CLAWDMETER_ALLOW_PROVIDER_SPEND=1 to acknowledge live provider quota use"
         )
     }
 

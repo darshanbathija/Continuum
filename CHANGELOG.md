@@ -4,6 +4,16 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.8 build 208] - 2026-06-07 - Stop synthetic provider prompts (`darshanbathija/stop-hi-ping-waste`)
+
+### Fixed
+
+- Adds a shared provider-prompt policy that blocks legacy, probe, heartbeat, and live-test prompt origins before Claude PTY, Codex turn/start, ACP harness, session send, scheduled follow-up, and frontier broadcast writes can spend provider usage.
+- Preserves user-authored prompts, including intentional `hi` or `PING` messages, by requiring explicit user-origin metadata and client intent ids on prompt sends.
+- Holds persisted scheduled follow-ups and mobile/offline provider queues for manual confirmation after relaunch instead of replaying delayed background sends silently.
+- Replaces default live/smoke prompt fixtures with dry-run or fake-transport paths and requires explicit live-spend consent before provider-spending scripts can run.
+- Bumps `VERSION` 0.31.7 -> 0.31.8, `MARKETING_VERSION` 0.31.7 -> 0.31.8, and `CURRENT_PROJECT_VERSION` 207 -> 208.
+
 ## [0.31.7 build 207] - 2026-06-06 - Codebase simplification pass (`darshanbathija/codebase-simplify-audit`)
 
 ### Removed

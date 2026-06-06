@@ -51,7 +51,9 @@ public final class MobileCommandOutbox: ObservableObject {
         self.storeURL = storeURL
         self.deviceId = deviceId
         load()
-        // Kick off any pending entries persisted from a previous launch.
+        holdPersistedProviderSendsForManualRetry()
+        // Kick off persisted non-provider commands; provider sends need an
+        // explicit retry after relaunch so old chat text cannot spend tokens.
         for envelope in pending { schedule(envelope) }
     }
 
@@ -84,7 +86,13 @@ public final class MobileCommandOutbox: ObservableObject {
         enqueue(
             kind: .send,
             sessionId: sessionId,
-            payload: SendPromptRequest(text: text, asFollowUp: asFollowUp, idempotencyKey: "")
+            payload: SendPromptRequest(
+                text: text,
+                asFollowUp: asFollowUp,
+                idempotencyKey: "",
+                origin: .userComposer,
+                clientIntentId: UUID().uuidString
+            )
         )
     }
 
@@ -168,6 +176,9 @@ public final class MobileCommandOutbox: ObservableObject {
     public func retry(idempotencyKey: String) {
         guard let idx = failed.firstIndex(where: { $0.idempotencyKey == idempotencyKey }) else { return }
         let envelope = failed.remove(at: idx)
+        let payload = restampedPayloadForExplicitRetry(envelope)
+        retryTasks.removeValue(forKey: envelope.idempotencyKey)?.cancel()
+        inflight.remove(envelope.idempotencyKey)
         let reset = MobileCommandEnvelope(
             idempotencyKey: envelope.idempotencyKey,
             deviceId: envelope.deviceId,
@@ -177,11 +188,38 @@ public final class MobileCommandOutbox: ObservableObject {
             createdAt: envelope.createdAt,
             lastAttemptAt: nil,
             retryCount: 0,
-            payload: envelope.payload
+            payload: payload
         )
         pending.append(reset)
         persist()
         schedule(reset)
+    }
+
+    private func restampedPayloadForExplicitRetry(_ envelope: MobileCommandEnvelope) -> String {
+        guard envelope.kind == .send,
+              let data = envelope.payload.data(using: .utf8)
+        else {
+            return envelope.payload
+        }
+        let decoder = JSONDecoder()
+        guard let body = try? decoder.decode(SendPromptRequest.self, from: data) else {
+            return envelope.payload
+        }
+        let request = SendPromptRequest(
+            text: body.text,
+            asFollowUp: body.asFollowUp,
+            idempotencyKey: envelope.idempotencyKey,
+            origin: .userComposer,
+            clientIntentId: body.clientIntentId ?? UUID().uuidString
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let encoded = try? encoder.encode(request),
+              let string = String(data: encoded, encoding: .utf8)
+        else {
+            return envelope.payload
+        }
+        return string
     }
 
     /// Drop an envelope from the queue entirely. Used by the iOS UI's
@@ -246,8 +284,8 @@ public final class MobileCommandOutbox: ObservableObject {
     private func schedule(_ envelope: MobileCommandEnvelope) {
         guard !inflight.contains(envelope.idempotencyKey) else { return }
         inflight.insert(envelope.idempotencyKey)
-        retryTasks[envelope.idempotencyKey] = Task { [weak self] in
-            await self?.deliver(envelope)
+        retryTasks[envelope.idempotencyKey] = Task {
+            await self.deliver(envelope)
         }
     }
 
@@ -319,7 +357,9 @@ public final class MobileCommandOutbox: ObservableObject {
                 sessionId: sessionId,
                 text: body.text,
                 asFollowUp: body.asFollowUp,
-                idempotencyKey: envelope.idempotencyKey
+                idempotencyKey: envelope.idempotencyKey,
+                origin: body.origin,
+                clientIntentId: body.clientIntentId
             )
         case .interrupt:
             return await client.interruptSession(sessionId: sessionId, idempotencyKey: envelope.idempotencyKey)
@@ -522,6 +562,39 @@ public final class MobileCommandOutbox: ObservableObject {
         } catch {
             outboxLogger.error("Failed to load outbox: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func holdPersistedProviderSendsForManualRetry() {
+        let replayable = pending.filter { $0.kind != .send }
+        let held = pending.filter { $0.kind == .send }
+        guard !held.isEmpty else { return }
+        pending = replayable
+        for envelope in held {
+            retryTasks.removeValue(forKey: envelope.idempotencyKey)?.cancel()
+            inflight.remove(envelope.idempotencyKey)
+        }
+        let heldFailures = held.map {
+            MobileCommandEnvelope(
+                idempotencyKey: $0.idempotencyKey,
+                deviceId: $0.deviceId,
+                sessionId: $0.sessionId,
+                kind: $0.kind,
+                status: .failed,
+                createdAt: $0.createdAt,
+                lastAttemptAt: $0.lastAttemptAt,
+                retryCount: $0.retryCount,
+                payload: $0.payload
+            )
+        }
+        for envelope in heldFailures {
+            if let idx = failed.firstIndex(where: { $0.idempotencyKey == envelope.idempotencyKey }) {
+                failed[idx] = envelope
+            } else {
+                failed.append(envelope)
+            }
+        }
+        persist()
+        outboxLogger.info("Held \(held.count) persisted provider send(s) for manual retry")
     }
 
     private func persist() {

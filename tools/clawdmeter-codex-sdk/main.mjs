@@ -67,6 +67,13 @@ function safePrompt(raw) {
   return raw;
 }
 
+function requireProviderSpendAllowed(agent) {
+  if (process.env.CLAWDMETER_ALLOW_PROVIDER_SPEND === "1") return;
+  throw new Error(
+    `${agent} would send a live Codex provider prompt; set CLAWDMETER_ALLOW_PROVIDER_SPEND=1 to run it`
+  );
+}
+
 const SKELETON_VERSION = "0.7.1-skeleton";
 const SDK_VERSION = "0.7.1-sdk";
 
@@ -184,6 +191,7 @@ async function runObserver(SDK, rl) {
  * Cancellable via the AbortSignal.
  */
 async function streamThread(codex, cmd, subscriptionId, signal) {
+  requireProviderSpendAllowed("codex streamThread");
   const threadOptions = {
     workingDirectory: safeWorkingDirectory(cmd.workingDirectory),
     skipGitRepoCheck: cmd.skipGitRepoCheck ?? false,
@@ -248,6 +256,7 @@ async function streamThread(codex, cmd, subscriptionId, signal) {
  * it without keeping a long-running stream open.
  */
 async function runResume(SDK, cmd) {
+  requireProviderSpendAllowed("codex resume");
   const codex = new SDK.Codex();
   const threadOptions = {
     workingDirectory: safeWorkingDirectory(cmd.workingDirectory),

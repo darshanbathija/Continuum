@@ -264,8 +264,16 @@ public struct FrontierSendRequest: Codable, Sendable {
     public let text: String
     public let asFollowUp: Bool
     public let perChildText: [String: String]?
+    public let origin: ProviderPromptOrigin
+    public let clientIntentId: String?
 
-    public init(text: String, asFollowUp: Bool = false, perChildText: [UUID: String]? = nil) {
+    public init(
+        text: String,
+        asFollowUp: Bool = false,
+        perChildText: [UUID: String]? = nil,
+        origin: ProviderPromptOrigin = .legacyClient,
+        clientIntentId: String? = nil
+    ) {
         self.text = text
         self.asFollowUp = asFollowUp
         if let perChildText {
@@ -275,6 +283,30 @@ public struct FrontierSendRequest: Codable, Sendable {
         } else {
             self.perChildText = nil
         }
+        self.origin = origin
+        self.clientIntentId = clientIntentId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text, asFollowUp, perChildText, origin, clientIntentId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        text = try c.decode(String.self, forKey: .text)
+        asFollowUp = try c.decodeIfPresent(Bool.self, forKey: .asFollowUp) ?? false
+        perChildText = try c.decodeIfPresent([String: String].self, forKey: .perChildText)
+        origin = try c.decodeIfPresent(ProviderPromptOrigin.self, forKey: .origin) ?? .legacyClient
+        clientIntentId = try c.decodeIfPresent(String.self, forKey: .clientIntentId)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(text, forKey: .text)
+        try c.encode(asFollowUp, forKey: .asFollowUp)
+        try c.encodeIfPresent(perChildText, forKey: .perChildText)
+        try c.encode(origin, forKey: .origin)
+        try c.encodeIfPresent(clientIntentId, forKey: .clientIntentId)
     }
 
     /// Look up the override for a given child session id; falls back

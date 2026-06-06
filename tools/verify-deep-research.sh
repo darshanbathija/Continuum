@@ -65,6 +65,10 @@ require_cmd() {
 require_cmd curl
 require_cmd jq
 
+if [[ "${CLAWDMETER_ALLOW_PROVIDER_SPEND:-0}" != "1" ]]; then
+  die "Deep Research verification sends live provider prompts; set CLAWDMETER_ALLOW_PROVIDER_SPEND=1 and launch the daemon with CLAWDMETER_LIVE_PROVIDER_TESTS=1 to run it" 2
+fi
+
 if [[ -z "$DAEMON_TOKEN" ]]; then
   echo "${C_YEL}NOTE${C_RESET}: \$CLAWDMETER_DAEMON_TOKEN not set; fetching from PairingTokenStore default file."
   # The token store writes a file under Application Support — read it
@@ -138,7 +142,8 @@ verify_provider() {
 
   # 2. Send the canned research prompt.
   local send_body
-  send_body="$(jq -n --arg t "$DEFAULT_PROMPT" '{text:$t, asFollowUp:false}')"
+  send_body="$(jq -n --arg t "$DEFAULT_PROMPT" --arg id "$(uuidgen)" \
+    '{text:$t, asFollowUp:false, origin:"liveProviderTest", clientIntentId:$id}')"
   curl -fsS -X POST -H 'Content-Type: application/json' \
     -d "$send_body" "${AUTH[@]}" \
     "${DAEMON_URL}/sessions/${session_id}/send" >/dev/null || true

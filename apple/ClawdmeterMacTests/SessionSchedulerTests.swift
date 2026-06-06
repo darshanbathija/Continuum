@@ -118,4 +118,96 @@ final class SessionSchedulerTests: XCTestCase {
         XCTAssertTrue(reloaded.scheduledFollowUps.isEmpty)
         XCTAssertEqual(reloaded.status, .running)
     }
+
+    func test_manualConfirmationFollowUpDoesNotAutoDeliverWhenPastDue() async throws {
+        let registry = AgentSessionRegistry(storeURL: tempDir.appendingPathComponent("sessions.json"))
+        let session = try await registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: "Scheduler",
+            agent: .claude,
+            model: "sonnet",
+            goal: "Hold follow-up",
+            worktreePath: tempDir.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let followUp = ScheduledFollowUp(
+            fireAt: Date().addingTimeInterval(-1),
+            prompt: "hi",
+            origin: .legacyClient,
+            deliveryPolicy: .requiresConfirmation
+        )
+        try await registry.addScheduledFollowUp(sessionId: session.id, followUp: followUp)
+
+        var attempts = 0
+        let scheduler = SessionScheduler(
+            registry: registry,
+            deliverer: { _, _ in
+                attempts += 1
+                return .delivered
+            },
+            unavailableRetryInterval: 0.01
+        )
+        scheduler.start()
+        try await Task.sleep(nanoseconds: 250_000_000)
+        scheduler.stop()
+
+        let reloaded = try XCTUnwrap(registry.session(id: session.id))
+        XCTAssertEqual(attempts, 0)
+        XCTAssertNil(reloaded.scheduledFollowUps.first?.firedAt)
+    }
+
+    func test_confirmedManualFollowUpDeliversWhenPastDue() async throws {
+        let registry = AgentSessionRegistry(storeURL: tempDir.appendingPathComponent("sessions.json"))
+        let session = try await registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: "Scheduler",
+            agent: .claude,
+            model: "sonnet",
+            goal: "Confirm follow-up",
+            worktreePath: tempDir.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let followUp = ScheduledFollowUp(
+            fireAt: Date().addingTimeInterval(-1),
+            prompt: "hi",
+            origin: .legacyClient,
+            deliveryPolicy: .requiresConfirmation
+        )
+        try await registry.addScheduledFollowUp(sessionId: session.id, followUp: followUp)
+
+        let delivered = expectation(description: "confirmed follow-up delivered")
+        var attempts = 0
+        let scheduler = SessionScheduler(
+            registry: registry,
+            deliverer: { _, up in
+                attempts += 1
+                XCTAssertEqual(up.origin, .scheduledUserFollowUp)
+                delivered.fulfill()
+                return .delivered
+            },
+            unavailableRetryInterval: 0.01
+        )
+        scheduler.start()
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(attempts, 0)
+
+        try await registry.confirmScheduledFollowUp(
+            sessionId: session.id,
+            followUpId: followUp.id,
+            confirmedBy: "test"
+        )
+        await fulfillment(of: [delivered], timeout: 2)
+
+        scheduler.stop()
+        let reloaded = try XCTUnwrap(registry.session(id: session.id))
+        XCTAssertEqual(attempts, 1)
+        XCTAssertNotNil(reloaded.scheduledFollowUps.first?.firedAt)
+        XCTAssertEqual(reloaded.scheduledFollowUps.first?.deliveryPolicy, .autonomousAfterRestart)
+    }
 }

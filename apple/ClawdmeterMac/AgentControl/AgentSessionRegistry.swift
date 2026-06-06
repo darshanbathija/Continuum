@@ -777,11 +777,44 @@ public final class AgentSessionRegistry: ObservableObject {
         update(id: sessionId) { _ in projected }
     }
 
+    public func confirmScheduledFollowUp(
+        sessionId: UUID,
+        followUpId: UUID,
+        confirmedBy: String = "user"
+    ) async throws {
+        guard let s = session(id: sessionId) else { return }
+        let ups = s.scheduledFollowUps.map { f -> ScheduledFollowUp in
+            guard f.id == followUpId else { return f }
+            return ScheduledFollowUp(
+                id: f.id,
+                fireAt: f.fireAt,
+                prompt: f.prompt,
+                firedAt: f.firedAt,
+                origin: .scheduledUserFollowUp,
+                createdAt: f.createdAt,
+                createdBy: confirmedBy,
+                deliveryPolicy: .autonomousAfterRestart
+            )
+        }
+        let projected = with(s, scheduledFollowUps: ups)
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: sessionId, session: projected)
+        update(id: sessionId) { _ in projected }
+    }
+
     public func markFollowUpFired(sessionId: UUID, followUpId: UUID, at firedAt: Date = Date()) async throws {
         guard let s = session(id: sessionId) else { return }
         let ups = s.scheduledFollowUps.map { f -> ScheduledFollowUp in
             if f.id == followUpId {
-                return ScheduledFollowUp(id: f.id, fireAt: f.fireAt, prompt: f.prompt, firedAt: firedAt)
+                return ScheduledFollowUp(
+                    id: f.id,
+                    fireAt: f.fireAt,
+                    prompt: f.prompt,
+                    firedAt: firedAt,
+                    origin: f.origin,
+                    createdAt: f.createdAt,
+                    createdBy: f.createdBy,
+                    deliveryPolicy: f.deliveryPolicy
+                )
             }
             return f
         }

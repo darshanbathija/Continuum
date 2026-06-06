@@ -20,7 +20,7 @@ set -euo pipefail
 DAEMON_HOST="${CLAWDMETER_DAEMON_HOST:-127.0.0.1}"
 DAEMON_PORT="${CLAWDMETER_DAEMON_PORT:-21731}"
 DAEMON_TOKEN="${CLAWDMETER_DAEMON_TOKEN:-}"
-DEFAULT_PROMPT="${SMOKE_PROMPT:-Say hi in one short sentence.}"
+DEFAULT_PROMPT="${SMOKE_PROMPT:-Briefly confirm this chat route is working.}"
 TURN_TIMEOUT_SEC="${SMOKE_TURN_TIMEOUT_SEC:-180}"
 POLL_INTERVAL_SEC=1
 
@@ -34,6 +34,10 @@ die() { printf '%sFAIL%s: %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit "${2:-1}"; }
 require() { command -v "$1" >/dev/null 2>&1 || die "missing: $1" 2; }
 require curl
 require jq
+
+if [[ "${CLAWDMETER_ALLOW_PROVIDER_SPEND:-0}" != "1" ]]; then
+  die "live smoke sends provider prompts; set CLAWDMETER_ALLOW_PROVIDER_SPEND=1 and launch the daemon with CLAWDMETER_LIVE_PROVIDER_TESTS=1 to run it" 2
+fi
 
 if [[ -z "$DAEMON_TOKEN" ]]; then
   DAEMON_TOKEN="$(security find-generic-password -s 'com.clawdmeter.mac.pairing' -a 'daemon-bearer-token' -w 2>/dev/null || true)"
@@ -95,7 +99,8 @@ solo_smoke() {
   printf '  session=%s\n' "$session_id"
 
   local send_body
-  send_body="$(jq -n --arg t "$DEFAULT_PROMPT" '{text:$t, asFollowUp:false}')"
+  send_body="$(jq -n --arg t "$DEFAULT_PROMPT" --arg id "$(uuidgen)" \
+    '{text:$t, asFollowUp:false, origin:"liveProviderTest", clientIntentId:$id}')"
   curl -fsS -X POST -H 'Content-Type: application/json' -d "$send_body" "${AUTH[@]}" \
     "${DAEMON_URL}/sessions/${session_id}/send" >/dev/null || true
   printf '  sent, polling up to %ss…\n' "$TURN_TIMEOUT_SEC"
@@ -149,7 +154,8 @@ broadcast_smoke() {
   [[ -z "$slots" ]] && { printf '  %sFAIL%s no slot ids in response: %s\n' "$C_RED" "$C_RESET" "$create_resp"; FAIL_COUNT=$((FAIL_COUNT+1)); FAIL_LIST+=("broadcast"); return 1; }
 
   local send_body
-  send_body="$(jq -n --arg t "$DEFAULT_PROMPT" '{text:$t, asFollowUp:false}')"
+  send_body="$(jq -n --arg t "$DEFAULT_PROMPT" --arg id "$(uuidgen)" \
+    '{text:$t, asFollowUp:false, origin:"liveProviderTest", clientIntentId:$id}')"
   curl -fsS -X POST -H 'Content-Type: application/json' -d "$send_body" "${AUTH[@]}" \
     "${DAEMON_URL}/chat-sessions/frontier/${frontier_id}/send" >/dev/null || true
   printf '  sent, polling each slot up to %ss…\n' "$TURN_TIMEOUT_SEC"

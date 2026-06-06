@@ -12,10 +12,9 @@ private let agyLogger = Logger(subsystem: "com.clawdmeter.mac", category: "Antig
 ///   agy --dangerously-skip-permissions [--continue] --print "<prompt>"
 ///
 /// `agy --print` runs a single prompt non-interactively and streams the response
-/// as plain text to stdout (verified live 2026-06-04: replied "PONG" with the
-/// app closed). Multi-turn uses `--continue`, which resumes the most recent
-/// conversation for the cwd — and each chat/Sessions workspace has its own cwd,
-/// so turns chain correctly (same model as `GrokHeadlessDriver`).
+/// as plain text to stdout. Multi-turn uses `--continue`, which resumes the most
+/// recent conversation for the cwd — and each chat/Sessions workspace has its
+/// own cwd, so turns chain correctly (same model as `GrokHeadlessDriver`).
 ///
 /// Conforms to `AgentDriver` so it plugs into `AcpHarnessBridge` via the
 /// `.transportOwning` factory (binary == nil; this driver owns its per-turn
