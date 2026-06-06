@@ -88,6 +88,7 @@ protocol SparkleUpdateDriving: AnyObject {
 
     func start() throws
     func checkForUpdates()
+    func checkForUpdateInformation()
     func checkForUpdatesInBackground()
 }
 
@@ -176,30 +177,11 @@ final class UpdateCoordinator: ObservableObject {
     // MARK: - Actions
 
     func checkForUpdates() {
-        guard canUseSparkle else { return }
+        startManualCheck(mode: .foreground)
+    }
 
-        if let lastManualCheckAt,
-           nowProvider().timeIntervalSince(lastManualCheckAt) < Self.manualCheckDebounce {
-            updateLogger.debug("Skipping update check because it is inside the manual debounce window")
-            return
-        }
-
-        guard let driver else {
-            state = .setupBlocked(reason: "Sparkle is not available in this build.", fallbackURL: fallbackURL)
-            return
-        }
-
-        guard driver.canCheckForUpdates else {
-            state = .setupBlocked(
-                reason: "Sparkle cannot check for updates right now. Open the app from /Applications and try again.",
-                fallbackURL: fallbackURL
-            )
-            return
-        }
-
-        lastManualCheckAt = nowProvider()
-        state = .checking
-        driver.checkForUpdates()
+    func refreshUpdateStatus() {
+        startManualCheck(mode: .informationOnly)
     }
 
     func checkForUpdatesInBackground() {
@@ -317,6 +299,49 @@ final class UpdateCoordinator: ObservableObject {
         lastCheckedAt = driver.lastUpdateCheckDate
         if !automaticChecksEnabled, case .idle = state {
             state = .automaticChecksDisabled
+        }
+    }
+
+    private enum ManualCheckMode {
+        case foreground
+        case informationOnly
+    }
+
+    private func startManualCheck(mode: ManualCheckMode) {
+        guard canUseSparkle else { return }
+
+        let bypassDebounce: Bool = {
+            if case .foreground = mode, case .updateAvailable = state { return true }
+            return false
+        }()
+
+        if !bypassDebounce,
+           let lastManualCheckAt,
+           nowProvider().timeIntervalSince(lastManualCheckAt) < Self.manualCheckDebounce {
+            updateLogger.debug("Skipping update check because it is inside the manual debounce window")
+            return
+        }
+
+        guard let driver else {
+            state = .setupBlocked(reason: "Sparkle is not available in this build.", fallbackURL: fallbackURL)
+            return
+        }
+
+        guard driver.canCheckForUpdates else {
+            state = .setupBlocked(
+                reason: "Sparkle cannot check for updates right now. Open the app from /Applications and try again.",
+                fallbackURL: fallbackURL
+            )
+            return
+        }
+
+        lastManualCheckAt = nowProvider()
+        state = .checking
+        switch mode {
+        case .foreground:
+            driver.checkForUpdates()
+        case .informationOnly:
+            driver.checkForUpdateInformation()
         }
     }
 
@@ -511,6 +536,11 @@ final class SparkleUpdateDriver: NSObject, SparkleUpdateDriving, SPUUpdaterDeleg
     func checkForUpdates() {
         delegate?.updateDriverDidStartChecking()
         updaterController.updater.checkForUpdates()
+    }
+
+    func checkForUpdateInformation() {
+        delegate?.updateDriverDidStartChecking()
+        updaterController.updater.checkForUpdateInformation()
     }
 
     func checkForUpdatesInBackground() {

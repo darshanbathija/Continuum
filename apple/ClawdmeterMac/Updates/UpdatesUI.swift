@@ -256,7 +256,7 @@ struct UpdateAppControl: View {
     private func primaryAction() {
         switch snapshot {
         case .idle, .upToDate, .automaticChecksDisabled, .cancelled:
-            coordinator.wrapped?.checkForUpdates()
+            coordinator.wrapped?.refreshUpdateStatus()
             popoverPresented = true
         default:
             popoverPresented = true
@@ -491,12 +491,14 @@ struct UpdatePopoverContent: View {
 
     private func primaryAction() {
         switch coordinator.wrapped?.state {
+        case .updateAvailable:
+            coordinator.wrapped?.checkForUpdates()
         case .translocated, .nonApplicationsInstall:
             coordinator.wrapped?.showCurrentBundleInFinder()
         case .failed, .setupBlocked, .invalidAppcastSignature, .corruptedDownload:
             coordinator.wrapped?.openReleasePageFallback()
         default:
-            coordinator.wrapped?.checkForUpdates()
+            coordinator.wrapped?.refreshUpdateStatus()
         }
     }
 

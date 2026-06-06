@@ -113,7 +113,7 @@ struct ClawdmeterMacApp: App {
             }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
-                    runtime.updateCoordinator.checkForUpdates()
+                    runtime.updateCoordinator.refreshUpdateStatus()
                     NotificationCenter.default.post(
                         name: .clawdmeterOpenSettingsSection,
                         object: nil,
