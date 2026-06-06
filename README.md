@@ -12,7 +12,7 @@ At a high level, Continuum does three jobs:
 - Runs and controls local coding-agent sessions from Mac, iPhone, and Watch.
 - Keeps chat, code, usage, device pairing, diagnostics, and provider setup in one app.
 
-Current source version: `0.29.23` (`apple/project.yml` build `162`).
+Current source version: `0.31.6` (`apple/project.yml` build `206`).
 
 ## What ships
 
@@ -33,6 +33,7 @@ Current source version: `0.29.23` (`apple/project.yml` build `162`).
 | **Codex** | Uses the Codex app-server harness for chat and code sessions. Usage parsing reads Codex session JSONL, including cumulative-to-delta conversion. Plan mode maps to read-only sandboxing, and send/interrupt/model/effort flows go through the same daemon surface as other agents. |
 | **Antigravity / Gemini** | Gemini quota and Antigravity native sessions are represented through the shared `.gemini` agent kind in current wire contracts. Sessions run through the headless `agy` harness, read conversation DB and brain-dir state, and expose plan snapshots. |
 | **Cursor** | Discovers account models from Cursor, launches Cursor-backed ACP harness sessions, and treats effort as Cursor Auto until Cursor exposes a real effort control. |
+| **Grok** | Runs through a headless harness, surfaces Grok usage limits and token history, and participates in Chat, Code, Usage, and provider-picker flows. |
 | **OpenRouter via OpenCode** | Runs OpenRouter models through Continuum's shared `opencode serve` process, consumes SSE events, sends prompts through OpenCode's HTTP API, maps OpenRouter usage into Continuum analytics, and surfaces live model metadata under Settings -> Providers. |
 
 ## App model
@@ -42,7 +43,7 @@ HTTP and WebSocket daemon:
 
 - HTTP listener starts at `21731`, with fallback ports through `21741`.
 - WebSocket listener normally starts at `21732`.
-- Non-loopback access is restricted to Tailscale/loopback peer ranges and bearer-token pairing.
+- Non-loopback access is restricted to the secure relay path, Tailscale/loopback peer ranges, and bearer-token pairing.
 - The same daemon backs Mac loopback clients, iPhone pairing, Watch relays, terminal streams, chat snapshots, usage, analytics, diffs, and PR actions.
 
 The main Mac tabs are:
@@ -81,7 +82,7 @@ Refresh pricing with:
 ## Security and privacy
 
 Three reference documents describe what Continuum trusts, what it
-sends over the network, and what isn't built yet:
+sends over the network, and what remains deferred:
 
 - [`docs/security.md`](docs/security.md) — trust model, cryptographic
   primitives, key lifecycle, per-peer bearer auth, APNS device-token
@@ -92,10 +93,9 @@ sends over the network, and what isn't built yet:
   telemetry, and the update check. Also covers what stays local,
   backup posture, and the GDPR / CCPA deletion story.
 - [`docs/known-limitations.md`](docs/known-limitations.md) — what's
-  NOT yet shipped: the Mac/iOS clients for the secure cloud relay
-  and APNS gateway, the Swift CryptoKit XChaCha20 gap, F3 daemon
-  wire-up, the C2 `@Observable` migration, watchOS / iOS launch
-  Tahoe-debt, and Mac Code-tab density follow-ups.
+  still deferred: F3 daemon wire-up, per-provider HOME isolation,
+  C2 `@Observable` migration, watchOS / iOS launch Tahoe-debt,
+  Sparkle follow-ups, and Mac Code-tab density follow-ups.
 
 The full normative design for the secure relay + APNS gateway lives
 at [`docs/design/secure-relay-apns-2026-05-26.md`](docs/design/secure-relay-apns-2026-05-26.md).
@@ -111,7 +111,7 @@ Requirements:
 - Apple Silicon Mac for the packaged DMG path.
 - Xcode with Swift 5.10 support and the current Apple platform SDKs used by the project.
 - `xcodegen` for regenerating `apple/Clawdmeter.xcodeproj`.
-- Provider CLIs as needed: `claude`, `codex`, `gemini` / Antigravity, and/or `opencode`.
+- Provider CLIs as needed: `claude`, `codex`, `cursor-agent`, `grok`, `gemini` / Antigravity, and/or `opencode`.
 
 Useful build commands:
 
@@ -210,7 +210,9 @@ The repo has substantial XCTest coverage under:
 |   |-- build-mac-dmg.sh                    Mac DMG packaging
 |   |-- download-bundled-*.sh               vendored runtime staging
 |   |-- clawdmeter-codex-sdk/               Node Codex SDK bridge
-|   `-- clawdmeter-agents/                  Python Antigravity sidecar skeleton
+|   |-- clawdmeter-agents/                  Python Antigravity sidecar skeleton
+|   |-- release-mac.sh                      signed/notarized Sparkle release path
+|   `-- extract-antigravity-proto.sh        Antigravity protocol inventory helper
 |-- CHANGELOG.md                            detailed release history
 |-- VERSION                                 marketing version mirror
 `-- CLAUDE.md                               maintainer-oriented implementation notes
@@ -223,7 +225,7 @@ The repo has substantial XCTest coverage under:
 - Chat sessions and code sessions share the same `AgentSessionRegistry` and daemon.
 - OpenCode sessions go through `opencode serve` plus SSE.
 - Legacy `tmuxWindowId` / `tmuxPaneId` fields still decode for old registries; sessions carrying them are retired and return `410 legacy_session_retired`.
-- iPhone pairing is QR/token based and expects loopback or Tailscale-reachable hosts. Tailscale MagicDNS is the easiest path for iOS App Transport Security.
+- iPhone pairing is QR/token based and can use the secure relay path; loopback/Tailscale remains available for local development and fallback.
 - Release Mac builds are sandboxed; Debug builds keep broader local access for development.
 - App Store/iCloud/CloudKit/notarization paths still depend on Apple account capabilities outside this repo.
 

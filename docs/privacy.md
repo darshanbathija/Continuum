@@ -3,14 +3,12 @@
 This doc enumerates every byte that leaves the user's Mac. The
 companion docs are [`docs/security.md`](security.md) (how the egress
 paths are protected) and
-[`docs/known-limitations.md`](known-limitations.md) (what isn't shipped
-yet).
+[`docs/known-limitations.md`](known-limitations.md) (what remains
+deferred).
 
-> Status note. Several egress paths described here are designed but
-> not yet live in main: the Cloudflare relay (E2) and APNS gateway
-> (E5) Workers are deployed, but the Mac/iOS clients that talk to them
-> (E3, E4, E6) are not. The current shipped pairing path is still
-> Tailscale-or-local-network. See
+> Status note. The secure relay and APNS gateway now have both Worker
+> and Apple-client paths in the app. Loopback/Tailscale remains useful
+> for local development and fallback. See
 > [`docs/known-limitations.md`](known-limitations.md) for the precise
 > live-vs-designed table.
 
@@ -21,7 +19,7 @@ yet).
 There are exactly five categories of network egress from a default
 Continuum install.
 
-### 1.1 Pairing relay (designed; shipped Worker, client lands in E3/E4)
+### 1.1 Pairing relay
 
 When the Cloudflare relay path is used (the secure-cloud pairing
 mode), the Mac daemon and the paired iPhone exchange opaque
@@ -47,7 +45,7 @@ The Worker does NOT see:
 
 Source: [PR #151](https://github.com/darshanbathija/Clawdmeter/pull/151).
 
-### 1.2 APNS gateway (designed; shipped Worker, client lands in E6)
+### 1.2 APNS gateway
 
 When the Mac daemon sends a plan-approval push notification, it goes
 through a separate Cloudflare Worker (`infra/apns-gateway/`) that
@@ -57,7 +55,7 @@ forwards the push to Apple's HTTP/2 APNS endpoint. The gateway sees:
 - The SHA-256 hash of the iPhone's APNS device token (the raw token
   reaches the Worker only as the request body; it is hashed before
   any KV write or log line).
-- The bundle id (`com.clawdmeter.iphone`, `com.clawdmeter.watch`).
+- The bundle id (`ai.continuum.ios` for the current iPhone APNS topic).
 - The APNS topic.
 - The byte length of the encrypted payload.
 - The SHA-256 fingerprint of the sender Mac daemon's pairing public
