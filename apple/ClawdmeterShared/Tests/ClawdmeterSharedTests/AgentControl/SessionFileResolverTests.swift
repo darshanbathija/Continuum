@@ -225,13 +225,12 @@ final class SessionFileResolverTests: XCTestCase {
         assertSameFile(resolver.resolve(session: session), rolloutB)
     }
 
-    func testFallbackToNewestForSyntheticPreview() throws {
-        // Synthetic preview sessions (the Mac UI's outside-Clawdmeter JSONL
-        // viewer) have a session whose createdAt is the JSONL's mtime and
-        // lastEventAt the same. The activity window is a single point; no
-        // in-window match. Resolver must fall back to "newest in directory."
+    func testUnlinkedCodexRolloutDoesNotFallBackToNewestExternalJSONL() throws {
+        // When a Codex session has no recorded or in-window rollout link,
+        // the resolver must fail closed. A global newest-file fallback can
+        // pick up a Terminal-launched or otherwise external Codex session.
         let _ = try writeRollout(name: "rollout-older.jsonl", mtime: Date().addingTimeInterval(-3600))
-        let newest = try writeRollout(name: "rollout-newest.jsonl", mtime: Date().addingTimeInterval(-1800))
+        let _ = try writeRollout(name: "rollout-newest.jsonl", mtime: Date().addingTimeInterval(-1800))
 
         let session = makeSession(
             agent: .codex,
@@ -243,7 +242,7 @@ final class SessionFileResolverTests: XCTestCase {
             codexSessionsRoot: tmpdir,
             resolveClaudeURL: { _ in nil }
         )
-        assertSameFile(resolver.resolve(session: session), newest)
+        XCTAssertNil(resolver.resolve(session: session))
     }
 
     func testRecordSetsCacheDirectly() throws {

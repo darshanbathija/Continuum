@@ -49,7 +49,6 @@ public final class DaemonChatStoreRegistry {
     /// the session-id-keyed map (idle eviction, max cap).
     private var pathEntries: [URL: Entry] = [:]
     private var sweepTask: Task<Void, Never>?
-    private var warmupTask: Task<Void, Never>?
 
     /// Idle window after the last subscriber drops before the entry is
     /// evicted. 5 minutes balances "warm enough for tab-back" against
@@ -86,8 +85,6 @@ public final class DaemonChatStoreRegistry {
         // isolated context. `Task.cancel()` is itself thread-safe.
         let sweep = sweepTask
         sweep?.cancel()
-        let warmup = warmupTask
-        warmup?.cancel()
     }
 
     // MARK: - Public API
@@ -266,55 +263,26 @@ public final class DaemonChatStoreRegistry {
 
     // MARK: - Default file-URL resolution
 
-    /// Phase 0a default. Mirrors `AgentControlServer.handleGetChatSnapshot`'s
-    /// existing path-resolution rules. Phase 0b replaces this with a real
-    /// `SessionFileResolver` that tracks Codex respawn lineage so
-    /// `approve-plan` doesn't break continuity.
-    ///
-    /// v0.8.0 agy-migration: Gemini sessions spawned via Antigravity 2's
-    /// agentapi don't have JSONL files at all — chat state lives in a
-    /// SQLite WAL at ~/.gemini/antigravity/conversations/<id>.db. We
-    /// surface that URL here so future SessionChatStore work (v0.8.1+
-    /// ingest path) can consume `AntigravityConversationDB` (T6) instead
-    /// of trying to JSONL-parse a binary database.
+    /// Default resolver used by tests and ad hoc registry construction.
+    /// Production injects `SessionFileResolver` from `AgentControlServer`.
+    /// Keep this conservative: Claude can resolve from its session cwd, while
+    /// all other providers fail closed instead of scanning global provider
+    /// history.
     @MainActor
     public static func defaultResolveURL(sessionId: UUID, session: AgentSession) -> URL? {
         let cwd = session.effectiveCwd
         if session.agent == .claude {
             return SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
         } else {
-            return Self.newestCodexJSONL()
+            return nil
         }
-    }
-
-    /// Same logic as `AgentControlServer.newestCodexJSONL()` — kept here so
-    /// the registry's default resolver doesn't reach across the server's
-    /// private API. Phase 0b replaces this entirely.
-    nonisolated public static func newestCodexJSONL() -> URL? {
-        let sessionsDir = ClawdmeterRealHome.url()
-            .appendingPathComponent(".codex/sessions", isDirectory: true)
-        guard let enumerator = FileManager.default.enumerator(
-            at: sessionsDir,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else { return nil }
-        var newest: URL?
-        var newestDate = Date.distantPast
-        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            if date > newestDate {
-                newestDate = date
-                newest = url
-            }
-        }
-        return newest
     }
 
     /// v0.8 QA F1: find the newest Codex rollout whose `session_meta.cwd`
     /// matches `cwd` AND whose mtime is >= `after`. This isolates a
     /// chat-mode Codex CLI session's rollout from any other Codex
-    /// activity on the machine — without this, `newestCodexJSONL()`
-    /// surfaces ANY codex run's transcript (concurrent chat, another
+    /// activity on the machine — without this, an unscoped newest-file
+    /// fallback surfaces ANY codex run's transcript (concurrent chat, another
     /// worktree, manual `codex` in Terminal). Returns nil when no
     /// rollout for this session exists yet (e.g. before the user's first
     /// prompt processes).
@@ -645,61 +613,6 @@ public final class DaemonChatStoreRegistry {
 
     public func isPathResident(_ url: URL) -> Bool {
         pathEntries[url.standardizedFileURL] != nil
-    }
-
-    // MARK: - v0.5.3: warmup on daemon startup
-
-    /// Pre-warm the registry with the N most-recently-modified JSONLs
-    /// under `~/.claude/projects/` and `~/.codex/sessions/`. Each store
-    /// kicks off a background reverse-tail parse; by the time the iPhone
-    /// hits its first `/chat-snapshot` or `/transcript` after Mac
-    /// startup, the snapshot is already populated. Eliminates the cold-
-    /// cache slowness the user reported on 2026-05-19.
-    ///
-    /// Safe to call from `AgentControlServer.start()` post-listener-bind.
-    /// Runs async on a detached Task so it doesn't block startup.
-    public func warm(recentLimit: Int = 5) {
-        guard warmupTask == nil else { return }
-        let limit = recentLimit
-        warmupTask = Task.detached(priority: .utility) { [weak self] in
-            let recents = Self.scanForRecentJSONLs(limit: limit)
-            await MainActor.run {
-                guard let self else { return }
-                for url in recents {
-                    _ = self.snapshotStore(forJSONLPath: url)
-                }
-                // Audit P2 fix: clear the slot so a later force-rewarm
-                // (e.g. after the user adds a new repo) can run instead
-                // of short-circuiting on the lingering completed task.
-                self.warmupTask = nil
-                registryLogger.info("warmup complete: \(recents.count) JSONLs preloaded")
-            }
-        }
-    }
-
-    /// Walk `~/.claude/projects/` and `~/.codex/sessions/` for the `limit`
-    /// most-recently-modified `.jsonl` files. `nonisolated` so the
-    /// background `Task.detached` in `warm()` can call it off-main.
-    nonisolated private static func scanForRecentJSONLs(limit: Int) -> [URL] {
-        let home = ClawdmeterRealHome.url()
-        let roots = [
-            home.appendingPathComponent(".claude/projects", isDirectory: true),
-            home.appendingPathComponent(".codex/sessions", isDirectory: true),
-        ]
-        var candidates: [(URL, Date)] = []
-        for root in roots {
-            guard let enumerator = FileManager.default.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-            for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-                let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                candidates.append((url.standardizedFileURL, mtime))
-            }
-        }
-        candidates.sort { $0.1 > $1.1 }
-        return candidates.prefix(limit).map(\.0)
     }
 
     /// Deterministic UUID derived from a path. We use the same SHA-256-

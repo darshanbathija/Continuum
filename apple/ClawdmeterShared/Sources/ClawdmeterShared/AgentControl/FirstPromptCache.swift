@@ -10,13 +10,10 @@ import OSLog
 // switch to `com.clawdmeter` for cross-platform attribution.
 private let cacheLogger = Logger(subsystem: "com.clawdmeter.shared", category: "FirstPromptCache")
 
-/// T12 (codex A1' override): on-disk + in-memory cache for the first
-/// user prompt extracted from a JSONL. Keyed by `(path, mtime, size)`.
-///
-/// Without this cache, `RepoIndex.refresh()` (every 60s) re-reads up to
-/// 256 KB from every recent JSONL — 50 per repo × N repos × every minute
-/// = hundreds of MB of disk I/O. With it, JSONLs whose mtime+size
-/// haven't moved skip the disk entirely.
+/// Legacy on-disk + in-memory cache for the first user prompt extracted
+/// from a JSONL. Keyed by `(path, mtime, size)`. RepoIndex no longer reads
+/// external provider JSONLs for Code navigation, but this type stays in the
+/// shared package for compatibility with older cache files/tests.
 ///
 /// Codex argued (correctly) that NSCache is the wrong fit for 1,451
 /// stable entries: a plain dictionary is enumerable for the dead-file

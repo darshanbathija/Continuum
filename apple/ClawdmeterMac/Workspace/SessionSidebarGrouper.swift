@@ -1,9 +1,9 @@
 import Foundation
 import ClawdmeterShared
 
-/// One section in the sidebar's grouped view. Carries both live
-/// `AgentSession`s and outside `RecentSession`s — the renderer decides
-/// which subset to display based on the grouping mode.
+/// One section in the sidebar's grouped view. Carries Continuum-owned
+/// `AgentSession`s only; `recents` is retained as an empty compatibility
+/// field for older tests/callers that still construct the type directly.
 public struct SessionSidebarGroup: Identifiable, Hashable {
     public let id: String
     /// Header label, e.g. "Today", "Running", "Claude", "my-repo".
@@ -16,7 +16,7 @@ public struct SessionSidebarGroup: Identifiable, Hashable {
     public let sessions: [AgentSession]
     public let recents: [RecentSession]
 
-    public var isEmpty: Bool { sessions.isEmpty && recents.isEmpty }
+    public var isEmpty: Bool { sessions.isEmpty }
 }
 
 public enum SessionSidebarStatusBucket: String, CaseIterable, Sendable {
@@ -45,14 +45,13 @@ public enum SessionSidebarStatusBucket: String, CaseIterable, Sendable {
 }
 
 /// Bucketing + sorting helpers that map the registry's flat session list
-/// (+ per-repo recent JSONLs) into the sidebar's section structure.
+/// into the sidebar's section structure.
 /// Pure logic, no SwiftUI — testable from the shared package.
 public enum SessionSidebarGrouper {
 
     /// Build the sidebar's section list according to the user's prefs.
-    /// `repos` provides the Repo grouping path (and supplies recent
-    /// JSONLs for non-Repo groupings via flattening). `sessions` are the
-    /// already-search-filtered live AgentSessions.
+    /// `repos` provides the Repo grouping path. `sessions` are the
+    /// already-search-filtered AgentSessions.
     public static func group(
         sessions: [AgentSession],
         repos: [AgentRepo],
@@ -137,9 +136,7 @@ public enum SessionSidebarGrouper {
         keyAliases: [String: String],
         sorting: SessionSorting
     ) -> [SessionSidebarGroup] {
-        // Preserve the order returned by SessionsModel.filteredRepos —
-        // it's already sorted by most-recent activity. Each section
-        // carries the repo's live sessions + outside JSONLs.
+        // Preserve the order returned by SessionsModel.filteredRepos.
         var byRepo: [String: [AgentSession]] = [:]
         for s in sessions {
             // v0.8 schema v5: chat sessions have nil repoKey and live in
@@ -156,7 +153,7 @@ public enum SessionSidebarGrouper {
                 repoKey: repo.key,
                 sortRank: idx,
                 sessions: live,
-                recents: repo.recentSessions
+                recents: []
             )
         }
     }
@@ -169,7 +166,6 @@ public enum SessionSidebarGrouper {
     static func canonicalizeRepos(_ repos: [AgentRepo]) -> CanonicalRepos {
         struct Accumulator {
             var repo: AgentRepo
-            var recentPaths: Set<String>
         }
 
         var orderedKeys: [String] = []
@@ -182,14 +178,12 @@ public enum SessionSidebarGrouper {
             if let primaryKey = displayKeyToRepoKey[displayKey],
                var accumulator = accumulators[primaryKey] {
                 keyAliases[repo.key] = primaryKey
-                let mergedRecents = accumulator.repo.recentSessions + repo.recentSessions.filter { !accumulator.recentPaths.contains($0.path) }
-                accumulator.recentPaths.formUnion(repo.recentSessions.map(\.path))
                 accumulator.repo = AgentRepo(
                     key: accumulator.repo.key,
                     displayName: accumulator.repo.displayName,
                     hasActiveSessions: accumulator.repo.hasActiveSessions || repo.hasActiveSessions,
                     liveSessionCount: accumulator.repo.liveSessionCount + repo.liveSessionCount,
-                    recentSessions: mergedRecents.sorted { $0.lastModified > $1.lastModified }
+                    recentSessions: []
                 )
                 accumulators[primaryKey] = accumulator
             } else {
@@ -197,8 +191,13 @@ public enum SessionSidebarGrouper {
                 orderedKeys.append(repo.key)
                 keyAliases[repo.key] = repo.key
                 accumulators[repo.key] = Accumulator(
-                    repo: repo,
-                    recentPaths: Set(repo.recentSessions.map(\.path))
+                    repo: AgentRepo(
+                        key: repo.key,
+                        displayName: repo.displayName,
+                        hasActiveSessions: repo.hasActiveSessions,
+                        liveSessionCount: repo.liveSessionCount,
+                        recentSessions: []
+                    )
                 )
             }
         }
@@ -221,14 +220,13 @@ public enum SessionSidebarGrouper {
     // MARK: - Date
 
     /// "Today", "Yesterday", "Earlier this week", "Last 30 days", "Older".
-    /// Buckets driven by `lastEventAt` for sessions and `lastModified`
-    /// for recents — the most-recent activity wins regardless of source.
+    /// Buckets driven by `lastEventAt` for Continuum-owned sessions.
     private static func groupByDate(
         sessions: [AgentSession],
         repos: [AgentRepo],
         sorting: SessionSorting
     ) -> [SessionSidebarGroup] {
-        let allRecents = repos.flatMap(\.recentSessions)
+        _ = repos
         let calendar = Calendar.current
         let now = Date()
 
@@ -254,18 +252,6 @@ public enum SessionSidebarGrouper {
                 recents: existing?.recents ?? []
             )
         }
-        for r in allRecents {
-            let (rank, title) = bucket(for: r.lastModified)
-            let existing = buckets[rank]
-            buckets[rank] = SessionSidebarGroup(
-                id: "date:\(rank)",
-                title: title,
-                repoKey: nil,
-                sortRank: rank,
-                sessions: existing?.sessions ?? [],
-                recents: (existing?.recents ?? []) + [r]
-            )
-        }
         return buckets.values
             .sorted { $0.sortRank < $1.sortRank }
             .map { group in
@@ -275,7 +261,7 @@ public enum SessionSidebarGrouper {
                     repoKey: nil,
                     sortRank: group.sortRank,
                     sessions: sorted(group.sessions, by: sorting),
-                    recents: group.recents.sorted { $0.lastModified > $1.lastModified }
+                    recents: []
                 )
             }
     }
@@ -299,7 +285,7 @@ public enum SessionSidebarGrouper {
                 repoKey: nil,
                 sortRank: bucket.sortRank,
                 sessions: sorted(buckets[bucket] ?? [], by: sorting),
-                recents: []  // recents have no status field
+                recents: []
             )
         }
     }
@@ -311,27 +297,22 @@ public enum SessionSidebarGrouper {
         repos: [AgentRepo],
         sorting: SessionSorting
     ) -> [SessionSidebarGroup] {
-        let allRecents = repos.flatMap(\.recentSessions)
+        _ = repos
         var sBuckets: [AgentKind: [AgentSession]] = [:]
         for s in sessions {
             sBuckets[s.agent, default: []].append(s)
         }
-        var rBuckets: [AgentKind: [RecentSession]] = [:]
-        for r in allRecents {
-            rBuckets[r.provider, default: []].append(r)
-        }
         let order: [(AgentKind, Int)] = [(.claude, 0), (.codex, 1)]
         return order.compactMap { (agent, rank) in
             let live = sorted(sBuckets[agent] ?? [], by: sorting)
-            let recents = (rBuckets[agent] ?? []).sorted { $0.lastModified > $1.lastModified }
-            guard !live.isEmpty || !recents.isEmpty else { return nil }
+            guard !live.isEmpty else { return nil }
             return SessionSidebarGroup(
                 id: "agent:\(agent.rawValue)",
                 title: agent.rawValue.capitalized,
                 repoKey: nil,
                 sortRank: rank,
                 sessions: live,
-                recents: recents
+                recents: []
             )
         }
     }

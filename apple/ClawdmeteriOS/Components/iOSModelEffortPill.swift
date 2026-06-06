@@ -7,9 +7,7 @@ import ClawdmeterShared
 /// `iOSModelPicker` + `iOSEffortDial` that used to sit in the
 /// `iOSSessionControlsStrip` row above the chat.
 ///
-/// Live sessions only — the composer hides this pill for outside
-/// (Recent JSONL) rows since their model/effort are decided at
-/// promote time by the daemon's `/sessions/continue-readonly` handler.
+/// Live Continuum sessions only.
 struct iOSModelEffortPill: View {
     let agent: AgentKind
     let catalog: ModelCatalog
