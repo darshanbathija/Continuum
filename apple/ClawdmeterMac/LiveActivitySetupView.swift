@@ -14,7 +14,7 @@ struct LiveActivitySetupView: View {
     @State private var p8PreviewSummary: String = ""
     @State private var keyId: String = ""
     @State private var teamId: String = ""
-    @State private var bundleId: String = "com.clawdmeter.iOS"
+    @State private var bundleId: String = "ai.continuum.ios"
     @State private var environment: APNSCredentialStore.Environment = .sandbox
 
     @State private var statusMessage: String?

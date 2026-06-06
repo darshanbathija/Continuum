@@ -1021,7 +1021,8 @@ public final class AgentControlClient: ObservableObject {
             if scheduleAuthoritativeRefresh {
                 scheduleDesktopEventAuthoritativeRefresh()
             }
-        case .sessionCreated, .statusChanged, .planReady, .doneDetected, .paused, .unknown:
+        case .sessionCreated, .statusChanged, .planReady, .doneDetected, .paused,
+             .tmuxServerLost, .tmuxServerRecovered, .unknown:
             if scheduleAuthoritativeRefresh {
                 scheduleDesktopEventAuthoritativeRefresh()
             }

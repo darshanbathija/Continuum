@@ -191,10 +191,8 @@ final class LiveDriveTests: XCTestCase {
 
     // MARK: - Antigravity / Gemini (headless `agy` CLI — Antigravity 2.0)
 
-    /// Drives the DEFAULT production Gemini path: the headless `agy` CLI. No
-    /// desktop app, no gRPC. The legacy Cascade gRPC driver is the opt-in
-    /// fallback (`antigravity.grpc.enabled`) and is intentionally NOT exercised
-    /// here — it requires Antigravity 2 running and a provisional proto handshake.
+    /// Drives the production Gemini path: the headless `agy` CLI. No desktop
+    /// app and no legacy gRPC/agentapi fallback.
     func testAntigravityLiveDrive() async throws {
         guard let agy = ShellRunner.locateBinary("agy") else {
             throw XCTSkip("agy not on PATH — install Antigravity 2 (the agy CLI) first.")

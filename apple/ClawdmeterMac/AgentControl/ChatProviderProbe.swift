@@ -33,11 +33,11 @@ public actor ChatProviderProbe {
     /// of starting a parallel probe (Codex P1 thundering-herd defense).
     private var inflight: Task<ChatProvidersResponse, Never>?
 
-    /// Per-provider/backend auth overrides set by AuthObserver. Keyed by
-    /// "claude" / "codex:sdk" / "codex:cli" / "gemini". When present,
+    /// Per-provider auth overrides set by AuthObserver. Keyed by
+    /// "claude" / "codex" / "gemini" / etc. When present,
     /// the next probe surfaces these values regardless of what the
-    /// binary checks say. Cleared when the user re-auths (CodexSDKManager
-    /// notify, manual probe invalidate).
+    /// binary checks say. Cleared when the user re-auths or manually
+    /// invalidates the probe.
     private var authOverrides: [String: (authenticated: Bool, reason: String?)] = [:]
 
     /// Cache TTL — how long a probed response stays valid before the
@@ -72,7 +72,6 @@ public actor ChatProviderProbe {
 
     /// Force the next call to re-probe (skip the cache). Called by:
     ///   - manual user "Re-check" affordance in Settings (TBD)
-    ///   - CodexSDKManager when the user toggles SDK provisioning
     ///   - ChatProviderAuthObserver when it detects an auth failure
     public func invalidate() {
         cache = nil
@@ -109,8 +108,6 @@ public actor ChatProviderProbe {
             cursorEnabled: Bool,
             claudeAvailable: Bool,
             codexAvailable: Bool,
-            codexSDKAvailable: Bool,
-            agentapiLive: Bool,
             agyHeadlessAvailable: Bool,
             opencodeAvailable: Bool,
             opencodeAuthProviderCount: Int,
@@ -126,16 +123,6 @@ public actor ChatProviderProbe {
             let cursorEnabled = ProviderEnablement.isEnabled("cursor")
             let claudeAvailable = claudeEnabled && ShellRunner.locateBinary("claude") != nil
             let codexAvailable = codexEnabled && ShellRunner.locateBinary("codex") != nil
-            // Codex SDK sidecar removed — Codex chat+code drive `codex app-server`
-            // directly. The vestigial codex:sdk probe entry always reports
-            // unavailable (it is no longer surfaced in the provider UI).
-            let codexSDKAvailable = false
-            // Antigravity LS live probe is cheap (one localhost HEAD).
-            let lsLive: Bool = await MainActor.run {
-                guard geminiEnabled else { return false }
-                if case .live = LanguageServerClient().discoverLive() { return true }
-                return false
-            }
             // Headless `agy` CLI (Antigravity 2.0) is the DEFAULT Gemini drive path
             // and works with the desktop app CLOSED — binary presence is the signal,
             // mirroring how grok/cursor/codex are probed by `locateBinary`.
@@ -204,8 +191,6 @@ public actor ChatProviderProbe {
                 cursorEnabled,
                 claudeAvailable,
                 codexAvailable,
-                codexSDKAvailable,
-                lsLive,
                 agyHeadlessAvailable,
                 opencodeAvailable,
                 opencodeAuthProviderCount,
@@ -226,12 +211,11 @@ public actor ChatProviderProbe {
         }
 
         let (claudeAuth, claudeReason) = resolveAuth(key: "claude", fallback: probes.claudeAvailable)
-        let (codexSDKAuth, codexSDKReason) = resolveAuth(key: "codex:sdk", fallback: probes.codexSDKAvailable)
-        _ = (codexSDKAuth, codexSDKReason)
-        let (codexCLIAuth, codexCLIReason) = resolveAuth(key: "codex:cli", fallback: probes.codexAvailable)
-        // Gemini drives headlessly via `agy` (DEFAULT, app closed) OR the live
-        // Antigravity language-server (legacy gRPC fallback). Either makes it usable.
-        let geminiDriveAvailable = probes.agentapiLive || probes.agyHeadlessAvailable
+        let (codexAuth, codexReason) = resolveAuth(key: "codex", fallback: probes.codexAvailable)
+        // Gemini drives headlessly via `agy` (Antigravity 2.0). The legacy
+        // language-server/agentapi drive path is no longer a chat availability
+        // fallback.
+        let geminiDriveAvailable = probes.agyHeadlessAvailable
         let (geminiAuth, geminiReason) = resolveAuth(key: "gemini", fallback: geminiDriveAvailable)
         let (opencodeAuth, opencodeReason) = resolveAuth(
             key: "opencode",
@@ -264,26 +248,13 @@ public actor ChatProviderProbe {
                 lastProbedAt: now,
                 reason: claudeReason ?? (probes.claudeAvailable ? nil : (probes.claudeEnabled ? "claude CLI not on PATH" : "Provider disabled"))
             ),
-            // The chat "ChatGPT" row keys on the .sdk entry, but Codex chat now
-            // drives app-server (the SDK was deleted). Report this entry's
-            // availability from the app-server/CLI probe so ChatGPT is usable
-            // whenever the codex CLI is present + authed — not gated on the dead
-            // SDK (which always probes false → the old "Enable Codex SDK" error).
             ChatProviderEntry(
-                provider: .codex, codexBackend: .sdk,
+                provider: .codex,
                 available: probes.codexAvailable,
-                authenticated: codexCLIAuth,
-                capabilityProbePassed: probes.codexAvailable && codexCLIAuth,
+                authenticated: codexAuth,
+                capabilityProbePassed: probes.codexAvailable && codexAuth,
                 lastProbedAt: now,
-                reason: codexCLIReason ?? (probes.codexAvailable ? nil : (probes.codexEnabled ? "codex CLI not on PATH — run `codex login`." : "Provider disabled"))
-            ),
-            ChatProviderEntry(
-                provider: .codex, codexBackend: .cli,
-                available: probes.codexAvailable,
-                authenticated: codexCLIAuth,
-                capabilityProbePassed: probes.codexAvailable && codexCLIAuth,
-                lastProbedAt: now,
-                reason: codexCLIReason ?? (probes.codexAvailable ? nil : (probes.codexEnabled ? "codex CLI not on PATH" : "Provider disabled"))
+                reason: codexReason ?? (probes.codexAvailable ? nil : (probes.codexEnabled ? "codex CLI not on PATH — run `codex login`." : "Provider disabled"))
             ),
             ChatProviderEntry(
                 provider: .gemini,
@@ -311,7 +282,7 @@ public actor ChatProviderProbe {
             ),
         ])
         cache = CacheEntry(response: response, computedAt: now)
-        probeLogger.info("probe completed: claude=\(probes.claudeAvailable, privacy: .public) codexSDK=\(probes.codexSDKAvailable, privacy: .public) codexCLI=\(probes.codexAvailable, privacy: .public) geminiAgy=\(probes.agyHeadlessAvailable, privacy: .public) geminiLS=\(probes.agentapiLive, privacy: .public) opencode=\(probes.opencodeAvailable, privacy: .public) cursor=\((probes.cursorState.binaryPath != nil), privacy: .public)")
+        probeLogger.info("probe completed: claude=\(probes.claudeAvailable, privacy: .public) codex=\(probes.codexAvailable, privacy: .public) geminiAgy=\(probes.agyHeadlessAvailable, privacy: .public) opencode=\(probes.opencodeAvailable, privacy: .public) cursor=\((probes.cursorState.binaryPath != nil), privacy: .public)")
         return response
     }
 
@@ -321,7 +292,7 @@ public actor ChatProviderProbe {
         switch provider {
         case .claude: return "claude"
         case .codex:
-            return codexBackend == .sdk ? "codex:sdk" : "codex:cli"
+            return "codex"
         case .gemini: return "gemini"
         case .opencode: return "opencode"  // PR #29
         case .cursor: return "cursor"

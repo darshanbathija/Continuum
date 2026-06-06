@@ -2311,6 +2311,15 @@ actor StagingParser {
         // 4) artifacts — maintained as an insertion-ordered list.
         let artifacts = artifactPaths.map { ArtifactEntry(path: $0) }
 
+        let snapshotTurnState: TurnState
+        if currentTurnState == .idle,
+           case .message(let message)? = items.last,
+           message.kind == .assistantText {
+            snapshotTurnState = .completed
+        } else {
+            snapshotTurnState = currentTurnState
+        }
+
         cachedSnapshot = SessionChatStore.ChatSnapshot(
             items: items,
             // v0.5.3: include the raw chronological message list so the
@@ -2335,7 +2344,7 @@ actor StagingParser {
             modelHint: modelHint,
             lastEventAt: lastEventAt,
             updateCounter: updateCounter,
-            currentTurnState: currentTurnState
+            currentTurnState: snapshotTurnState
         )
         cachedCounter = updateCounter
         lastSnapshotRebuildNS = nowNS

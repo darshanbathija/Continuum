@@ -66,7 +66,7 @@ final class DaemonChatStoreRegistryRoutingTests: XCTestCase {
         XCTAssertEqual(secondStore.currentFileURL, secondURL)
     }
 
-    func test_codexAppServerSessionUsesPersistedHarnessRuntimeNotGlobalFlag() throws {
+    func test_codexHarnessCodeSessionUsesPersistedRuntimeNotGlobalFlag() throws {
         var resolverCallCount = 0
         let registry = DaemonChatStoreRegistry(resolveURL: { _, _ in
             resolverCallCount += 1
@@ -74,13 +74,27 @@ final class DaemonChatStoreRegistryRoutingTests: XCTestCase {
         })
         let session = makeSession(
             agent: .codex,
-            runtimeBinding: SessionRuntimeBinding(runtimeKind: .codexAppServer)
+            runtimeBinding: SessionRuntimeBinding(runtimeKind: .codexCLI)
         )
 
         let store = try XCTUnwrap(registry.snapshotStore(for: session))
 
         XCTAssertTrue(store.isSDKOnly)
-        XCTAssertEqual(resolverCallCount, 0, "bridge-fed Codex app-server sessions must not fall back to JSONL resolution")
+        XCTAssertEqual(resolverCallCount, 0, "bridge-fed Codex harness sessions must not fall back to JSONL resolution")
+    }
+
+    func test_opencodeCodeSessionUsesSDKOnlyStoreWithoutJSONLResolver() throws {
+        var resolverCallCount = 0
+        let registry = DaemonChatStoreRegistry(resolveURL: { _, _ in
+            resolverCallCount += 1
+            return URL(fileURLWithPath: "/tmp/unrelated-opencode.jsonl")
+        })
+        let session = makeSession(agent: .opencode)
+
+        let store = try XCTUnwrap(registry.snapshotStore(for: session))
+
+        XCTAssertTrue(store.isSDKOnly)
+        XCTAssertEqual(resolverCallCount, 0, "OpenCode serve sessions are bridge-fed and must not require a JSONL")
     }
 
     // MARK: - v0.23.2 T8: opencode branch routing

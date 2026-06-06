@@ -362,56 +362,43 @@ public actor UsageHistoryLoader {
         let cursorTranscriptActive = cursorTranscriptFiles.max(by: { $0.mtime < $1.mtime })?.url
         let cursorAgentKVActive = cursorAgentKVFiles.max(by: { $0.mtime < $1.mtime })?.url
 
-        let claudeResults = await parseConcurrently(
-            files: claudeFiles,
-            cache: cache,
-            activeURL: claudeActive,
-            parser: { url in
+        let claudeResults = await load(
+            CachedFileSourceAdapter(files: claudeFiles, activeURL: claudeActive) { url in
                 try Self.parseClaudeFile(at: url)
-            }
+            },
+            cache: cache
         )
 
-        let codexResults = await parseConcurrently(
-            files: codexFiles,
-            cache: cache,
-            activeURL: codexActive,
-            parser: { url in
+        let codexResults = await load(
+            CachedFileSourceAdapter(files: codexFiles, activeURL: codexActive) { url in
                 try Self.parseCodexFile(at: url)
-            }
+            },
+            cache: cache
         )
 
-        let cursorHookResults = await parseConcurrently(
-            files: cursorHookFiles,
-            cache: cache,
-            activeURL: cursorHookActive,
-            parser: { url in
+        let cursorHookResults = await load(
+            CachedFileSourceAdapter(files: cursorHookFiles, activeURL: cursorHookActive) { url in
                 try Self.parseCursorHooksFile(at: url)
-            }
+            },
+            cache: cache
         )
 
-        let cursorTranscriptResults = await parseConcurrently(
-            files: cursorTranscriptFiles,
-            cache: cache,
-            activeURL: cursorTranscriptActive,
-            parser: { url in
+        let cursorTranscriptResults = await load(
+            CachedFileSourceAdapter(files: cursorTranscriptFiles, activeURL: cursorTranscriptActive) { url in
                 try Self.parseCursorAgentTranscriptFile(at: url, modelHints: cursorTranscriptModelHints)
-            }
+            },
+            cache: cache
         )
 
-        let cursorAgentKVResults = await parseConcurrently(
-            files: cursorAgentKVFiles,
-            cache: cache,
-            activeURL: cursorAgentKVActive,
-            parser: { url in
+        let cursorAgentKVResults = await load(
+            CachedFileSourceAdapter(files: cursorAgentKVFiles, activeURL: cursorAgentKVActive) { url in
                 try Self.parseCursorAgentKVDatabase(at: url)
-            }
+            },
+            cache: cache
         )
 
-        let geminiResults = await parseConcurrently(
-            files: geminiFiles,
-            cache: cache,
-            activeURL: geminiActive,
-            parser: { url in
+        let geminiResults = await load(
+            CachedFileSourceAdapter(files: geminiFiles, activeURL: geminiActive) { url in
                 try Self.parseAntigravityFile(
                     at: url,
                     antigravityDataDir: antigravityDataDir,
@@ -419,7 +406,8 @@ public actor UsageHistoryLoader {
                     modelName: antigravityModel,
                     dedupPrefix: "antigravity"
                 )
-            }
+            },
+            cache: cache
         )
 
         // v0.23.8: agy CLI pass. Runs only when the corpus exists on
@@ -428,11 +416,8 @@ public actor UsageHistoryLoader {
         let agyResults: [PerFileResult]
         if let agyDataDir, !agyFiles.isEmpty {
             let agyActive = agyFiles.max(by: { $0.mtime < $1.mtime })?.url
-            agyResults = await parseConcurrently(
-                files: agyFiles,
-                cache: cache,
-                activeURL: agyActive,
-                parser: { url in
+            agyResults = await load(
+                CachedFileSourceAdapter(files: agyFiles, activeURL: agyActive) { url in
                     try Self.parseAntigravityFile(
                         at: url,
                         antigravityDataDir: agyDataDir,
@@ -440,7 +425,8 @@ public actor UsageHistoryLoader {
                         modelName: agyModel,
                         dedupPrefix: "agy"
                     )
-                }
+                },
+                cache: cache
             )
         } else {
             agyResults = []
@@ -536,36 +522,18 @@ public actor UsageHistoryLoader {
         var opencodeDayByRepo: [Date: [RepoKey: TokenTotals]]? = nil
         #if os(macOS)
         if let opencodeDBURL {
-            let records = OpencodeUsageParser.parse(databaseURL: opencodeDBURL)
+            let records = SQLiteUsageSourceAdapter(databaseURL: opencodeDBURL) {
+                OpencodeUsageParser.parse(databaseURL: $0)
+            }.records()
             if !records.isEmpty {
-                var bucket: [Date: [RepoKey: TokenTotals]] = [:]
-                var localDedup = Set<String>()
-                var localUnpriced: [String: TokenTotals] = [:]
-                var localByModel: [String: TokenTotals] = [:]
-                var localByDayByModel: [Date: [String: TokenTotals]] = [:]
-                for record in records {
-                    Self.accumulate(
-                        record: record,
-                        into: &bucket,
-                        dedup: &localDedup,
-                        unpriced: &localUnpriced,
-                        byModel: &localByModel,
-                        byDayByModel: &localByDayByModel
-                    )
-                }
-                opencodeDayByRepo = bucket
-                // Fold opencode's unpriced + per-model buckets into the shared maps.
-                for (model, totals) in localUnpriced {
-                    unpricedModelTokens[model, default: .zero] += totals
-                }
-                for (model, totals) in localByModel {
-                    tokensByModel[model, default: .zero] += totals
-                }
-                for (day, modelMap) in localByDayByModel {
-                    var existing = byDayByModel[day, default: [:]]
-                    for (model, totals) in modelMap { existing[model, default: .zero] += totals }
-                    byDayByModel[day] = existing
-                }
+                let rollup = Self.rollup(records: records)
+                opencodeDayByRepo = rollup.byDayByRepo
+                Self.mergeModelRollups(
+                    rollup,
+                    unpriced: &unpricedModelTokens,
+                    byModel: &tokensByModel,
+                    byDayByModel: &byDayByModel
+                )
                 // Single SQLite source → one "session" for the metrics counter.
                 sessionCount += 1
             }
@@ -582,7 +550,10 @@ public actor UsageHistoryLoader {
         var grokLedgerRecordCount = 0
         var grokContextLimit: GrokCLIUsageParser.ContextLimit?
         if let grokLedgerURL {
-            let ledgerRecords = GrokUsageLedger.records(from: grokLedgerURL)
+            let ledgerRecords = LedgerUsageSourceAdapter(url: grokLedgerURL) { url in
+                guard let url else { return [] }
+                return GrokUsageLedger.records(from: url)
+            }.records()
             grokLedgerRecordCount = ledgerRecords.count
             grokRecords.append(contentsOf: ledgerRecords)
         }
@@ -594,75 +565,31 @@ public actor UsageHistoryLoader {
             sessionCount += cliSessionKeys.isEmpty ? cliRecords.count : cliSessionKeys.count
         }
         if !grokRecords.isEmpty {
-            var bucket: [Date: [RepoKey: TokenTotals]] = [:]
-            var localDedup = Set<String>()
-            var localUnpriced: [String: TokenTotals] = [:]
-            var localByModel: [String: TokenTotals] = [:]
-            var localByDayByModel: [Date: [String: TokenTotals]] = [:]
-            for record in grokRecords {
-                Self.accumulate(
-                    record: record,
-                    into: &bucket,
-                    dedup: &localDedup,
-                    unpriced: &localUnpriced,
-                    byModel: &localByModel,
-                    byDayByModel: &localByDayByModel
-                )
-            }
-            grokDayByRepo = bucket
-            for (model, totals) in localUnpriced {
-                unpricedModelTokens[model, default: .zero] += totals
-            }
-            for (model, totals) in localByModel {
-                tokensByModel[model, default: .zero] += totals
-            }
-            for (day, modelMap) in localByDayByModel {
-                var existing = byDayByModel[day, default: [:]]
-                for (model, totals) in modelMap { existing[model, default: .zero] += totals }
-                byDayByModel[day] = existing
-            }
+            let rollup = Self.rollup(records: grokRecords)
+            grokDayByRepo = rollup.byDayByRepo
+            Self.mergeModelRollups(
+                rollup,
+                unpriced: &unpricedModelTokens,
+                byModel: &tokensByModel,
+                byDayByModel: &byDayByModel
+            )
             if grokLedgerRecordCount > 0 {
                 sessionCount += 1
             }
         }
 
-        let cursorRecords = CursorACPUsageLedger.parseFile(at: cursorLedgerURL)
+        let cursorRecords = LedgerUsageSourceAdapter(url: cursorLedgerURL) {
+            CursorACPUsageLedger.parseFile(at: $0)
+        }.records()
         if !cursorRecords.isEmpty {
-            var bucket: [Date: [RepoKey: TokenTotals]] = [:]
-            var localDedup = Set<String>()
-            var localUnpriced: [String: TokenTotals] = [:]
-            var localByModel: [String: TokenTotals] = [:]
-            var localByDayByModel: [Date: [String: TokenTotals]] = [:]
-            for record in cursorRecords {
-                Self.accumulate(
-                    record: record,
-                    into: &bucket,
-                    dedup: &localDedup,
-                    unpriced: &localUnpriced,
-                    byModel: &localByModel,
-                    byDayByModel: &localByDayByModel
-                )
-            }
-            var mergedCursorDayByRepo = cursorDayByRepo ?? [:]
-            for (day, repoMap) in bucket {
-                var existing = mergedCursorDayByRepo[day, default: [:]]
-                for (repo, totals) in repoMap {
-                    existing[repo, default: .zero] += totals
-                }
-                mergedCursorDayByRepo[day] = existing
-            }
-            cursorDayByRepo = mergedCursorDayByRepo
-            for (model, totals) in localUnpriced {
-                unpricedModelTokens[model, default: .zero] += totals
-            }
-            for (model, totals) in localByModel {
-                tokensByModel[model, default: .zero] += totals
-            }
-            for (day, modelMap) in localByDayByModel {
-                var existing = byDayByModel[day, default: [:]]
-                for (model, totals) in modelMap { existing[model, default: .zero] += totals }
-                byDayByModel[day] = existing
-            }
+            let rollup = Self.rollup(records: cursorRecords)
+            Self.mergeProviderRollup(rollup.byDayByRepo, into: &cursorDayByRepo)
+            Self.mergeModelRollups(
+                rollup,
+                unpriced: &unpricedModelTokens,
+                byModel: &tokensByModel,
+                byDayByModel: &byDayByModel
+            )
             sessionCount += 1
         }
 
@@ -721,6 +648,58 @@ public actor UsageHistoryLoader {
         let unpricedModelTokens: [String: TokenTotals]
         let byModelTokens: [String: TokenTotals]
         let cacheEntry: AnalyticsCache.FileEntry
+    }
+
+    private struct CachedFileSourceAdapter: Sendable {
+        let files: [FileMeta]
+        let activeURL: URL?
+        let parser: @Sendable (URL) throws -> PerFileResult
+
+        init(
+            files: [FileMeta],
+            activeURL: URL?,
+            parser: @escaping @Sendable (URL) throws -> PerFileResult
+        ) {
+            self.files = files
+            self.activeURL = activeURL
+            self.parser = parser
+        }
+    }
+
+    private struct SQLiteUsageSourceAdapter: Sendable {
+        let databaseURL: URL
+        let parser: @Sendable (URL) -> [UsageRecord]
+
+        init(databaseURL: URL, parser: @escaping @Sendable (URL) -> [UsageRecord]) {
+            self.databaseURL = databaseURL
+            self.parser = parser
+        }
+
+        func records() -> [UsageRecord] {
+            parser(databaseURL)
+        }
+    }
+
+    private struct LedgerUsageSourceAdapter: Sendable {
+        let url: URL?
+        let parser: @Sendable (URL?) -> [UsageRecord]
+
+        init(url: URL?, parser: @escaping @Sendable (URL?) -> [UsageRecord]) {
+            self.url = url
+            self.parser = parser
+        }
+
+        func records() -> [UsageRecord] {
+            parser(url)
+        }
+    }
+
+    private struct RecordRollup: Sendable {
+        let byDayByRepo: [Date: [RepoKey: TokenTotals]]
+        let dedupKeys: Set<String>
+        let unpricedModelTokens: [String: TokenTotals]
+        let byModelTokens: [String: TokenTotals]
+        let byDayByModel: [Date: [String: TokenTotals]]
     }
 
     private static func sqliteFileMeta(_ url: URL) -> FileMeta? {
@@ -812,6 +791,15 @@ public actor UsageHistoryLoader {
         return out
     }
 
+    private func load(_ source: CachedFileSourceAdapter, cache: AnalyticsCache) async -> [PerFileResult] {
+        await parseConcurrently(
+            files: source.files,
+            cache: cache,
+            activeURL: source.activeURL,
+            parser: source.parser
+        )
+    }
+
     private func parseConcurrently(
         files: [FileMeta],
         cache: AnalyticsCache,
@@ -879,13 +867,38 @@ public actor UsageHistoryLoader {
         return cached + parsed
     }
 
+    private nonisolated static func makePerFileResult(
+        at url: URL,
+        records: [UsageRecord],
+        metadata: FileMeta? = nil,
+        fallbackSize: Int = 0
+    ) throws -> PerFileResult {
+        let rollup = Self.rollup(records: records)
+        let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let entry = AnalyticsCache.FileEntry(
+            mtime: (metadata?.mtime ?? values.contentModificationDate ?? Date(timeIntervalSince1970: 0)).timeIntervalSince1970,
+            size: metadata?.size ?? values.fileSize ?? fallbackSize,
+            byDayByRepo: AnalyticsCache.FileEntry.encode(rollup.byDayByRepo),
+            dedupKeys: Array(rollup.dedupKeys),
+            unpricedModelTokens: rollup.unpricedModelTokens,
+            byModelTokens: rollup.byModelTokens,
+            byDayByModel: AnalyticsCache.FileEntry.encodeModels(rollup.byDayByModel)
+        )
+
+        return PerFileResult(
+            path: url.path,
+            byDayByRepo: rollup.byDayByRepo,
+            byDayByModel: rollup.byDayByModel,
+            dedupKeys: rollup.dedupKeys,
+            unpricedModelTokens: rollup.unpricedModelTokens,
+            byModelTokens: rollup.byModelTokens,
+            cacheEntry: entry
+        )
+    }
+
     private nonisolated static func parseClaudeFile(at url: URL) throws -> PerFileResult {
         let data = try Data(contentsOf: url)
-        var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
-        var dedupKeys = Set<String>()
-        var unpriced: [String: TokenTotals] = [:]
-        var byModel: [String: TokenTotals] = [:]
-        var byDayByModel: [Date: [String: TokenTotals]] = [:]
+        var records: [UsageRecord] = []
 
         let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
         // F1a-wire shipped in #152 and is now the default-ON path: every
@@ -904,69 +917,15 @@ public actor UsageHistoryLoader {
                 ? ClaudeAdapterUsageBridge.parseLine(lineData)
                 : ClaudeUsageParser.parse(line: lineData)
             guard let record else { continue }
-            accumulate(record: record, into: &byDayByRepo, dedup: &dedupKeys, unpriced: &unpriced, byModel: &byModel, byDayByModel: &byDayByModel)
+            records.append(record)
         }
 
-        let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-        let entry = AnalyticsCache.FileEntry(
-            mtime: values.contentModificationDate?.timeIntervalSince1970 ?? 0,
-            size: values.fileSize ?? data.count,
-            byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
-            dedupKeys: Array(dedupKeys),
-            unpricedModelTokens: unpriced,
-            byModelTokens: byModel,
-            byDayByModel: AnalyticsCache.FileEntry.encodeModels(byDayByModel)
-        )
-
-        return PerFileResult(
-            path: url.path,
-            byDayByRepo: byDayByRepo,
-            byDayByModel: byDayByModel,
-            dedupKeys: dedupKeys,
-            unpricedModelTokens: unpriced,
-            byModelTokens: byModel,
-            cacheEntry: entry
-        )
+        return try makePerFileResult(at: url, records: records, fallbackSize: data.count)
     }
 
     private nonisolated static func parseCursorHooksFile(at url: URL) throws -> PerFileResult {
         let records = try CursorHooksUsageParser.parse(file: url)
-        var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
-        var dedupKeys = Set<String>()
-        var unpriced: [String: TokenTotals] = [:]
-        var byModel: [String: TokenTotals] = [:]
-        var byDayByModel: [Date: [String: TokenTotals]] = [:]
-        for record in records {
-            accumulate(
-                record: record,
-                into: &byDayByRepo,
-                dedup: &dedupKeys,
-                unpriced: &unpriced,
-                byModel: &byModel,
-                byDayByModel: &byDayByModel
-            )
-        }
-
-        let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-        let entry = AnalyticsCache.FileEntry(
-            mtime: values.contentModificationDate?.timeIntervalSince1970 ?? 0,
-            size: values.fileSize ?? 0,
-            byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
-            dedupKeys: Array(dedupKeys),
-            unpricedModelTokens: unpriced,
-            byModelTokens: byModel,
-            byDayByModel: AnalyticsCache.FileEntry.encodeModels(byDayByModel)
-        )
-
-        return PerFileResult(
-            path: url.path,
-            byDayByRepo: byDayByRepo,
-            byDayByModel: byDayByModel,
-            dedupKeys: dedupKeys,
-            unpricedModelTokens: unpriced,
-            byModelTokens: byModel,
-            cacheEntry: entry
-        )
+        return try makePerFileResult(at: url, records: records)
     }
 
     private nonisolated static func parseCursorAgentTranscriptFile(
@@ -974,42 +933,7 @@ public actor UsageHistoryLoader {
         modelHints: [String: String] = [:]
     ) throws -> PerFileResult {
         let records = try CursorAgentTranscriptParser.parse(file: url, modelHints: modelHints)
-        var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
-        var dedupKeys = Set<String>()
-        var unpriced: [String: TokenTotals] = [:]
-        var byModel: [String: TokenTotals] = [:]
-        var byDayByModel: [Date: [String: TokenTotals]] = [:]
-        for record in records {
-            accumulate(
-                record: record,
-                into: &byDayByRepo,
-                dedup: &dedupKeys,
-                unpriced: &unpriced,
-                byModel: &byModel,
-                byDayByModel: &byDayByModel
-            )
-        }
-
-        let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-        let entry = AnalyticsCache.FileEntry(
-            mtime: values.contentModificationDate?.timeIntervalSince1970 ?? 0,
-            size: values.fileSize ?? 0,
-            byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
-            dedupKeys: Array(dedupKeys),
-            unpricedModelTokens: unpriced,
-            byModelTokens: byModel,
-            byDayByModel: AnalyticsCache.FileEntry.encodeModels(byDayByModel)
-        )
-
-        return PerFileResult(
-            path: url.path,
-            byDayByRepo: byDayByRepo,
-            byDayByModel: byDayByModel,
-            dedupKeys: dedupKeys,
-            unpricedModelTokens: unpriced,
-            byModelTokens: byModel,
-            cacheEntry: entry
-        )
+        return try makePerFileResult(at: url, records: records)
     }
 
     private nonisolated static func parseCursorAgentKVDatabase(at url: URL) throws -> PerFileResult {
@@ -1018,43 +942,7 @@ public actor UsageHistoryLoader {
         #else
         let records: [UsageRecord] = []
         #endif
-        var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
-        var dedupKeys = Set<String>()
-        var unpriced: [String: TokenTotals] = [:]
-        var byModel: [String: TokenTotals] = [:]
-        var byDayByModel: [Date: [String: TokenTotals]] = [:]
-        for record in records {
-            accumulate(
-                record: record,
-                into: &byDayByRepo,
-                dedup: &dedupKeys,
-                unpriced: &unpriced,
-                byModel: &byModel,
-                byDayByModel: &byDayByModel
-            )
-        }
-
-        let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-        let sqliteMeta = sqliteFileMeta(url)
-        let entry = AnalyticsCache.FileEntry(
-            mtime: (sqliteMeta?.mtime ?? values.contentModificationDate ?? Date(timeIntervalSince1970: 0)).timeIntervalSince1970,
-            size: sqliteMeta?.size ?? values.fileSize ?? 0,
-            byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
-            dedupKeys: Array(dedupKeys),
-            unpricedModelTokens: unpriced,
-            byModelTokens: byModel,
-            byDayByModel: AnalyticsCache.FileEntry.encodeModels(byDayByModel)
-        )
-
-        return PerFileResult(
-            path: url.path,
-            byDayByRepo: byDayByRepo,
-            byDayByModel: byDayByModel,
-            dedupKeys: dedupKeys,
-            unpricedModelTokens: unpriced,
-            byModelTokens: byModel,
-            cacheEntry: entry
-        )
+        return try makePerFileResult(at: url, records: records, metadata: sqliteFileMeta(url))
     }
 
     private nonisolated static func parseCodexFile(at url: URL) throws -> PerFileResult {
@@ -1074,35 +962,7 @@ public actor UsageHistoryLoader {
         let records: [UsageRecord] = FeatureFlags.useCodexAdapter
             ? try CodexAdapterUsageBridge.parseFile(at: url)
             : try CodexUsageParser.parse(file: url)
-        var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
-        var dedupKeys = Set<String>()
-        var unpriced: [String: TokenTotals] = [:]
-        var byModel: [String: TokenTotals] = [:]
-        var byDayByModel: [Date: [String: TokenTotals]] = [:]
-        for record in records {
-            accumulate(record: record, into: &byDayByRepo, dedup: &dedupKeys, unpriced: &unpriced, byModel: &byModel, byDayByModel: &byDayByModel)
-        }
-
-        let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-        let entry = AnalyticsCache.FileEntry(
-            mtime: values.contentModificationDate?.timeIntervalSince1970 ?? 0,
-            size: values.fileSize ?? 0,
-            byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
-            dedupKeys: Array(dedupKeys),
-            unpricedModelTokens: unpriced,
-            byModelTokens: byModel,
-            byDayByModel: AnalyticsCache.FileEntry.encodeModels(byDayByModel)
-        )
-
-        return PerFileResult(
-            path: url.path,
-            byDayByRepo: byDayByRepo,
-            byDayByModel: byDayByModel,
-            dedupKeys: dedupKeys,
-            unpricedModelTokens: unpriced,
-            byModelTokens: byModel,
-            cacheEntry: entry
-        )
+        return try makePerFileResult(at: url, records: records)
     }
 
     private nonisolated static func parseAntigravityFile(
@@ -1145,35 +1005,7 @@ public actor UsageHistoryLoader {
                 dedupPrefix: dedupPrefix
             )
         }
-        var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
-        var dedupKeys = Set<String>()
-        var unpriced: [String: TokenTotals] = [:]
-        var byModel: [String: TokenTotals] = [:]
-        var byDayByModel: [Date: [String: TokenTotals]] = [:]
-        for record in records {
-            accumulate(record: record, into: &byDayByRepo, dedup: &dedupKeys, unpriced: &unpriced, byModel: &byModel, byDayByModel: &byDayByModel)
-        }
-
-        let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-        let entry = AnalyticsCache.FileEntry(
-            mtime: values.contentModificationDate?.timeIntervalSince1970 ?? 0,
-            size: values.fileSize ?? 0,
-            byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
-            dedupKeys: Array(dedupKeys),
-            unpricedModelTokens: unpriced,
-            byModelTokens: byModel,
-            byDayByModel: AnalyticsCache.FileEntry.encodeModels(byDayByModel)
-        )
-
-        return PerFileResult(
-            path: url.path,
-            byDayByRepo: byDayByRepo,
-            byDayByModel: byDayByModel,
-            dedupKeys: dedupKeys,
-            unpricedModelTokens: unpriced,
-            byModelTokens: byModel,
-            cacheEntry: entry
-        )
+        return try makePerFileResult(at: url, records: records)
     }
 
     private nonisolated static func accumulate(
@@ -1218,6 +1050,67 @@ public actor UsageHistoryLoader {
         var dayMap = byDayByRepo[day, default: [:]]
         dayMap[repo, default: .zero] += tokensWithCost
         byDayByRepo[day] = dayMap
+    }
+
+    private nonisolated static func rollup(records: [UsageRecord]) -> RecordRollup {
+        var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
+        var dedup = Set<String>()
+        var unpriced: [String: TokenTotals] = [:]
+        var byModel: [String: TokenTotals] = [:]
+        var byDayByModel: [Date: [String: TokenTotals]] = [:]
+        for record in records {
+            accumulate(
+                record: record,
+                into: &byDayByRepo,
+                dedup: &dedup,
+                unpriced: &unpriced,
+                byModel: &byModel,
+                byDayByModel: &byDayByModel
+            )
+        }
+        return RecordRollup(
+            byDayByRepo: byDayByRepo,
+            dedupKeys: dedup,
+            unpricedModelTokens: unpriced,
+            byModelTokens: byModel,
+            byDayByModel: byDayByModel
+        )
+    }
+
+    private nonisolated static func mergeProviderRollup(
+        _ source: [Date: [RepoKey: TokenTotals]],
+        into destination: inout [Date: [RepoKey: TokenTotals]]?
+    ) {
+        var merged = destination ?? [:]
+        for (day, repoMap) in source {
+            var existing = merged[day, default: [:]]
+            for (repo, totals) in repoMap {
+                existing[repo, default: .zero] += totals
+            }
+            merged[day] = existing
+        }
+        destination = merged
+    }
+
+    private nonisolated static func mergeModelRollups(
+        _ rollup: RecordRollup,
+        unpriced: inout [String: TokenTotals],
+        byModel: inout [String: TokenTotals],
+        byDayByModel: inout [Date: [String: TokenTotals]]
+    ) {
+        for (model, totals) in rollup.unpricedModelTokens {
+            unpriced[model, default: .zero] += totals
+        }
+        for (model, totals) in rollup.byModelTokens {
+            byModel[model, default: .zero] += totals
+        }
+        for (day, modelMap) in rollup.byDayByModel {
+            var existing = byDayByModel[day, default: [:]]
+            for (model, totals) in modelMap {
+                existing[model, default: .zero] += totals
+            }
+            byDayByModel[day] = existing
+        }
     }
 
     internal nonisolated static func tokensWithResolvedCost(_ record: UsageRecord) -> (tokens: TokenTotals, isPriced: Bool) {
@@ -1267,7 +1160,7 @@ public actor UsageHistoryLoader {
                         ? ClaudeAdapterUsageBridge.parseLine(lineData)
                         : ClaudeUsageParser.parse(line: lineData)
                     guard let record else { continue }
-                    Self.accumulateGlobal(record: record, into: &byDayByRepo, dedup: &dedup, unpriced: &unpriced, byModel: &byModel, byDayByModel: &byDayByModel)
+                    Self.accumulate(record: record, into: &byDayByRepo, dedup: &dedup, unpriced: &unpriced, byModel: &byModel, byDayByModel: &byDayByModel)
                 }
             }
             return
@@ -1295,43 +1188,6 @@ public actor UsageHistoryLoader {
             }
             byDayByModel[day] = existing
         }
-    }
-
-    private nonisolated static func accumulateGlobal(
-        record: UsageRecord,
-        into byDayByRepo: inout [Date: [RepoKey: TokenTotals]],
-        dedup: inout Set<String>,
-        unpriced: inout [String: TokenTotals],
-        byModel: inout [String: TokenTotals],
-        byDayByModel: inout [Date: [String: TokenTotals]]
-    ) {
-        if let key = record.dedupKey, !dedup.insert(key).inserted {
-            return
-        }
-
-        let day = Calendar.current.startOfDay(for: record.timestamp)
-        let repo = record.repo ?? RepoKey.unknown
-        let pricedByRateCard = Pricing.shared.isPriced(record.model)
-        let cost = record.tokens.costUSD > 0
-            ? record.tokens.costUSD
-            : Pricing.shared.cost(for: record.model, tokens: record.tokens)
-        var tokensWithCost = record.tokens
-        tokensWithCost.costUSD = cost
-        if !(record.tokens.costUSD > 0 || pricedByRateCard), record.tokens.totalTokens > 0 {
-            unpriced[record.model, default: .zero] += tokensWithCost
-        }
-        if record.tokens.totalTokens > 0 {
-            let modelKey = Self.modelRollupKey(for: record)
-            byModel[modelKey, default: .zero] += tokensWithCost
-            // Per-day-by-model adds the time dimension so the Usage tab's
-            // tokens-by-model section can be windowed (today/7d/30d/90d) the
-            // same way byDayByRepo powers the dollar charts.
-            byDayByModel[day, default: [:]][modelKey, default: .zero] += tokensWithCost
-        }
-
-        var dayMap = byDayByRepo[day, default: [:]]
-        dayMap[repo, default: .zero] += tokensWithCost
-        byDayByRepo[day] = dayMap
     }
 
     private nonisolated static func modelRollupKey(for record: UsageRecord) -> String {

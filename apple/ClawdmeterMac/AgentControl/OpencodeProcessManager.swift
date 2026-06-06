@@ -534,8 +534,8 @@ public final class OpencodeProcessManager {
     }
 
     /// Re-run binary discovery + auth-status probe, restart `opencode
-    /// serve` if anything changed. Called from OpencodeProviderRow after
-    /// Activate AND from OpencodeSetupSheet after every auth flow.
+    /// serve` if anything changed. Called from setup/auth flows after
+    /// provider activation or credential changes.
     ///
     /// Restart triggers (A3 + O5):
     ///   - binary path changed (brew upgrade / first bundle discovery)

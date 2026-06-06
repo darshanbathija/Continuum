@@ -4,6 +4,27 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.7 build 207] - 2026-06-06 - Codebase simplification pass (`darshanbathija/codebase-simplify-audit`)
+
+### Removed
+
+- Untracks generated verification/QA artifacts and the bundled `uv` runtime binary so build scripts remain the source of truth for downloaded tools.
+- Deletes the Mac Code prototype, stale settings/provider rows, unavailable settings affordances, retired language-server paths, and legacy Linux/release claims that no longer match the Apple-first product surface.
+- Removes duplicate npm lockfiles from relay/APNS workers and keeps Bun as the single package manager for those infra packages.
+
+### Changed
+
+- Centralizes provider metadata, usage parsing/rollups, and sidebar projection/search ownership so Mac, iOS, settings, analytics, and chat rendering share fewer hardcoded provider branches.
+- Splits the shared agent-control wire DTOs into domain files while preserving public names and JSON compatibility.
+- Routes non-tmux provider startup through `AgentTransportPolicy`, keeps direct terminal/session paths on the current daemon model, and preserves external JSONL rows as read-only transcript opens now that continuation is retired.
+- Refactors repo environment variable settings into focused root/filter/table/form/detail units with shared picker state.
+
+### Fixed
+
+- Restores build compatibility after the `origin/main` tmux-removal merge by aligning sidebar recent-session support, provider runtime inference, project package references, and localized repo-onboarding errors.
+- Updates shared wire tests for the current Codex/Gemini runtime placeholders and keeps legacy event decoding tolerant for older paired clients.
+- Bumps `VERSION` 0.31.6 -> 0.31.7, `MARKETING_VERSION` 0.31.6 -> 0.31.7, and `CURRENT_PROJECT_VERSION` 206 -> 207.
+
 ## [0.31.6 build 206] - 2026-06-06 - Remove tmux runtime (`darshanbathija/remove-tmux`)
 
 ### Removed

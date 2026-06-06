@@ -62,8 +62,7 @@ public struct UsageData: Codable, Equatable, Sendable {
     public let updatedAt: Date           // server-time, parsed from API response `date:` header
     public let organizationID: String?   // surfaced for V2 multi-account (see plan roadmap)
     /// Wire v7: display name of the currently-selected Antigravity 2 model
-    /// (e.g. "gemini-3.5-flash"). Resolved by the Mac from the live
-    /// LanguageServerClient or — when LS isn't available — from
+    /// (e.g. "gemini-3.5-flash"). Resolved by the Mac from
     /// `antigravity_state.pbtxt`'s `last_selected_agent_model` token.
     /// Nil for non-Gemini providers and for older wire versions.
     /// decodeIfPresent — back-compat with v6 readers.

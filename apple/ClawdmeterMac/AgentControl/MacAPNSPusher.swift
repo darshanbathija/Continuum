@@ -33,7 +33,7 @@ public actor MacAPNSPusher {
 
     public struct RegisteredToken: Sendable {
         public let token: String
-        /// The iOS app's bundle id (e.g. `com.clawdmeter.iOS`). Used to
+        /// The iOS app's bundle id (e.g. `ai.continuum.ios`). Used to
         /// build the `apns-topic` header (`<bundle>.push-type.liveactivity`).
         public let bundleId: String
         /// When the token was first registered. Tokens that go more

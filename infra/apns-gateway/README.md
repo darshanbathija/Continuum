@@ -121,7 +121,7 @@ The shape of `expectedTokenMessage` is exported from `src/auth.ts#expectedTokenM
 
 ```bash
 cd infra/apns-gateway
-bun install         # or npm install / pnpm install
+bun install
 bun run typecheck   # tsc --noEmit
 bun run test        # vitest run
 bun run dev         # wrangler dev — uses sandbox APNS endpoint by default

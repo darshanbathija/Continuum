@@ -134,7 +134,7 @@ struct SessionWorkspaceView: View {
                             } else if let session = model.openSession {
                                 CenterThread(
                                     session: session,
-                                    isReadOnly: false,
+                                    isReadOnly: model.openSessionIsReadOnly,
                                     model: model,
                                     catalog: launcher.modelCatalog,
                                     workbenchState: workbenchState,

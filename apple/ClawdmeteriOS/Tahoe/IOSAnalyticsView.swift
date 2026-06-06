@@ -12,9 +12,9 @@ import ClawdmeterShared
 /// the gesture replaces a silent no-op).
 public struct IOSAnalyticsView: View {
     @Environment(\.tahoe) private var t
+    @ObservedObject var usageModel: UsageModel
     @ObservedObject var agentClient: AgentControlClient
     @State private var window: UsageHistorySnapshot.Window = .past7d
-    @State private var snapshot: UsageHistorySnapshot?
     @State private var refreshing: Bool = false
 
     /// v0.14.0 (plan v2.1 D1): optional Live gauges header. When set,
@@ -24,17 +24,20 @@ public struct IOSAnalyticsView: View {
     private let liveHeader: AnyView?
     private let onPairWithDesktop: () -> Void
 
-    public init(agentClient: AgentControlClient, onPairWithDesktop: @escaping () -> Void = {}) {
+    public init(usageModel: UsageModel, agentClient: AgentControlClient, onPairWithDesktop: @escaping () -> Void = {}) {
+        self.usageModel = usageModel
         self.agentClient = agentClient
         self.liveHeader = nil
         self.onPairWithDesktop = onPairWithDesktop
     }
 
     public init<Header: View>(
+        usageModel: UsageModel,
         agentClient: AgentControlClient,
         @ViewBuilder liveHeader: () -> Header,
         onPairWithDesktop: @escaping () -> Void = {}
     ) {
+        self.usageModel = usageModel
         self.agentClient = agentClient
         self.liveHeader = AnyView(liveHeader())
         self.onPairWithDesktop = onPairWithDesktop
@@ -80,7 +83,7 @@ public struct IOSAnalyticsView: View {
                 }
                 .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 14)
 
-                if let snapshot {
+                if let snapshot = usageModel.analyticsSnapshot {
                     let totalUSD = totalCost(in: snapshot, window: window)
                     let claudeUSD = providerCost(snapshot, .claude, window)
                     let codexUSD = providerCost(snapshot, .codex, window)
@@ -226,7 +229,7 @@ public struct IOSAnalyticsView: View {
     private func refresh() async {
         refreshing = true
         defer { refreshing = false }
-        snapshot = await agentClient.fetchAnalytics()
+        await usageModel.refreshMirroredData()
     }
 
     private func providerCost(_ s: UsageHistorySnapshot, _ p: TahoeProvider, _ w: UsageHistorySnapshot.Window) -> Double {

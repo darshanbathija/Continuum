@@ -302,11 +302,11 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(jsonObject(add.data))["error"] as? String, "terminal_not_supported")
     }
 
-    func test_staleHarnessSessionsReturn503ForSendAndInterrupt() async throws {
+    func test_staleManagedSessionsReturn503ForSendAndInterrupt() async throws {
         let cases: [(AgentKind, String?, SessionRuntimeKind)] = [
             (.cursor, CursorModelCatalog.autoModelId, .acpCursor),
-            (.codex, "gpt-5.5", .codexAppServer),
-            (.gemini, nil, .agyHeadless),
+            (.codex, "gpt-5.5", .codexCLI),
+            (.gemini, nil, .unknown),
             (.grok, nil, .acpGrok),
         ]
 

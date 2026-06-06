@@ -531,7 +531,7 @@ final class SidebarProjectionCacheTests: XCTestCase {
         XCTAssertEqual(model.filteredRepos.map { $0.key }, [repo.key])
     }
 
-    func test_repoRecentsDoNotInvalidateProjectionCache() {
+    func test_repoRecentsInvalidateProjectionCacheForExternalSections() {
         let sessions: [AgentSession] = []
         let cache = SingleSlotProjectionCache<SidebarProjectionKey, SidebarProjection>()
         var builderCalls = 0
@@ -565,8 +565,9 @@ final class SidebarProjectionCacheTests: XCTestCase {
         _ = body(repos: baselineRepos)
         _ = body(repos: mutatedRepos)
 
-        XCTAssertEqual(builderCalls, 1)
-        XCTAssertEqual(cache.hitCount, 1)
+        XCTAssertEqual(builderCalls, 2)
+        XCTAssertEqual(cache.missCount, 2)
+        XCTAssertEqual(cache.hitCount, 0)
     }
 
     @MainActor
@@ -659,6 +660,8 @@ final class SidebarProjectionCacheTests: XCTestCase {
             grouping: grouping,
             sorting: .recency,
             pinnedSet: pins,
+            ownedJSONLPathsFingerprint: SidebarProjectionBuilder.ownedJSONLPathsFingerprint([]),
+            externalActivityClockBucket: SidebarProjectionBuilder.externalActivityClockBucket(now: Date(), repos: repos),
             workspaceRepoKeysFingerprint: SidebarProjectionBuilder.workspaceRepoKeysFingerprint([])
         )
     }

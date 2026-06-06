@@ -35,10 +35,6 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
         }
     }
 
-    public var codexBackend: CodexChatBackend? {
-        self == .chatgpt ? .sdk : nil
-    }
-
     public var billingProvider: String? {
         switch self {
         case .openrouter: return "openrouter"
@@ -124,7 +120,6 @@ public final class ChatV2Store: ObservableObject {
     @Published public var selectedModelByProvider: [AgentKind: String]
     @Published public var selectedEffortByProvider: [AgentKind: ReasoningEffort]
     @Published public var deepResearch: Bool
-    @Published public var codexBackendPreference: CodexChatBackend
     @Published public var attachments: [ChatV2Attachment] = []
 
     private let defaults: UserDefaults
@@ -173,8 +168,6 @@ public final class ChatV2Store: ObservableObject {
             defaults.dictionary(forKey: Self.defaultsPrefix + "effortByProvider") ?? [:]
         )
         self.deepResearch = defaults.bool(forKey: Self.defaultsPrefix + "deepResearch")
-        let codexRaw = defaults.string(forKey: Self.defaultsPrefix + "codexBackend") ?? CodexChatBackend.sdk.rawValue
-        self.codexBackendPreference = CodexChatBackend(rawValue: codexRaw) ?? .sdk
     }
 
     // MARK: - Persistence
@@ -208,7 +201,6 @@ public final class ChatV2Store: ObservableObject {
         defaults.set(Self.encodeMap(selectedEffortByProvider.mapValues { $0.rawValue }),
                      forKey: Self.defaultsPrefix + "effortByProvider")
         defaults.set(deepResearch, forKey: Self.defaultsPrefix + "deepResearch")
-        defaults.set(codexBackendPreference.rawValue, forKey: Self.defaultsPrefix + "codexBackend")
     }
 
     /// Picker accessor — falls back to the bundled catalog default
@@ -222,7 +214,7 @@ public final class ChatV2Store: ObservableObject {
         effort(for: primaryVendor)
     }
 
-    public static let defaultChatVendorOrder: [ChatVendor] = [.chatgpt, .claude, .antigravity, .cursor, .openrouter, .grok]
+    public static let defaultChatVendorOrder: [ChatVendor] = ProviderDescriptor.chatOrder
     public static let broadcastCapableProviders: Set<AgentKind> = Set(defaultChatVendorOrder.map(\.backingProvider))
     public static let defaultBroadcastProviderOrder: [AgentKind] = defaultChatVendorOrder.map(\.backingProvider)
 
@@ -412,7 +404,7 @@ public final class ChatV2Store: ObservableObject {
                 provider: vendor.backingProvider,
                 model: model(for: vendor, catalog: catalog),
                 effort: effort(for: vendor, catalog: catalog),
-                codexChatBackend: vendor == .chatgpt ? codexBackendPreference : nil,
+                codexChatBackend: nil,
                 deepResearch: deepResearch,
                 chatVendor: vendor,
                 billingProvider: vendor.billingProvider
@@ -432,7 +424,7 @@ public final class ChatV2Store: ObservableObject {
             model: selectedModel,
             effort: selectedEffort,
             deepResearch: deepResearch,
-            codexBackend: primaryVendor == .chatgpt ? codexBackendPreference : nil
+            codexBackend: nil
         )
     }
 

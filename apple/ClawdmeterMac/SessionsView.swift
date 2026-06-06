@@ -7,9 +7,8 @@ import ClawdmeterShared
 /// `SessionWorkspaceView`).
 ///
 /// The top-level `SessionsView` SwiftUI struct that used to live here was
-/// retired in v0.11 — the Tahoe `MacCodeView` is the only entry point
-/// into the IDE surface now. File name kept as `SessionsView.swift` for
-/// minimal diff noise; effectively a `SessionsModel.swift`.
+/// retired in v0.11. File name kept as `SessionsView.swift` for minimal diff
+/// noise; effectively a `SessionsModel.swift`.
 
 // MARK: - New session sheet (Mac)
 
@@ -17,10 +16,9 @@ struct NewSessionMacSheet: View {
     @ObservedObject var model: SessionsModel
     @Environment(\.dismiss) private var dismiss
 
-    /// Pre-selected repo path (when MacCodeView's per-repo `+` button opens
-    /// the sheet, this is the repo's key so the picker lands on the right
-    /// row without the user needing to choose). Nil opens the sheet with
-    /// "(custom path)" selected, matching the previous behavior.
+    /// Pre-selected repo path so the picker lands on the right row without the
+    /// user needing to choose. Nil opens the sheet with "(custom path)"
+    /// selected, matching the previous behavior.
     var preselectedRepoKey: String?
 
     @State private var repoPath: String = ""
@@ -30,9 +28,6 @@ struct NewSessionMacSheet: View {
     @StateObject private var launcher = SessionLauncherModel()
     @State private var selectedModelId: String?
     @State private var selectedModelWasUserChosen = false
-    // v0.7.9: worktree by default. Local stays in the enum for
-    // back-compat but the mode chip is no longer in the New Session UI.
-    @State private var mode: SessionMode = .worktree
     @State private var isSpawning: Bool = false
     @State private var errorMessage: String?
     // Conductor parity: per-repo setup script run in each new worktree.
@@ -224,7 +219,7 @@ struct NewSessionMacSheet: View {
         // (and future quick "+" spawns in this repo) pick it up via
         // RepoSetupScriptStore inside WorktreeManager.provision.
         RepoSetupScriptStore.setScript(setupScript, forRepoRoot: repoPath)
-        guard let runtime = AppDelegate.runtime else {
+        guard AppDelegate.runtime != nil else {
             errorMessage = "Daemon not started — relaunch Clawdmeter."
             return
         }
@@ -251,7 +246,7 @@ struct NewSessionMacSheet: View {
                 agent: agent,
                 planMode: agent == .cursor ? false : planMode,
                 goal: goal.isEmpty ? nil : goal,
-                mode: mode,
+                mode: .worktree,
                 model: selectedModel,
                 effort: supportsEffort(modelId: selectedModel) ? defaults.effort : nil
             )
@@ -412,7 +407,10 @@ public final class SessionsModel: ObservableObject {
     /// Per-session URL pin. Drives `chatStore(for:)` to tail the exact JSONL
     /// created for a Continuum-owned session instead of falling back to
     /// `resolveSessionFileURL`'s newest-wins logic.
+    @Published public var openOutsideJSONLPath: String?
+    private var syntheticOutsideSessions: [String: AgentSession] = [:]
     private var forcedChatStoreURLs: [UUID: URL] = [:]
+    private var externalForcedJSONLPaths: Set<String> = []
 
     /// Sidebar search query (G6). Filters repos + sessions by displayName,
     /// goal, and message body substring. Empty = no filter.
@@ -430,7 +428,15 @@ public final class SessionsModel: ObservableObject {
            let s = registry.sessions.first(where: { $0.id == id }) {
             return s
         }
+        if let path = openOutsideJSONLPath,
+           let s = syntheticOutsideSessions[path] {
+            return s
+        }
         return nil
+    }
+
+    public var openSessionIsReadOnly: Bool {
+        openOutsideJSONLPath != nil && openSessionId == nil
     }
 
     var selectedWorkspaceTerminalTab: WorkspaceTerminalTab? {
@@ -459,15 +465,60 @@ public final class SessionsModel: ObservableObject {
         return tab
     }
 
+    public func openOutsideSession(recent: RecentSession, repoKey: String, repoDisplayName: String) {
+        let url = URL(fileURLWithPath: recent.path)
+        let path = recent.path
+        if let existing = syntheticOutsideSessions[path] {
+            draftWorkspaceTab = nil
+            selectedWorkspaceTerminalTabId = nil
+            selectedWorkspaceDocumentTabId = nil
+            openOutsideJSONLPath = path
+            openSessionId = nil
+            forcedChatStoreURLs[existing.id] = url
+            needsURLRevalidation.insert(existing.id)
+            externalForcedJSONLPaths.insert(Self.canonicalJSONLPath(path))
+            return
+        }
+
+        let synth = AgentSession(
+            id: UUID(),
+            repoKey: nil,
+            repoDisplayName: repoDisplayName,
+            agent: recent.provider,
+            model: nil,
+            goal: recent.firstPrompt,
+            worktreePath: nil,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            status: .running,
+            planText: nil,
+            createdAt: recent.lastModified,
+            lastEventAt: recent.lastModified,
+            lastEventSeq: 0,
+            runtimeCwd: repoKey
+        )
+        syntheticOutsideSessions[path] = synth
+        forcedChatStoreURLs[synth.id] = url
+        needsURLRevalidation.insert(synth.id)
+        externalForcedJSONLPaths.insert(Self.canonicalJSONLPath(path))
+        draftWorkspaceTab = nil
+        selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = nil
+        openOutsideJSONLPath = path
+        openSessionId = nil
+    }
+
     public func closeChatView() {
         openSessionId = nil
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
+        openOutsideJSONLPath = nil
     }
 
     public func prepareNewSession(in repoKey: String?) {
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
+        openOutsideJSONLPath = nil
         openSessionId = nil
         selectedRepoKey = repoKey
         showingNewSessionSheet = true
@@ -494,7 +545,7 @@ public final class SessionsModel: ObservableObject {
             prepareNewSession(in: repoKey)
             return
         }
-        guard let runtime = AppDelegate.runtime else {
+        guard AppDelegate.runtime != nil else {
             Self.postQuickSpawnFailureToast(
                 title: "Daemon offline",
                 detail: "Restart Clawdmeter to spawn sessions."
@@ -531,6 +582,7 @@ public final class SessionsModel: ObservableObject {
                     ownsWorktree: false,
                     id: sessionId
                 )
+                openOutsideJSONLPath = nil
                 openSessionId = provisional.id
                 provisionAndAttachWorktree(
                     sessionId: sessionId, repoKey: repoKey,
@@ -963,16 +1015,22 @@ public final class SessionsModel: ObservableObject {
         var paths = Set<String>()
         for url in forcedChatStoreURLs.values {
             let path = Self.canonicalJSONLPath(url.path)
-            paths.insert(path)
+            if !externalForcedJSONLPaths.contains(path) {
+                paths.insert(path)
+            }
         }
         for store in chatStores.values where !store.isSDKOnly {
             let path = Self.canonicalJSONLPath(store.currentFileURL.path)
-            paths.insert(path)
+            if !externalForcedJSONLPaths.contains(path) {
+                paths.insert(path)
+            }
         }
         if let daemonPaths = AppDelegate.runtime?.agentControlServer.ownedSessionJSONLPaths {
             for daemonPath in daemonPaths {
                 let path = Self.canonicalJSONLPath(daemonPath)
-                paths.insert(path)
+                if !externalForcedJSONLPaths.contains(path) {
+                    paths.insert(path)
+                }
             }
         }
         return paths
@@ -980,6 +1038,11 @@ public final class SessionsModel: ObservableObject {
 
     private nonisolated static func canonicalJSONLPath(_ path: String) -> String {
         (path as NSString).standardizingPath
+    }
+
+    public func renameJSONLAlias(path: String, name: String?) {
+        JSONLAliasStore.shared.setAlias(path: path, name: name)
+        Task { [repoIndex] in await repoIndex.refresh() }
     }
 
     /// LRU bump: move `id` to the tail (most-recently-used position).
@@ -1183,6 +1246,7 @@ public final class SessionsModel: ObservableObject {
         draftWorkspaceTab = nil
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
+        openOutsideJSONLPath = nil
         openSessionId = session.id
     }
 
@@ -1192,6 +1256,7 @@ public final class SessionsModel: ObservableObject {
         // strip until the user closes it (X) or it's consumed by a spawn.
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
+        openOutsideJSONLPath = nil
         openSessionId = session.id
     }
 
@@ -1200,6 +1265,7 @@ public final class SessionsModel: ObservableObject {
         guard draftWorkspaceTab != nil else { return }
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
+        openOutsideJSONLPath = nil
         openSessionId = nil
     }
 
@@ -1210,6 +1276,7 @@ public final class SessionsModel: ObservableObject {
         guard let key = WorkspaceKey.of(session) else { return }
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
+        openOutsideJSONLPath = nil
         draftWorkspaceTab = WorkspaceDraftTab(
             workspaceKey: key,
             mode: session.mode,
@@ -1323,6 +1390,7 @@ public final class SessionsModel: ObservableObject {
               sessionKey == tab.workspaceKey
         else { return }
         draftWorkspaceTab = nil
+        openOutsideJSONLPath = nil
         openSessionId = tab.sessionId
         selectedWorkspaceDocumentTabId = nil
         selectedWorkspaceTerminalTabId = tab.id
@@ -1379,6 +1447,7 @@ public final class SessionsModel: ObservableObject {
         if selectedWorkspaceTerminalTabId == tab.id {
             selectedWorkspaceTerminalTabId = nil
             if registry.session(id: tab.sessionId) != nil {
+                openOutsideJSONLPath = nil
                 openSessionId = tab.sessionId
             }
         }
@@ -1391,6 +1460,7 @@ public final class SessionsModel: ObservableObject {
               sessionKey == tab.workspaceKey
         else { return }
         draftWorkspaceTab = nil
+        openOutsideJSONLPath = nil
         openSessionId = tab.sessionId
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = tab.id
@@ -1426,6 +1496,7 @@ public final class SessionsModel: ObservableObject {
             selectedWorkspaceDocumentTabId = nil
             selectedWorkspaceTerminalTabId = nil
             if registry.session(id: tab.sessionId) != nil {
+                openOutsideJSONLPath = nil
                 openSessionId = tab.sessionId
             }
         }
@@ -1567,6 +1638,7 @@ public final class SessionsModel: ObservableObject {
         recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
         expandedRepoKeys.insert(repoPath)
         draftWorkspaceTab = nil
+        openOutsideJSONLPath = nil
         openSessionId = session.id
         await refresh()
         return registry.session(id: session.id) ?? session
@@ -1799,6 +1871,7 @@ public final class SessionsModel: ObservableObject {
         )
         expandedRepoKeys.insert(repoPath)
         draftWorkspaceTab = nil
+        openOutsideJSONLPath = nil
         openSessionId = session.id
         await self.refresh()
         return registry.session(id: session.id) ?? session
@@ -1977,6 +2050,7 @@ public final class SessionsModel: ObservableObject {
                 model: parent.model,
                 effort: parent.effort
             )
+            openOutsideJSONLPath = nil
             openSessionId = child.id
             await refresh()
             return child

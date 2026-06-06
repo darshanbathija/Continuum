@@ -151,6 +151,12 @@ public final class UsageModel: ObservableObject {
         daemonRefreshTimer = timer
     }
 
+    /// Manual pull used by iOS Analytics. Keeps daemon/iCloud precedence in
+    /// one model instead of letting views fetch and merge snapshots themselves.
+    public func refreshMirroredData() async {
+        await refreshFromDaemon()
+    }
+
     /// One-shot fetch — drop the daemon's `/usage` + `/analytics` data
     /// onto the published properties. The Live tab's CodexSection and
     /// the Analytics tab already render from these publishers, so the

@@ -59,9 +59,14 @@ final class WireV26GrokTests: XCTestCase {
         XCTAssertEqual(SessionRuntimeKind.inferred(agent: .cursor), .acpCursor)
     }
 
-    func testCodexAndGeminiInferHarnessRuntimes() {
-        XCTAssertEqual(SessionRuntimeKind.inferred(agent: .codex), .codexAppServer)
-        XCTAssertEqual(SessionRuntimeKind.inferred(agent: .gemini), .agyHeadless)
+    func testCodexAndGeminiInferCurrentRuntimePlaceholders() {
+        XCTAssertEqual(SessionRuntimeKind.inferred(agent: .codex), .codexCLI)
+        XCTAssertEqual(SessionRuntimeKind.inferred(agent: .codex, codexBackend: .sdk), .codexSDK)
+        XCTAssertEqual(SessionRuntimeKind.inferred(agent: .gemini), .unknown)
+        XCTAssertFalse(
+            SessionRuntimeCapabilities.defaults(for: .codexCLI).supportsTerminal,
+            "Codex code sessions are bridge-fed through app-server and do not expose shell terminal panes"
+        )
     }
 
     /// Old persisted Cursor sessions keep their stored `.cursorCLI` runtime kind
@@ -73,15 +78,14 @@ final class WireV26GrokTests: XCTestCase {
         XCTAssertFalse(rt.isACPDriven)
     }
 
-    /// `isACPDriven` is the daemon's discriminator for routing a session through
-    /// the harness bridge vs direct PTY / serve paths.
+    /// `isACPDriven` is the daemon's discriminator for routing native ACP
+    /// sessions through `AcpHarnessBridge`; Gemini's `agy` bridge is detected
+    /// at runtime and Codex still reports CLI/SDK here for wire compatibility.
     func testIsACPDrivenDiscriminator() {
         XCTAssertTrue(SessionRuntimeKind.acpGrok.isACPDriven)
         XCTAssertTrue(SessionRuntimeKind.acpCursor.isACPDriven)
-        XCTAssertTrue(SessionRuntimeKind.codexAppServer.isACPDriven)
-        XCTAssertTrue(SessionRuntimeKind.agyHeadless.isACPDriven)
         for rt in [SessionRuntimeKind.claudeCLI, .codexCLI, .codexSDK,
-                   .opencodeServer, .cursorCLI, .unknown] {
+                   .opencodeServer, .cursorCLI, .cursorSDK, .vscodeBridge, .unknown] {
             XCTAssertFalse(rt.isACPDriven, "\(rt.rawValue) must not route to the ACP harness")
         }
     }

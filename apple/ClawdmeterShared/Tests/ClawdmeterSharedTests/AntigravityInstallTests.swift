@@ -2,15 +2,14 @@
 import XCTest
 @testable import ClawdmeterShared
 
-/// Probes the `AntigravityInstall.detect` + `checkOAuthValidity` +
-/// `preflight` implementations by handing them a synthetic filesystem
-/// layout under a tempdir. Never touches the real `/Applications/Antigravity.app/`
-/// or `~/.gemini/antigravity/` — every entry point accepts `homeDirectory`
-/// + `applicationsRoot` for exactly this reason.
+/// Probes the `AntigravityInstall.detect` + `checkOAuthValidity`
+/// implementations by handing them a synthetic filesystem layout under a
+/// tempdir. Never touches the real `/Applications/Antigravity.app/` or
+/// `~/.gemini/antigravity/` — every entry point accepts `homeDirectory` +
+/// `applicationsRoot` for exactly this reason.
 ///
-/// v0.8.0 agy-migration: agyNode → languageServerURL field rename + new
-/// multi-path probe + OAuth credential check + `preflight(forRepoKey:)`
-/// composition.
+/// v0.8.0 agy-migration: agyNode → languageServerURL field rename +
+/// multi-path probe + OAuth credential check.
 final class AntigravityInstallTests: XCTestCase {
 
     // MARK: - Fixture helpers
@@ -260,127 +259,6 @@ final class AntigravityInstallTests: XCTestCase {
         try touch(fx.oauthCreds, contents: #"{ "access_token": "" }"#)
         let result = AntigravityInstall.checkOAuthValidity(homeDirectory: fx.homeDir)
         XCTAssertEqual(result, .malformed)
-    }
-
-    // MARK: - preflight composition (D7)
-
-    private func validInstall(_ fx: Fixture) throws {
-        try makeDir(fx.appBundle)
-        try makeDir(fx.appData)
-        try touch(fx.lsBinary)
-        try touch(fx.oauthCreds, contents: #"{ "access_token": "ya29.AAAA" }"#)
-    }
-
-    func test_preflight_returnsAbsentWhenNotInstalled() async throws {
-        let fx = try makeFixture()
-        let result = await AntigravityInstall.preflight(
-            forRepoKey: "/Users/dev/repo",
-            isLanguageServerLive: { false },
-            resolveProject: { _ in nil },
-            homeDirectory: fx.homeDir,
-            applicationsRoot: fx.appsRoot
-        )
-        XCTAssertEqual(result, .absent)
-    }
-
-    func test_preflight_returnsNotSignedInWhenOAuthMissing() async throws {
-        let fx = try makeFixture()
-        try makeDir(fx.appBundle)
-        try makeDir(fx.appData)
-        try touch(fx.lsBinary)
-        // No oauth_creds.json.
-        let result = await AntigravityInstall.preflight(
-            forRepoKey: "/Users/dev/repo",
-            isLanguageServerLive: { false },
-            resolveProject: { _ in nil },
-            homeDirectory: fx.homeDir,
-            applicationsRoot: fx.appsRoot
-        )
-        if case .installedNotSignedIn = result { /* ok */ } else {
-            XCTFail("Expected .installedNotSignedIn; got \(result)")
-        }
-    }
-
-    func test_preflight_returnsAppOnlyNotRunningWhenLSDown() async throws {
-        let fx = try makeFixture()
-        try validInstall(fx)
-        let result = await AntigravityInstall.preflight(
-            forRepoKey: "/Users/dev/repo",
-            isLanguageServerLive: { false },   // ← LS not running
-            resolveProject: { _ in "should-not-be-called" },
-            homeDirectory: fx.homeDir,
-            applicationsRoot: fx.appsRoot
-        )
-        if case .appOnlyNotRunning = result { /* ok */ } else {
-            XCTFail("Expected .appOnlyNotRunning; got \(result)")
-        }
-    }
-
-    func test_preflight_returnsNoProjectWhenRepoUnmapped() async throws {
-        let fx = try makeFixture()
-        try validInstall(fx)
-        let result = await AntigravityInstall.preflight(
-            forRepoKey: "/Users/dev/unmapped-repo",
-            isLanguageServerLive: { true },
-            resolveProject: { _ in nil },      // ← no project for repo
-            homeDirectory: fx.homeDir,
-            applicationsRoot: fx.appsRoot
-        )
-        if case .noProjectForRepo = result { /* ok */ } else {
-            XCTFail("Expected .noProjectForRepo; got \(result)")
-        }
-    }
-
-    func test_preflight_returnsReadyWhenAllConditionsMet() async throws {
-        let fx = try makeFixture()
-        try validInstall(fx)
-        let result = await AntigravityInstall.preflight(
-            forRepoKey: "/Users/dev/repo",
-            isLanguageServerLive: { true },
-            resolveProject: { _ in "test-project-id" },
-            homeDirectory: fx.homeDir,
-            applicationsRoot: fx.appsRoot
-        )
-        guard case let .ready(install, projectId) = result else {
-            return XCTFail("Expected .ready; got \(result)")
-        }
-        XCTAssertEqual(projectId, "test-project-id")
-        XCTAssertEqual(install.appBundleURL, fx.appBundle)
-        XCTAssertEqual(install.languageServerURL, fx.lsBinary)
-    }
-
-    func test_preflight_shortCircuitsOnAbsent_doesNotInvokeDependencies() async throws {
-        let fx = try makeFixture()
-        // No install at all.
-        var lsCalled = false
-        var resolveCalled = false
-        let result = await AntigravityInstall.preflight(
-            forRepoKey: "/Users/dev/repo",
-            isLanguageServerLive: { lsCalled = true; return true },
-            resolveProject: { _ in resolveCalled = true; return "x" },
-            homeDirectory: fx.homeDir,
-            applicationsRoot: fx.appsRoot
-        )
-        XCTAssertEqual(result, .absent)
-        XCTAssertFalse(lsCalled, "isLanguageServerLive must not run when install is absent")
-        XCTAssertFalse(resolveCalled, "resolveProject must not run when install is absent")
-    }
-
-    func test_preflight_shortCircuitsOnNotSignedIn_doesNotInvokeLS() async throws {
-        let fx = try makeFixture()
-        try makeDir(fx.appBundle)
-        try makeDir(fx.appData)
-        try touch(fx.lsBinary)
-        // No OAuth → must short-circuit.
-        var lsCalled = false
-        _ = await AntigravityInstall.preflight(
-            forRepoKey: "/Users/dev/repo",
-            isLanguageServerLive: { lsCalled = true; return true },
-            resolveProject: { _ in nil },
-            homeDirectory: fx.homeDir,
-            applicationsRoot: fx.appsRoot
-        )
-        XCTAssertFalse(lsCalled, "isLanguageServerLive must not run when OAuth missing")
     }
 
     // MARK: - detectRunningServer subhelper

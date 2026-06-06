@@ -1839,7 +1839,7 @@ public final class AgentControlServer {
         // An ACP session whose bridge died (daemon restart) has no live bridge:
         // return an explicit 503 ("paste succeeded" ≠ "provider accepted")
         // return an explicit stale-session error. Revive is Phase-1.
-        if SessionCommandRouter.acpExpectedButNoBridge(routeCtx) {
+        if SessionCommandRouter.managedSessionExpectedButNoBridge(routeCtx) {
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
                 contentType: "application/json",
@@ -1884,7 +1884,7 @@ public final class AgentControlServer {
                 return .unavailable(reason: error.localizedDescription)
             }
         case .legacyRetired:
-            if SessionCommandRouter.acpExpectedButNoBridge(routeCtx) {
+            if SessionCommandRouter.managedSessionExpectedButNoBridge(routeCtx) {
                 return .unavailable(reason: "acp_session_not_live")
             }
             return .retired(reason: "legacy_session_retired")
@@ -2098,7 +2098,7 @@ public final class AgentControlServer {
             return
         }
         if let s = registry.session(id: uuid),
-           SessionCommandRouter.acpExpectedButNoBridge(routeContext(for: s)) {
+           SessionCommandRouter.managedSessionExpectedButNoBridge(routeContext(for: s)) {
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
                 contentType: "application/json",
@@ -4982,18 +4982,22 @@ public final class AgentControlServer {
         }
 
         let effectivePlanMode = req.agent == .cursor ? false : req.planMode
-        // ACP harness agents (Grok, Cursor) and OpenCode spawn via their own
-        // managers, so `AgentSpawner.argv` returns [] for them. Use a
-        // non-empty sentinel so they pass the CLI-presence guard and reach their
-        // dedicated spawn branch below (binary presence is checked there, at
-        // launch, via the two-phase start contract / provider preflight).
+        // Managed transports spawn through their own adapters, so
+        // `AgentSpawner.argv` returns [] for them. Use transport-policy
+        // sentinels so they pass this legacy CLI-presence guard and reach
+        // their dedicated spawn branches below. Binary/auth checks remain in
+        // the provider-specific preflight/launch path.
+        let transport = AgentTransportPolicy.codeSessionTransport(
+            for: req.agent,
+            acpSupported: Self.acpSupport(for: req.agent) != nil
+        )
         let preflightArgv: [String]
-        if req.agent == .opencode {
-            preflightArgv = ["opencode-managed-session"]
-        } else if Self.acpSupport(for: req.agent) != nil {
-            preflightArgv = ["acp-managed-session"]
-        } else {
+        if transport.requiresArgvPreflight {
             preflightArgv = AgentSpawner.argv(for: req, workspacePath: req.repoKey)
+        } else if transport.managedPreflightToken.isEmpty {
+            preflightArgv = []
+        } else {
+            preflightArgv = [transport.managedPreflightToken]
         }
         guard !preflightArgv.isEmpty else {
             sendResponse(HTTPResponse(
@@ -5104,6 +5108,13 @@ public final class AgentControlServer {
         // streaming-json` per turn (transport-owning; no stdio child).
         if req.agent == .grok {
             guard let grokPath = ShellRunner.locateBinary("grok") else {
+                await cleanupUnregisteredWorktree(
+                    repoRoot: req.repoKey,
+                    worktreePath: worktreePath,
+                    provisioning: provisioning,
+                    provisionalSessionId: provisionalSessionId,
+                    context: "grok preflight"
+                )
                 sendResponse(HTTPResponse(
                     status: 503, reason: "Service Unavailable", contentType: "application/json",
                     body: Data(#"{"error":"grok_not_found","cta":"Install Grok / cmux first."}"#.utf8)
@@ -5146,6 +5157,13 @@ public final class AgentControlServer {
         if req.agent == .gemini {
             let display = providerDisplayName(req.agent)
             guard let agyPath = ShellRunner.locateBinary("agy") else {
+                await cleanupUnregisteredWorktree(
+                    repoRoot: req.repoKey,
+                    worktreePath: worktreePath,
+                    provisioning: provisioning,
+                    provisionalSessionId: provisionalSessionId,
+                    context: "agy preflight"
+                )
                 sendResponse(HTTPResponse(
                     status: 503, reason: "Service Unavailable", contentType: "application/json",
                     body: Data(#"{"error":"agy_not_found","cta":"Install Antigravity 2 (the agy CLI) first."}"#.utf8)
@@ -5409,7 +5427,7 @@ public final class AgentControlServer {
         }
 
         let codexBackend = provider == .codex
-            ? (requestedCodexBackend ?? vendor.codexBackend ?? .sdk)
+            ? (requestedCodexBackend ?? .sdk)
             : nil
         return ResolvedChatRuntimeMetadata(
             vendor: vendor,

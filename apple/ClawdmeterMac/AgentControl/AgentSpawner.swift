@@ -1,11 +1,11 @@
 import Foundation
 import ClawdmeterShared
 
-/// Builds the child-process argv that runs inside a direct PTY for a given
-/// (agent, cwd, options) tuple.
+/// Builds the child-process argv for providers that still launch an external
+/// CLI directly, currently Claude via a per-session PTY.
 ///
-/// Per E4: returns argv arrays, NEVER `cd && exec` shell strings. The caller
-/// passes the cwd separately to the PTY host.
+/// Per E4: returns argv arrays, NEVER `cd && exec` shell strings. The
+/// caller passes the cwd separately in the runtime launch plan.
 ///
 /// Sessions v2 changes (T1 + T2 + T3 + Phase 0):
 /// - Uses `ShellRunner.locateBinary` instead of hardcoded user-specific paths.
@@ -17,7 +17,7 @@ public enum AgentSpawner {
 
     /// The child environment for a Claude PTY spawn.
     ///
-    /// Without the enriched login PATH, a PTY `claude` runs under launchd's thin GUI PATH
+    /// Without this, a PTY `claude` runs under launchd's thin GUI PATH
     /// (`/usr/bin:/bin:…`) and can't find node/rg/hooks. `extra` carries managed
     /// repo env (only the daemon's repo-env resolver can compute it; callers
     /// without one pass nil). Sanitized LAST so the subscription-billing rail
@@ -112,12 +112,9 @@ public enum AgentSpawner {
                 autopilot: autopilot
             ) ?? []
         case .codex, .gemini, .cursor, .opencode, .grok:
-            // v27: every non-Claude provider is ACP-harness-driven (paneless) —
-            // codex via app-server, cursor via cursor-agent ACP, gemini via the
-            // Cascade gRPC driver, grok headless, opencode via its SSE manager.
-            // None take a direct CLI argv here; the Mac fork + daemon route them
-            // to the AcpHarnessBridge/app-server/SSE manager before this builder
-            // is reached. Claude uses the direct PTY path.
+            // Non-Claude providers are managed outside tmux: Codex through
+            // app-server, Cursor through ACP, Gemini/Grok through headless
+            // harnesses, and OpenCode through its SSE manager.
             return []
         case .unknown:
             // X3: forward-compat unknown agent — no argv builder. Caller
@@ -126,19 +123,9 @@ public enum AgentSpawner {
         }
     }
 
-    /// v0.8 chat-tab kind-aware dispatch. Branches on `session.kind`:
-    /// - `.code`: identical to the NewSessionRequest path above (existing
-    ///   code-session behavior).
-    /// - `.chat`: forces `planMode = true` for Claude/Codex CLI, ignores
-    ///   autopilot, and produces the appropriate per-agent argv.
-    ///
-    /// **Legacy Codex SDK chat** (`session.codexChatBackend == .sdk`) returns
-    /// an empty array. Those persisted sessions are decode-only and command
-    /// routes retire them with `legacy_session_retired`; new Codex chat uses
-    /// the app-server harness.
-    ///
-    /// **Gemini chat** is now started through the headless `agy` harness. This
-    /// argv builder remains a compatibility boundary for legacy CLI shapes.
+    /// Build argv for a persisted session. Claude is the only remaining
+    /// direct-PTY provider; all non-Claude sessions return empty argv so
+    /// callers route them through their managed adapters.
     public static func argv(for session: AgentSession, autopilot: Bool = false) -> [String] {
         // Chat sessions always run in plan-mode regardless of stored
         // request flags — that's the safety wedge for v0.8.
@@ -157,13 +144,13 @@ public enum AgentSpawner {
                 // Track A: a session that already captured a CLI session id is a
                 // RESUME (idle-teardown / relaunch / crash-degraded) — pass it so
                 // `claude --resume` continues the conversation. nil for a fresh
-                // session -> clean start.
+                // session means clean start.
                 resumeSessionId: session.claudeSessionId,
                 deepResearch: session.deepResearch
             ) ?? []
         case (.codex, _), (.gemini, _), (.cursor, _), (.opencode, _), (.grok, _):
-            // v27: every non-Claude provider is harness/server-driven. The Mac
-            // fork + daemon route them before this builder is reached.
+            // Managed transports do not have direct CLI argv. Keep this empty so
+            // accidental argv-based spawns fail closed at the caller.
             return []
         case (.unknown, _):
             // X3: forward-compat unknown kind — no argv. Caller surfaces
@@ -172,10 +159,9 @@ public enum AgentSpawner {
         }
     }
 
-    /// Build argv for re-spawning an existing session with new config
-    /// (model/effort/mode/plan swap). Uses `--resume` for Claude and
-    /// `codex resume <id>` for Codex to preserve chat history (D12).
-    /// The caller still needs the D13 overlay flow to handle the visual gap.
+    /// Build argv for re-spawning an existing Claude direct-PTY session with new
+    /// config (model/effort/mode/plan swap). Managed transports rebuild their
+    /// adapter instead of respawning via argv.
     public static func respawnArgv(
         agent: AgentKind,
         resumeSessionId: String,
@@ -199,7 +185,7 @@ public enum AgentSpawner {
         case .codex, .gemini, .cursor, .opencode, .grok:
             // v27: non-Claude providers are ACP-harness-driven — respawn /
             // config-swap / approve-plan go through rebuilding the harness
-            // bridge, not a direct CLI argv. Claude respawns via direct PTY.
+            // bridge, not direct CLI argv. Only Claude respawns via direct PTY.
             return []
         case .unknown:
             // X3: forward-compat unknown agent — no respawn argv builder.
@@ -207,35 +193,16 @@ public enum AgentSpawner {
         }
     }
 
-    /// Best-effort: locate the agent binaries at app launch and verify
-    /// they exist. Returns the user-visible reason if either is missing.
-    public static func preflight() -> String? {
-        var missing: [String] = []
-        if ShellRunner.locateBinary("claude") == nil {
-            missing.append("claude")
-        }
-        if ShellRunner.locateBinary("codex") == nil {
-            missing.append("codex")
-        }
-        if missing.isEmpty { return nil }
-        return "Agent CLI not found on PATH: \(missing.joined(separator: ", ")). Configure in Settings → Diagnostics."
-    }
-
     /// Locate the Cursor Agent CLI: prefer `cursor-agent`, fall back to `agent`.
     /// Returns nil when neither is on PATH. Used by the cursor preflight +
-    /// ChatProviderProbe. Cursor routes through the cursor-agent ACP harness.
+    /// ChatProviderProbe.
     public static func cursorBinaryPath() -> String? {
         ShellRunner.locateBinary("cursor-agent") ?? ShellRunner.locateBinary("agent")
     }
 
-    /// Agent-specific preflight for starting a single selected runtime.
+    /// Argv preflight for starting a direct-PTY runtime.
     public static func preflight(agent: AgentKind) -> String? {
-        if agent == .cursor {
-            if cursorBinaryPath() == nil {
-                return "Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings → Diagnostics."
-            }
-            return nil
-        }
+        guard agent == .claude else { return nil }
         let binary = agent.rawValue
         if ShellRunner.locateBinary(binary) == nil {
             return "Agent CLI not found on PATH: \(binary). Configure in Settings → Diagnostics."

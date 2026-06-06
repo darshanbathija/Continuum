@@ -37,8 +37,6 @@ This is the **infra scaffold** (codex eng-review finding #6, folded into E0). La
 ```bash
 # Install once
 bun install
-# (or npm install if bun unavailable on your machine; wrangler is the
-#  source-of-truth runtime, and it natively supports either package manager)
 
 # Spin up the relay locally on http://localhost:8787
 cd infra/relay

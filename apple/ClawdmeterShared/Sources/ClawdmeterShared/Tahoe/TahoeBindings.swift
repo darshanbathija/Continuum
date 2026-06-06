@@ -141,9 +141,7 @@ public struct TahoeLiveBindings: Equatable, Sendable {
 
 // MARK: - Code (Sessions IDE) bindings
 
-/// Portable shape for a repository row in the Code IDE sidebar. Mirrors the
-/// JSX `DEMO_REPOS` row literal so the existing MacCodeView body code keeps
-/// working without restructuring — only the data source changes.
+/// Portable shape for a repository row in Code previews and iOS Tahoe views.
 public struct TahoeCodeRepo: Identifiable, Hashable, Sendable {
     public var id: String { key }
     public var key: String

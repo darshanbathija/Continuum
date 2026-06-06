@@ -202,7 +202,7 @@ public struct IOSRootView: View {
                 // v0.14.0 (plan v2.1 D1): fold Live gauges into Analytics
                 // as a permanent header. Settings sheet trigger moves here
                 // so the gear that used to live in the Live tab still works.
-                IOSAnalyticsView(agentClient: agentClient) {
+                IOSAnalyticsView(usageModel: usageModel, agentClient: agentClient) {
                     LiveGaugesHeader(
                         model: usageModel,
                         agentClient: agentClient,

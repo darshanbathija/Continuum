@@ -985,7 +985,6 @@ private struct Composer: View {
                     guard let session = await client.createChatSession(
                         provider: vendor.backingProvider,
                         model: store.model(for: vendor, catalog: client.modelCatalog),
-                        codexBackend: vendor == .chatgpt ? store.codexBackendPreference : nil,
                         effort: store.effort(for: vendor, catalog: client.modelCatalog),
                         chatVendor: vendor,
                         billingProvider: vendor.billingProvider,
@@ -1017,20 +1016,12 @@ private struct Composer: View {
               !entries.isEmpty else {
             return true
         }
-        if vendor == .chatgpt {
-            return entries.contains { $0.codexBackend == .sdk && $0.capabilityProbePassed }
-        }
         return entries.contains { $0.capabilityProbePassed }
     }
 
     private func providerUnavailableReason(_ vendor: ChatVendor) -> String? {
         guard !isVendorAvailable(vendor) else { return nil }
         let provider = vendor.backingProvider
-        if vendor == .chatgpt {
-            return providerMatrix?.providers.first {
-                $0.provider == provider && $0.codexBackend == .sdk && !$0.capabilityProbePassed
-            }?.reason
-        }
         return providerMatrix?.providers.first { $0.provider == provider && !$0.capabilityProbePassed }?.reason
     }
 
@@ -1384,20 +1375,12 @@ private struct IOSChatModelSelectorSheet: View {
               !entries.isEmpty else {
             return true
         }
-        if vendor == .chatgpt {
-            return entries.contains { $0.codexBackend == .sdk && $0.capabilityProbePassed }
-        }
         return entries.contains { $0.capabilityProbePassed }
     }
 
     private func providerUnavailableReason(_ vendor: ChatVendor) -> String? {
         guard !isVendorAvailable(vendor) else { return nil }
         let provider = vendor.backingProvider
-        if vendor == .chatgpt {
-            return providerMatrix?.providers.first {
-                $0.provider == provider && $0.codexBackend == .sdk && !$0.capabilityProbePassed
-            }?.reason
-        }
         return providerMatrix?.providers.first { $0.provider == provider && !$0.capabilityProbePassed }?.reason
     }
 

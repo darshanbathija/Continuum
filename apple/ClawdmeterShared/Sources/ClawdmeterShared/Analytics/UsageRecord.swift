@@ -68,25 +68,12 @@ public extension UsageRecord.Provider {
     /// Canonical provider order for analytics surfaces. Keep Grok here so
     /// shared totals, legends, hover breakdowns, and Tahoe usage cards cannot
     /// drift into separate provider lists.
-    static let analyticsDisplayOrder: [UsageRecord.Provider] = [
-        .claude,
-        .codex,
-        .gemini,
-        .opencode,
-        .cursor,
-        .grok,
-    ]
+    static let analyticsDisplayOrder: [UsageRecord.Provider] = ProviderDescriptor.analyticsDisplayOrder
 
     /// Providers with dollar-denominated cost bars. Request-only providers stay
     /// on their dedicated count surfaces; unpriced token providers still appear
     /// in totals and token analytics through `analyticsDisplayOrder`.
-    static let analyticsCostStackOrder: [UsageRecord.Provider] = [
-        .claude,
-        .codex,
-        .opencode,
-        .cursor,
-        .grok,
-    ]
+    static let analyticsCostStackOrder: [UsageRecord.Provider] = ProviderDescriptor.analyticsCostStackOrder
 }
 
 /// Stable string key for the per-repo aggregation maps. Either the normalized

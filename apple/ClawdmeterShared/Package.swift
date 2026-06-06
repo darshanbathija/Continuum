@@ -42,7 +42,7 @@ let package = Package(
                 // Manual pricing overrides, bundled so PricingUpdater's daily
                 // runtime refresh applies them on top of LiteLLM exactly like
                 // tools/refresh-pricing.sh does at build time (kept in sync by
-                // that script from tools/pricing-overrides.json).
+                // that script from the bundled pricing-overrides.json).
                 .process("Analytics/pricing-overrides.json"),
                 // Tahoe 26 redesign: provider logos + accent color sets
                 // bundled as a resource asset catalog. Read via

@@ -38,7 +38,6 @@ final class ChatV2StoreTests: XCTestCase {
         XCTAssertEqual(store.selectedModel, "gpt-5.5")
         XCTAssertEqual(store.selectedEffort, .high)
         XCTAssertFalse(store.deepResearch)
-        XCTAssertEqual(store.codexBackendPreference, .sdk)
         XCTAssertTrue(store.attachments.isEmpty)
     }
 
@@ -61,7 +60,6 @@ final class ChatV2StoreTests: XCTestCase {
         store.selectModel("gpt-5.5-custom", for: .chatgpt)
         store.selectEffort(.high, for: .chatgpt)
         store.selectModel("anthropic/claude-sonnet-4.6", for: .openrouter)
-        store.codexBackendPreference = .cli
         store.persist()
 
         let reloaded = ChatV2Store(defaults: defaults)
@@ -72,7 +70,6 @@ final class ChatV2StoreTests: XCTestCase {
         XCTAssertEqual(reloaded.selectedModelByVendor[.chatgpt], "gpt-5.5-custom")
         XCTAssertEqual(reloaded.selectedEffortByVendor[.chatgpt], .high)
         XCTAssertEqual(reloaded.selectedModelByVendor[.openrouter], "anthropic/claude-sonnet-4.6")
-        XCTAssertEqual(reloaded.codexBackendPreference, .cli)
     }
 
     func test_legacyProviderDefaults_doNotOverrideNewChatGPTDefault() {
@@ -117,7 +114,6 @@ final class ChatV2StoreTests: XCTestCase {
         store.selectModel("gpt-5.5-test", for: .chatgpt)
         store.selectEffort(.high, for: .chatgpt)
         store.selectModel("anthropic/claude-sonnet-4.6", for: .openrouter)
-        store.codexBackendPreference = .cli
 
         let slots = store.frontierSlots()
         XCTAssertEqual(slots.map(\.provider), [.claude, .codex, .opencode])
@@ -126,7 +122,7 @@ final class ChatV2StoreTests: XCTestCase {
         XCTAssertNil(slots[0].codexChatBackend)
         XCTAssertEqual(slots[1].model, "gpt-5.5-test")
         XCTAssertEqual(slots[1].effort, .high)
-        XCTAssertEqual(slots[1].codexChatBackend, .cli)
+        XCTAssertNil(slots[1].codexChatBackend)
         XCTAssertEqual(slots[2].model, "anthropic/claude-sonnet-4.6")
         XCTAssertEqual(slots[2].billingProvider, "openrouter")
         XCTAssertTrue(slots.allSatisfy(\.deepResearch))
@@ -155,7 +151,6 @@ final class ChatV2StoreTests: XCTestCase {
         store.selectModel("gpt-5.5", for: .chatgpt)
         store.selectEffort(.max, for: .chatgpt)
         store.deepResearch = true
-        store.codexBackendPreference = .sdk
 
         let kind = store.firstSendKind()
         guard case let .chatCreateV2(provider, model, effort, deepResearch, codexBackend) = kind else {
@@ -166,7 +161,7 @@ final class ChatV2StoreTests: XCTestCase {
         XCTAssertEqual(model, "gpt-5.5")
         XCTAssertEqual(effort, .max)
         XCTAssertTrue(deepResearch)
-        XCTAssertEqual(codexBackend, .sdk)
+        XCTAssertNil(codexBackend)
     }
 
     func test_firstSendKind_omits_codexBackend_when_not_codex() {
