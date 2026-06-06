@@ -545,7 +545,7 @@ public final class SessionsModel: ObservableObject {
             prepareNewSession(in: repoKey)
             return
         }
-        guard let runtime = AppDelegate.runtime else {
+        guard AppDelegate.runtime != nil else {
             Self.postQuickSpawnFailureToast(
                 title: "Daemon offline",
                 detail: "Restart Clawdmeter to spawn sessions."

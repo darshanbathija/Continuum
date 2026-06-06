@@ -63,6 +63,10 @@ final class WireV26GrokTests: XCTestCase {
         XCTAssertEqual(SessionRuntimeKind.inferred(agent: .codex), .codexCLI)
         XCTAssertEqual(SessionRuntimeKind.inferred(agent: .codex, codexBackend: .sdk), .codexSDK)
         XCTAssertEqual(SessionRuntimeKind.inferred(agent: .gemini), .unknown)
+        XCTAssertFalse(
+            SessionRuntimeCapabilities.defaults(for: .codexCLI).supportsTerminal,
+            "Codex code sessions are bridge-fed through app-server and do not expose shell terminal panes"
+        )
     }
 
     /// Old persisted Cursor sessions keep their stored `.cursorCLI` runtime kind

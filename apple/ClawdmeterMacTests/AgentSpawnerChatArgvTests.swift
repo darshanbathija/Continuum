@@ -150,6 +150,24 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
         }
     }
 
+    func test_codeSessionTransportPolicy_routesManagedAdaptersPastArgvPreflight() {
+        let cases: [(AgentKind, Bool, AgentTransportPolicy, String)] = [
+            (.claude, false, .directPtyArgv, ""),
+            (.codex, false, .codexAppServer, "codex-app-server-session"),
+            (.gemini, false, .transportOwningHarness, "transport-owning-harness-session"),
+            (.grok, false, .transportOwningHarness, "transport-owning-harness-session"),
+            (.opencode, false, .opencodeServe, "opencode-managed-session"),
+            (.cursor, true, .acpHarness, "acp-managed-session"),
+            (.cursor, false, .unsupported, "")
+        ]
+        for (agent, acpSupported, expected, token) in cases {
+            let policy = AgentTransportPolicy.codeSessionTransport(for: agent, acpSupported: acpSupported)
+            XCTAssertEqual(policy, expected, "\(agent.rawValue) should route through the expected code-session transport")
+            XCTAssertEqual(policy.managedPreflightToken, token)
+            XCTAssertEqual(policy.requiresArgvPreflight, expected == .directPtyArgv)
+        }
+    }
+
     func test_nonClaudeRespawn_returnsEmptyArgvForManagedAdapters() {
         let agents: [AgentKind] = [.codex, .gemini, .cursor, .opencode, .grok]
         for agent in agents {

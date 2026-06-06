@@ -197,11 +197,13 @@ public final class DaemonChatStoreRegistry {
                 desiredURL = nil
             }
         case .code:
-            // v27: paneless harness Code sessions are sdkOnly (bridge-fed) —
-            // never roll them over to a JSONL, or every snapshot would drop +
-            // rebuild the store and lose streamed content. Only LEGACY tmux Code
-            // sessions (real pane) track rollout lineage.
-            if session.tmuxPaneId == nil {
+            // Managed Code sessions are sdkOnly (bridge-fed): never roll them
+            // over to a JSONL, or every snapshot would drop + rebuild the store
+            // and lose streamed content. Claude direct PTY and retired legacy
+            // pane-bearing sessions still use JSONL resolution.
+            if session.agent == .claude {
+                desiredURL = resolveURL(session.id, session)
+            } else if session.tmuxPaneId == nil {
                 desiredURL = nil
             } else {
                 // Plan-mode rollout swap on approve-plan (PR #69 audit P1).
@@ -428,7 +430,8 @@ public final class DaemonChatStoreRegistry {
              || session.agent == .cursor
              || session.agent == .grok
              || session.agent == .gemini
-             || session.agent == .codex {
+             || session.agent == .codex
+             || session.agent == .opencode {
             let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
             store.start()
             SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
@@ -621,15 +624,15 @@ public final class DaemonChatStoreRegistry {
         let limit = recentLimit
         warmupTask = Task.detached(priority: .utility) { [weak self] in
             let recents = Self.scanForRecentJSONLs(limit: limit)
-            await MainActor.run {
-                guard let self else { return }
+            await MainActor.run { [weak self] in
+                guard let registry = self else { return }
                 for url in recents {
-                    _ = self.snapshotStore(forJSONLPath: url)
+                    _ = registry.snapshotStore(forJSONLPath: url)
                 }
                 // Audit P2 fix: clear the slot so a later force-rewarm
                 // (e.g. after the user adds a new repo) can run instead
                 // of short-circuiting on the lingering completed task.
-                self.warmupTask = nil
+                registry.warmupTask = nil
                 registryLogger.info("warmup complete: \(recents.count) JSONLs preloaded")
             }
         }

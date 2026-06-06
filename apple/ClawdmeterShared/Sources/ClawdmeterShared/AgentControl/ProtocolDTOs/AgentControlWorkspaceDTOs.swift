@@ -325,12 +325,19 @@ public struct SessionRuntimeCapabilities: Codable, Hashable, Sendable {
 
     public static func defaults(for runtime: SessionRuntimeKind) -> SessionRuntimeCapabilities {
         switch runtime {
-        case .claudeCLI, .codexCLI, .cursorCLI:
+        case .claudeCLI, .cursorCLI:
             return SessionRuntimeCapabilities(
                 supportsCancel: true,
                 supportsPermissionPrompts: true,
                 supportsUsage: true,
                 supportsTerminal: true
+            )
+        case .codexCLI:
+            return SessionRuntimeCapabilities(
+                supportsCancel: true,
+                supportsPermissionPrompts: true,
+                supportsUsage: true,
+                supportsTerminal: false
             )
         case .codexSDK:
             return SessionRuntimeCapabilities(

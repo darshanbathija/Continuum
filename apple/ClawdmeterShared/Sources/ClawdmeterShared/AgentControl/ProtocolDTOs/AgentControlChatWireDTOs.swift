@@ -505,7 +505,8 @@ public struct PermissionOption: Codable, Sendable, Hashable, Identifiable {
 /// looks up the pending prompt for the session, validates that
 /// `promptId` matches (rejects stale clicks if the prompt was already
 /// answered), maps `optionId` to the CLI-specific key sequence, sends
-/// it via tmux, and clears the pending prompt on the session's store.
+/// it through the session transport, and clears the pending prompt on
+/// the session's store.
 public struct PermissionRespondRequest: Codable, Sendable {
     public let promptId: String
     public let optionId: String

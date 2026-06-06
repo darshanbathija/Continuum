@@ -124,7 +124,7 @@ public enum AgentSpawner {
     }
 
     /// Build argv for a persisted session. Claude is the only remaining
-    /// tmux-backed provider; all non-Claude sessions return empty argv so
+    /// direct-PTY provider; all non-Claude sessions return empty argv so
     /// callers route them through their managed adapters.
     public static func argv(for session: AgentSession, autopilot: Bool = false) -> [String] {
         // Chat sessions always run in plan-mode regardless of stored
@@ -144,13 +144,12 @@ public enum AgentSpawner {
                 // Track A: a session that already captured a CLI session id is a
                 // RESUME (idle-teardown / relaunch / crash-degraded) — pass it so
                 // `claude --resume` continues the conversation. nil for a fresh
-                // session ⇒ clean start. tmux sessions never capture an id, so
-                // this is a no-op for them.
+                // session means clean start.
                 resumeSessionId: session.claudeSessionId,
                 deepResearch: session.deepResearch
             ) ?? []
         case (.codex, _), (.gemini, _), (.cursor, _), (.opencode, _), (.grok, _):
-            // Managed transports do not have tmux argv. Keep this empty so
+            // Managed transports do not have direct CLI argv. Keep this empty so
             // accidental argv-based spawns fail closed at the caller.
             return []
         case (.unknown, _):
@@ -160,7 +159,7 @@ public enum AgentSpawner {
         }
     }
 
-    /// Build argv for re-spawning an existing Claude tmux session with new
+    /// Build argv for re-spawning an existing Claude direct-PTY session with new
     /// config (model/effort/mode/plan swap). Managed transports rebuild their
     /// adapter instead of respawning via argv.
     public static func respawnArgv(
@@ -186,7 +185,7 @@ public enum AgentSpawner {
         case .codex, .gemini, .cursor, .opencode, .grok:
             // v27: non-Claude providers are ACP-harness-driven — respawn /
             // config-swap / approve-plan go through rebuilding the harness
-            // bridge, not a tmux argv. Only Claude respawns via tmux.
+            // bridge, not direct CLI argv. Only Claude respawns via direct PTY.
             return []
         case .unknown:
             // X3: forward-compat unknown agent — no respawn argv builder.
@@ -196,13 +195,12 @@ public enum AgentSpawner {
 
     /// Locate the Cursor Agent CLI: prefer `cursor-agent`, fall back to `agent`.
     /// Returns nil when neither is on PATH. Used by the cursor preflight +
-    /// ChatProviderProbe. (The tmux argv builder that also used it is gone — v27
-    /// routes cursor through the cursor-agent ACP harness, not tmux.)
+    /// ChatProviderProbe.
     public static func cursorBinaryPath() -> String? {
         ShellRunner.locateBinary("cursor-agent") ?? ShellRunner.locateBinary("agent")
     }
 
-    /// Argv preflight for starting a tmux-backed runtime.
+    /// Argv preflight for starting a direct-PTY runtime.
     public static func preflight(agent: AgentKind) -> String? {
         guard agent == .claude else { return nil }
         let binary = agent.rawValue

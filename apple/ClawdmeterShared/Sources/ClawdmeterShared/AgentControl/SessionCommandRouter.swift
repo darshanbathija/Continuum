@@ -144,19 +144,20 @@ public struct SessionCommandRouter: Sendable {
         Self.resolve(ctx)
     }
 
-    /// Diagnostic: true when the session is *expected* to be ACP-driven
-    /// (`runtimeIsACPDriven`) but has no live bridge. The daemon's
-    /// handleSendPrompt intercepts exactly this case with an
-    /// explicit 503 ("acp_session_not_live") instead of treating the session as
-    /// reconnectable. This is NOT a route — it's the signal the caller
-    /// uses to choose the 503 error response. Keeping it
-    /// here (rather than re-deriving in the handler) keeps the whole routing
-    /// decision in one place and preserves the daemon's exact behavior.
-    public static func acpExpectedButNoBridge(_ ctx: SessionContext) -> Bool {
+    /// Diagnostic: true when a managed session should be bridge-driven
+    /// (native ACP, Codex app-server, or Gemini headless agy) but the daemon has
+    /// no live bridge for it. The send/interrupt paths return an explicit 503
+    /// instead of mislabeling these as retired legacy pane sessions.
+    public static func managedSessionExpectedButNoBridge(_ ctx: SessionContext) -> Bool {
         resolve(ctx) == .legacyRetired
-            && ctx.runtimeIsACPDriven
             && !ctx.hasLiveBridge
             && !isLegacyCodexSDKChat(ctx)
+            && (ctx.runtimeIsACPDriven || ctx.agent == .codex || ctx.agent == .gemini)
+    }
+
+    /// Compatibility name for older call sites/tests that only knew about ACP.
+    public static func acpExpectedButNoBridge(_ ctx: SessionContext) -> Bool {
+        managedSessionExpectedButNoBridge(ctx)
     }
 
     private static func isLegacyCodexSDKChat(_ ctx: SessionContext) -> Bool {

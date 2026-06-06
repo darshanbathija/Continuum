@@ -29,7 +29,7 @@ enum AgentTransportPolicy: Equatable {
     }
 
     var requiresArgvPreflight: Bool {
-        self == .directPtyArgv || self == .unsupported
+        self == .directPtyArgv
     }
 
     var managedPreflightToken: String {

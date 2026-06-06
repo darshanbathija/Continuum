@@ -297,7 +297,7 @@ public enum AgentControlWireVersion {
     /// v0.8.1 (wire v10) migrated only the Mac UI's spawn path; iOS's
     /// daemon-initiated start path waits for v0.8.2 (wire v11). When
     /// false, iOS surfaces "Update Clawdmeter on Mac" instead of
-    /// posting to an endpoint that lands in legacy tmux argv.
+    /// posting to an endpoint that lands in a legacy direct-argv path.
     public static func supportsAntigravityChat(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= antigravityChatMinimum

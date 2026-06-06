@@ -2,6 +2,7 @@ import XCTest
 @testable import ClawdmeterShared
 
 final class ProviderDescriptorTests: XCTestCase {
+    @MainActor
     func test_descriptorCoversEverySelectableAgentAndSurfaceOrder() {
         let selectableAgents = Set(AgentKind.allCases)
         let describedAgents = Set(ProviderDescriptor.all.map(\.agent))
