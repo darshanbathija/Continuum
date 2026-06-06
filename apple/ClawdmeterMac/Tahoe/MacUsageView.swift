@@ -374,7 +374,13 @@ private struct ProviderColumn: View {
                 // QuotaBar
                 TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 220,
                               label: quotaLabel, sublabel: quotaSublabel)
-                .padding(.vertical, 28)
+                .padding(.top, 28)
+                .padding(.bottom, provider == .cursor ? 18 : 28)
+
+                if provider == .cursor, let quota = row.cursorQuota {
+                    CursorMonthlyMeters(quota: quota, fallbackTotalPct: Int(row.sessionPercent))
+                        .padding(.bottom, row.hasWeekly ? 18 : 0)
+                }
 
                 // Weekly row — hidden when provider has no weekly window.
                 if row.hasWeekly {
@@ -434,6 +440,36 @@ private struct ProviderColumn: View {
             // The AppDelegate has a UserDefaults observer that picks this
             // up and calls `setVisible(_:)` on the matching status item.
             // No notification needed.
+        }
+    }
+}
+
+private struct CursorMonthlyMeters: View {
+    @Environment(\.tahoe) private var t
+    var quota: UsageData.CursorQuota
+    var fallbackTotalPct: Int
+
+    var body: some View {
+        VStack(spacing: 9) {
+            meter(label: "Monthly total", pct: quota.totalPct)
+            meter(label: "Auto", pct: quota.autoPct)
+            meter(label: "API", pct: quota.apiPct)
+        }
+    }
+
+    private func meter(label: String, pct: Int?) -> some View {
+        let value = min(100, max(0, pct ?? fallbackTotalPct))
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(label)
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                Spacer()
+                Text("\(value)%")
+                    .font(TahoeFont.mono(10.5))
+                    .foregroundStyle(t.fg3)
+            }
+            TahoePillBar(percent: Double(value), provider: .cursor, height: 5)
         }
     }
 }

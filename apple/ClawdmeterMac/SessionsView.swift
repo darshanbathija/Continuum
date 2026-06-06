@@ -638,6 +638,7 @@ public final class SessionsModel: ObservableObject {
         tmux: TmuxControlClient
     ) {
         Task { @MainActor in
+            var provisionedWorktree: WorktreeManager.ProvisionedWorktree?
             do {
                 let city = CityNamer.shared.cityName(for: sessionId)
                 let slug = WorktreeManager.slug(city: city)
@@ -651,6 +652,7 @@ public final class SessionsModel: ObservableObject {
                         Task { @MainActor in self?.applyProvisionPhase(phase, sessionId: sessionId) }
                     }
                 )
+                provisionedWorktree = provisioned
                 let cwd = provisioned.path
                 // v27: drive codex via the daemon ACP harness (paneless) instead
                 // of a tmux pane. The daemon adopts the optimistic row (same
@@ -718,12 +720,30 @@ public final class SessionsModel: ObservableObject {
                 // registered for this id before deleting the row, so we don't
                 // leak the driver child. No-op if no bridge exists.
                 await AppDelegate.runtime?.agentControlServer.teardownHarnessSession(sessionId)
-                try? await registry.delete(id: sessionId)
-                if openSessionId == sessionId { openSessionId = nil }
+                if let provisionedWorktree {
+                    try? await registry.updateRuntime(
+                        id: sessionId,
+                        worktreePath: provisionedWorktree.path,
+                        provisioning: provisionedWorktree.metadata,
+                        runtimeCwd: provisionedWorktree.path,
+                        tmuxWindowId: nil,
+                        tmuxPaneId: nil,
+                        mode: .worktree,
+                        ownsWorktree: true
+                    )
+                    try? await registry.updateStatus(id: sessionId, status: .degraded)
+                    recordWorkspaceSession(repoRoot: repoKey, sessionId: sessionId)
+                    await refresh()
+                } else {
+                    try? await registry.delete(id: sessionId)
+                    if openSessionId == sessionId { openSessionId = nil }
+                }
                 NSLog("[Clawdmeter] quickSpawn provision failed sid=%@ repo=%@: %@",
                       sessionId.uuidString, repoKey, "\(error)")
                 Self.postQuickSpawnFailureToast(
-                    title: "Couldn’t set up the worktree in \((repoKey as NSString).lastPathComponent)",
+                    title: provisionedWorktree == nil
+                        ? "Couldn’t set up the worktree in \((repoKey as NSString).lastPathComponent)"
+                        : "Worktree created, but Codex didn’t attach",
                     detail: Self.humanize(spawnError: error)
                 )
             }
