@@ -240,6 +240,8 @@ struct EmptyStateCenteredComposer: View {
         launcher.normalize(store)
         let draftText = store.text
         let draftAttachments = store.attachments
+        let draftPayload = store.draftPayload()
+        let firstSendIntentId = UUID().uuidString
         var spawnedSession: AgentSession?
         guard let runtime = AppDelegate.runtime else {
             store.endSend(error: .offline)
@@ -298,7 +300,10 @@ struct EmptyStateCenteredComposer: View {
                     unavailableSourceIds: unavailableSourceIds
                 ))
             }
-            let initialBody = store.renderPromptBody(attachmentPaths: stagedPaths)
+            let initialBody = draftPayload.render(attachmentPaths: stagedPaths)
+            let hasInitialSendContent = draftPayload.hasContent
+                || !selectedSourceIds.isEmpty
+                || !unavailableSourceIds.isEmpty
             let session: AgentSession
             if let workspaceDraft {
                 session = try await model.spawnSessionInExistingWorkspace(
@@ -338,19 +343,17 @@ struct EmptyStateCenteredComposer: View {
             } else if bypassPicked {
                 PermissionModeStore.shared.setBypass(true, sessionId: session.id)
             }
-            // Post the first prompt through the daemon once the session is up.
-            // Every non-Claude provider (incl. gemini via headless agy) drives
-            // through the harness bridge, so the first /send reaches the bridge —
-            // no provider-specific skip needed.
-            try await Task.sleep(nanoseconds: 600_000_000)
-            if store.canSend, let port = runtime.agentControlServer.boundPort {
+            // Post the captured first prompt through the daemon once the
+            // session is up. Do not re-read the mutable composer here: the
+            // provider turn must be the exact draft the user submitted.
+            if hasInitialSendContent, let port = runtime.agentControlServer.boundPort {
                 // Local loopback: authenticate with the in-process token, not
                 // the pairing keychain (which would prompt on first send).
                 let sender = MacComposerSender(port: Int(port), token: runtime.agentControlServer.localLoopbackToken)
                 // Stage attachments under the new session's dir.
                 stagedPaths.removeAll()
                 if let dir = AttachmentStaging.stagingDir(for: session) {
-                    for att in store.attachments {
+                    for att in draftAttachments {
                         if let staged = try? AttachmentStaging.stage(source: att.sourceURL, into: dir, attachmentId: att.id) {
                             stagedPaths.append(staged)
                         }
@@ -361,9 +364,16 @@ struct EmptyStateCenteredComposer: View {
                         unavailableSourceIds: unavailableSourceIds
                     ))
                 }
-                let body = store.renderPromptBody(attachmentPaths: stagedPaths)
+                let body = draftPayload.render(attachmentPaths: stagedPaths)
                 if !body.isEmpty {
-                    try await sender.send(sessionId: session.id, body: body, asFollowUp: false)
+                    try await sender.send(
+                        sessionId: session.id,
+                        body: body,
+                        asFollowUp: false,
+                        origin: .userComposerFirstTurn,
+                        idempotencyKey: "first-send:\(session.id.uuidString):\(firstSendIntentId)",
+                        clientIntentId: firstSendIntentId
+                    )
                 }
             }
             store.endSend()

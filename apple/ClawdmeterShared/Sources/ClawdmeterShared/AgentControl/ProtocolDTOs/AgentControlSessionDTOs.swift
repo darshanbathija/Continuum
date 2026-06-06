@@ -45,17 +45,61 @@ public struct ScheduledFollowUp: Codable, Hashable, Sendable, Identifiable {
     public let prompt: String
     /// When the scheduler actually delivered the prompt. `nil` until then.
     public let firedAt: Date?
+    /// Provenance of the scheduled prompt. Older persisted follow-ups decode
+    /// as legacy and require confirmation so they cannot silently spend quota
+    /// after an app update/relaunch.
+    public let origin: ProviderPromptOrigin
+    public let createdAt: Date
+    public let createdBy: String
+    public let deliveryPolicy: ScheduledFollowUpDeliveryPolicy
 
     public init(
         id: UUID = UUID(),
         fireAt: Date,
         prompt: String,
-        firedAt: Date? = nil
+        firedAt: Date? = nil,
+        origin: ProviderPromptOrigin = .scheduledUserFollowUp,
+        createdAt: Date = Date(),
+        createdBy: String = "user",
+        deliveryPolicy: ScheduledFollowUpDeliveryPolicy = .autonomousAfterRestart
     ) {
         self.id = id
         self.fireAt = fireAt
         self.prompt = prompt
         self.firedAt = firedAt
+        self.origin = origin
+        self.createdAt = createdAt
+        self.createdBy = createdBy
+        self.deliveryPolicy = deliveryPolicy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, fireAt, prompt, firedAt, origin, createdAt, createdBy, deliveryPolicy
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        fireAt = try c.decode(Date.self, forKey: .fireAt)
+        prompt = try c.decode(String.self, forKey: .prompt)
+        firedAt = try c.decodeIfPresent(Date.self, forKey: .firedAt)
+        origin = try c.decodeIfPresent(ProviderPromptOrigin.self, forKey: .origin) ?? .legacyClient
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? fireAt
+        createdBy = try c.decodeIfPresent(String.self, forKey: .createdBy) ?? "legacy"
+        deliveryPolicy = try c.decodeIfPresent(ScheduledFollowUpDeliveryPolicy.self, forKey: .deliveryPolicy)
+            ?? .requiresConfirmation
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(fireAt, forKey: .fireAt)
+        try c.encode(prompt, forKey: .prompt)
+        try c.encodeIfPresent(firedAt, forKey: .firedAt)
+        try c.encode(origin, forKey: .origin)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(createdBy, forKey: .createdBy)
+        try c.encode(deliveryPolicy, forKey: .deliveryPolicy)
     }
 }
 
@@ -725,11 +769,46 @@ public struct SendPromptRequest: Codable, Sendable {
     /// Code V2 mobile outbox dedupe key. Optional for legacy clients;
     /// durable mobile sends should populate it.
     public let idempotencyKey: String?
+    /// Who is asking to spend a provider turn. Missing values decode as
+    /// `legacyClient`; provider writes fail closed for that origin unless a
+    /// current UI path restamps the request as user-authored.
+    public let origin: ProviderPromptOrigin
+    public let clientIntentId: String?
 
-    public init(text: String, asFollowUp: Bool = true, idempotencyKey: String? = nil) {
+    public init(
+        text: String,
+        asFollowUp: Bool = true,
+        idempotencyKey: String? = nil,
+        origin: ProviderPromptOrigin = .legacyClient,
+        clientIntentId: String? = nil
+    ) {
         self.text = text
         self.asFollowUp = asFollowUp
         self.idempotencyKey = idempotencyKey
+        self.origin = origin
+        self.clientIntentId = clientIntentId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text, asFollowUp, idempotencyKey, origin, clientIntentId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        text = try c.decode(String.self, forKey: .text)
+        asFollowUp = try c.decodeIfPresent(Bool.self, forKey: .asFollowUp) ?? true
+        idempotencyKey = try c.decodeIfPresent(String.self, forKey: .idempotencyKey)
+        origin = try c.decodeIfPresent(ProviderPromptOrigin.self, forKey: .origin) ?? .legacyClient
+        clientIntentId = try c.decodeIfPresent(String.self, forKey: .clientIntentId)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(text, forKey: .text)
+        try c.encode(asFollowUp, forKey: .asFollowUp)
+        try c.encodeIfPresent(idempotencyKey, forKey: .idempotencyKey)
+        try c.encode(origin, forKey: .origin)
+        try c.encodeIfPresent(clientIntentId, forKey: .clientIntentId)
     }
 }
 

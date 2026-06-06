@@ -1124,11 +1124,19 @@ public final class AgentControlClient: ObservableObject {
         sessionId: UUID,
         text: String,
         asFollowUp: Bool = true,
-        idempotencyKey: String? = nil
+        idempotencyKey: String? = nil,
+        origin: ProviderPromptOrigin = .userComposer,
+        clientIntentId: String? = nil
     ) async -> Bool {
         let ok = await postBody(
             path: "/sessions/\(sessionId.uuidString)/send",
-            body: SendPromptRequest(text: text, asFollowUp: asFollowUp, idempotencyKey: idempotencyKey)
+            body: SendPromptRequest(
+                text: text,
+                asFollowUp: asFollowUp,
+                idempotencyKey: idempotencyKey,
+                origin: origin,
+                clientIntentId: clientIntentId
+            )
         )
         if ok {
             await refreshSessions()
@@ -1811,7 +1819,12 @@ public final class AgentControlClient: ObservableObject {
     /// to every child. Returns true on 2xx, false on transport error.
     @MainActor
     public func frontierSend(groupId: UUID, text: String) async -> Bool {
-        let req = SendPromptRequest(text: text, asFollowUp: false)
+        let req = SendPromptRequest(
+            text: text,
+            asFollowUp: false,
+            origin: .frontierUserBroadcast,
+            clientIntentId: UUID().uuidString
+        )
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
         guard let body = try? encoder.encode(req),
               let request = makeRequest(path: "/chat-sessions/frontier/\(groupId.uuidString)/send", method: "POST", body: body) else {
@@ -1838,7 +1851,13 @@ public final class AgentControlClient: ObservableObject {
         text: String,
         perChildText: [UUID: String]? = nil
     ) async -> FrontierSendResponse? {
-        let req = FrontierSendRequest(text: text, asFollowUp: false, perChildText: perChildText)
+        let req = FrontierSendRequest(
+            text: text,
+            asFollowUp: false,
+            perChildText: perChildText,
+            origin: .frontierUserBroadcast,
+            clientIntentId: UUID().uuidString
+        )
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
         guard let body = try? encoder.encode(req),
               let request = makeRequest(path: "/chat-sessions/frontier/\(groupId.uuidString)/send", method: "POST", body: body) else {

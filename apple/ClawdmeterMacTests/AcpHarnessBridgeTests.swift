@@ -151,7 +151,7 @@ final class AcpHarnessBridgeTests: XCTestCase {
         let (bridge, store) = makeBridge(driver)
         try await bridge.start(binary: nil, arguments: [], cwd: "/tmp", env: [:], effort: nil, alwaysApprove: false)
 
-        await bridge.prompt("do the thing")
+        await bridge.prompt("do the thing", origin: .userComposer)
         let streaming = await waitUntil { store.snapshot.currentTurnState == .streaming }
         XCTAssertTrue(streaming, "prompt flips turn state to streaming")
         let prompts = await driver.prompts

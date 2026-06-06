@@ -1,4 +1,5 @@
 import Foundation
+import ClawdmeterShared
 import CryptoKit
 import OSLog
 
@@ -53,6 +54,23 @@ public actor AuditLog {
             "kind": "send",
             "sessionId": sessionId.uuidString,
             "sourcePeer": sourcePeer,
+            "textHash": sha256(text),
+            "textBytes": text.utf8.count,
+        ]
+        if includePlaintext {
+            entry["text"] = text
+        }
+        append(entry: entry, kind: "sends")
+    }
+
+    public func recordBlockedPrompt(sessionId: UUID, sourcePeer: String, text: String, origin: ProviderPromptOrigin, reason: String) {
+        var entry: [String: Any] = [
+            "at": ISO8601DateFormatter().string(from: Date()),
+            "kind": "blocked-prompt",
+            "sessionId": sessionId.uuidString,
+            "sourcePeer": sourcePeer,
+            "origin": origin.rawValue,
+            "reason": reason,
             "textHash": sha256(text),
             "textBytes": text.utf8.count,
         ]

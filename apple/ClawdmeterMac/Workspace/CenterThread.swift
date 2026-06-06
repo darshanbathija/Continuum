@@ -739,7 +739,8 @@ struct CenterThread: View {
         guard session.status != .running,
               !isDispatchingQueuedSend,
               !dispatchedQueuedTurnForCurrentIdle,
-              let draft = workbenchState.nextQueuedSend(for: session.id)
+              let draft = workbenchState.nextQueuedSend(for: session.id),
+              draft.dispatchPolicy == .autoCurrentProcess
         else { return }
         dispatchedQueuedTurnForCurrentIdle = true
         await dispatchQueuedDraft(draft, manual: false)
@@ -796,7 +797,14 @@ struct CenterThread: View {
                 if !manual { dispatchedQueuedTurnForCurrentIdle = false }
                 return
             }
-            try await sender.send(sessionId: target.id, body: body, asFollowUp: true)
+            try await sender.send(
+                sessionId: target.id,
+                body: body,
+                asFollowUp: true,
+                origin: .userComposer,
+                idempotencyKey: "queued-send:\(draft.id.uuidString)",
+                clientIntentId: draft.id.uuidString
+            )
             workbenchState.removeQueuedSend(id: draft.id)
             composerStore.endSend()
         } catch MacComposerSender.Error.http(let status, let retry, _) {
@@ -945,7 +953,15 @@ struct CenterThread: View {
         }
         let body = composerStore.renderPromptBody(attachmentPaths: stagedPaths)
         do {
-            try await sender.send(sessionId: target.id, body: body, asFollowUp: true)
+            let intentId = UUID().uuidString
+            try await sender.send(
+                sessionId: target.id,
+                body: body,
+                asFollowUp: true,
+                origin: .userComposer,
+                idempotencyKey: "composer-send:\(target.id.uuidString):\(intentId)",
+                clientIntentId: intentId
+            )
             composerStore.endSend()
             // A13: daemon accepted the send. The auto-reconcile in
             // SessionChatStore clears the pending bubble once the real
@@ -956,7 +972,8 @@ struct CenterThread: View {
             // ack-vs-JSONL race could flicker the bubble out and back in.
             // A13: drain any messages that piled up while the daemon was
             // offline — now that one send succeeded, the daemon is reachable.
-            await drainOfflineQueueIfAny(target: target, port: Int(port))
+            // Offline queued messages stay visible for explicit retry. A
+            // successful foreground send must not silently replay older bodies.
         } catch MacComposerSender.Error.http(let status, let retry, _) {
             finishBoundSendWithError(
                 sendError(forHTTPStatus: status, retryAfter: retry),
@@ -1369,7 +1386,10 @@ struct CenterThread: View {
         let claudePtyReady = session.agent == .claude
             && session.tmuxPaneId == nil
             && session.tmuxWindowId == nil
-        if recovery.autoSendWhenReady, claudePtyReady || harnessReady {
+        let fresh = Date().timeIntervalSince(recovery.createdAt) <= 90
+        let selected = workbenchState.selectedSessionId == nil || workbenchState.selectedSessionId == session.id
+        let foreground = NSApp.isActive
+        if recovery.autoSendWhenReady, fresh, selected, foreground, claudePtyReady || harnessReady {
             Task { await performBoundSend() }
         }
     }

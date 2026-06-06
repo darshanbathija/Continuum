@@ -195,9 +195,24 @@ final class AcpHarnessBridge {
         startConsuming()
     }
 
-    func prompt(_ text: String) async {
+    @discardableResult
+    func prompt(
+        _ text: String,
+        origin: ProviderPromptOrigin = .legacyClient,
+        allowLiveProviderSpend: Bool = false
+    ) async -> Bool {
+        let decision = ProviderPromptGuard.validate(
+            text: text,
+            origin: origin,
+            allowLiveProviderSpend: allowLiveProviderSpend
+        )
+        guard decision.allowed else {
+            store.setCurrentTurnState(.idle)
+            return false
+        }
         store.setCurrentTurnState(.streaming)
         await driver.prompt(text)
+        return true
     }
 
     func cancel() async {

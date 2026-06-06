@@ -87,7 +87,7 @@ final class ClaudePtyHostTests: XCTestCase {
         _ = try await host.start()
         let ready = await waitUntil { await host.recentOutput().contains("READY_MARKER") }
         XCTAssertTrue(ready, "host must reach the ready marker")
-        await host.submitPrompt("hello", isChat: true)
+        await host.submitPrompt("hello", isChat: true, origin: .userComposer)
         let echoed = await waitUntil { await host.recentOutput().contains("hello") }
         XCTAssertTrue(echoed, "submitted text must reach the child (GOT:…hello)")
         await host.kill()
@@ -105,7 +105,7 @@ final class ClaudePtyHostTests: XCTestCase {
         }
         _ = try await host.start()
         _ = await waitUntil { await host.recentOutput().contains("READY_MARKER") }
-        await host.submitPrompt("QUIT", isChat: true)   // stub exits 0
+        await host.submitPrompt("QUIT", isChat: true, origin: .userComposer)   // stub exits 0
         await fulfillment(of: [exited], timeout: 5)
         let running = await host.isRunning
         XCTAssertFalse(running, "child exit must clear isRunning")
@@ -169,7 +169,7 @@ final class ClaudePtyHostTests: XCTestCase {
         _ = await waitUntil { await host.recentOutput().contains("READY_MARKER") }
         await host.kill()
         // Should not crash, hang, or write anything.
-        await host.submitPrompt("after-kill", isChat: true)
+        await host.submitPrompt("after-kill", isChat: true, origin: .userComposer)
         await host.writeBytes(Data([0x0d]))
         let running = await host.isRunning
         XCTAssertFalse(running)

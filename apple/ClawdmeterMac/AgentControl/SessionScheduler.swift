@@ -38,6 +38,7 @@ public final class SessionScheduler {
     private var observerTask: Task<Void, Never>?
     private var inFlightFollowUps: Set<String> = []
     private var followUpRetryAfter: [String: Date] = [:]
+    private var followUpsHeldForConfirmation: Set<String> = []
     private let unavailableRetryInterval: TimeInterval
 
     public init(
@@ -85,6 +86,10 @@ public final class SessionScheduler {
                 .compactMap { followUp -> (UUID, ScheduledFollowUp, Date)? in
                     let key = Self.followUpDeliveryKey(sessionId: session.id, followUpId: followUp.id)
                     guard !inFlightFollowUps.contains(key) else { return nil }
+                    if followUp.deliveryPolicy == .autonomousAfterRestart,
+                       followUpsHeldForConfirmation.remove(key) != nil {
+                        followUpRetryAfter.removeValue(forKey: key)
+                    }
                     let retryAt = followUpRetryAfter[key]
                     let dueAt = retryAt.map { Swift.max(followUp.fireAt, $0) } ?? followUp.fireAt
                     return (session.id, followUp, dueAt)
@@ -126,6 +131,7 @@ public final class SessionScheduler {
         guard let session = registry.session(id: sessionId) else {
             schedulerLogger.warning("fire: session missing — dropping follow-up")
             followUpRetryAfter.removeValue(forKey: deliveryKey)
+            followUpsHeldForConfirmation.remove(deliveryKey)
             do {
                 try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
             } catch {
@@ -135,6 +141,13 @@ public final class SessionScheduler {
         }
         guard let followUp = session.scheduledFollowUps.first(where: { $0.id == followUpId }) else {
             followUpRetryAfter.removeValue(forKey: deliveryKey)
+            followUpsHeldForConfirmation.remove(deliveryKey)
+            return
+        }
+        guard followUp.deliveryPolicy == .autonomousAfterRestart else {
+            followUpsHeldForConfirmation.insert(deliveryKey)
+            followUpRetryAfter[deliveryKey] = Date().addingTimeInterval(24 * 60 * 60)
+            schedulerLogger.warning("follow-up held for confirmation; not delivering automatically")
             return
         }
 
@@ -148,6 +161,7 @@ public final class SessionScheduler {
         switch result {
         case .delivered:
             followUpRetryAfter.removeValue(forKey: deliveryKey)
+            followUpsHeldForConfirmation.remove(deliveryKey)
             do {
                 try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
             } catch {
@@ -160,6 +174,7 @@ public final class SessionScheduler {
             schedulerLogger.error("fire: follow-up held pending for \(sessionId.uuidString, privacy: .public): \(reason, privacy: .public)")
         case .retired(let reason):
             followUpRetryAfter.removeValue(forKey: deliveryKey)
+            followUpsHeldForConfirmation.remove(deliveryKey)
             do {
                 try await registry.removeScheduledFollowUp(sessionId: sessionId, followUpId: followUpId)
             } catch {
@@ -189,7 +204,12 @@ public final class SessionScheduler {
             host = await ClaudePtyRegistry.shared.host(for: session.id)
         }
         if let host {
-            guard await host.submitPrompt(followUp.prompt, isChat: session.kind == .chat, isFollowUp: true) else {
+            guard await host.submitPrompt(
+                followUp.prompt,
+                isChat: session.kind == .chat,
+                isFollowUp: true,
+                origin: followUp.origin
+            ) else {
                 return .unavailable(reason: "pty_write_failed")
             }
             return .delivered

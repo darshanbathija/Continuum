@@ -27,6 +27,9 @@ final class LiveDriveTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["CLAWDMETER_LIVE_VERIFY"] == "1" else {
             throw XCTSkip("Set CLAWDMETER_LIVE_VERIFY=1 and create ~/.continuum-live-verify to run live provider drives (uses real CLIs + quota).")
         }
+        guard ProcessInfo.processInfo.environment["CLAWDMETER_ALLOW_PROVIDER_SPEND"] == "1" else {
+            throw XCTSkip("Set CLAWDMETER_ALLOW_PROVIDER_SPEND=1 to acknowledge live provider quota use.")
+        }
         let marker = (NSHomeDirectory() as NSString).appendingPathComponent(".continuum-live-verify")
         guard FileManager.default.fileExists(atPath: marker) else {
             throw XCTSkip("Create ~/.continuum-live-verify after setting CLAWDMETER_LIVE_VERIFY=1 to run live provider drives (uses real CLIs + quota).")
@@ -83,15 +86,10 @@ final class LiveDriveTests: XCTestCase {
         do {
             let result = try await ShellRunner.shared.run(
                 executable: binary,
-                arguments: [
-                    "--print",
-                    "--trust",
-                    "--workspace", cwd,
-                    "Reply with the single word PONG and nothing else."
-                ],
+                arguments: ["--version"],
                 cwd: cwd,
                 environment: env,
-                timeout: 45
+                timeout: 15
             )
             let output = (result.stdoutString + "\n" + result.stderrString)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -123,12 +121,17 @@ final class LiveDriveTests: XCTestCase {
         if env["HOME"] == nil { env["HOME"] = home }
         try await bridge.start(binary: binary, arguments: arguments, cwd: cwd,
                                env: env, effort: nil, alwaysApprove: true)
-        await bridge.prompt("Reply with the single word PONG and nothing else.")
-        // Require the literal PONG in an assistant row — a driver/transport error
+        let expectedToken = "CONTINUUM_LIVE_OK_\(UUID().uuidString.replacingOccurrences(of: "-", with: "_"))"
+        await bridge.prompt(
+            "Reply with the token \(expectedToken) and no other text.",
+            origin: .liveProviderTest,
+            allowLiveProviderSpend: true
+        )
+        // Require the literal token in an assistant row — a driver/transport error
         // (e.g. gRPC "StartCascade: unavailable") would surface as an .error event
-        // or a non-PONG body, and must NOT be mistaken for a real reply.
+        // or a non-token body, and must NOT be mistaken for a real reply.
         let gotReply = await waitUntil {
-            store.messages.contains { $0.kind == .assistantText && $0.body.uppercased().contains("PONG") }
+            store.messages.contains { $0.kind == .assistantText && $0.body.contains(expectedToken) }
         }
         let body = store.messages.last { $0.kind == .assistantText }?.body ?? "<none>"
         let turnDone = await waitUntil(30) {

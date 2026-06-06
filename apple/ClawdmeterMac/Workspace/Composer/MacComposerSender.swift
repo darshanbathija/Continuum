@@ -41,10 +41,23 @@ final class MacComposerSender {
         }
     }
 
-    func send(sessionId: UUID, body: String, asFollowUp: Bool = false) async throws {
+    func send(
+        sessionId: UUID,
+        body: String,
+        asFollowUp: Bool = false,
+        origin: ProviderPromptOrigin = .userComposer,
+        idempotencyKey: String? = nil,
+        clientIntentId: String? = nil
+    ) async throws {
         let req = try makeRequest(
             path: "/sessions/\(sessionId.uuidString)/send",
-            jsonBody: SendPromptRequest(text: body, asFollowUp: asFollowUp)
+            jsonBody: SendPromptRequest(
+                text: body,
+                asFollowUp: asFollowUp,
+                idempotencyKey: idempotencyKey,
+                origin: origin,
+                clientIntentId: clientIntentId
+            )
         )
         _ = try await execute(req)
     }
@@ -77,7 +90,12 @@ final class MacComposerSender {
     func frontierSend(groupId: UUID, text: String) async throws {
         let req = try makeRequest(
             path: "/chat-sessions/frontier/\(groupId.uuidString)/send",
-            jsonBody: SendPromptRequest(text: text, asFollowUp: false)
+            jsonBody: SendPromptRequest(
+                text: text,
+                asFollowUp: false,
+                origin: .frontierUserBroadcast,
+                clientIntentId: UUID().uuidString
+            )
         )
         _ = try await execute(req)
     }

@@ -137,7 +137,12 @@ final class ClaudePtyE2ETests: XCTestCase {
 
         // 4. SEND via the real handler → the prompt reaches the child.
         let sendBody = try JSONEncoder().encode(
-            SendPromptRequest(text: "hello-e2e-xyz", asFollowUp: false, idempotencyKey: UUID().uuidString)
+            SendPromptRequest(
+                text: "hello-e2e-xyz",
+                asFollowUp: false,
+                idempotencyKey: UUID().uuidString,
+                origin: .userComposer
+            )
         )
         let send = try await request("/sessions/\(session.id.uuidString)/send", method: "POST", body: sendBody)
         XCTAssertEqual(send.status, 200, "send should succeed; body=\(String(decoding: send.data, as: UTF8.self))")

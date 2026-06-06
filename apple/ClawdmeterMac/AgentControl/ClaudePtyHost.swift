@@ -1,4 +1,5 @@
 import Foundation
+import ClawdmeterShared
 import OSLog
 #if canImport(Darwin)
 import Darwin
@@ -158,7 +159,18 @@ actor ClaudePtyHost {
 
     /// Write the user's prompt to the PTY: clear (chat) → payload → settle → CR.
     @discardableResult
-    func submitPrompt(_ text: String, isChat: Bool, isFollowUp: Bool = false) async -> Bool {
+    func submitPrompt(
+        _ text: String,
+        isChat: Bool,
+        isFollowUp: Bool = false,
+        origin: ProviderPromptOrigin = .legacyClient,
+        allowLiveProviderSpend: Bool = false
+    ) async -> Bool {
+        guard ProviderPromptGuard.validate(
+            text: text,
+            origin: origin,
+            allowLiveProviderSpend: allowLiveProviderSpend
+        ).allowed else { return false }
         guard isRunning, masterFD >= 0 else { return false }
         lastUsedAt = Date()
         let w = PromptPtySubmission.writes(forText: text, isFollowUp: isFollowUp, isChat: isChat)

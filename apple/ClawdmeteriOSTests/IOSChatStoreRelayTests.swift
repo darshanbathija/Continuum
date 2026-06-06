@@ -89,18 +89,39 @@ final class MobileCommandOutboxRetryTests: XCTestCase {
 
     private final class OutboxURLProtocol: URLProtocol {
         static var responder: ((URLRequest) -> (Int, [String: String], Data))?
-        static var requests: [URLRequest] = []
+        private static let lock = NSLock()
+        private static var recordedRequests: [URLRequest] = []
+        private static var recordedRequestBodies: [Data?] = []
+
+        static var requests: [URLRequest] {
+            lock.lock()
+            defer { lock.unlock() }
+            return recordedRequests
+        }
+
+        static var requestBodies: [Data?] {
+            lock.lock()
+            defer { lock.unlock() }
+            return recordedRequestBodies
+        }
 
         static func reset() {
             responder = nil
-            requests = []
+            lock.lock()
+            recordedRequests = []
+            recordedRequestBodies = []
+            lock.unlock()
         }
 
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
         override func startLoading() {
-            Self.requests.append(request)
+            let body = Self.bodyData(from: request)
+            Self.lock.lock()
+            Self.recordedRequests.append(request)
+            Self.recordedRequestBodies.append(body)
+            Self.lock.unlock()
             guard let responder = Self.responder else {
                 client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
                 return
@@ -118,6 +139,28 @@ final class MobileCommandOutboxRetryTests: XCTestCase {
         }
 
         override func stopLoading() {}
+
+        private static func bodyData(from request: URLRequest) -> Data? {
+            if let body = request.httpBody {
+                return body
+            }
+            guard let stream = request.httpBodyStream else {
+                return nil
+            }
+            stream.open()
+            defer { stream.close() }
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 1024)
+            while stream.hasBytesAvailable {
+                let read = stream.read(&buffer, maxLength: buffer.count)
+                if read > 0 {
+                    data.append(buffer, count: read)
+                } else {
+                    break
+                }
+            }
+            return data.isEmpty ? nil : data
+        }
     }
 
     override func tearDown() {
@@ -186,5 +229,100 @@ final class MobileCommandOutboxRetryTests: XCTestCase {
         if let key = outbox.pending.first?.idempotencyKey {
             outbox.discard(idempotencyKey: key)
         }
+    }
+
+    func test_persistedQueuedSendRequiresManualRetryAfterRelaunch() async throws {
+        struct StoreFile: Codable {
+            var version: Int
+            var pending: [MobileCommandEnvelope]
+            var failed: [MobileCommandEnvelope]
+        }
+
+        OutboxURLProtocol.responder = { _ in
+            (200, ["Content-Type": "application/json"], Data("{}".utf8))
+        }
+        let storeURL = makeStoreURL()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let payload = try encoder.encode(SendPromptRequest(
+            text: "persisted prompt",
+            asFollowUp: true,
+            idempotencyKey: "persisted-key",
+            origin: .userComposer,
+            clientIntentId: "persisted-intent"
+        ))
+        let envelope = MobileCommandEnvelope(
+            idempotencyKey: "persisted-key",
+            deviceId: "test-device",
+            sessionId: UUID(),
+            kind: .send,
+            status: .queued,
+            payload: String(data: payload, encoding: .utf8) ?? "{}"
+        )
+        let store = StoreFile(version: 1, pending: [envelope], failed: [])
+        try encoder.encode(store).write(to: storeURL, options: [.atomic])
+
+        let outbox = MobileCommandOutbox(client: makeClient(), storeURL: storeURL, deviceId: "test-device")
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(outbox.pending.isEmpty)
+        XCTAssertEqual(outbox.failed.first?.idempotencyKey, "persisted-key")
+        XCTAssertEqual(OutboxURLProtocol.requests.count, 0)
+    }
+
+    func test_manualRetryRestampsLegacyQueuedSendAsUserComposer() async throws {
+        struct StoreFile: Codable {
+            var version: Int
+            var pending: [MobileCommandEnvelope]
+            var failed: [MobileCommandEnvelope]
+        }
+
+        OutboxURLProtocol.responder = { _ in
+            (200, ["Content-Type": "application/json"], Data("{}".utf8))
+        }
+        let storeURL = makeStoreURL()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let envelope = MobileCommandEnvelope(
+            idempotencyKey: "legacy-hi-key",
+            deviceId: "test-device",
+            sessionId: UUID(),
+            kind: .send,
+            status: .queued,
+            payload: #"{"text":"hi","asFollowUp":true,"idempotencyKey":"legacy-hi-key"}"#
+        )
+        let store = StoreFile(version: 1, pending: [envelope], failed: [])
+        try encoder.encode(store).write(to: storeURL, options: [.atomic])
+
+        let outbox = MobileCommandOutbox(client: makeClient(), storeURL: storeURL, deviceId: "test-device")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(outbox.pending.isEmpty)
+        XCTAssertEqual(outbox.failed.first?.idempotencyKey, "legacy-hi-key")
+        XCTAssertEqual(OutboxURLProtocol.requests.count, 0)
+
+        outbox.retry(idempotencyKey: "legacy-hi-key")
+        let restampedPayload = try XCTUnwrap(outbox.pending.first?.payload.data(using: .utf8))
+        let restampedRequest = try JSONDecoder().decode(SendPromptRequest.self, from: restampedPayload)
+        XCTAssertEqual(restampedRequest.origin, .userComposer)
+        XCTAssertEqual(restampedRequest.idempotencyKey, "legacy-hi-key")
+
+        let sent = await waitUntil {
+            OutboxURLProtocol.requests.contains { request in
+                request.url?.path.hasSuffix("/send") == true
+            }
+        }
+        XCTAssertTrue(sent, "manual retry should dispatch exactly one restamped send")
+        let sendBodies = zip(OutboxURLProtocol.requests, OutboxURLProtocol.requestBodies)
+            .filter { request, _ in request.url?.path.hasSuffix("/send") == true }
+            .map { _, body in body }
+        XCTAssertEqual(sendBodies.count, 1)
+        let body = try XCTUnwrap(sendBodies.first ?? nil)
+        let request = try JSONDecoder().decode(SendPromptRequest.self, from: body)
+        XCTAssertEqual(request.text, "hi")
+        XCTAssertEqual(request.origin, .userComposer)
+        XCTAssertEqual(request.idempotencyKey, "legacy-hi-key")
+        XCTAssertNotNil(request.clientIntentId)
     }
 }

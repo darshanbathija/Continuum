@@ -31,11 +31,17 @@ enum WorkbenchPaneTab: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum QueuedWorkbenchSendDispatchPolicy: String, Codable, Equatable, Sendable {
+    case manualConfirmation
+    case autoCurrentProcess
+}
+
 struct QueuedWorkbenchSend: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let sessionId: UUID
     var payload: ComposerDraftPayload
     let createdAt: Date
+    var dispatchPolicy: QueuedWorkbenchSendDispatchPolicy
 
     var text: String {
         get { payload.text }
@@ -58,7 +64,8 @@ struct QueuedWorkbenchSend: Codable, Equatable, Identifiable, Sendable {
         text: String,
         attachmentPaths: [String] = [],
         browserComments: [BrowserCommentContext] = [],
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        dispatchPolicy: QueuedWorkbenchSendDispatchPolicy = .autoCurrentProcess
     ) {
         self.id = id
         self.sessionId = sessionId
@@ -68,22 +75,25 @@ struct QueuedWorkbenchSend: Codable, Equatable, Identifiable, Sendable {
             browserComments: browserComments
         )
         self.createdAt = createdAt
+        self.dispatchPolicy = dispatchPolicy
     }
 
     init(
         id: UUID = UUID(),
         sessionId: UUID,
         payload: ComposerDraftPayload,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        dispatchPolicy: QueuedWorkbenchSendDispatchPolicy = .autoCurrentProcess
     ) {
         self.id = id
         self.sessionId = sessionId
         self.payload = payload
         self.createdAt = createdAt
+        self.dispatchPolicy = dispatchPolicy
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, sessionId, payload, text, attachmentPaths, browserComments, createdAt
+        case id, sessionId, payload, text, attachmentPaths, browserComments, createdAt, dispatchPolicy
     }
 
     init(from decoder: Decoder) throws {
@@ -91,6 +101,8 @@ struct QueuedWorkbenchSend: Codable, Equatable, Identifiable, Sendable {
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         sessionId = try c.decode(UUID.self, forKey: .sessionId)
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        dispatchPolicy = try c.decodeIfPresent(QueuedWorkbenchSendDispatchPolicy.self, forKey: .dispatchPolicy)
+            ?? .manualConfirmation
         if let payload = try c.decodeIfPresent(ComposerDraftPayload.self, forKey: .payload) {
             self.payload = payload
         } else {
@@ -111,6 +123,17 @@ struct QueuedWorkbenchSend: Codable, Equatable, Identifiable, Sendable {
         try c.encode(payload.attachmentPaths, forKey: .attachmentPaths)
         try c.encode(payload.browserComments, forKey: .browserComments)
         try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(dispatchPolicy, forKey: .dispatchPolicy)
+    }
+
+    func manualConfirmationCopy() -> QueuedWorkbenchSend {
+        QueuedWorkbenchSend(
+            id: id,
+            sessionId: sessionId,
+            payload: payload,
+            createdAt: createdAt,
+            dispatchPolicy: .manualConfirmation
+        )
     }
 }
 
@@ -324,6 +347,12 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
         refresh = try c.decodeIfPresent(WorkbenchRefreshState.self, forKey: .refresh) ?? WorkbenchRefreshState()
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
+
+    func demotingPersistedQueuedSends() -> WorkbenchStateSnapshot {
+        var copy = self
+        copy.queuedSends = queuedSends.map { $0.manualConfirmationCopy() }
+        return copy
+    }
 }
 
 final class WorkbenchStateStore {
@@ -355,9 +384,9 @@ final class WorkbenchStateStore {
         do {
             let data = try Data(contentsOf: storeURL)
             if let file = try? decoder.decode(StoreFile.self, from: data) {
-                return file.snapshot
+                return file.snapshot.demotingPersistedQueuedSends()
             }
-            return try decoder.decode(WorkbenchStateSnapshot.self, from: data)
+            return try decoder.decode(WorkbenchStateSnapshot.self, from: data).demotingPersistedQueuedSends()
         } catch {
             return WorkbenchStateSnapshot()
         }

@@ -124,7 +124,7 @@ final class ChatSendPerProviderTests: XCTestCase {
         let (bridge, store, driver) = makeHarnessBridge(displayName: "ChatGPT")
         try await bridge.start(binary: nil, arguments: [], cwd: "/tmp", env: [:], effort: nil, alwaysApprove: false)
 
-        await bridge.prompt("hello from the test")
+        await bridge.prompt("hello from the test", origin: .userComposer)
         let delivered = await driver.prompts
         XCTAssertEqual(delivered, ["hello from the test"], "the chat prompt reaches the driver")
         let streaming = await waitUntil { store.snapshot.currentTurnState == .streaming }
@@ -142,6 +142,19 @@ final class ChatSendPerProviderTests: XCTestCase {
         await bridge.teardown()
     }
 
+    func test_harnessBridgeBlocksLegacyPromptBeforeDriver() async throws {
+        let (bridge, store, driver) = makeHarnessBridge(displayName: "ChatGPT")
+        try await bridge.start(binary: nil, arguments: [], cwd: "/tmp", env: [:], effort: nil, alwaysApprove: false)
+
+        let accepted = await bridge.prompt("background prompt")
+        let delivered = await driver.prompts
+
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(delivered, [])
+        XCTAssertEqual(store.snapshot.currentTurnState, .idle)
+        await bridge.teardown()
+    }
+
     /// Grok drives the same bridge path (its streaming-json → HarnessEvent
     /// mapping is unit-tested in GrokHeadlessDriverTests); confirm thought + text
     /// deltas both project into the store under the Grok display name.
@@ -149,16 +162,16 @@ final class ChatSendPerProviderTests: XCTestCase {
         let (bridge, store, driver) = makeHarnessBridge(displayName: "Grok")
         try await bridge.start(binary: nil, arguments: [], cwd: "/tmp", env: [:], effort: nil, alwaysApprove: false)
 
-        await bridge.prompt("ping")
+        await bridge.prompt("fake grok prompt", origin: .userComposer)
         driver.emit(.agentThoughtDelta("considering…"))
-        driver.emit(.agentMessageDelta("pong"))
+        driver.emit(.agentMessageDelta("fake grok reply"))
         driver.emit(.turnEnded(.endTurn))
 
         let replied = await waitUntil {
-            store.messages.contains { $0.kind == .assistantText && $0.body == "pong" }
+            store.messages.contains { $0.kind == .assistantText && $0.body == "fake grok reply" }
         }
         XCTAssertTrue(replied, "grok's text reply projects as an assistant row")
-        let row = store.messages.first { $0.kind == .assistantText && $0.body == "pong" }
+        let row = store.messages.first { $0.kind == .assistantText && $0.body == "fake grok reply" }
         XCTAssertEqual(row?.title, "Grok")
         await bridge.teardown()
     }

@@ -448,22 +448,16 @@ public final class AgentControlServer {
             kind: .statusChanged,
             payload: ["autopilot": "false", "reason": "inactivity_timeout"]
         )
-        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
-        let result = await changer.swap(sessionId: id)
-        switch result {
-        case .swapped:
-            serverLogger.info(
-                "autopilot disabled and session respawned after inactivity: session=\(id.uuidString, privacy: .public)"
-            )
-        case .resumeFailed(let restoredOriginal):
-            serverLogger.error(
-                "autopilot expiry respawn failed for \(id.uuidString, privacy: .public); restoredOriginal=\(restoredOriginal, privacy: .public)"
-            )
-        case .spawnError(let message):
-            serverLogger.error(
-                "autopilot expiry could not respawn \(id.uuidString, privacy: .public): \(message, privacy: .public)"
-            )
-        }
+        await claudePtyRegistry.suspend(id)
+        try? await registry.updateStatus(id: id, status: .paused)
+        AgentEventStream.recordEvent(
+            sessionId: id,
+            kind: .statusChanged,
+            payload: ["status": "paused", "reason": "autopilot_inactivity_timeout"]
+        )
+        serverLogger.info(
+            "autopilot disabled after inactivity; session paused until explicit user resume: session=\(id.uuidString, privacy: .public)"
+        )
     }
 
     private func startListening(on port: UInt16, queue: DispatchQueue) -> Bool {
@@ -1742,6 +1736,41 @@ public final class AgentControlServer {
         }
     }
 
+    private static var allowLiveProviderSpend: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return env["CLAWDMETER_LIVE_PROVIDER_TESTS"] == "1"
+            && env["CLAWDMETER_ALLOW_PROVIDER_SPEND"] == "1"
+    }
+
+    private func blockedProviderPromptResponse(
+        sessionId: UUID,
+        sourcePeer: String,
+        text: String,
+        origin: ProviderPromptOrigin
+    ) async -> HTTPResponse? {
+        let decision = ProviderPromptGuard.validate(
+            text: text,
+            origin: origin,
+            allowLiveProviderSpend: Self.allowLiveProviderSpend
+        )
+        guard !decision.allowed else { return nil }
+        let reason = decision.reason ?? "provider_prompt_blocked"
+        await AuditLog.shared.recordBlockedPrompt(
+            sessionId: sessionId,
+            sourcePeer: sourcePeer,
+            text: text,
+            origin: origin,
+            reason: reason
+        )
+        return blockedProviderPromptHTTPResponse(reason: reason, origin: origin)
+    }
+
+    private func blockedProviderPromptHTTPResponse(reason: String, origin: ProviderPromptOrigin) -> HTTPResponse {
+        HTTPResponse.forbidden(
+            body: Data(#"{"error":"provider_prompt_blocked","reason":"\#(reason)","origin":"\#(origin.rawValue)"}"#.utf8)
+        )
+    }
+
     private func handleSendPrompt(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
@@ -1761,6 +1790,16 @@ public final class AgentControlServer {
         let bytes = Array(req.text.utf8)
         guard !bytes.isEmpty, bytes.count <= 1_000_000 else {
             sendResponse(.badRequest, on: connection); return
+        }
+        let peer = Self.endpointString(connection.endpoint)
+        if let blocked = await blockedProviderPromptResponse(
+            sessionId: uuid,
+            sourcePeer: peer,
+            text: req.text,
+            origin: req.origin
+        ) {
+            sendResponse(blocked, on: connection)
+            return
         }
         // Phase 1: resolve the owning backend ONCE via SessionCommandRouter
         // (the tested single source of truth for the precedence below). Each
@@ -1783,7 +1822,13 @@ public final class AgentControlServer {
                 ), on: connection)
                 return
             }
-            guard await host.submitPrompt(req.text, isChat: session.kind == .chat, isFollowUp: req.asFollowUp) else {
+            guard await host.submitPrompt(
+                req.text,
+                isChat: session.kind == .chat,
+                isFollowUp: req.asFollowUp,
+                origin: req.origin,
+                allowLiveProviderSpend: Self.allowLiveProviderSpend
+            ) else {
                 sendResponse(HTTPResponse(
                     status: 503, reason: "Service Unavailable",
                     contentType: "application/json",
@@ -1792,7 +1837,6 @@ public final class AgentControlServer {
                 return
             }
             captureClaudeSessionId(for: session)   // re-capture the (possibly rotated) CLI id
-            let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
             await sendCommandResponse(
                 body: ["ok": true], key: req.idempotencyKey, kind: .send,
@@ -1823,8 +1867,10 @@ public final class AgentControlServer {
         // off the bridge registry so retired legacy sessions never masquerade
         // as live harnesses.
         if route == .harnessBridge, let bridge = harnessRegistry.bridge(for: uuid) {
-            await bridge.prompt(req.text)
-            let peer = Self.endpointString(connection.endpoint)
+            guard await bridge.prompt(req.text, origin: req.origin, allowLiveProviderSpend: Self.allowLiveProviderSpend) else {
+                sendResponse(blockedProviderPromptHTTPResponse(reason: "provider_prompt_blocked", origin: req.origin), on: connection)
+                return
+            }
             await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
             await sendCommandResponse(
                 body: ["ok": true],
@@ -1855,6 +1901,25 @@ public final class AgentControlServer {
         followUp: ScheduledFollowUp
     ) async -> SessionScheduler.DeliveryResult {
         let current = registry.session(id: session.id) ?? session
+        if followUp.deliveryPolicy != .autonomousAfterRestart {
+            return .retired(reason: "follow_up_requires_confirmation")
+        }
+        let decision = ProviderPromptGuard.validate(
+            text: followUp.prompt,
+            origin: followUp.origin,
+            allowLiveProviderSpend: Self.allowLiveProviderSpend
+        )
+        guard decision.allowed else {
+            let reason = decision.reason ?? "provider_prompt_blocked"
+            await AuditLog.shared.recordBlockedPrompt(
+                sessionId: current.id,
+                sourcePeer: "scheduler",
+                text: followUp.prompt,
+                origin: followUp.origin,
+                reason: reason
+            )
+            return .retired(reason: reason)
+        }
         let routeCtx = routeContext(for: current)
         let route = SessionCommandRouter.resolve(routeCtx)
         switch route {
@@ -1862,7 +1927,13 @@ public final class AgentControlServer {
             guard let host = await claudePtyHost(for: current) else {
                 return .unavailable(reason: "agent_cli_not_found")
             }
-            guard await host.submitPrompt(followUp.prompt, isChat: current.kind == .chat, isFollowUp: true) else {
+            guard await host.submitPrompt(
+                followUp.prompt,
+                isChat: current.kind == .chat,
+                isFollowUp: true,
+                origin: followUp.origin,
+                allowLiveProviderSpend: Self.allowLiveProviderSpend
+            ) else {
                 return .unavailable(reason: "pty_write_failed")
             }
             captureClaudeSessionId(for: current)
@@ -1872,7 +1943,13 @@ public final class AgentControlServer {
             guard let bridge = harnessRegistry.bridge(for: current.id) else {
                 return .unavailable(reason: "acp_session_not_live")
             }
-            await bridge.prompt(followUp.prompt)
+            guard await bridge.prompt(
+                followUp.prompt,
+                origin: followUp.origin,
+                allowLiveProviderSpend: Self.allowLiveProviderSpend
+            ) else {
+                return .retired(reason: "provider_prompt_blocked")
+            }
             await AuditLog.shared.recordSend(sessionId: current.id, sourcePeer: "scheduler", text: followUp.prompt)
             return .delivered
         case .opencodeServe:
@@ -6298,19 +6375,22 @@ public final class AgentControlServer {
         let legacyReq = frontierReq == nil ? try? decoder.decode(SendPromptRequest.self, from: request.body) : nil
         let sharedText: String
         let perChild: [String: String]?
+        let origin: ProviderPromptOrigin
         if let frontierReq {
             sharedText = frontierReq.text
             perChild = frontierReq.perChildText
+            origin = frontierReq.origin
         } else if let legacyReq {
             sharedText = legacyReq.text
             perChild = nil
+            origin = legacyReq.origin
         } else {
             sendResponse(.badRequest, on: connection); return
         }
         var results: [FrontierChildSendResult] = []
         for child in children {
             let text = perChild?[child.id.uuidString] ?? sharedText
-            results.append(await forwardFrontierChildSend(session: child, text: text))
+            results.append(await forwardFrontierChildSend(session: child, text: text, origin: origin))
         }
         let response = FrontierSendResponse(groupId: uuid, childCount: children.count, results: results)
         let encoder = JSONEncoder()
@@ -6330,10 +6410,35 @@ public final class AgentControlServer {
     /// inside handleSendPrompt (harness vs SDK vs direct PTY/SSE) but does NOT
     /// touch the HTTP connection — Frontier fan-out caller already
     /// returned a 202. Errors are logged + dropped.
-    private func forwardFrontierChildSend(session: AgentSession, text: String) async -> FrontierChildSendResult {
+    private func forwardFrontierChildSend(
+        session: AgentSession,
+        text: String,
+        origin: ProviderPromptOrigin
+    ) async -> FrontierChildSendResult {
         let bytes = Array(text.utf8)
         guard !bytes.isEmpty, bytes.count <= 1_000_000 else {
             return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "invalid_prompt")
+        }
+        let decision = ProviderPromptGuard.validate(
+            text: text,
+            origin: origin,
+            allowLiveProviderSpend: Self.allowLiveProviderSpend
+        )
+        guard decision.allowed else {
+            let reason = decision.reason ?? "provider_prompt_blocked"
+            await AuditLog.shared.recordBlockedPrompt(
+                sessionId: session.id,
+                sourcePeer: "frontier",
+                text: text,
+                origin: origin,
+                reason: reason
+            )
+            return FrontierChildSendResult(
+                childIndex: session.frontierChildIndex ?? 0,
+                sessionId: session.id,
+                ok: false,
+                reason: reason
+            )
         }
         // v0.23.9 adversarial-review fix: handleFrontierSend snapshots
         // the child list before iterating, then awaits per-child sends
@@ -6354,7 +6459,9 @@ public final class AgentControlServer {
         // below. A registered bridge is authoritative (mirrors the Solo send path's
         // SessionCommandRouter `.harnessBridge` route).
         if let bridge = harnessRegistry.bridge(for: session.id) {
-            await bridge.prompt(text)
+            guard await bridge.prompt(text, origin: origin, allowLiveProviderSpend: Self.allowLiveProviderSpend) else {
+                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "provider_prompt_blocked")
+            }
             await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
             return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
         }
@@ -6374,7 +6481,13 @@ public final class AgentControlServer {
             guard let host = await claudePtyHost(for: session) else {
                 return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "agent_cli_not_found")
             }
-            guard await host.submitPrompt(text, isChat: session.kind == .chat, isFollowUp: true) else {
+            guard await host.submitPrompt(
+                text,
+                isChat: session.kind == .chat,
+                isFollowUp: true,
+                origin: origin,
+                allowLiveProviderSpend: Self.allowLiveProviderSpend
+            ) else {
                 return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "pty_write_failed")
             }
             await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)

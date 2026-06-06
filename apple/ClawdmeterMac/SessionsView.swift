@@ -266,6 +266,8 @@ struct PendingFirstSendRecovery: Equatable {
     let attachments: [ComposerStore.Attachment]
     let browserComments: [BrowserCommentContext]
     let error: ComposerStore.SendError
+    let createdAt: Date
+    let clientIntentId: String
     /// When true, the queued draft auto-sends the moment the session is ready
     /// (used for sends made while a "+" session is still provisioning) instead
     /// of being restored to the composer for a manual retry.
@@ -811,6 +813,8 @@ public final class SessionsModel: ObservableObject {
             attachments: attachments,
             browserComments: browserComments,
             error: error,
+            createdAt: Date(),
+            clientIntentId: UUID().uuidString,
             autoSendWhenReady: autoSendWhenReady
         )
         pendingFirstSendRecoveryVersion += 1

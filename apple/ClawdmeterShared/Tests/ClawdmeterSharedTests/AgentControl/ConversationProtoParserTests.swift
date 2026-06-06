@@ -392,7 +392,7 @@ final class ConversationProtoParserTests: XCTestCase {
     }
 
     func test_messageBlock_classifiesSystemSenderAsUserPromptEcho() {
-        let text = "[Message] timestamp=2026-05-23T01:00:00Z sender=system priority=MESSAGE_PRIORITY_HIGH content=Say hi in one short sentence."
+        let text = "[Message] timestamp=2026-05-23T01:00:00Z sender=system priority=MESSAGE_PRIORITY_HIGH content=Confirm status in one short sentence."
         let payload = Data([0x2A, 0x7F]) + Data(text.utf8) + Data([0x12, 0x00])
         let blocks = ConversationProtoParser.scrapeMessageBlocks(payload)
         XCTAssertEqual(blocks.count, 1)

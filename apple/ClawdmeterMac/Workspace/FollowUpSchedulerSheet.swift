@@ -47,6 +47,22 @@ struct FollowUpSchedulerSheet: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                         Spacer()
+                        if up.deliveryPolicy == .requiresConfirmation {
+                            Button(action: {
+                                Task { @MainActor in
+                                    try? await registry.confirmScheduledFollowUp(
+                                        sessionId: session.id,
+                                        followUpId: up.id,
+                                        confirmedBy: "mac-follow-up-sheet-confirm"
+                                    )
+                                }
+                            }) {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 10, weight: .semibold))
+                            }
+                            .buttonStyle(PressableButtonStyle())
+                            .help("Confirm")
+                        }
                         Button(action: {
                             // F2-wire: SwiftUI Button action closures are
                             // sync — wrap the now-async registry call in
@@ -70,7 +86,13 @@ struct FollowUpSchedulerSheet: View {
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Schedule") {
-                    let up = ScheduledFollowUp(fireAt: fireAt, prompt: prompt)
+                    let up = ScheduledFollowUp(
+                        fireAt: fireAt,
+                        prompt: prompt,
+                        origin: .scheduledUserFollowUp,
+                        createdBy: "mac-follow-up-sheet",
+                        deliveryPolicy: .autonomousAfterRestart
+                    )
                     // F2-wire: SwiftUI Button action closure is sync —
                     // wrap the now-async registry call. Best-effort:
                     // if the receipt write fails, the user re-clicks.
