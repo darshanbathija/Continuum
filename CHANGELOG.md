@@ -11,6 +11,10 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 - Removes tmux runtime code, control-mode parsing, bundled tmux provisioning, the tmux control-mode probe tool, and tmux-specific tests from active Mac/shared build paths.
 - Retires old tmux pane-backed sessions instead of reconnecting them, while preserving legacy `tmuxWindowId` and `tmuxPaneId` decoding compatibility.
 
+### Fixed
+
+- Live provider drive tests now require both `CLAWDMETER_LIVE_VERIFY=1` and `~/.continuum-live-verify`, so a stale marker file alone cannot burn Codex or other provider usage with PONG probes.
+
 ### Changed
 
 - Claude Code and chat sessions now always use the direct Claude PTY registry for sends, interrupts, deletes, approval, revive, scheduler, and config-swap flows.
@@ -32,7 +36,6 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 - Repo snapshots are now produced from `WorkspaceStore` and Continuum-owned session state, with `recentSessions: []` kept for wire compatibility.
 - Backward-compatible endpoints for read-only continuation and JSONL alias rename remain inert without visible UI entry points.
 - Live Cursor drive tests now skip cleanly when the local Cursor account reports agent usage exhaustion.
-- Bumps `VERSION` 0.31.4 -> 0.31.5, `MARKETING_VERSION` 0.31.4 -> 0.31.5, and `CURRENT_PROJECT_VERSION` 204 -> 205.
 
 ## [0.31.4 build 204] - 2026-06-06 - Stop Claude background prompt polling (`darshanbathija/stop-claude-hi-spam`)
 
