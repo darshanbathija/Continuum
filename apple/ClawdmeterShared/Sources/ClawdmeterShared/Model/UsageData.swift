@@ -24,9 +24,9 @@ public struct UsageData: Codable, Equatable, Sendable {
             includedUsageLabel: String? = nil,
             extraUsageLabel: String? = nil
         ) {
-            self.totalPct = totalPct
-            self.autoPct = autoPct
-            self.apiPct = apiPct
+            self.totalPct = UsageData.clampPercent(totalPct)
+            self.autoPct = autoPct.map(UsageData.clampPercent)
+            self.apiPct = apiPct.map(UsageData.clampPercent)
             self.resetMins = resetMins
             self.resetEpoch = resetEpoch
             self.includedUsageLabel = includedUsageLabel
@@ -100,10 +100,10 @@ public struct UsageData: Codable, Equatable, Sendable {
         codexSDKModeActive: Bool? = nil,
         cursorQuota: CursorQuota? = nil
     ) {
-        self.sessionPct = sessionPct
+        self.sessionPct = Self.clampPercent(sessionPct)
         self.sessionResetMins = sessionResetMins
         self.sessionEpoch = sessionEpoch
-        self.weeklyPct = weeklyPct
+        self.weeklyPct = Self.clampPercent(weeklyPct)
         self.weeklyResetMins = weeklyResetMins
         self.weeklyEpoch = weeklyEpoch
         self.status = status
@@ -130,10 +130,10 @@ public struct UsageData: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.sessionPct = try c.decode(Int.self, forKey: .sessionPct)
+        self.sessionPct = Self.clampPercent(try c.decode(Int.self, forKey: .sessionPct))
         self.sessionResetMins = try c.decode(Int.self, forKey: .sessionResetMins)
         self.sessionEpoch = try c.decode(Int.self, forKey: .sessionEpoch)
-        self.weeklyPct = try c.decode(Int.self, forKey: .weeklyPct)
+        self.weeklyPct = Self.clampPercent(try c.decode(Int.self, forKey: .weeklyPct))
         self.weeklyResetMins = try c.decode(Int.self, forKey: .weeklyResetMins)
         self.weeklyEpoch = try c.decode(Int.self, forKey: .weeklyEpoch)
         self.status = try c.decode(Status.self, forKey: .status)
@@ -148,6 +148,10 @@ public struct UsageData: Codable, Equatable, Sendable {
         // v8 field — decodeIfPresent so v6/v7 payloads still parse.
         self.codexSDKModeActive = try c.decodeIfPresent(Bool.self, forKey: .codexSDKModeActive)
         self.cursorQuota = try c.decodeIfPresent(CursorQuota.self, forKey: .cursorQuota)
+    }
+
+    private static func clampPercent(_ value: Int) -> Int {
+        min(100, max(0, value))
     }
 
     public func encode(to encoder: Encoder) throws {

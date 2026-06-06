@@ -28,15 +28,12 @@ let package = Package(
         // nested steps, ignore prose between lists, and handle fenced
         // code blocks correctly (eng review 2C fix).
         .package(url: "https://github.com/apple/swift-markdown", from: "0.4.0"),
-        // Cross-platform implementation of CryptoKit APIs for Linux CI.
-        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
     ],
     targets: [
         .target(
             name: "ClawdmeterShared",
             dependencies: [
                 .product(name: "Markdown", package: "swift-markdown"),
-                .product(name: "Crypto", package: "swift-crypto"),
             ],
             resources: [
                 // Embedded LiteLLM pricing snapshot (A3 + A20). Refreshed via

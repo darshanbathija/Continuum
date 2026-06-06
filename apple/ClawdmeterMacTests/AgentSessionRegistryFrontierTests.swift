@@ -108,7 +108,7 @@ final class AgentSessionRegistryFrontierTests: XCTestCase {
         )
 
         let binding = reg.session(id: session.id)?.runtimeBinding
-        XCTAssertEqual(binding?.runtimeKind, .cursorCLI)
+        XCTAssertEqual(binding?.runtimeKind, .acpCursor)
         XCTAssertEqual(binding?.providerModelId, CursorModelCatalog.autoModelId)
         XCTAssertEqual(binding?.metadata["chatVendor"], ChatVendor.cursor.rawValue)
     }

@@ -26,7 +26,7 @@ struct PairingSettingsView: View {
     @ObservedObject var runtime: AppRuntime
     @ObservedObject var pairingService: RelayPairingService
     /// Plain @State (not @AppStorage) seeded from the array-typed default:
-    /// the scanRootsKey is read as [String] by RepoIndex / PathAllowList, so
+    /// the scanRootsKey is read as [String] by PathAllowList, so
     /// an @AppStorage(String) bound here would dual-type the key and silently
     /// clobber the array consumers on every keystroke. onChange is the sole
     /// writer, and it only ever writes [String].
@@ -400,10 +400,10 @@ struct PairingSettingsView: View {
         .padding(.top, 4)
     }
 
-    // MARK: - Scan roots section (unchanged from pre-E7)
+    // MARK: - Allowed roots
 
     private var scanRootsSection: some View {
-        tahoeSection("Scan roots", footer: "Comma-separated directories to scan for `.git` repos beyond `~/.claude/projects/` and `~/.codex/sessions/`. Empty by default; common picks: `~/Downloads`, `~/Desktop`, `~/code`.") {
+        tahoeSection("Allowed roots", footer: "Comma-separated directories that paired-device workspace creation may access outside the default workspace parent. These roots are not scanned for sidebar session history.") {
             TextField(
                 "e.g. ~/Downloads, ~/code",
                 text: $scanRoots,

@@ -11,8 +11,8 @@
 //       associated_data
 //   )
 //
-// CryptoKit / swift-crypto expose `ChaChaPoly` (the IETF variant with
-// 12-byte nonces) but NOT the raw ChaCha20 quarter-round building block,
+// CryptoKit exposes `ChaChaPoly` (the IETF variant with 12-byte nonces) but
+// NOT the raw ChaCha20 quarter-round building block,
 // which is what HChaCha20 boils down to: a single 20-round permutation
 // on the ChaCha20 state matrix where the output is the first 128 bits +
 // last 128 bits (skipping the intermediate state).
@@ -128,8 +128,4 @@ enum HChaCha20 {
     }
 }
 
-#if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
-#endif

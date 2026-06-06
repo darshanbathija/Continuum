@@ -139,7 +139,7 @@ struct ClaudeView: View {
                 }
                 Text("\(snap.usage.sessionPct)% used")
                     .font(.subheadline)
-                (Text("Resets ") + Text(resetDate, style: .relative))
+                Text("Resets \(resetDate, style: .relative)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -161,8 +161,7 @@ struct ClaudeView: View {
     private var inline: some View {
         if let snap = entry.snapshot {
             let resetDate = Date(timeIntervalSince1970: TimeInterval(snap.usage.sessionEpoch))
-            Text("Claude \(snap.usage.sessionPct)% · resets ")
-                + Text(resetDate, style: .relative)
+            Text("Claude \(snap.usage.sessionPct)% · resets \(resetDate, style: .relative)")
         } else {
             Text("Continuum offline")
         }

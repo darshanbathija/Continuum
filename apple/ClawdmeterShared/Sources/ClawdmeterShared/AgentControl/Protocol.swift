@@ -1052,9 +1052,9 @@ public struct ModelCatalog: Codable, Sendable {
 
 // MARK: - Repo + Session
 
-/// One session JSONL file that wasn't spawned by Clawdmeter but lived in a
-/// repo we know about. Surfaced in the sidebar so the user can revisit any
-/// past Claude / Codex session as read-only chat.
+/// Legacy wire DTO for external provider JSONL files. Kept decode-compatible
+/// so older clients can read `AgentRepo.recentSessions`, but current
+/// Continuum-produced repo snapshots set that array to empty.
 public struct RecentSession: Codable, Hashable, Sendable, Identifiable {
     /// Absolute path to the JSONL on disk. Doubles as our stable id —
     /// JSONL files don't move once written.
@@ -1068,9 +1068,8 @@ public struct RecentSession: Codable, Hashable, Sendable, Identifiable {
     /// instead of "Claude session" five times in a row. Optional —
     /// empty / parse-failed JSONLs fall back to the generic label.
     public let firstPrompt: String?
-    /// User-supplied memorable name. When non-empty wins over `firstPrompt`
-    /// as the sidebar row title. Persisted on the Mac in
-    /// `~/.clawdmeter/jsonl-aliases.json` keyed by `path`.
+    /// Legacy user-supplied memorable name. Current Continuum UI no longer
+    /// surfaces external JSONL rows or aliases.
     public let customName: String?
     public var id: String { path }
 
@@ -1103,8 +1102,8 @@ public struct RecentSession: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
-/// `POST /jsonl-aliases/rename` body. Sent from iOS to the Mac daemon to
-/// rename a Recent JSONL row. `name` nil-or-empty clears the alias.
+/// Legacy `POST /jsonl-aliases/rename` body. Current daemons keep the route
+/// compatible but do not surface or mutate external JSONL sidebar aliases.
 public struct RenameJSONLRequest: Codable, Sendable {
     public let path: String
     public let name: String?
@@ -1189,9 +1188,8 @@ public struct AgentRepo: Codable, Hashable, Sendable {
     /// "live now" signal (green dot in UI). Optional (default 0) so old
     /// wire stays valid.
     public let liveSessionCount: Int
-    /// Sessions (outside-Clawdmeter) that wrote to disk within the recent
-    /// activity window (30 days by default). Each entry is one JSONL the
-    /// user can open as read-only chat. Sorted newest-first.
+    /// Legacy external-session array. Current repo snapshots emitted by
+    /// Continuum set this to `[]`; the field remains for wire compatibility.
     public let recentSessions: [RecentSession]
 
     public init(
@@ -2033,7 +2031,7 @@ public struct OpenLocalFolderRequest: Codable, Sendable {
 /// `owner/repo`, `https://github.com/owner/repo[.git]`, or
 /// `git@github.com:owner/repo.git`; daemon normalizes to `owner/repo`.
 /// `destinationParent` must canonicalize under `defaultParent` or one of
-/// the configured scan roots; otherwise → 403.
+/// the configured allowed roots; otherwise -> 403.
 public struct CloneFromGitHubRequest: Codable, Sendable {
     public let spec: String
     public let destinationParent: String?
@@ -2104,10 +2102,10 @@ public struct WorkspaceAllowListResponse: Codable, Sendable {
     }
 }
 
-/// Typed error surface for the Add-Repo flow. Used by Mac UI (LocalizedError
-/// conformance lives on the Mac side in `RepoOnboardingError+Localized.swift`)
-/// AND by iOS (decoded from non-2xx daemon response bodies). Conforms to
-/// `Codable` + `Error` here in shared so both surfaces see the same shape.
+/// Typed error surface for the Add-Repo flow. Used by Mac UI and by iOS
+/// (decoded from non-2xx daemon response bodies). Conforms to `Codable`,
+/// `Error`, and `LocalizedError` here in shared so both surfaces see and
+/// display the same shape.
 public enum RepoOnboardingError: Error, Codable, Sendable, Equatable {
     case pathMissing
     case notADirectory
@@ -2176,6 +2174,59 @@ public enum RepoOnboardingError: Error, Codable, Sendable, Equatable {
             try c.encode(Kind.pathNotAllowed, forKey: .kind)
             try c.encode(reason, forKey: .reason)
         }
+    }
+}
+
+extension RepoOnboardingError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .pathMissing:
+            return "Folder doesn't exist"
+        case .notADirectory:
+            return "Selected path isn't a folder"
+        case .alreadyRegistered:
+            return "Already in your projects"
+        case .notAGitRepo:
+            return "Folder isn't a git repository"
+        case .ghAuthFailed:
+            return "GitHub authentication failed"
+        case .cloneFailed(let stderr):
+            return "Clone failed: \(firstLine(stderr))"
+        case .gitInitFailed(let stderr):
+            return "git init failed: \(firstLine(stderr))"
+        case .persistenceFailed(let message):
+            return "Couldn't save workspace: \(message)"
+        case .pathNotAllowed(let reason):
+            return "Path not allowed: \(reason)"
+        }
+    }
+
+    public var recoverySuggestion: String? {
+        switch self {
+        case .pathMissing:
+            return "Pick a different folder."
+        case .notADirectory:
+            return "Select a folder, not a file."
+        case .alreadyRegistered:
+            return "Open it from the sidebar."
+        case .notAGitRepo:
+            return "Run `git init` in the folder, or pick a different one."
+        case .ghAuthFailed:
+            return "Run `gh auth login` in Terminal and try again."
+        case .cloneFailed:
+            return "Check the URL and your network, then retry."
+        case .gitInitFailed:
+            return "Make sure the parent folder is writable."
+        case .persistenceFailed:
+            return "Restart Clawdmeter and try again."
+        case .pathNotAllowed:
+            return "Pick a folder under your configured default-parent."
+        }
+    }
+
+    private func firstLine(_ s: String) -> String {
+        s.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+            .first.map(String.init) ?? s
     }
 }
 
@@ -3306,12 +3357,9 @@ public struct SendPromptRequest: Codable, Sendable {
     }
 }
 
-/// `POST /sessions/continue-readonly` body. Used by the iOS app to promote
-/// a Recent JSONL row (outside Clawdmeter) into a live Clawdmeter-owned
-/// session and optionally send a first prompt — the same flow the Mac runs
-/// inline via `SessionsModel.continueCurrentReadOnly`. The daemon parses
-/// the JSONL header for the CLI session id, resumes through the provider's
-/// current runtime, and returns the new AgentSession's id.
+/// Legacy `POST /sessions/continue-readonly` body. Current Continuum UI does
+/// not expose external JSONL continuation, and current daemons reject this
+/// route without creating a session.
 public struct ContinueReadOnlyRequest: Codable, Sendable {
     /// Absolute path to the JSONL on the Mac. Stable id for the outside
     /// session (`RecentSession.path`).
@@ -3333,9 +3381,7 @@ public struct ContinueReadOnlyRequest: Codable, Sendable {
     }
 }
 
-/// `POST /sessions/continue-readonly` response. Carries the new live
-/// session id so the client can swap its open-state from the outside
-/// JSONL path to the live `AgentSession`.
+/// Legacy `POST /sessions/continue-readonly` response.
 public struct ContinueReadOnlyResponse: Codable, Sendable {
     public let sessionId: UUID
 
@@ -4530,9 +4576,8 @@ public struct TerminalResize: Codable, Sendable {
 // MARK: - Transcript
 
 /// Response shape for `GET /transcript?path=<jsonl>`. Lets the iOS client
-/// render the actual chat for any read-only outside-Clawdmeter session
-/// (Conductor / Cursor / Terminal-launched agent) AND the live transcript
-/// for a Clawdmeter-spawned session. The chat content is the same
+/// render the actual chat for Continuum-owned live or archived sessions.
+/// The chat content is the same
 /// `ChatMessage` shape the Mac uses in `SessionChatStore.snapshot.items`
 /// after flattening tool runs — keeping the wire shape simple and the
 /// iOS renderer minimal.

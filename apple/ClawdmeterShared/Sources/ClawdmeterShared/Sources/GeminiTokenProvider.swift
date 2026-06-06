@@ -120,6 +120,10 @@ public final class GeminiTokenProvider: TokenProvider, @unchecked Sendable {
     /// reliably whenever the user needs to re-sign-in to Gemini.
     @discardableResult
     public func refreshIfNeeded() async throws -> Bool {
+        try refreshFromDisk()
+    }
+
+    private func refreshFromDisk() throws -> Bool {
         lock.lock(); defer { lock.unlock() }
         let previous = cached?.accessToken
         cached = nil

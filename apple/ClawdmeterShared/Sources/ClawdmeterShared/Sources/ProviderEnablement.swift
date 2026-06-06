@@ -65,16 +65,6 @@ public enum ProviderEnablement {
         set { UserDefaults.standard.set(newValue, forKey: "clawdmeter.usage.dataAccessGranted") }
     }
 
-    /// Code sidebar discovery. When false (default), the sidebar shows only
-    /// managed (explicitly-added) repos and does NO filesystem session
-    /// discovery — no ~/.claude / ~/.codex read, no folder scan, so opening
-    /// Code triggers no folder/cross-app prompt. The "Discover parallel
-    /// sessions" button opts in to full discovery (the prior behavior).
-    public static var discoverParallelSessions: Bool {
-        get { UserDefaults.standard.bool(forKey: "clawdmeter.code.discoverParallelSessions") }
-        set { UserDefaults.standard.set(newValue, forKey: "clawdmeter.code.discoverParallelSessions") }
-    }
-
     /// First-run welcome sheet gate.
     public static var hasOnboarded: Bool {
         get { UserDefaults.standard.bool(forKey: "clawdmeter.hasOnboarded") }

@@ -2,14 +2,14 @@
 
 Continuum is a native desktop and mobile control surface for coding agents. It
 started as a Claude usage meter, but the current repo is broader: a Mac menu-bar
-meter, a Tahoe-style Mac workbench, iPhone and Apple Watch companions, a Linux
-desktop port, shared usage analytics, and adapters for Claude Code, Codex,
-Antigravity/Gemini, and OpenCode.
+meter, a Tahoe-style Mac workbench, iPhone and Apple Watch companions, shared
+usage analytics, and adapters for Claude Code, Codex, Antigravity/Gemini, and
+OpenCode.
 
 At a high level, Continuum does three jobs:
 
 - Shows live quota and spend for coding-agent providers.
-- Runs and controls local coding-agent sessions from Mac, iPhone, Watch, and Linux.
+- Runs and controls local coding-agent sessions from Mac, iPhone, and Watch.
 - Keeps chat, code, usage, device pairing, diagnostics, and provider setup in one app.
 
 Current source version: `0.29.23` (`apple/project.yml` build `162`).
@@ -22,9 +22,8 @@ Current source version: `0.29.23` (`apple/project.yml` build `162`).
 | **iPhone app** | Paired control plane for the Mac. Shows live provider status, analytics, chat/code sessions, new-session creation, plan approvals, diffs, terminal views, and Live Activities. |
 | **Apple Watch app** | Wrist view for live usage and sessions that need attention, including plan approval and interruption flows through the paired iPhone. |
 | **Widgets / complications** | iOS widgets, watchOS complications, and a Mac widget extension backed by the shared app-group cache. |
-| **Linux app** | Native Swift Linux desktop and daemon work under `linux/`, targeting Ubuntu/Zorin GNOME environments with AppIndicator, GTK4/libadwaita, WebKitGTK, VTE, libsecret, and the same shared analytics package. |
-| **Shared package** | `apple/ClawdmeterShared` contains wire DTOs, analytics parsers, pricing, provider models, session protocol types, Tahoe UI primitives, and cross-platform tests. |
-| **Tools** | Build scripts, bundled runtime fetchers, the legacy Codex SDK shim, and Antigravity Python sidecar skeleton live under `tools/`. (Open Design bridge + plugin removed in v0.27.0.) |
+| **Shared package** | `apple/ClawdmeterShared` contains wire DTOs, analytics parsers, pricing, provider models, session protocol types, Tahoe UI primitives, and Apple-platform tests. |
+| **Tools** | Build scripts, bundled runtime fetchers, Codex SDK shim, and Antigravity Python sidecar skeleton live under `tools/`. (Open Design bridge + plugin removed in v0.27.0.) |
 
 ## Provider support
 
@@ -175,42 +174,6 @@ CLAWDMETER_SKIP_BUNDLED_OPENCODE=1
 Skipping those makes the corresponding bundled feature depend on a system
 install or become inert in that local build.
 
-## Building Linux
-
-The Linux package lives under `linux/` and shares
-`apple/ClawdmeterShared`. It is a Swift package with two executables:
-`clawdmeterd` and `clawdmeter`.
-
-Development build:
-
-```bash
-sudo apt install -y \
-  libgtk-4-dev libadwaita-1-dev \
-  libayatana-appindicator3-dev libsecret-1-dev \
-  libcairo2-dev libpango1.0-dev \
-  libwebkitgtk-6.0-dev libvte-2.91-gtk4-dev \
-  pkg-config
-
-cd linux
-./scripts/configure-c-shims.sh
-swift build
-swift test
-```
-
-Distribution packages from the repo root:
-
-```bash
-./tools/build-linux-appimage.sh
-./tools/build-linux-deb.sh
-```
-
-Install/user docs:
-
-- `docs/linux/INSTALL.md`
-- `docs/linux/PAIRING.md`
-- `docs/linux/TROUBLESHOOTING.md`
-- `docs/linux/QA-CHECKLIST.md`
-
 ## Other test targets
 
 ```bash
@@ -222,7 +185,6 @@ The repo has substantial XCTest coverage under:
 
 - `apple/ClawdmeterShared/Tests/ClawdmeterSharedTests`
 - `apple/ClawdmeterMacTests`
-- `linux/Tests/ClawdmeterLinuxTests`
 
 ## Repo layout
 
@@ -239,20 +201,13 @@ The repo has substantial XCTest coverage under:
 |   |-- ClawdmeterWatch/                    watchOS app
 |   |-- ClawdmeterWatchWidgets/             watch complications
 |   `-- ClawdmeterMacWidgets/               macOS widget extension
-|-- linux/
-|   |-- Package.swift                       Linux app and daemon package
-|   |-- Sources/                            Swift Linux app, daemon, C shims
-|   |-- Tests/                              Linux tests
-|   |-- scripts/                            C-shim configuration
-|   `-- resources/                          desktop files, service, metadata
 |-- docs/
 |   |-- designs/                            Sessions/control-plane docs
-|   |-- linux/                              Linux install/pairing/QA docs
 |   |-- agentapi-*.md                       Antigravity runtime research
 |   |-- opencode-research-2026-05-22.md     OpenCode integration research
 |   `-- button-wiring-audit.md              UI/backend wiring audit
 |-- tools/
-|   |-- build-*.sh                          DMG, AppImage, and .deb packaging
+|   |-- build-mac-dmg.sh                    Mac DMG packaging
 |   |-- download-bundled-*.sh               vendored runtime staging
 |   |-- clawdmeter-codex-sdk/               Node Codex SDK bridge
 |   `-- clawdmeter-agents/                  Python Antigravity sidecar skeleton

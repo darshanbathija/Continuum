@@ -89,13 +89,13 @@ public struct AnalyticsDailyChart: View {
 
     // MARK: - A4 compute closures (pure, static)
 
-    fileprivate static func costProviders(in snapshot: UsageHistorySnapshot, filter: UsageHistoryStore.ProviderFilter) -> [UsageRecord.Provider] {
+    nonisolated fileprivate static func costProviders(in snapshot: UsageHistorySnapshot, filter: UsageHistoryStore.ProviderFilter) -> [UsageRecord.Provider] {
         // Cost-bearing providers only. Gemini's $0 doesn't go in the
         // stacked dollar chart — it gets a separate request-count panel.
         UsageRecord.Provider.analyticsCostStackOrder.filter { snapshot.byProvider[$0] != nil && filter.includes($0) }
     }
 
-    fileprivate static func computeCostPoints(_ input: ChartInput) -> [CostPoint] {
+    nonisolated fileprivate static func computeCostPoints(_ input: ChartInput) -> [CostPoint] {
         let snapshot = input.snapshot
         let window = input.window
         let providerFilter = input.providerFilter
@@ -131,7 +131,7 @@ public struct AnalyticsDailyChart: View {
         return out
     }
 
-    fileprivate static func computeReqsPoints(_ input: ChartInput) -> [ReqsPoint] {
+    nonisolated fileprivate static func computeReqsPoints(_ input: ChartInput) -> [ReqsPoint] {
         let snapshot = input.snapshot
         let window = input.window
         let providerFilter = input.providerFilter
@@ -335,7 +335,7 @@ public struct AnalyticsDailyChart: View {
         return (cost: total, day: best.key)
     }
 
-    private static func displayName(_ p: UsageRecord.Provider) -> String {
+    nonisolated private static func displayName(_ p: UsageRecord.Provider) -> String {
         TahoeProvider(analyticsProvider: p).displayName
     }
 }

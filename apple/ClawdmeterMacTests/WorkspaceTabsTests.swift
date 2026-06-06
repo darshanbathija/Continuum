@@ -135,8 +135,8 @@ final class WorkspaceTabsTests: XCTestCase {
         let source = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
-            agent: .codex,
-            model: "gpt",
+            agent: .opencode,
+            model: "opencode",
             goal: "source",
             worktreePath: "/repo/.claude/worktrees/kolkata",
             tmuxWindowId: nil,
@@ -153,6 +153,31 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.selectedWorkspaceTerminalTab?.sessionId, source.id)
         XCTAssertNil(model.selectedWorkspaceTerminalTab?.paneRefId)
         XCTAssertEqual(model.selectedWorkspaceTerminalTab?.workspaceKey, WorkspaceKey.of(source))
+    }
+
+    func test_openWorkspaceTerminalTabRejectsHarnessSessionsWithoutTerminalSupport() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalUnsupportedHarness")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let source = try await registry.create(
+            repoKey: "/repo",
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt",
+            goal: "source",
+            worktreePath: "/repo/.claude/worktrees/kolkata",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+
+        model.openWorkspaceTerminalTab(from: source)
+
+        XCTAssertFalse(model.canOpenWorkspaceTerminalTab(from: source))
+        XCTAssertEqual(model.registry.sessions.count, 1)
+        XCTAssertNil(model.openSessionId)
+        XCTAssertNil(model.selectedWorkspaceTerminalTab)
+        XCTAssertEqual(model.workspaceTerminalTabs(in: WorkspaceKey.of(source)!).count, 0)
     }
 
     func test_openWorkspaceTerminalTabRejectsLegacyPaneBackedSessions() async throws {
@@ -188,8 +213,8 @@ final class WorkspaceTabsTests: XCTestCase {
         let source = try await registry.create(
             repoKey: repo.path,
             repoDisplayName: "repo",
-            agent: .codex,
-            model: "gpt",
+            agent: .opencode,
+            model: "opencode",
             goal: "source",
             worktreePath: repo.path,
             tmuxWindowId: nil,
@@ -255,7 +280,6 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.selectedRepoKey, repo.path)
         XCTAssertTrue(model.showingNewSessionSheet)
         XCTAssertNil(model.openSessionId)
-        XCTAssertNil(model.openOutsideJSONLPath)
         XCTAssertNil(model.selectedWorkspaceTerminalTabId)
         XCTAssertNil(model.selectedWorkspaceDocumentTabId)
     }

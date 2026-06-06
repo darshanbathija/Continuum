@@ -84,7 +84,7 @@ public final class VendorProvisioningService: ObservableObject {
         self.shellRunner = shellRunner
         self.openURL = openURL
         self.launchTerminalCommand = launchTerminalCommand ?? { command in
-            await VisibleTerminalCommandLauncher.launch(command)
+            await DirectTerminalCommandLauncher.launch(command)
         }
         self.deviceProbe = deviceProbe
     }
@@ -550,39 +550,34 @@ public final class VendorProvisioningService: ObservableObject {
     }
 }
 
-private enum VisibleTerminalCommandLauncher {
+private enum DirectTerminalCommandLauncher {
     static func launch(_ command: String) async -> VendorProvisioningService.TerminalLaunchResult {
-        let opened = launchTerminal(command: wrappedShellScript(for: command))
-        return .init(
-            launched: opened,
-            message: opened
-                ? "Opened a visible terminal for this command."
-                : "Could not open Terminal for this command."
-        )
-    }
-
-    private static func launchTerminal(command: String) -> Bool {
-        let script = """
-        tell application "Terminal"
-          activate
-          do script "\(appleScriptEscaped(command))"
-        end tell
-        """
-        var error: NSDictionary?
-        if NSAppleScript(source: script)?.executeAndReturnError(&error) != nil {
-            return true
+        do {
+            let host = try await TerminalPtyRegistry.shared.spawnCommand(
+                wrappedShellScript(for: command),
+                cwd: NSHomeDirectory(),
+                title: "Vendor Provisioning"
+            )
+            let paneId = host.id.uuidString
+            return .init(
+                launched: true,
+                message: "Started a direct terminal for this command.",
+                paneId: paneId
+            )
+        } catch {
+            vendorProvisioningLogger.warning("Direct terminal launch failed: \(error.localizedDescription, privacy: .public)")
+            return .init(
+                launched: false,
+                message: "Could not start a direct terminal for this command."
+            )
         }
-        if let error {
-            vendorProvisioningLogger.warning("Terminal launch failed: \(String(describing: error), privacy: .public)")
-        }
-        return false
     }
 
     private static func wrappedShellScript(for command: String) -> String {
         let script = """
         clear
-        echo 'Clawdmeter vendor provisioning'
-        echo '+ \(shellQuoted(command))'
+        echo 'Continuum vendor provisioning'
+        printf '%s\\n' \(shellQuoted("+ \(command)"))
         \(command)
         status=$?
         echo
@@ -591,13 +586,7 @@ private enum VisibleTerminalCommandLauncher {
         read _
         exit $status
         """
-        return "/bin/zsh -lc \(shellQuoted(script))"
-    }
-
-    private static func appleScriptEscaped(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        return script
     }
 
     private static func shellQuoted(_ value: String) -> String {

@@ -73,18 +73,11 @@
 - [ ] **P2-61** Watch plan goal can linger after a session swap because `apply()` never clears `latestGoal` when the key is absent — `apple/ClawdmeterWatch/WatchPlanBridge.swift:68-79`
 - [ ] **P2-62** iOS→Watch context push bypasses the built-and-tested `SendGate` diff-guard and pushes unconditionally — `apple/ClawdmeteriOS/WatchPlanBridgeIOS.swift:54-91`
 - [ ] **P2-63** Reauth state is masked by a stale `usage` on the watch — `apple/ClawdmeterWatch/WatchUsageModel.swift:95-112`
-- [ ] **P2-64** Runtime-dir parent under world-writable `/tmp` is never ownership-validated; symlink redirection survives the leaf-only check — `linux/Sources/ClawdmeterLinux/Storage/LinuxConfigPaths.swift:82-105`
-- [ ] **P2-65** Bearer-token file fallback is written through the process-umask temp file during the atomic-rename window (TOCTOU on 0600) — `linux/Sources/ClawdmeterLinux/Storage/PairingTokenStore+SecretService.swift:92-107`
-- [ ] **P2-66** IPv6 Tailscale-ULA allowlist uses textual prefix match, not byte-range — diverges from the byte-accurate /48 the file claims parity with — `linux/Sources/ClawdmeterLinux/Transport/HummingbirdPeerFilter.swift:55-57`
-- [ ] **P2-67** `VisualTestHelper.pixelDiffPercent` indexes `Data` by zero-based offset; would crash on a sliced `Data` — `linux/Tests/ClawdmeterLinuxTests/Visual/AssertImageEqual.swift:83-94`
-- [ ] **P2-68** Linux peer filter omits the Tailscale-whois identity check the Mac filter requires for non-loopback peers — `linux/Sources/ClawdmeterLinux/Transport/HummingbirdPeerFilter.swift:30-60`
-- [ ] **P2-69** Empty-`Data` gauge PNG is written and reported as success on Linux (invalid icon file handed to AppIndicator) — `linux/Sources/ClawdmeterLinux/Tray/CairoGaugeRenderer.swift:43-76`
 - [ ] **P2-70** No CI builds or tests the Mac daemon, iOS, or watchOS apps — the core product ships untested — `.github/workflows/`
-- [ ] **P2-71** VERSION file is not the single source of truth it claims to be — Mac DMG and Linux artifacts can drift — `VERSION:1`
+- [ ] **P2-71** VERSION file is not the single source of truth it claims to be — Mac DMG artifacts can drift — `VERSION:1`
 - [ ] **P2-72** build-mac-dmg.sh version fallback yields a literal `$(MARKETING_VERSION)` in the DMG name, not 0.1.0 — `tools/build-mac-dmg.sh:68-78`
-- [ ] **P2-73** Linux release-upload runs only the linux-pkg gate, not the ClawdmeterShared Swift tests, before publishing artifacts — `.github/workflows/linux.yml:84-92,156-210`
 
-## B. From the prior audit (14) — release / identity / Linux / infra
+## B. From the prior audit (14) — release / identity / infra
 
 - [ ] **P2-001** Worktree provisioning can hang forever in raw git helper
 - [ ] **P2-002** Per-session rate-limit maps are never released
@@ -97,8 +90,6 @@
 - [ ] **P2-009** iOS relay requests hang until timeout when the socket drops
 - [ ] **P2-010** Legacy LAN pairing token is stored in plain UserDefaults
 - [ ] **P2-011** Settings "Files to copy" rows synchronously read repo files during SwiftUI body build
-- [ ] **P2-012** Linux config path hardening accepts non-directories and group/world-readable secret dirs
-- [ ] **P2-013** Linux tray support detection and dialog cannot produce correct runtime state
 - [ ] **P2-014** Codex SDK sidecar validates `workingDirectory` but passes `additionalDirectories` unchecked
 
 ## C. Net-new, verified from external AI audits (18)
@@ -135,7 +126,3 @@
   - Real availability defect — a transient `tailscale whois` error (e.g
 - [ ] **EXT D-6** Pairing token not bound to Tailscale node identity — `apple/ClawdmeterMac/AgentControl/AgentControlServer.swift:136-139`
   - Real defense-in-depth gap (token isn't bound to a node/user identity), but exploiting it needs token theft AND tailnet membership, and tailnets are ACL-controlled — P2 hardening, not P0
-- [ ] **EXT L-3** Linux OAuth secret token never persisted (writeFallbackFile never invoked) — `linux/Sources/ClawdmeterLinux/Storage/LinuxSecretServiceTokenProvider.swift:115-141` _(partial/narrower than claimed)_
-  - Real but narrower than "token lost on exit" — the OAuth provider is read-only by design (it reads tokens the Mac mirrors / Phase-3 libsecret), so there is no write path to lose; our v2 audit already f…
-- [ ] **EXT L-5** Empty bearer token accepted on Linux — `linux/Sources/ClawdmeterLinux/Transport/HummingbirdBearerAuth.swift:31-38` _(partial/narrower than claimed)_
-  - Real defensive gap (the auth predicate should reject empty expected/presented), but NOT an exploitable bypass against the real Linux store, which never yields an empty token — and the transport that w…

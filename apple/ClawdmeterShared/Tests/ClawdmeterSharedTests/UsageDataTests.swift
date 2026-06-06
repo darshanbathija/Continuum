@@ -61,6 +61,56 @@ final class UsageDataTests: XCTestCase {
         XCTAssertEqual(original, decoded)
     }
 
+    func test_percentFieldsClampToDocumentedRange() {
+        let usage = UsageData(
+            sessionPct: 3_700,
+            sessionResetMins: 60,
+            sessionEpoch: 1_000,
+            weeklyPct: -8,
+            weeklyResetMins: 120,
+            weeklyEpoch: 2_000,
+            status: .limited,
+            representativeClaim: .fiveHour,
+            updatedAt: Date(timeIntervalSince1970: 0),
+            cursorQuota: UsageData.CursorQuota(
+                totalPct: 6_800,
+                autoPct: -1,
+                apiPct: 101,
+                resetMins: 60,
+                resetEpoch: 1_000
+            )
+        )
+
+        XCTAssertEqual(usage.sessionPct, 100)
+        XCTAssertEqual(usage.weeklyPct, 0)
+        XCTAssertEqual(usage.cursorQuota?.totalPct, 100)
+        XCTAssertEqual(usage.cursorQuota?.autoPct, 0)
+        XCTAssertEqual(usage.cursorQuota?.apiPct, 100)
+    }
+
+    func test_decodedPercentFieldsClampToDocumentedRange() throws {
+        let json = """
+        {
+          "sessionPct": 3700,
+          "sessionResetMins": 60,
+          "sessionEpoch": 1000,
+          "weeklyPct": 6800,
+          "weeklyResetMins": 120,
+          "weeklyEpoch": 2000,
+          "status": "limited",
+          "representativeClaim": "five_hour",
+          "updatedAt": "2026-05-19T08:00:00Z"
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(UsageData.self, from: json)
+
+        XCTAssertEqual(decoded.sessionPct, 100)
+        XCTAssertEqual(decoded.weeklyPct, 100)
+    }
+
     func test_moodMapping() {
         XCTAssertEqual(make(session: 0).mood, .idle)
         XCTAssertEqual(make(session: 29).mood, .idle)

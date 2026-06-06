@@ -139,6 +139,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         XCTAssertEqual(response.status, 410)
         let object = try XCTUnwrap(jsonObject(response.data))
         XCTAssertEqual(object["error"] as? String, "legacy_session_retired")
+        XCTAssertNil(registry.session(id: session.id)?.customName)
     }
 
     func test_configAndReviveLegacyPaneBackedSessionsReturnRetired410() async throws {
@@ -166,6 +167,42 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         )
         XCTAssertEqual(revive.status, 410)
         XCTAssertEqual(try XCTUnwrap(jsonObject(revive.data))["error"] as? String, "legacy_session_retired")
+    }
+
+    func test_remainingLegacyPaneBackedMutationsReturnRetired410() async throws {
+        let modelSession = try await createLegacyPaneSession(goal: "Legacy model")
+        let model = try await postJSON(
+            "/sessions/\(modelSession.id.uuidString)/model",
+            ChangeModelRequest(model: "claude-sonnet-4-6", effort: .medium, idempotencyKey: UUID().uuidString)
+        )
+        XCTAssertEqual(model.status, 410, bodySnippet(model.data))
+        XCTAssertEqual(try XCTUnwrap(jsonObject(model.data))["error"] as? String, "legacy_session_retired")
+
+        let interruptSession = try await createLegacyPaneSession(goal: "Legacy interrupt")
+        let interrupt = try await requestRaw(
+            path: "/sessions/\(interruptSession.id.uuidString)/interrupt",
+            method: "POST"
+        )
+        XCTAssertEqual(interrupt.status, 410, bodySnippet(interrupt.data))
+        XCTAssertEqual(try XCTUnwrap(jsonObject(interrupt.data))["error"] as? String, "legacy_session_retired")
+
+        let approveSession = try await createLegacyPaneSession(goal: "Legacy approve")
+        try await registry.updateStatus(id: approveSession.id, status: .planning)
+        try await registry.setPlanText(id: approveSession.id, planText: "1. Legacy plan")
+        let approve = try await requestRaw(
+            path: "/sessions/\(approveSession.id.uuidString)/approve-plan",
+            method: "POST"
+        )
+        XCTAssertEqual(approve.status, 410, bodySnippet(approve.data))
+        XCTAssertEqual(try XCTUnwrap(jsonObject(approve.data))["error"] as? String, "legacy_session_retired")
+
+        let terminalSession = try await createLegacyPaneSession(goal: "Legacy add terminal")
+        let addTerminal = try await postJSON(
+            "/sessions/\(terminalSession.id.uuidString)/terminals",
+            ["title": "Ignored"]
+        )
+        XCTAssertEqual(addTerminal.status, 410, bodySnippet(addTerminal.data))
+        XCTAssertEqual(try XCTUnwrap(jsonObject(addTerminal.data))["error"] as? String, "legacy_session_retired")
     }
 
     func test_terminalListOnLegacyPaneBackedSessionReturnsRetired410() async throws {
@@ -201,8 +238,8 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         let session = try await registry.create(
             repoKey: tempDir.path,
             repoDisplayName: "Terminal",
-            agent: .codex,
-            model: nil,
+            agent: .opencode,
+            model: "opencode-default",
             goal: "Terminal pane",
             worktreePath: tempDir.path,
             tmuxWindowId: nil,
@@ -238,6 +275,70 @@ final class AgentControlServerChatRouteTests: XCTestCase {
             method: "DELETE"
         )
         XCTAssertEqual(delete.status, 200, bodySnippet(delete.data))
+    }
+
+    func test_terminalAddOnHarnessSessionReturnsUnsupported() async throws {
+        let session = try await registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: "Harness Terminal",
+            agent: .cursor,
+            model: CursorModelCatalog.autoModelId,
+            goal: "Harness terminal",
+            worktreePath: tempDir.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        XCTAssertEqual(session.runtimeBinding?.runtimeKind, .acpCursor)
+        XCTAssertEqual(session.runtimeBinding?.capabilities.supportsTerminal, false)
+
+        let add = try await postJSON(
+            "/sessions/\(session.id.uuidString)/terminals",
+            ["title": "Blocked"]
+        )
+
+        XCTAssertEqual(add.status, 409, bodySnippet(add.data))
+        XCTAssertEqual(try XCTUnwrap(jsonObject(add.data))["error"] as? String, "terminal_not_supported")
+    }
+
+    func test_staleHarnessSessionsReturn503ForSendAndInterrupt() async throws {
+        let cases: [(AgentKind, String?, SessionRuntimeKind)] = [
+            (.cursor, CursorModelCatalog.autoModelId, .acpCursor),
+            (.codex, "gpt-5.5", .codexAppServer),
+            (.gemini, nil, .agyHeadless),
+            (.grok, nil, .acpGrok),
+        ]
+
+        for (agent, model, expectedRuntime) in cases {
+            let session = try await registry.create(
+                repoKey: tempDir.path,
+                repoDisplayName: "Stale \(agent.rawValue)",
+                agent: agent,
+                model: model,
+                goal: "Stale harness",
+                worktreePath: tempDir.path,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                planMode: false,
+                mode: .worktree
+            )
+            XCTAssertEqual(session.runtimeBinding?.runtimeKind, expectedRuntime)
+
+            let send = try await postJSON(
+                "/sessions/\(session.id.uuidString)/send",
+                SendPromptRequest(text: "stale harness prompt", asFollowUp: false, idempotencyKey: UUID().uuidString)
+            )
+            XCTAssertEqual(send.status, 503, "\(agent.rawValue): \(bodySnippet(send.data))")
+            XCTAssertEqual(try XCTUnwrap(jsonObject(send.data))["error"] as? String, "acp_session_not_live")
+
+            let interrupt = try await requestRaw(
+                path: "/sessions/\(session.id.uuidString)/interrupt",
+                method: "POST"
+            )
+            XCTAssertEqual(interrupt.status, 503, "\(agent.rawValue): \(bodySnippet(interrupt.data))")
+            XCTAssertEqual(try XCTUnwrap(jsonObject(interrupt.data))["error"] as? String, "acp_session_not_live")
+        }
     }
 
     func test_registryReplacingPrimaryTerminalPaneDoesNotDuplicatePrimary() async throws {
@@ -518,7 +619,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         XCTAssertEqual(session.kind, .chat)
         XCTAssertEqual(session.agent, .cursor)
         XCTAssertEqual(session.model, CursorModelCatalog.autoModelId)
-        XCTAssertEqual(session.runtimeBinding?.runtimeKind, .cursorCLI)
+        XCTAssertEqual(session.runtimeBinding?.runtimeKind, .acpCursor)
         XCTAssertEqual(session.runtimeBinding?.metadata["chatVendor"], ChatVendor.cursor.rawValue)
         XCTAssertNil(session.tmuxPaneId)
         XCTAssertNil(session.tmuxWindowId)

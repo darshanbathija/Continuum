@@ -50,42 +50,17 @@ exercise the protocol end-to-end against mock peers), so the staging
 deploys are real; users just can't reach them yet without the
 Mac/iOS clients.
 
-## 2. Crypto cross-impl gap with Swift CryptoKit
+## 2. Relay crypto parity is guarded by vectors
 
-The `/verify` pass on the E2 relay Worker
-([PR #151](https://github.com/darshanbathija/Clawdmeter/pull/151))
-discovered a cross-impl crypto gap that will block the Swift Mac/iOS
-clients (E3/E4) when they land.
+The relay wire protocol uses **XChaCha20-Poly1305** with a 24-byte nonce
+(per the design doc §4.3 and the test vectors at
+`infra/relay/test-vectors/xchacha20-poly1305-001.json`). The TypeScript
+Worker uses `libsodium-wrappers-sumo`; Apple clients use CryptoKit plus
+Continuum's pure-Swift HChaCha20 prelude to derive the 12-byte
+`ChaChaPoly` nonce form.
 
-The wire protocol uses **XChaCha20-Poly1305** with a 24-byte
-nonce (per the design doc §4.3 and the test vectors at
-`infra/relay/test-vectors/xchacha20-poly1305-001.json`).
-The TypeScript side ships this via `libsodium-wrappers-sumo`, which
-implements XChaCha20 directly.
-
-Swift's CryptoKit `ChaChaPoly` API is **standard ChaCha20-Poly1305**
-with a 12-byte nonce. There is no native XChaCha20 in CryptoKit.
-
-**The implication:** the E3/E4 Swift clients cannot decrypt
-relay-side ciphertext with stock CryptoKit. The fix requires either:
-
-1. Adding `libsodium-swift` as a Swift Package Manager dependency to
-   `ClawdmeterShared`, and routing the relay decrypt path through it
-   while the rest of the app continues to use CryptoKit.
-2. Implementing the XChaCha20 prelude (HChaCha20 + subkey derivation)
-   in Swift and feeding the derived subkey + 12-byte nonce into
-   CryptoKit's `ChaChaPoly`. This works because XChaCha20 is defined
-   as exactly this prelude over a standard ChaCha20.
-
-The plan's stated direction is option 1 (the test-vectors README
-explicitly says "the Swift suite … will read the same JSON via
-`JSONDecoder` and assert against `CryptoKit.ChaChaPoly.seal` +
-`Curve25519.KeyAgreement` outputs", and that assumption needs to be
-revisited).
-
-This is a known gap, not a regression. The relay Worker is correct as
-spec'd; the Swift side will adopt to match. Until then, the cross-impl
-test vectors only exercise the TypeScript path.
+This is no longer a product blocker. Keep the shared test vectors as the
+contract whenever relay crypto changes.
 
 ## 3. F3 HOME isolation type carrier shipped; daemon wire-up deferred
 

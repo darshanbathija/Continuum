@@ -1,7 +1,4 @@
 import XCTest
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
 @testable import ClawdmeterShared
 
 /// Tests `AnthropicSource` against a `URLProtocol`-based mock.
@@ -79,6 +76,26 @@ final class AnthropicSourceTests: XCTestCase {
         XCTAssertEqual(usage.weeklyPct, 81)
         XCTAssertEqual(usage.status, .allowed)
         XCTAssertEqual(usage.representativeClaim, .unknown)
+    }
+
+    func test_poll_dualWindowBody_acceptsWholeNumberUtilizationPercent() async throws {
+        let usageBody = """
+        {
+          "rate_limits": {
+            "five_hour": {"utilization": 37, "resets_at": "2026-05-14T11:00:00Z"},
+            "seven_day": {"utilization": 68, "resets_at": "2026-05-20T13:00:00Z"}
+          }
+        }
+        """.data(using: .utf8)!
+
+        MockURLProtocol.responder = { _ in
+            (200, ["date": "Thu, 14 May 2026 07:40:31 GMT"], usageBody)
+        }
+
+        let usage = try await makeSource().poll()
+        XCTAssertEqual(usage.sessionPct, 37)
+        XCTAssertEqual(usage.weeklyPct, 68)
+        XCTAssertEqual(usage.status, .allowed)
     }
 
     func test_poll_limitedWhenEitherWindowAtOneHundred() async throws {

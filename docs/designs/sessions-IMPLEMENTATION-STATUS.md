@@ -31,7 +31,7 @@ deferred on design-API rate limit.
 - T3: `AgentControlServer.swift` — Network.framework HTTP/1.1 on 21731
   + WS listener on 21732. Accept-handler peer filter
   (`127/8`, `::1`, `100.64/10` Tailscale CGNAT, `fd7a:115c:a1e0::/48`).
-- T5: `RepoIndex.swift` — background refresh actor; default-empty scan roots.
+- T5: `RepoIndex.swift` — workspace-only background refresh actor.
 - T6: `NotificationDispatcher.swift` — pending-event queue with ack semantics.
 - T20: `ShellRunner.swift` — argv-only subprocess wrapper (E4 fix for
   space-in-path).
@@ -159,12 +159,10 @@ deferred on design-API rate limit.
 
 ### Post-G3 polish
 
-- **30-day session sidebar** (commit `d9bcb02`) — `RecentSession` DTO +
-  `AgentRepo.recentSessions`; `RepoIndex` splits `liveNowWindow` (5 min,
-  green dot) from `recentActivityWindow` (30 days, per-JSONL rows).
-  Each recent row opens a synthetic AgentSession pinned to that exact
-  JSONL path via `forcedChatStoreURLs`. Repos sort by most-recent
-  activity. 50-row cap per repo.
+- **Retired 30-day external JSONL sidebar** (commit `d9bcb02`) —
+  `RecentSession` and `AgentRepo.recentSessions` remain wire-compatible,
+  but current Code navigation no longer scans or renders external JSONL
+  rows.
 - **JSONL encoder fix** (commit `6c4fb61`) — `SessionChatStore.resolveSessionFileURL`
   now applies Claude's full encoding (`/`, `_`, ` ` → `-`) and walks up
   parent directories to find sessions filed under a parent of the git

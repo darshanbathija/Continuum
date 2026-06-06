@@ -1356,9 +1356,7 @@ public struct IOSSessionDetailView: View {
                 thumbnailData: thumbData,
                 remotePath: nil,
                 uploadError: nil,
-                isUploading: true,
-                pendingBytes: nil,
-                pendingExt: nil
+                isUploading: true
             ))
             Task {
                 let remote = await agentClient.uploadAttachment(sessionId: realAgentSession.id, ext: ext, data: data)

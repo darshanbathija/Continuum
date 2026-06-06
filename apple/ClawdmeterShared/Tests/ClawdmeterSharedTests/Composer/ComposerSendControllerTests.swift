@@ -1,4 +1,7 @@
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import ClawdmeterShared
 
 /// PR #24a Step 2 / CQ1 — state-machine coverage for the shared

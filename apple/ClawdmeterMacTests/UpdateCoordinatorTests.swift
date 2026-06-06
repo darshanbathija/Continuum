@@ -41,7 +41,7 @@ final class UpdateCoordinatorTests: XCTestCase {
     func testParseVersionFromMacTagOnly() {
         XCTAssertEqual(ReleaseUpdateConfig.parseVersion(fromTag: "v0.29.16-mac"), "0.29.16")
         XCTAssertNil(ReleaseUpdateConfig.parseVersion(fromTag: "v0.29.16-beta1-mac"))
-        XCTAssertNil(ReleaseUpdateConfig.parseVersion(fromTag: "v0.29.16-linux"))
+        XCTAssertNil(ReleaseUpdateConfig.parseVersion(fromTag: "v0.29.16-ios"))
         XCTAssertNil(ReleaseUpdateConfig.parseVersion(fromTag: "v0.29"))
     }
 

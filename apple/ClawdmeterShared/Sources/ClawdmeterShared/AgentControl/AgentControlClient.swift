@@ -1,12 +1,5 @@
 import Foundation
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
-#if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
-#endif
 #if canImport(OSLog)
 import OSLog
 #endif
@@ -1202,13 +1195,11 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
-    /// Promote a Recent (outside-Clawdmeter) JSONL into a live live
-    /// session and optionally post a first prompt. Mirrors the Mac's
-    /// `SessionsModel.continueCurrentReadOnly` over the wire so iOS can
-    /// initiate the same flow without being on the Mac. Returns the new
-    /// live session id, or nil on failure (no CLI session id in the
-    /// JSONL header, network error, agent CLI missing).
+    /// Legacy compatibility wrapper for the removed external-JSONL
+    /// continuation route. Current Continuum UI has no caller; modern
+    /// daemons return nil/no session for this path.
     @MainActor
+    @available(*, deprecated, message: "External JSONL continuation is no longer surfaced by Continuum.")
     public func continueReadOnly(
         jsonlPath: String,
         repoKey: String,
@@ -1290,15 +1281,13 @@ public final class AgentControlClient: ObservableObject {
         await refreshSessions()
     }
 
-    /// v0.5.10: rename a Recent JSONL row (not a Clawdmeter-owned session).
-    /// Keyed by absolute path on the daemon side, persisted to
-    /// `~/.clawdmeter/jsonl-aliases.json`. Pass nil/empty to clear.
+    /// Legacy compatibility wrapper for removed external JSONL aliases.
+    /// Current daemons accept the shape but do not mutate Code sidebar state.
     @MainActor
+    @available(*, deprecated, message: "External JSONL aliases are no longer surfaced by Continuum.")
     public func renameJSONLAlias(path: String, name: String?) async {
         await postBody(path: "/jsonl-aliases/rename",
                         body: RenameJSONLRequest(path: path, name: name))
-        // Repo index refresh on the daemon side is fire-and-forget; the
-        // next sessions-list poll picks up the new customName.
         await refreshSessions()
     }
 

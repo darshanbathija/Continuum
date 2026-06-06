@@ -1,4 +1,5 @@
 #if os(macOS)
+import Foundation
 import XCTest
 @testable import ClawdmeterShared
 
@@ -21,6 +22,21 @@ final class AntigravitySourceTests: XCTestCase {
         var currentAccessToken: String? { token }
         var hasToken: Bool { token != nil }
         func refreshIfNeeded() async throws -> Bool { false }
+    }
+
+    final class LockedCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+
+        func increment() {
+            lock.lock(); defer { lock.unlock() }
+            value += 1
+        }
+
+        var count: Int {
+            lock.lock(); defer { lock.unlock() }
+            return value
+        }
     }
 
     private func makeUsageData(pct: Int) -> UsageData {
@@ -95,17 +111,17 @@ final class AntigravitySourceTests: XCTestCase {
     func test_tier1_invokedEvenWhenTokenAvailable() async throws {
         // Token is present — tier 2 would succeed if reached, but tier 1
         // wins regardless. We verify by checking the LS probe runs.
-        var probeCallCount = 0
+        let probeCallCount = LockedCounter()
         let expected = makeUsageData(pct: 12)
         let source = AntigravitySource(
             tokenProvider: StubTokenProvider(token: "fake-token"),
             lsQuotaProbe: {
-                probeCallCount += 1
+                probeCallCount.increment()
                 return expected
             }
         )
         _ = try await source.poll()
-        XCTAssertEqual(probeCallCount, 1, "tier-1 probe must run on every poll (D13: always re-discover)")
+        XCTAssertEqual(probeCallCount.count, 1, "tier-1 probe must run on every poll (D13: always re-discover)")
     }
 
     func test_isAuthenticated_reflectsTokenProviderState() {

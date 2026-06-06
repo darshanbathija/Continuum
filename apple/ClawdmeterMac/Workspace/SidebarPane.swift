@@ -9,10 +9,8 @@ struct SidebarPane: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    // Used to pause the 1Hz "external activity" tick when the window isn't
-    // active (app backgrounded / occluded by another window). The tick only
-    // drives cosmetic relative-time / "live now" freshness, so there's
-    // nothing to refresh while the user can't see it.
+    // Used to pause the 1Hz sidebar freshness tick when the window isn't
+    // active (app backgrounded / occluded by another window).
     @Environment(\.controlActiveState) private var controlActiveState
     @FocusState private var searchFocused: Bool
 
@@ -21,19 +19,6 @@ struct SidebarPane: View {
     @AppStorage("clawdmeter.sidebar.grouping") private var groupingRaw: String = SessionGrouping.status.rawValue
     @AppStorage("clawdmeter.sidebar.sorting")  private var sortingRaw: String  = SessionSorting.recency.rawValue
     @AppStorage("clawdmeter.sidebar.status")   private var statusRaw: String   = SessionStatusFilter.all.rawValue
-
-    /// History section is collapsed by default — older external sessions
-    /// clutter the sidebar and most of the time the user wants the active
-    /// repos at the top. Tapping the History row expands the list.
-    @AppStorage("clawdmeter.sidebar.historyExpanded") private var historyExpanded: Bool = false
-
-    /// v0.29.33: opt-in to filesystem session discovery. Default false → the
-    /// sidebar shows only Managed (explicitly-added) repos and RepoIndex does
-    /// NO ~/.claude / ~/.codex / folder scan, so opening Code triggers no
-    /// folder/cross-app permission prompt. The "Discover parallel sessions"
-    /// button flips this shared key (RepoIndex reads the same UserDefaults
-    /// key via ProviderEnablement) and refreshes → status-quo discovery.
-    @AppStorage("clawdmeter.code.discoverParallelSessions") private var discoverParallelSessions: Bool = false
 
     /// v0.5.4: rename sheet state. v0.5.9: split into a dedicated bool
     /// + data target — the `Binding(get:set:)` pattern for `isPresented:`
@@ -46,23 +31,16 @@ struct SidebarPane: View {
     /// NSOpenPanel directly. Clone + Quick Start each get a SwiftUI sheet.
     @State private var showingCloneRepoSheet: Bool = false
     @State private var showingQuickStartRepoSheet: Bool = false
-    // v0.5.10 — parallel state for Recent JSONL row rename. Keyed by path
-    // (not session id) because these rows aren't Clawdmeter-owned
-    // sessions; they're files we surface.
-    @State private var renameJSONLTarget: RecentSession?
-    @State private var renameJSONLInput: String = ""
-    @State private var showingRenameJSONLAlert: Bool = false
     @State private var collapsedStatusGroupIDs: Set<String> = []
     @State private var collapsedPrioritySectionIDs: Set<String> = []
     @State private var sidebarViewportHeight: CGFloat = 0
     @State private var sidebarContentHeight: CGFloat = 0
     @State private var hoveredSessionId: UUID?
-    @State private var hoveredRecentPath: String?
     @State private var colorTagTarget: AgentSession?
     @State private var colorTagInput: String = ""
     @State private var showingColorTagAlert = false
     @State private var comparisonPair: SessionComparisonPair?
-    @State private var externalActivityNow: Date = Date()
+    @State private var sidebarNow: Date = Date()
     @State private var requestedRepoIdentityKeys: Set<String> = []
 
     /// A11: single-slot cache for the sidebar projection. Persists across
@@ -115,36 +93,6 @@ struct SidebarPane: View {
         } message: { target in
             Text("Currently: \(sessionTitle(target))")
         }
-        // v0.5.10 — Recent JSONL row rename alert. Same canonical Bool
-        // + presenting payload pattern as the session-rename alert.
-        .alert(
-            "Rename session",
-            isPresented: $showingRenameJSONLAlert,
-            presenting: renameJSONLTarget
-        ) { target in
-            TextField("Name", text: $renameJSONLInput)
-                .textFieldStyle(.roundedBorder)
-            Button("Save") {
-                let trimmed = renameJSONLInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                model.renameJSONLAlias(path: target.path, name: trimmed.isEmpty ? nil : trimmed)
-                showingRenameJSONLAlert = false
-                renameJSONLTarget = nil
-                renameJSONLInput = ""
-            }
-            Button("Clear name", role: .destructive) {
-                model.renameJSONLAlias(path: target.path, name: nil)
-                showingRenameJSONLAlert = false
-                renameJSONLTarget = nil
-                renameJSONLInput = ""
-            }
-            Button("Cancel", role: .cancel) {
-                showingRenameJSONLAlert = false
-                renameJSONLTarget = nil
-                renameJSONLInput = ""
-            }
-        } message: { target in
-            Text("Currently: \(recentTitle(target))")
-        }
         .alert(
             "Color tag",
             isPresented: $showingColorTagAlert,
@@ -176,13 +124,9 @@ struct SidebarPane: View {
             SessionComparisonSheet(pair: pair, model: model)
         }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now in
-            // Skip cosmetic freshness ticks while the window is inactive —
-            // no visible relative-time/green-dot to refresh. (Same-window
-            // hidden-tab gating needs an active-tab flag from MacRootView;
-            // see cross-file note.)
+            // Skip cosmetic freshness ticks while the window is inactive.
             guard controlActiveState != .inactive else { return }
-            guard model.repos.contains(where: { !$0.recentSessions.isEmpty }) else { return }
-            externalActivityNow = now
+            sidebarNow = now
         }
     }
 
@@ -485,13 +429,6 @@ struct SidebarPane: View {
                     } else {
                         filteredEmptyState
                     }
-                    // Sits under the Managed repos (or the empty state). Off by
-                    // default; tapping opts in to full filesystem discovery for
-                    // this and future launches. Until then nothing reads
-                    // ~/.claude / ~/.codex or scans user folders.
-                    if !discoverParallelSessions {
-                        discoverSessionsButton
-                    }
                 }
                 .padding(.vertical, 6)
                 .background(
@@ -557,15 +494,13 @@ struct SidebarPane: View {
         let sessions = model.registry.sessions
         let searchFiltered = model.filter(sessions: sessions)
         let repos = model.filteredRepos
-        let now = externalActivityNow
-        let ownedJSONLPaths = model.knownOwnedJSONLPaths
+        let now = sidebarNow
         let prSnapshot = workbenchState.snapshot.prCache
         let workbenchPRStateBySession: [UUID: String?] = prSnapshot.reduce(into: [:]) { acc, kv in
             acc[kv.key] = kv.value.state
         }
-        // v0.29.28: pull the manually-registered workspace keys (Add Repo
-        // flow) so the projection can pull those repos out of "Active
-        // outside Clawdmeter" / "History" and into Managed.
+        // Pull manually-registered workspace keys from the Add Repo flow so
+        // empty workspaces still appear before they have a session.
         let workspaceRepoKeys: Set<String> = Set(
             model.workspaceStore.all().map { RepoIdentity.normalize($0.repoRoot) }
         )
@@ -580,8 +515,6 @@ struct SidebarPane: View {
             grouping: grouping,
             sorting: sorting,
             pinnedSet: presentationStore.snapshot.pinnedSessionIds,
-            ownedJSONLPathsFingerprint: SidebarProjectionBuilder.ownedJSONLPathsFingerprint(ownedJSONLPaths),
-            externalActivityClockBucket: SidebarProjectionBuilder.externalActivityClockBucket(now: now, repos: repos),
             workspaceRepoKeysFingerprint: SidebarProjectionBuilder.workspaceRepoKeysFingerprint(workspaceRepoKeys)
         )
         return projectionCache.value(for: key) {
@@ -595,7 +528,6 @@ struct SidebarPane: View {
                 sorting: sorting,
                 pinnedSessionIds: presentationStore.snapshot.pinnedSessionIds,
                 workbenchPRStateBySession: workbenchPRStateBySession,
-                ownedJSONLPaths: ownedJSONLPaths,
                 workspaceRepoKeys: workspaceRepoKeys,
                 now: now
             )
@@ -617,116 +549,6 @@ struct SidebarPane: View {
                 workspaceSection(section)
             }
         }
-        if !projection.activeExternalSections.isEmpty {
-            priorityLabel("Active outside Clawdmeter")
-            ForEach(projection.activeExternalSections) { section in
-                externalRepoSection(section)
-            }
-        }
-        if !projection.historySections.isEmpty {
-            historyDivider
-            historyToggle(repoCount: projection.historySections.count)
-            if historyExpanded {
-                ForEach(projection.historySections) { section in
-                    historyRepoSection(section)
-                }
-            }
-        }
-    }
-
-    /// v0.29.33: opt-in CTA shown under "Managed" when discovery is off.
-    /// Tapping flips the shared `clawdmeter.code.discoverParallelSessions`
-    /// key (RepoIndex reads it via ProviderEnablement) and refreshes, so the
-    /// "Active outside Clawdmeter" / "History" sections populate from
-    /// ~/.claude + ~/.codex exactly like the prior behavior. The folder /
-    /// cross-app prompts then fire with clear user intent, not on launch.
-    private var discoverSessionsButton: some View {
-        Button(action: {
-            discoverParallelSessions = true   // @AppStorage writes the shared key
-            Task { await model.refresh() }
-        }) {
-            HStack(spacing: 8) {
-                TahoeIcon("search", size: 11)
-                    .foregroundStyle(t.accent)
-                    .frame(width: 12)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Discover parallel sessions")
-                        .font(TahoeFont.body(11.5, weight: .semibold))
-                        .foregroundStyle(t.fg)
-                    Text("Find Claude & Codex sessions outside your added repos")
-                        .font(TahoeFont.body(9.5))
-                        .foregroundStyle(t.fg3)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 6)
-        }
-        .buttonStyle(PressableButtonStyle())
-        .help("Scan ~/.claude and ~/.codex for recent sessions. Folder/data access is requested only when you tap this.")
-    }
-
-    /// Collapsed-by-default "History" row. Looks like a sidebar item so
-    /// it sits cleanly at the bottom of the list; tapping toggles the
-    /// `historyExpanded` AppStorage which conditionally renders the
-    /// historyRepoSection list above this row.
-    private func historyToggle(repoCount: Int) -> some View {
-        Button(action: {
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
-                historyExpanded.toggle()
-            }
-        }) {
-            HStack(spacing: 8) {
-                TahoeIcon(historyExpanded ? "chevD" : "chevR", size: 10)
-                    .foregroundStyle(t.fg3)
-                    .frame(width: 10)
-                Text("History")
-                    .font(.system(size: 10, weight: .bold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                if !historyExpanded && repoCount > 0 {
-                    Text("\(repoCount)")
-                        .font(TahoeFont.body(10.5, weight: .semibold))
-                        .foregroundStyle(t.fg3)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(t.hair2, in: Capsule())
-                }
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 3)
-        }
-        .buttonStyle(PressableButtonStyle())
-        .help(historyExpanded ? "Hide older external sessions" : "Show older external sessions")
-    }
-
-    private func priorityLabel(_ title: String) -> some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 10, weight: .bold))
-                .textCase(.uppercase)
-                .foregroundStyle(.tertiary)
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 3)
-    }
-
-    private var historyDivider: some View {
-        Rectangle()
-            .fill(t.hairline)
-            .frame(height: 1)
-            .padding(.horizontal, 10)
-            .padding(.top, 10)
-            .padding(.bottom, 2)
     }
 
     private var filteredEmptyState: some View {
@@ -749,16 +571,8 @@ struct SidebarPane: View {
     private func workspaceSection(_ section: SidebarWorkspaceSection) -> some View {
         let sectionID = "workspace:\(section.id)"
         let isExpanded = isPrioritySectionExpanded(sectionID)
-        // v0.29.29: import-a-repo should be a clean slate. Earlier v0.29.28
-        // rendered the repo's historical JSONLs underneath the workspace
-        // header so users wouldn't lose access to past sessions; turns
-        // out the user expects "import" to mean "start fresh here." Only
-        // Clawdmeter-spawned `AgentSession` rows render under Managed
-        // now. Historical JSONLs remain reachable from the History
-        // section at the bottom of the sidebar when the user expands
-        // it — but only when the repo is NOT workspace-managed
-        // (managed repos skip the external/history split entirely so
-        // their recents stay out of sight).
+        // Import-a-repo is a clean slate: only Continuum-spawned
+        // AgentSession rows render under the workspace.
         return VStack(alignment: .leading, spacing: 0) {
             repoHeader(
                 section.repo,
@@ -885,7 +699,7 @@ struct SidebarPane: View {
 
     /// The persisted workspace record backing a sidebar repo, matched by
     /// canonical root (`repo.key` is `RepoIdentity.normalize(repoRoot)`).
-    /// Nil for external / unmanaged repos.
+    /// Nil for unmanaged repos.
     private func managedWorkspace(for repo: AgentRepo) -> CodeWorkspaceRecord? {
         model.workspaceStore.all().first { RepoIdentity.normalize($0.repoRoot) == repo.key }
     }
@@ -955,66 +769,6 @@ struct SidebarPane: View {
         .help("Workspace settings — archive, env variables, remove")
     }
 
-    private func externalRepoSection(_ section: SidebarExternalRepoSection) -> some View {
-        let sectionID = "external:\(section.repo.key)"
-        let isExpanded = isPrioritySectionExpanded(sectionID)
-        return VStack(alignment: .leading, spacing: 0) {
-            repoHeader(
-                section.repo,
-                isExpanded: isExpanded,
-                sessionCount: section.recents.count,
-                subtitle: "Active in the last 5 min",
-                onToggle: { togglePrioritySection(sectionID) }
-            )
-            if isExpanded {
-                ForEach(section.recents) { recent in
-                    externalRecentButton(recent, repo: section.repo)
-                }
-            }
-        }
-    }
-
-    private func historyRepoSection(_ section: SidebarHistoryRepoSection) -> some View {
-        let sectionID = "history:\(section.repo.key)"
-        let isExpanded = isPrioritySectionExpanded(sectionID)
-        let count = section.dateGroups.reduce(0) { $0 + $1.recents.count }
-        return VStack(alignment: .leading, spacing: 0) {
-            repoHeader(
-                section.repo,
-                isExpanded: isExpanded,
-                sessionCount: count,
-                subtitle: "Older external sessions",
-                onToggle: { togglePrioritySection(sectionID) }
-            )
-            if isExpanded {
-                ForEach(section.dateGroups) { dateGroup in
-                    Text(dateGroup.title)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .padding(.leading, 28)
-                        .padding(.top, 5)
-                    ForEach(dateGroup.recents) { recent in
-                        externalRecentButton(recent, repo: section.repo)
-                    }
-                }
-            }
-        }
-    }
-
-    private func externalRecentButton(_ recent: RecentSession, repo: AgentRepo) -> some View {
-        Button(action: {
-            model.openOutsideSession(
-                recent: recent,
-                repoKey: repo.key,
-                repoDisplayName: repo.displayName
-            )
-        }) {
-            recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path, repo: repo)
-        }
-        .buttonStyle(PressableButtonStyle())
-    }
-
     private func isPrioritySectionExpanded(_ id: String) -> Bool {
         !collapsedPrioritySectionIDs.contains(id)
     }
@@ -1061,8 +815,7 @@ struct SidebarPane: View {
     }
 
     /// Generic group renderer for non-Repo groupings. Header is a plain
-    /// label (no expand toggle — flatter taxonomy than repos). Session
-    /// rows reuse `sessionRow`; recent rows reuse `recentSessionRow`.
+    /// label (no expand toggle — flatter taxonomy than repos).
     @ViewBuilder
     private func groupSection(_ group: SessionSidebarGroup) -> some View {
         if group.id.hasPrefix("status:") {
@@ -1102,7 +855,7 @@ struct SidebarPane: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
             Spacer()
-            let count = group.sessions.count + group.recents.count
+            let count = group.sessions.count
             if count > 0 {
                 Text("\(count)")
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -1115,7 +868,7 @@ struct SidebarPane: View {
     }
 
     private func statusGroupHeader(_ group: SessionSidebarGroup) -> some View {
-        let count = group.sessions.count + group.recents.count
+        let count = group.sessions.count
         return HStack(spacing: 6) {
             StatusPulseDot(
                 color: statusGroupTint(group),
@@ -1150,29 +903,6 @@ struct SidebarPane: View {
         ForEach(group.sessions) { s in
             sessionRow(s, isOpen: model.openSessionId == s.id, depth: 0)
         }
-        ForEach(group.recents) { recent in
-            Button(action: {
-                // Resolve the repo display name from the recent's path.
-                let repo = model.repos.first(where: { $0.recentSessions.contains(recent) })
-                model.openOutsideSession(
-                    recent: recent,
-                    repoKey: repo?.key ?? recent.path,
-                    repoDisplayName: repo?.displayName ?? "Recent"
-                )
-            }) {
-                // Non-Repo grouping (Date / Status / Agent / None):
-                // no repo section header above this row, so surface
-                // the repo as an inline chip in the subtitle.
-                recentSessionRow(
-                    recent,
-                    isOpen: model.openOutsideJSONLPath == recent.path,
-                    repo: model.repos.first(where: { $0.recentSessions.contains(recent) })
-                        ?? AgentRepo(key: recent.path, displayName: "Recent", hasActiveSessions: false),
-                    showRepoChip: true
-                )
-            }
-            .buttonStyle(PressableButtonStyle())
-        }
     }
 
     private func repoSection(_ repo: AgentRepo, keyAliases: [String: String] = [:]) -> some View {
@@ -1185,35 +915,13 @@ struct SidebarPane: View {
         let visibleSessions = presentationSorted(model.filter(sessions: allSessions).filter(sidebarStatusPasses))
         let rootSessions = visibleSessions.filter { $0.parentSessionId == nil }
         let isExpanded = model.expandedRepoKeys.contains(repo.key)
-        let recentSessions = repo.recentSessions
         return VStack(alignment: .leading, spacing: 0) {
-            repoHeader(repo, isExpanded: isExpanded, sessionCount: visibleSessions.count + recentSessions.count)
+            repoHeader(repo, isExpanded: isExpanded, sessionCount: visibleSessions.count)
             if isExpanded {
                 ForEach(rootSessions) { root in
                     sessionTree(root: root, depth: 0)
                 }
-                if !recentSessions.isEmpty {
-                    Text("Recent (last 30 days)")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .padding(.leading, 24)
-                        .padding(.top, 4)
-                    ForEach(recentSessions) { recent in
-                        Button(action: {
-                            model.openOutsideSession(
-                                recent: recent,
-                                repoKey: repo.key,
-                                repoDisplayName: repo.displayName
-                            )
-                        }) {
-                            recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path, repo: repo)
-                        }
-                        .buttonStyle(PressableButtonStyle())
-                    }
-                }
-                if visibleSessions.isEmpty && recentSessions.isEmpty {
+                if visibleSessions.isEmpty {
                     Button(action: {
                         model.quickSpawnInRepo(repo.key)
                     }) {
@@ -1248,157 +956,6 @@ struct SidebarPane: View {
         case .archived:
             return SessionSidebarGrouper.bucket(for: session, reviewSessionIds: reviewSessionIds) == .archived
         }
-    }
-
-    /// One row per JSONL surfaced from `repo.recentSessions` — these were
-    /// not spawned by Clawdmeter (Conductor / Cursor / Terminal). Click
-    /// promotes them via `Continue here`. v0.4.6: matches the iOS row
-    /// treatment — provider badge on the leading edge, color-tinted
-    /// provider name in the subtitle, optional repo chip (for the
-    /// non-Repo groupings where the row has no repo section header
-    /// above it), green ring around the badge when the JSONL was
-    /// touched in the last 5 minutes. The "Read-only" copy and eye
-    /// icon are gone — v0.4.1 made the row continuable from the
-    /// composer so calling it read-only was misleading.
-    private func recentSessionRow(_ recent: RecentSession, isOpen: Bool, repo: AgentRepo, showRepoChip: Bool = false) -> some View {
-        let isHovered = hoveredRecentPath == recent.path
-        return HStack(alignment: .top, spacing: 8) {
-            providerBadge(for: recent)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(recentTitle(recent))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                recentSubtitleRow(recent: recent, repo: repo, showRepoChip: showRepoChip)
-            }
-            Spacer(minLength: 4)
-        }
-        .padding(.leading, 14)
-        .padding(.trailing, 14)
-        .padding(.vertical, 5)
-        .background(
-            isOpen
-                ? terraCotta.opacity(0.15)
-                : (isHovered ? t.hair2.opacity(colorScheme == .dark ? 1.0 : 1.35) : Color.clear),
-            in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .stroke(isOpen ? terraCotta.opacity(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
-        )
-        .padding(.horizontal, 6)
-        .contentShape(Rectangle())
-        .onHover { inside in
-            if inside {
-                hoveredRecentPath = recent.path
-            } else if hoveredRecentPath == recent.path {
-                hoveredRecentPath = nil
-            }
-        }
-        .help(recent.path)
-        .contextMenu {
-            Button("Continue here", systemImage: "play.fill") {
-                Task { _ = await model.continueOutsideSession(recent: recent, repoKey: repo.key, repoDisplayName: repo.displayName) }
-            }
-            Button("Rename…", systemImage: "pencil") {
-                renameJSONLTarget = recent
-                renameJSONLInput = recent.customName ?? ""
-                showingRenameJSONLAlert = true
-            }
-        }
-    }
-
-    /// 20pt circular provider badge with a tinted background, the
-    /// shared `ProviderBadgeImage` glyph, and a green ring overlay when
-    /// the JSONL is currently active.
-    @ViewBuilder
-    private func providerBadge(for recent: RecentSession) -> some View {
-        let isLive = isRecentLive(recent)
-        let rgb = AgentKindUI.accentRGB(for: recent.provider)
-        let accent = Color(red: Double(rgb.r)/255, green: Double(rgb.g)/255, blue: Double(rgb.b)/255)
-        ZStack {
-            Circle()
-                .fill(recent.provider == .claude
-                      ? accent.opacity(0.18)
-                      : Color.secondary.opacity(0.20))
-                .frame(width: 20, height: 20)
-            ProviderBadgeImage(
-                assetName: AgentKindUI.assetName(for: recent.provider),
-                isTemplate: AgentKindUI.isTemplate(for: recent.provider),
-                size: 12
-            )
-            .foregroundStyle(recent.provider == .claude ? accent : .primary)
-            if isLive {
-                Circle()
-                    .stroke(Color.green, lineWidth: 1.5)
-                    .frame(width: 20, height: 20)
-            }
-        }
-    }
-
-    /// Subtitle: color-tinted provider name · optional repo chip ·
-    /// relative time · green `Now` capsule when live. Drops the
-    /// `read-only` suffix that used to live here.
-    @ViewBuilder
-    private func recentSubtitleRow(recent: RecentSession, repo: AgentRepo, showRepoChip: Bool) -> some View {
-        let providerName = AgentKindUI.displayName(for: recent.provider)
-        let rgb = AgentKindUI.accentRGB(for: recent.provider)
-        let providerColor: Color = recent.provider == .claude
-            ? terraCotta
-            : Color(red: Double(rgb.r)/255, green: Double(rgb.g)/255, blue: Double(rgb.b)/255)
-        let rel = Self.relativeTimestampFormatter.localizedString(
-            for: recent.lastModified, relativeTo: Date()
-        )
-        HStack(spacing: 4) {
-            Text(providerName)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(providerColor)
-            if showRepoChip {
-                Text("·").font(.system(size: 10)).foregroundStyle(.tertiary)
-                HStack(spacing: 2) {
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 8, weight: .semibold))
-                    Text(repo.displayName)
-                        .font(.system(size: 10, weight: .medium))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .foregroundStyle(.secondary)
-            }
-            Text("·").font(.system(size: 10)).foregroundStyle(.tertiary)
-            Text(rel)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-            if isRecentLive(recent) {
-                Text("Now")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.green)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(Color.green.opacity(0.16), in: Capsule())
-            }
-        }
-        .lineLimit(1)
-    }
-
-    private func isRecentLive(_ recent: RecentSession) -> Bool {
-        Date().timeIntervalSince(recent.lastModified) < 5 * 60
-    }
-
-    private func recentTitle(_ recent: RecentSession) -> String {
-        // v0.5.10 — user-supplied alias wins. Always.
-        if let custom = recent.customName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !custom.isEmpty {
-            return custom
-        }
-        // Prefer the first user prompt — that's what the session was for.
-        // Fall back to the generic label when we couldn't extract one
-        // (empty JSONL, unparseable, all system meta).
-        if let prompt = recent.firstPrompt, !prompt.isEmpty {
-            return prompt
-        }
-        return "\(AgentKindUI.displayName(for: recent.provider)) session"
     }
 
     private static let relativeTimestampFormatter: RelativeDateTimeFormatter = {
@@ -1474,15 +1031,6 @@ struct SidebarPane: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 1)
                     .background(t.hair2, in: Capsule())
-            }
-            if repo.liveSessionCount > 0 {
-                HStack(spacing: 2) {
-                    Circle().fill(.green).frame(width: 4, height: 4)
-                    Text("\(repo.liveSessionCount)")
-                        .font(TahoeFont.body(9, weight: .bold))
-                        .foregroundStyle(.green)
-                }
-                .help("\(repo.liveSessionCount) live JSONL — Conductor / Cursor / Terminal-launched agents writing now.")
             }
             if let gearMenu {
                 gearMenu

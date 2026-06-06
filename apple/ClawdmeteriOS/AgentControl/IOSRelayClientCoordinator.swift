@@ -78,10 +78,10 @@ public final class IOSRelayClientCoordinator: ObservableObject {
     }
 
     public init(
-        pairingService: IOSRelayPairingService = .shared,
+        pairingService: IOSRelayPairingService? = nil,
         store: RelayPairingStore = .shared
     ) {
-        self.pairingService = pairingService
+        self.pairingService = pairingService ?? .shared
         self.store = store
     }
 

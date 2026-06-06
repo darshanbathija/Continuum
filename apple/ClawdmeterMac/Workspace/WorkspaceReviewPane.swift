@@ -151,7 +151,9 @@ struct WorkspaceReviewPane: View {
     /// without juggling a sheet.
     @ViewBuilder
     private var terminalTab: some View {
-        if let runtime = AppDelegate.runtime,
+        if !model.canOpenWorkspaceTerminalTab(from: session) {
+            placeholder(text: "Terminal unavailable for this runtime.")
+        } else if let runtime = AppDelegate.runtime,
            let port = runtime.agentControlServer.boundWsPort {
             TerminalTabContainer(
                 session: session,

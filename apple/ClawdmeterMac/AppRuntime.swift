@@ -678,8 +678,8 @@ final class AppRuntime: ObservableObject {
         // model (e.g. a fresh Opus) stops showing $0 within this session.
         Task.detached(priority: .utility) { [weak self] in
             let refreshed = await PricingUpdater.shared.refreshIfStale()
-            if refreshed {
-                await MainActor.run { self?.usageHistoryStore.forceRefresh() }
+            if refreshed, let runtime = self {
+                await runtime.refreshUsageHistoryStore()
             }
         }
         // v0.29.31: warm the Cursor + OpenRouter model probes on launch so the
@@ -718,6 +718,10 @@ final class AppRuntime: ObservableObject {
         Task(priority: .utility) { @MainActor in
             await ChatProviderProbe.shared.invalidate()
         }
+    }
+
+    private func refreshUsageHistoryStore() {
+        usageHistoryStore.forceRefresh()
     }
 
     private static var cursorStartupPollingEnabled: Bool {
