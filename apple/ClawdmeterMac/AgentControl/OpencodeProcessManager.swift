@@ -28,8 +28,7 @@
 //      reachable within 10s"). Process killed.
 //
 // AppRuntime owns the singleton's start/stop; AgentControlServer's
-// handlePostSession routes opencode-kind requests through this manager
-// instead of the tmux argv path.
+// handlePostSession routes opencode-kind requests through this manager.
 
 import Foundation
 import Darwin

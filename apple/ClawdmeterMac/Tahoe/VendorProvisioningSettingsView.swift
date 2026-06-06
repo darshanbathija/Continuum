@@ -15,6 +15,7 @@ struct VendorProvisioningSettingsView: View {
     @State private var isChecking = false
     @State private var message: String?
     @State private var importVendor: VendorProvisioningVendor?
+    @State private var actionTerminal: VendorProvisioningActionTerminal?
 
     private var workspaces: [CodeWorkspaceRecord] {
         workspaceStore?.all().sorted {
@@ -82,6 +83,12 @@ struct VendorProvisioningSettingsView: View {
                 onClose: { importVendor = nil }
             )
             .frame(minWidth: 760, minHeight: 700)
+        }
+        .sheet(item: $actionTerminal) { terminal in
+            VendorProvisioningActionTerminalSheet(
+                terminal: terminal,
+                onClose: { actionTerminal = nil }
+            )
         }
         .accessibilityIdentifier("settings.provisioning.root")
     }
@@ -162,9 +169,58 @@ struct VendorProvisioningSettingsView: View {
         do {
             let response = try await service.performAction(vendorId: vendor.id, actionId: action.id)
             message = response.message
+            if let paneId = response.terminalPaneId,
+               let host = await TerminalPtyRegistry.shared.host(id: paneId) {
+                actionTerminal = VendorProvisioningActionTerminal(
+                    id: paneId,
+                    title: "\(vendor.displayName) \(action.label)",
+                    host: host
+                )
+            }
         } catch {
             message = error.localizedDescription
         }
+    }
+}
+
+private struct VendorProvisioningActionTerminal: Identifiable {
+    let id: String
+    let title: String
+    let host: TerminalPtyHost
+}
+
+private struct VendorProvisioningActionTerminalSheet: View {
+    @Environment(\.tahoe) private var t
+
+    let terminal: VendorProvisioningActionTerminal
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                TahoeIcon("terminal", size: 14, weight: .bold)
+                    .foregroundStyle(t.accent)
+                Text(terminal.title)
+                    .font(TahoeFont.body(14, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Spacer(minLength: 0)
+                Button("Close", action: onClose)
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            TahoeHair()
+
+            DirectPtyTerminalView(host: terminal.host)
+                .frame(minWidth: 760, minHeight: 480)
+        }
+        .frame(minWidth: 760, minHeight: 540)
+        .onDisappear {
+            Task { await terminal.host.kill() }
+        }
+        .accessibilityIdentifier("settings.provisioning.action-terminal")
     }
 }
 

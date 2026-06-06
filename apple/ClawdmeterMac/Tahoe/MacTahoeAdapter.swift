@@ -96,14 +96,7 @@ extension AppRuntime {
                 .sorted { $0.lastEventAt > $1.lastEventAt }
                 .map { tahoeSession($0, now: nowDate) }
 
-            // PR #35: build the recents list by merging two sources:
-            //   1. Archived AgentSessions for this repo — tappable;
-            //      sessionId carried so the unarchive RPC has a target.
-            //   2. JSONL-only "recently touched" entries (no Clawdmeter
-            //      session ever existed for these) — read-only.
-            // Archived entries take priority (newer + actionable) so
-            // they appear first; we cap the combined list at 4 rows.
-            let archivedRecents: [TahoeCodeRecent] = archivedSessions
+            let recents: [TahoeCodeRecent] = archivedSessions
                 .filter { $0.repoKey == repo.key }
                 .sorted { ($0.archivedAt ?? .distantPast) > ($1.archivedAt ?? .distantPast) }
                 .prefix(4)
@@ -117,24 +110,6 @@ extension AppRuntime {
                         sessionId: session.id
                     )
                 }
-            let jsonlRecents: [TahoeCodeRecent] = repo.recentSessions
-                .prefix(max(0, 4 - archivedRecents.count))
-                .map { r in
-                    TahoeCodeRecent(
-                        id: r.path,
-                        title: r.customName ?? r.firstPrompt ?? URL(fileURLWithPath: r.path).lastPathComponent,
-                        provider: mapAgent(r.provider),
-                        live: nowDate.timeIntervalSince(r.lastModified) < 5 * 60,
-                        ago: TahoeFmt.ago(from: r.lastModified, reference: nowDate),
-                        sessionId: nil,  // JSONL-only; no Clawdmeter session record
-                        // v0.22.9: pass the disk path so the sidebar
-                        // RecentRow can offer "Reveal in Finder" (and,
-                        // post-v0.23, a read-only transcript preview)
-                        // instead of being a dead, disabled row.
-                        jsonlPath: r.path
-                    )
-                }
-            let recents = archivedRecents + jsonlRecents
             return TahoeCodeRepo(
                 key: repo.key,
                 name: repo.displayName,

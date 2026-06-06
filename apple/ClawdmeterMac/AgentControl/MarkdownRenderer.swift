@@ -158,7 +158,7 @@ struct MarkdownRenderer: View {
         }
     }
 
-    private static func prepare(source: String) -> [PreparedChunk] {
+    nonisolated private static func prepare(source: String) -> [PreparedChunk] {
         let chunks = Self.split(source)
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .inlineOnlyPreservingWhitespace
@@ -240,7 +240,7 @@ struct MarkdownRenderer: View {
 
     /// Split a markdown source on triple-backtick code fences. Stable + simple:
     /// any line beginning with three+ backticks toggles fenced state.
-    static func split(_ source: String) -> [Chunk] {
+    nonisolated static func split(_ source: String) -> [Chunk] {
         var chunks: [Chunk] = []
         var inCode = false
         var codeLanguage: String? = nil

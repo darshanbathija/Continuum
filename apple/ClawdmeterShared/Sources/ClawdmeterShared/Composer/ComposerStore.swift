@@ -567,7 +567,7 @@ public final class ComposerStore: ObservableObject {
     /// Compose the final prompt body sent to the daemon. Prepends the
     /// `@<absolute-path>` references for each attachment (per the locked
     /// image-handling decision) and the user's text. **Includes a trailing
-    /// newline** because tmux paste-buffer doesn't submit without one
+    /// newline** because terminal-driven submitters expect one
     /// (Codex P0 finding 2026-05-18).
     public func renderPromptBody(attachmentPaths: [URL]) -> String {
         draftPayload().render(attachmentPaths: attachmentPaths)

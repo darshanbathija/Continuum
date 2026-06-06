@@ -155,11 +155,9 @@ final class SessionLauncherModelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: registryURL) }
         defer { try? FileManager.default.removeItem(at: workspaceStoreURL) }
         let registry = AgentSessionRegistry(storeURL: registryURL)
-        let tmux = TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false"))
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
-            supervisor: TmuxSupervisor(tmux: tmux, registry: registry),
             workspaceStore: WorkspaceStore(storeURL: workspaceStoreURL, sessionsURL: registryURL)
         )
         let promotedSessionId = UUID()
@@ -194,11 +192,9 @@ final class SessionLauncherModelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: registryURL) }
         defer { try? FileManager.default.removeItem(at: workspaceStoreURL) }
         let registry = AgentSessionRegistry(storeURL: registryURL)
-        let tmux = TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false"))
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
-            supervisor: TmuxSupervisor(tmux: tmux, registry: registry),
             workspaceStore: WorkspaceStore(storeURL: workspaceStoreURL, sessionsURL: registryURL)
         )
         let session = try await registry.create(

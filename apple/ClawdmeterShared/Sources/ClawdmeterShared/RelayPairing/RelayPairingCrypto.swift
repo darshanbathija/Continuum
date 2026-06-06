@@ -9,18 +9,14 @@
 //   - symmetric key `K = HKDF-SHA256(salt=sid, info="clawdmeter.relay.v1",
 //     key_material=s, length=32)`
 //
-// We use CryptoKit on Darwin and swift-crypto everywhere else; both
-// expose the identical `Curve25519.KeyAgreement` + `HKDF` APIs.
+// Continuum's Apple targets use CryptoKit's `Curve25519.KeyAgreement` + `HKDF`
+// APIs directly.
 //
 // E7 stops at "derive K and persist it locally". E3 (Mac) / E4 (iOS)
 // will pick this up and seal frames with ChaCha20-Poly1305.
 
 import Foundation
-#if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
-#endif
 
 /// Thin wrapper around CryptoKit's `Curve25519.KeyAgreement` so callers
 /// in either iOS or Mac can use the same identifier names. The private
@@ -36,8 +32,7 @@ public struct RelayPairingKeyPair: Sendable {
     public let publicKey: Curve25519.KeyAgreement.PublicKey
 
     /// Generate a fresh keypair from the system CSPRNG. CryptoKit's
-    /// initializer pulls bytes from `SecRandomCopyBytes` on Darwin and
-    /// `/dev/urandom` (via libcrypto) on Linux — both satisfy threat #6
+    /// initializer pulls bytes from `SecRandomCopyBytes`, satisfying threat #6
     /// (nonce/secret randomness) and #13 (constant-time primitives).
     public init() {
         self.privateKey = Curve25519.KeyAgreement.PrivateKey()

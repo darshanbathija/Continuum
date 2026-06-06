@@ -303,7 +303,7 @@ private struct CodexSection: View {
                     resetDate: Date(timeIntervalSince1970: TimeInterval(usage.weeklyEpoch))
                 )
                 HStack(spacing: 4) {
-                    (Text("Synced from Mac ") + Text(snap.writtenAt, style: .relative) + Text(" ago"))
+                    Text("Synced from Mac \(snap.writtenAt, style: .relative) ago")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -344,7 +344,7 @@ private struct GeminiSection: View {
                     tint: GeminiBrand.color
                 )
                 HStack {
-                    (Text("Synced from Mac ") + Text(snap.writtenAt, style: .relative) + Text(" ago"))
+                    Text("Synced from Mac \(snap.writtenAt, style: .relative) ago")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -390,7 +390,7 @@ private struct SessionCard: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    (Text("Resets ") + Text(resetDate, style: .relative))
+                    Text("Resets \(resetDate, style: .relative)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -420,7 +420,7 @@ private struct WeeklyCard: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
-                (Text("Resets ") + Text(resetDate, style: .relative))
+                Text("Resets \(resetDate, style: .relative)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -438,7 +438,7 @@ private struct FooterRow: View {
 
     var body: some View {
         HStack {
-            (Text("Last updated ") + Text(updatedAt, style: .relative) + Text(" ago"))
+            Text("Last updated \(updatedAt, style: .relative) ago")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()

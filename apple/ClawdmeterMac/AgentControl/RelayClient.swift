@@ -72,11 +72,7 @@ import OSLog
 import Combine
 import Security
 import ClawdmeterShared
-#if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
-#endif
 
 private let macRelayLogger = Logger(subsystem: "com.clawdmeter.mac", category: "RelayClient")
 

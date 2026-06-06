@@ -1,5 +1,5 @@
 import XCTest
-import Crypto
+import CryptoKit
 @testable import ClawdmeterShared
 
 /// Track B — B3/B4: the LAN-direct challenge-response + per-request MAC.

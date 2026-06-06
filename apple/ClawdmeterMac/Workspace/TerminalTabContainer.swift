@@ -20,13 +20,12 @@ struct TerminalTabContainer: View {
             terminal
         }
         .background(t.surfaceSolid)
-        .onChange(of: selectedSecondaryId) { _, _ in
-            sawOutput = false
+        .onChange(of: session.terminalPanes) { _, _ in
+            if selectedSecondaryPane == nil {
+                selectedSecondaryId = nil
+            }
         }
-        // Revive respawns the primary pane (session.tmuxPaneId changes) and
-        // re-ids the terminal view; reset so the "starting" state tracks the
-        // reconnect rather than reporting connected from the dead pane.
-        .onChange(of: session.tmuxPaneId) { _, _ in
+        .onChange(of: selectedSecondaryId) { _, _ in
             sawOutput = false
         }
     }
@@ -34,14 +33,14 @@ struct TerminalTabContainer: View {
     private var tabStrip: some View {
         HStack(spacing: 2) {
             tabButton(id: nil, title: primaryTabTitle, isPrimary: true)
-            ForEach(session.terminalPanes) { ref in
-                tabButton(id: ref.id, title: ref.title, isPrimary: false, paneRef: ref)
+            ForEach(secondaryPanes) { ref in
+                tabButton(id: ref.id, title: ref.title, isPrimary: ref.isPrimary, paneRef: ref)
             }
             Button(action: {
                 Task {
                     if let _ = await model.addTerminalPane(sessionId: session.id) {
                         // Switch to the new tab — pick the last added.
-                        if let last = model.registry.session(id: session.id)?.terminalPanes.last {
+                        if let last = model.registry.session(id: session.id)?.terminalPanes.last(where: { !$0.isPrimary }) {
                             selectedSecondaryId = last.id
                         }
                     }
@@ -63,7 +62,6 @@ struct TerminalTabContainer: View {
     }
 
     private var primaryTabTitle: String {
-        // Agent pane gets a nicer label than just the tmux id.
         "\(session.agent.rawValue.capitalized)"
     }
 
@@ -73,7 +71,7 @@ struct TerminalTabContainer: View {
         isPrimary: Bool,
         paneRef: TerminalPaneRef? = nil
     ) -> some View {
-        let isSelected = (id == selectedSecondaryId)
+        let isSelected = isPrimary ? selectedSecondaryPane == nil : (id == selectedSecondaryId)
         return HStack(spacing: 4) {
             Button(action: { selectedSecondaryId = id }) {
                 HStack(spacing: 4) {
@@ -98,7 +96,7 @@ struct TerminalTabContainer: View {
                 )
             }
             .buttonStyle(PressableButtonStyle())
-            if let paneRef, !isPrimary {
+            if let paneRef, !paneRef.isPrimary {
                 Button(action: {
                     Task {
                         await model.closeTerminalPane(sessionId: session.id, paneRef: paneRef)
@@ -119,15 +117,10 @@ struct TerminalTabContainer: View {
 
     @ViewBuilder
     private var terminal: some View {
-        let targetPaneId: String? = {
-            guard let sid = selectedSecondaryId,
-                  let ref = session.terminalPanes.first(where: { $0.id == sid })
-            else { return nil }
-            return ref.paneId
-        }()
-        // SwiftUI re-creates the view (and the WS connection) when the
-        // .id() changes. That's what we want: switching tabs hangs up the
-        // previous WS and opens one for the new pane.
+        let targetPaneId = selectedSecondaryPane?.paneId
+        // SwiftUI re-creates the view (and the WS connection) when the .id()
+        // changes. Switching tabs hangs up the previous WS and opens one for
+        // the selected terminal instance.
         ZStack {
             Color.black
             MacTerminalView(
@@ -138,7 +131,7 @@ struct TerminalTabContainer: View {
                 paneId: targetPaneId,
                 onFirstOutput: { sawOutput = true }
             )
-            .id(targetPaneId ?? session.tmuxPaneId ?? "primary")
+            .id(targetPaneId ?? "primary-\(session.id.uuidString)")
             if !sawOutput {
                 terminalPendingOverlay
             }
@@ -215,10 +208,17 @@ struct TerminalTabContainer: View {
     }
 
     private var activePaneTitle: String {
-        guard let selectedSecondaryId,
-              let pane = session.terminalPanes.first(where: { $0.id == selectedSecondaryId })
-        else { return primaryTabTitle }
+        guard let pane = selectedSecondaryPane else { return primaryTabTitle }
         return pane.title
+    }
+
+    private var secondaryPanes: [TerminalPaneRef] {
+        session.terminalPanes.filter { !$0.isPrimary }
+    }
+
+    private var selectedSecondaryPane: TerminalPaneRef? {
+        guard let selectedSecondaryId else { return nil }
+        return secondaryPanes.first { $0.id == selectedSecondaryId }
     }
 
     private var terminalCwdLabel: String {

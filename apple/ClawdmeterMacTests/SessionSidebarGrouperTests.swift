@@ -86,7 +86,7 @@ final class SessionSidebarGrouperTests: XCTestCase {
         XCTAssertEqual(groups[0].title, "Clawdmeter")
         XCTAssertEqual(groups[0].repoKey, primaryKey)
         XCTAssertEqual(groups[0].sessions.map(\.goal), ["main", "branch"])
-        XCTAssertEqual(groups[0].recents.map(\.path), [sharedRecent.path, secondRecent.path])
+        XCTAssertEqual(groups[0].recents, [])
     }
 
     func test_canonicalizeReposExposesAliasesForRepoSidebarRenderer() {
@@ -116,7 +116,7 @@ final class SessionSidebarGrouperTests: XCTestCase {
         XCTAssertEqual(canonical.repos.count, 1)
         XCTAssertEqual(canonical.repos[0].key, primaryKey)
         XCTAssertEqual(canonical.repos[0].liveSessionCount, 3)
-        XCTAssertEqual(canonical.repos[0].recentSessions.map(\.path), [firstRecent.path, secondRecent.path])
+        XCTAssertEqual(canonical.repos[0].recentSessions, [])
         XCTAssertEqual(canonical.keyAliases[primaryKey], primaryKey)
         XCTAssertEqual(canonical.keyAliases[duplicateKey], primaryKey)
     }

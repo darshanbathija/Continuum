@@ -31,10 +31,8 @@ final class WireV10Tests: XCTestCase {
     }
 
     func test_antigravityChatMinimumDefersToV11() {
-        // Codex P1.4: v0.8.1's daemon POST /sessions still spawns Gemini
-        // via legacy tmux argv. Until the daemon endpoint is also
-        // migrated (v0.8.2), iOS must not claim Antigravity chat support
-        // — even on a v10 Mac.
+        // Codex P1.4: iOS must not claim Antigravity chat support on an older
+        // v10 Mac.
         XCTAssertEqual(AgentControlWireVersion.antigravityChatMinimum, 11)
     }
 

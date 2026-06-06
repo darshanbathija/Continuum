@@ -1,7 +1,7 @@
 # Continuum — Known Limitations
 
 This doc enumerates work that is described in the plan or implied by
-the security / privacy posture, but is **not yet in main**. Companion
+the security / privacy posture, but is still deferred or follow-up. Companion
 docs are [`docs/security.md`](security.md) and
 [`docs/privacy.md`](privacy.md); both cite this file in their
 "status note" callouts.
@@ -10,82 +10,56 @@ Plan reference: `~/.claude/plans/study-this-codebase-crystalline-shore.md` (main
 
 ---
 
-## 1. Secure relay + APNS clients are not in main yet
+## 1. Secure relay + APNS is live, with hardening follow-ups
 
-The Cloudflare Workers that back the secure-cloud pairing path are
-shipped:
+The secure-cloud pairing path now has both Worker and Apple-client pieces:
 
 - **E2 — relay Worker** at `infra/relay/`.
   [PR #151](https://github.com/darshanbathija/Clawdmeter/pull/151).
 - **E5 — APNS gateway Worker** at `infra/apns-gateway/`.
   [PR #147](https://github.com/darshanbathija/Clawdmeter/pull/147).
+- **Mac relay client** at
+  `apple/ClawdmeterMac/AgentControl/RelayClient.swift` plus
+  `RelaySubscriptionBridge.swift`.
+- **iOS relay client** at
+  `apple/ClawdmeteriOS/AgentControl/IOSRelayClient.swift` and
+  `IOSRelayClientCoordinator.swift`.
+- **Relay mux/shared transport** under
+  `apple/ClawdmeterShared/Sources/ClawdmeterShared/Relay/`.
+- **APNS client/registration** at
+  `apple/ClawdmeterMac/AgentControl/APNSGatewayClient.swift` and
+  `apple/ClawdmeteriOS/iOSAPNSRegistration.swift`.
 
-What is NOT shipped:
+What remains follow-up:
 
-- **E3 — Mac daemon `RelayClient.swift`.** The Mac side that opens a
-  relay session, runs the X25519 ECDH handshake, and routes existing
-  daemon handlers over relay envelopes. Not in main.
-- **E4 — iOS daemon `RelayClient.swift`.** The iOS side that scans
-  the QR, performs the matching ECDH, and consumes envelopes. Not in
-  main.
-- **E6 — Mac daemon `APNSGatewayClient.swift`.** The Mac side that
-  POSTs sealed payloads to the gateway. Not in main.
-- **E7 — pairing UX rewrite.** The QR-with-relay-token + ECDH-pubkey
-  pairing flow on the Mac + iOS side. Not in main.
+- **Operational drills.** Rotation, kill-switch, canary, and incident
+  drills need regular production proof after the live relay/default
+  transport cutover.
+- **Relay edge hardening.** Keep tightening rate limits, replay windows,
+  signed creation grants, and auth telemetry as production traffic grows.
+- **APNS delivery polish.** Keep validating token cleanup, retry behavior,
+  and degraded-mode user copy under real device churn.
 
-**Net effect:** Mac and iPhone clients do not actually use the
-relay/APNS Worker path today. The currently shipped pairing surface
-is still the **Tailscale-or-local-network** path:
+**Net effect:** Mac and iPhone clients can use the relay/APNS Worker path.
+Loopback/Tailscale remains useful for local development and fallback:
 
-- iPhone pairing remains QR/token based and expects loopback or
-  Tailscale-reachable hosts.
-- Tailscale MagicDNS is the recommended path for iOS App Transport
-  Security (per `README.md` §"App model").
-- Plan-approval push latency is bounded by iOS Background App
-  Refresh (15-30 min) rather than the ~2s the APNS gateway path
-  targets.
+- Pairing remains QR/token based.
+- Relay transport avoids requiring both devices to share a LAN or
+  Tailscale route.
+- APNS is the low-latency path for plan-approval notifications when
+  the device token and gateway are available.
 
-The Worker side is shippable in isolation (its acceptance tests
-exercise the protocol end-to-end against mock peers), so the staging
-deploys are real; users just can't reach them yet without the
-Mac/iOS clients.
+## 2. Relay crypto parity is guarded by vectors
 
-## 2. Crypto cross-impl gap with Swift CryptoKit
+The relay wire protocol uses **XChaCha20-Poly1305** with a 24-byte nonce
+(per the design doc §4.3 and the test vectors at
+`infra/relay/test-vectors/xchacha20-poly1305-001.json`). The TypeScript
+Worker uses `libsodium-wrappers-sumo`; Apple clients use CryptoKit plus
+Continuum's pure-Swift HChaCha20 prelude to derive the 12-byte
+`ChaChaPoly` nonce form.
 
-The `/verify` pass on the E2 relay Worker
-([PR #151](https://github.com/darshanbathija/Clawdmeter/pull/151))
-discovered a cross-impl crypto gap that will block the Swift Mac/iOS
-clients (E3/E4) when they land.
-
-The wire protocol uses **XChaCha20-Poly1305** with a 24-byte
-nonce (per the design doc §4.3 and the test vectors at
-`infra/relay/test-vectors/xchacha20-poly1305-001.json`).
-The TypeScript side ships this via `libsodium-wrappers-sumo`, which
-implements XChaCha20 directly.
-
-Swift's CryptoKit `ChaChaPoly` API is **standard ChaCha20-Poly1305**
-with a 12-byte nonce. There is no native XChaCha20 in CryptoKit.
-
-**The implication:** the E3/E4 Swift clients cannot decrypt
-relay-side ciphertext with stock CryptoKit. The fix requires either:
-
-1. Adding `libsodium-swift` as a Swift Package Manager dependency to
-   `ClawdmeterShared`, and routing the relay decrypt path through it
-   while the rest of the app continues to use CryptoKit.
-2. Implementing the XChaCha20 prelude (HChaCha20 + subkey derivation)
-   in Swift and feeding the derived subkey + 12-byte nonce into
-   CryptoKit's `ChaChaPoly`. This works because XChaCha20 is defined
-   as exactly this prelude over a standard ChaCha20.
-
-The plan's stated direction is option 1 (the test-vectors README
-explicitly says "the Swift suite … will read the same JSON via
-`JSONDecoder` and assert against `CryptoKit.ChaChaPoly.seal` +
-`Curve25519.KeyAgreement` outputs", and that assumption needs to be
-revisited).
-
-This is a known gap, not a regression. The relay Worker is correct as
-spec'd; the Swift side will adopt to match. Until then, the cross-impl
-test vectors only exercise the TypeScript path.
+This is no longer a product blocker. Keep the shared test vectors as the
+contract whenever relay crypto changes.
 
 ## 3. F3 HOME isolation type carrier shipped; daemon wire-up deferred
 

@@ -1,8 +1,4 @@
 import Foundation
-// On Linux, URLRequest/URLSession live in FoundationNetworking, not Foundation.
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
 #if canImport(os)
 import os
 #endif
@@ -26,8 +22,7 @@ public actor PricingUpdater {
     private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "PricingUpdater")
     #endif
 
-    // Best-effort logging: os.Logger on Apple, stderr on Linux. Keeps the
-    // `os`-only privacy interpolation off the cross-platform call sites.
+    // Best-effort logging keeps `os` privacy interpolation out of call sites.
     private func logError(_ message: String) {
         #if canImport(os)
         logger.error("\(message, privacy: .public)")
@@ -39,7 +34,7 @@ public actor PricingUpdater {
         #if canImport(os)
         logger.info("\(message, privacy: .public)")
         #else
-        _ = message  // info-level cache chatter stays quiet on Linux
+        _ = message
         #endif
     }
 
@@ -120,9 +115,8 @@ public actor PricingUpdater {
         }
     }
 
-    /// Cross-version data fetch. The async `URLSession.data(for:)` only exists on
-    /// Apple + Linux Swift 6.0+; bridging the completion-handler `dataTask` through a
-    /// continuation keeps the shared package compiling on Linux Swift 5.10 too.
+    /// Cross-version data fetch. Bridging the completion-handler `dataTask`
+    /// through a continuation keeps behavior consistent across Apple toolchains.
     private static func fetchData(_ request: URLRequest) async throws -> (Data, URLResponse) {
         try await withCheckedThrowingContinuation { continuation in
             let task = URLSession.shared.dataTask(with: request) { data, response, error in

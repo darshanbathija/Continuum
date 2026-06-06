@@ -66,7 +66,7 @@ catches what XCTest can't.
 - [ ] Scroll to "Add project" section. Tap **+ Add project**.
   - Expected: confirmation dialog with 3 options.
 - [ ] Tap **Open GitHub Project**. Sheet shows spec + destination fields.
-- [ ] Allowed roots row shows the Mac's `defaultParent` + scan roots.
+- [ ] Allowed roots row shows the Mac's `defaultParent` + configured allowed roots.
 - [ ] Type `anthropics/claude-code-sdk` + a destination under an allowed
   root. Tap Clone.
   - Expected: progress, then sheet dismisses + new workspace appears in

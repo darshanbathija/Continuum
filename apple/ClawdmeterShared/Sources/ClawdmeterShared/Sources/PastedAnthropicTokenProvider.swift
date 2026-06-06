@@ -128,6 +128,10 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
 
     @discardableResult
     public func refreshIfNeeded() async throws -> Bool {
+        try refreshFromKeychain()
+    }
+
+    private func refreshFromKeychain() throws -> Bool {
         // The user-pasted token doesn't have a refresh token (those are
         // Anthropic-internal). We just re-read the Keychain entry in case
         // the user updated it. If it's missing/empty after a re-read, we

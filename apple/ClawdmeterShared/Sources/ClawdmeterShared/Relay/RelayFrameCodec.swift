@@ -21,24 +21,18 @@
 // HKDF-derived symmetric key from the E7 pairing handshake (lives in
 // `RelayPairingStore` on iOS; in-process on Mac per §5b).
 //
-// This file is platform-neutral — it uses swift-crypto + a tiny pure-Swift
-// HChaCha20 helper, so it builds the same on iOS, macOS, watchOS, and
-// Linux CI (no CryptoKit-only types touched).
+// This file uses CryptoKit plus a tiny pure-Swift HChaCha20 helper, so it
+// builds across Continuum's Apple targets.
 //
 // Per the E3/E4 acceptance gates (§6.1):
-//   - All nonces drawn from `SecRandomCopyBytes` (Darwin) /
-//     `crypto.getRandomValues` equivalent (`SystemRandomNumberGenerator`
-//     on Swift, which on Darwin pulls from the same CSPRNG).
+//   - All nonces drawn from `SystemRandomNumberGenerator`, which on Apple
+//     platforms pulls from the system CSPRNG.
 //   - Bearer-token equality uses constant-time compare (`Data.constantTimeEquals`).
 //   - The wire-protocol version `v` is bound into the HKDF info string so
 //     a downgrade (`v=0`) derives a different key and AEAD fails.
 
 import Foundation
-#if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
-#endif
 
 // MARK: - Envelope header (§4.3)
 
@@ -274,8 +268,8 @@ public enum RelayFrameCodec {
     /// Fresh random 24-byte XChaCha20 nonce drawn from the platform CSPRNG.
     public static func randomNonce() -> Data {
         var bytes = [UInt8](repeating: 0, count: nonceLength)
-        // SystemRandomNumberGenerator pulls from SecRandomCopyBytes on
-        // Darwin and /dev/urandom on Linux — both satisfy threat #6.
+        // SystemRandomNumberGenerator pulls from SecRandomCopyBytes on Apple
+        // platforms, satisfying threat #6.
         var rng = SystemRandomNumberGenerator()
         for i in 0..<nonceLength {
             bytes[i] = UInt8.random(in: 0...255, using: &rng)

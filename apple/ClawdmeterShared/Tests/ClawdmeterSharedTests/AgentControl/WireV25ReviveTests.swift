@@ -2,7 +2,7 @@ import XCTest
 @testable import ClawdmeterShared
 
 /// Wire v25: `POST /sessions/:id/revive` respawns a degraded session's dead
-/// tmux pane.
+/// runtime.
 ///   - `AgentControlWireVersion.current >= 25` and `reviveMinimum = 25`.
 ///   - `supportsRevive` gates the iOS button so older Macs degrade gracefully.
 ///   - `ReviveRequest` round-trips; `MobileCommandKind.revive` decodes.

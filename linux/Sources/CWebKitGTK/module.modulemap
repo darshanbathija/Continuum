@@ -1,5 +1,0 @@
-module CWebKitGTK [system] {
-    header "shim.h"
-    link "webkitgtk-6.0"
-    export *
-}

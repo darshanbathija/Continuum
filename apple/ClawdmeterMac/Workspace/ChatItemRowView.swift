@@ -69,7 +69,7 @@ struct ChatItemRowPayload: Equatable {
     /// the assistant bubbles immediately.
     let providerGlyph: TahoeProvider
     /// Repo root used to resolve transcript path links. `nil` for
-    /// synthetic / read-only Recent JSONL rows where no cwd is set.
+    /// archived or compatibility-only rows where no cwd is set.
     let repoRoot: URL?
     /// Markdown syntax theme — affects assistant bubble fenced code
     /// rendering. Pulled from `SessionPresentationStore.snapshot`.
@@ -124,7 +124,7 @@ struct ChatItemRowActions {
     let onToggleToolPair: (_ pairId: String, _ shouldOpen: Bool) -> Void
     /// Apply a new AskUserQuestion selection state for a pair id.
     let onUpdateAskSelections: (_ pairId: String, _ selections: [String: Set<String>]) -> Void
-    /// Fire-and-forget answer send to the session's tmux pane.
+    /// Fire-and-forget answer send through the session's runtime.
     let onAnswerAsk: (_ answer: String) -> Void
     /// Copy text to the system pasteboard.
     let onCopy: (_ text: String) -> Void

@@ -58,7 +58,7 @@ final class ComposerStoreTests: XCTestCase {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         s.text = "look at this"
         let body = s.renderPromptBody(attachmentPaths: [URL(fileURLWithPath: "/tmp/a.png"), URL(fileURLWithPath: "/tmp/b.txt")])
-        XCTAssertEqual(body, "@/tmp/a.png\n@/tmp/b.txt\nlook at this\n", "tmux paste-buffer needs the trailing \\n to submit")
+        XCTAssertEqual(body, "@/tmp/a.png\n@/tmp/b.txt\nlook at this\n", "PTY submission needs the trailing \\n to submit")
     }
 
     @MainActor
@@ -154,7 +154,7 @@ final class ComposerStoreTests: XCTestCase {
         let s = ComposerStore(mode: .emptyState(repoKey: "/r", agent: .claude))
         s.text = "important draft"
         s.beginSend()
-        s.endSend(error: .spawnFailed(message: "tmux not started"))
+        s.endSend(error: .spawnFailed(message: "runtime not started"))
         XCTAssertEqual(s.text, "important draft", "2A locked: keep text for retry on send failure")
         XCTAssertNotNil(s.lastError)
     }
@@ -164,7 +164,7 @@ final class ComposerStoreTests: XCTestCase {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         s.text = "   \t  "
         // Whitespace-only text gets trimmed; no attachments; renderPromptBody
-        // returns "\n" so tmux paste-buffer commits (an empty body would not).
+        // returns "\n" so PTY submission commits (an empty body would not).
         XCTAssertEqual(s.renderPromptBody(attachmentPaths: []), "\n")
     }
 

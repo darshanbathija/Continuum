@@ -1,5 +1,5 @@
 import Foundation
-import Crypto
+import CryptoKit
 
 /// Track B — B3/B4: challenge-response auth for the Bonjour LAN-direct path.
 ///

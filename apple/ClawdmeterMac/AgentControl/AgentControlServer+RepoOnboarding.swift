@@ -364,7 +364,7 @@ extension AgentControlServer {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let recordData = try? encoder.encode(record),
-              var dict = try? JSONSerialization.jsonObject(with: recordData) as? [String: Any]
+              let dict = try? JSONSerialization.jsonObject(with: recordData) as? [String: Any]
         else {
             sendResponse(AgentControlServer.HTTPResponse.internalError, on: connection); return
         }
@@ -376,7 +376,6 @@ extension AgentControlServer {
             payloadHash: payloadHash,
             on: connection
         )
-        _ = dict // silence unused-warning in case sendCommandResponse early-returns
     }
 
     /// Common return path for `RepoOnboardingError`. Encodes the error as

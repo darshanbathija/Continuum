@@ -26,7 +26,7 @@ struct PairingSettingsView: View {
     @ObservedObject var runtime: AppRuntime
     @ObservedObject var pairingService: RelayPairingService
     /// Plain @State (not @AppStorage) seeded from the array-typed default:
-    /// the scanRootsKey is read as [String] by RepoIndex / PathAllowList, so
+    /// the scanRootsKey is read as [String] by PathAllowList, so
     /// an @AppStorage(String) bound here would dual-type the key and silently
     /// clobber the array consumers on every keystroke. onChange is the sole
     /// writer, and it only ever writes [String].
@@ -69,8 +69,6 @@ struct PairingSettingsView: View {
             relayPairSection
             TahoeHair()
             scanRootsSection
-            TahoeHair()
-            supervisorSection
             TahoeHair()
             relaySecuritySection
             TahoeHair()
@@ -402,10 +400,10 @@ struct PairingSettingsView: View {
         .padding(.top, 4)
     }
 
-    // MARK: - Scan roots section (unchanged from pre-E7)
+    // MARK: - Allowed roots
 
     private var scanRootsSection: some View {
-        tahoeSection("Scan roots", footer: "Comma-separated directories to scan for `.git` repos beyond `~/.claude/projects/` and `~/.codex/sessions/`. Empty by default; common picks: `~/Downloads`, `~/Desktop`, `~/code`.") {
+        tahoeSection("Allowed roots", footer: "Comma-separated directories that paired-device workspace creation may access outside the default workspace parent. These roots are not scanned for sidebar session history.") {
             TextField(
                 "e.g. ~/Downloads, ~/code",
                 text: $scanRoots,
@@ -419,32 +417,6 @@ struct PairingSettingsView: View {
                     .filter { !$0.isEmpty }
                 UserDefaults.standard.set(roots, forKey: RepoIndex.scanRootsKey)
                 Task { await runtime.repoIndex.refresh() }
-            }
-        }
-    }
-
-    private var supervisorSection: some View {
-        tahoeSection("Supervisor") {
-            LabeledContent("Status") {
-                if runtime.tmuxSupervisor.isRecoveryBlocked {
-                    HStack(spacing: 8) {
-                        Label("Unrecoverable", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        Spacer()
-                        Button("Recover") {
-                            Task { await runtime.tmuxSupervisor.userInitiatedRecovery() }
-                        }
-                        .controlSize(.small)
-                    }
-                } else {
-                    Label("tmux server is healthy", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-            }
-            LabeledContent("Restart count") {
-                Text("\(runtime.tmuxSupervisor.restartCount)")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.secondary)
             }
         }
     }

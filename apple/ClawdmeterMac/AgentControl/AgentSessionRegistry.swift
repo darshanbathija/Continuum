@@ -256,8 +256,8 @@ public final class AgentSessionRegistry: ObservableObject {
 
     // MARK: - Mutations
 
-    /// Create a new session record. Caller (handle POST /sessions) has
-    /// already spawned the tmux window; we just record the metadata.
+    /// Create a new session record. Caller (handle POST /sessions) has already
+    /// prepared the runtime; we record the metadata.
     ///
     /// F2-wire: `async throws` so the `sessionCreated` receipt lands in
     /// the SQLite log BEFORE the in-memory mutation. If the receipt
@@ -698,8 +698,32 @@ public final class AgentSessionRegistry: ObservableObject {
 
     public func addTerminalPane(sessionId: UUID, pane: TerminalPaneRef) async throws {
         guard let s = session(id: sessionId) else { return }
-        var panes = s.terminalPanes
+        var panes = s.terminalPanes.filter { $0.id != pane.id && $0.paneId != pane.paneId }
+        if pane.isPrimary {
+            panes = panes.map { existing in
+                existing.isPrimary
+                    ? TerminalPaneRef(
+                        id: existing.id,
+                        paneId: existing.paneId,
+                        title: existing.title,
+                        isPrimary: false,
+                        createdAt: existing.createdAt
+                    )
+                    : existing
+            }
+        }
         panes.append(pane)
+        let projected = with(s, terminalPanes: panes)
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: sessionId, session: projected)
+        update(id: sessionId) { _ in projected }
+    }
+
+    public func replacePrimaryTerminalPane(sessionId: UUID, pane: TerminalPaneRef) async throws {
+        guard let s = session(id: sessionId) else { return }
+        let primary = TerminalPaneRef(id: pane.id, paneId: pane.paneId, title: pane.title, isPrimary: true)
+        let panes = s.terminalPanes
+            .filter { !$0.isPrimary && $0.id != pane.id && $0.paneId != pane.paneId }
+            + [primary]
         let projected = with(s, terminalPanes: panes)
         try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: sessionId, session: projected)
         update(id: sessionId) { _ in projected }
@@ -908,14 +932,19 @@ public final class AgentSessionRegistry: ObservableObject {
             agent: agent,
             codexBackend: codexBackend
         )
-        // Cursor is ACP-harness-driven only for CODE sessions. A cursor CHAT
-        // session (chatVendor set) runs on the chat backend and has no harness
-        // bridge, so it must NOT be tagged .acpCursor — otherwise the send
-        // path's `acpExpectedButNoBridge` guard (route .tmux + isACPDriven + no
-        // live bridge) would 503 it. Keep the legacy .cursorCLI kind for cursor
-        // chat. (Grok has no chat path; other agents' chat kinds are unaffected.)
-        if agent == .cursor, chatVendor != nil {
-            runtime = .cursorCLI
+        if chatVendor != nil {
+            switch agent {
+            case .codex:
+                runtime = .codexAppServer
+            case .gemini:
+                runtime = .agyHeadless
+            case .cursor:
+                runtime = .acpCursor
+            case .grok:
+                runtime = .acpGrok
+            default:
+                break
+            }
         }
         let resolvedBillingProvider: String? = billingProvider ?? {
             switch agent {

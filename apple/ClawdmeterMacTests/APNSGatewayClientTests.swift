@@ -19,11 +19,7 @@
 import XCTest
 @testable import Clawdmeter
 @testable import ClawdmeterShared
-#if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
-#endif
 
 @MainActor
 final class APNSGatewayClientTests: XCTestCase {

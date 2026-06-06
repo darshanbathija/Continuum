@@ -809,7 +809,6 @@ struct MacRootView: View {
             target = attention[0]
         }
         tab = .code
-        sessionsModel.openOutsideJSONLPath = nil
         sessionsModel.openSessionId = target.id
         try? presentationStore.markUnread(target.id, unread: false)
     }

@@ -141,10 +141,10 @@ public struct ComposerModelPicker: View {
             searchFocused = true
             focusedRowIndex = currentlySelectedRowIndex()
         }
-        .onChange(of: searchQuery) { _ in
+        .onChange(of: searchQuery) {
             focusedRowIndex = visibleEntries.isEmpty ? nil : 0
         }
-        .onChange(of: activeRail) { _ in
+        .onChange(of: activeRail) {
             focusedRowIndex = currentlySelectedRowIndex()
         }
     }
@@ -370,7 +370,7 @@ public struct ComposerModelPicker: View {
         // Single Text run so ⌘ and digit share one baseline + tracking
         // (round-2 design critique flagged uneven kerning when these
         // were two adjacent Text views in an HStack).
-        Text("⌘\(digit)")
+        Text("⌘\(String(digit))")
             .font(TahoeFont.mono(11))
             .tracking(0.5)
             .foregroundStyle(t.fg4)

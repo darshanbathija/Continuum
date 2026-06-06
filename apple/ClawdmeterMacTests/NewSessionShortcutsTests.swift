@@ -42,12 +42,9 @@ final class NewSessionShortcutsTests: XCTestCase {
             sessionsURL: sessionsURL
         )
         let repoIndex = RepoIndex()
-        let tmux = TmuxControlClient()
-        let supervisor = TmuxSupervisor(tmux: tmux, registry: registry)
         return SessionsModel(
             repoIndex: repoIndex,
             registry: registry,
-            supervisor: supervisor,
             workspaceStore: workspaceStore
         )
     }

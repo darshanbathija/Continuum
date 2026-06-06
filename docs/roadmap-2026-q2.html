@@ -356,7 +356,7 @@
                             </tr>
                             <tr>
                                 <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Cursor CLI<br><span class="text-[10px] text-zinc-500 font-mono">Jan 2026 → stable</span></td>
-                                <td class="px-5 py-3.5">Plan/Ask modes, cloud handoff (<code class="text-zinc-500">&amp;</code> prefix), one-click MCP auth, headless invocation, stable on macOS/Linux/Windows</td>
+                                <td class="px-5 py-3.5">Plan/Ask modes, cloud handoff (<code class="text-zinc-500">&amp;</code> prefix), one-click MCP auth, headless invocation, stable across desktop OSes</td>
                                 <td class="px-5 py-3.5 text-[#e09177]">A <code class="text-zinc-500">cursor --headless</code> shim that pipes into our daemon would be huge for CI users — zero-friction adoption path.</td>
                             </tr>
                             <tr>
@@ -532,7 +532,7 @@
                             <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">2–3 days</span>
                         </div>
                         <p class="text-xs text-zinc-400 leading-relaxed mb-2">
-                            One click suspends all running agents (kills tmux panes cleanly with checkpointing). One click resumes from the JSONL cursor.
+                            One click suspends all running agents cleanly with checkpointing. One click resumes from the JSONL cursor.
                         </p>
                         <p class="text-[11px] text-[#d97757] font-mono"><i class="fa-solid fa-bolt mr-1"></i> Why P0: "suspend overnight to save $50 in tokens" is a 5-second viral demo, and the only local product to ship it.</p>
                     </div>
@@ -714,11 +714,6 @@
                     </div>
                     <div class="roadmap-item cut">
                         <p class="text-sm text-zinc-300 leading-relaxed">
-                            <strong class="text-white">Linux parity as a v1 priority</strong> — Linux is the lowest-leverage target. Stay WIP, don't promote. The Tahoe design language doesn't port.
-                        </p>
-                    </div>
-                    <div class="roadmap-item cut">
-                        <p class="text-sm text-zinc-300 leading-relaxed">
                             <strong class="text-white">Full WCAG AA on every surface</strong> — ship AA on the 5 critical user flows, audit the rest over time. Don't block the roadmap on this.
                         </p>
                     </div>
@@ -880,18 +875,6 @@
                         <div class="flex items-start gap-x-3">
                             <span class="text-[#d97757] font-mono font-bold text-sm mt-0.5">Q2.</span>
                             <div>
-                                <h3 class="font-bold text-white text-sm tracking-tight mb-1.5">Linux bet</h3>
-                                <p class="text-xs text-zinc-400 leading-relaxed">
-                                    Keep as WIP indefinitely, or pick a deadline to either ship or archive? "Linux Tier 2 with real Tahoe parity" is a 4–6 week bet; "Linux as-is, no parity promise" is fine.
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="glass-panel rounded-2xl p-5 border border-zinc-900">
-                        <div class="flex items-start gap-x-3">
-                            <span class="text-[#d97757] font-mono font-bold text-sm mt-0.5">Q3.</span>
-                            <div>
                                 <h3 class="font-bold text-white text-sm tracking-tight mb-1.5">Cloud Agents strategy</h3>
                                 <p class="text-xs text-zinc-400 leading-relaxed">
                                     If Cursor's Cloud Agents (Max tier $200/mo) start eating into the "I want agents that survive my laptop closing" market, do we (a) ignore it and double down on local, (b) build a "rent a Mac" relay, or (c) ship a thin client that runs in the user's iCloud / Linode? The answer shapes whether we're a Mac-only tool forever.
@@ -902,7 +885,7 @@
                     
                     <div class="glass-panel rounded-2xl p-5 border border-zinc-900">
                         <div class="flex items-start gap-x-3">
-                            <span class="text-[#d97757] font-mono font-bold text-sm mt-0.5">Q4.</span>
+                            <span class="text-[#d97757] font-mono font-bold text-sm mt-0.5">Q3.</span>
                             <div>
                                 <h3 class="font-bold text-white text-sm tracking-tight mb-1.5">Cost dashboard naming</h3>
                                 <p class="text-xs text-zinc-400 leading-relaxed">

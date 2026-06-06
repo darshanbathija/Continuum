@@ -1390,12 +1390,14 @@ private struct RunningRow: View {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small).tint(t.accent)
                 if isDemo {
-                    Text("Editing ")
-                        .font(TahoeFont.body(12.5))
-                        .foregroundStyle(t.fg2)
-                    + Text("settlement-store.ts")
-                        .font(TahoeFont.mono(12.5))
-                        .foregroundStyle(t.fg)
+                    HStack(spacing: 0) {
+                        Text("Editing ")
+                            .font(TahoeFont.body(12.5))
+                            .foregroundStyle(t.fg2)
+                        Text("settlement-store.ts")
+                            .font(TahoeFont.mono(12.5))
+                            .foregroundStyle(t.fg)
+                    }
                 } else {
                     Text("Working…")
                         .font(TahoeFont.body(12.5))
@@ -1532,16 +1534,16 @@ private struct PlanHalo: View {
                         if let branch = session?.commitBranch, !branch.isEmpty {
                             HStack(spacing: 4) {
                                 TahoeIcon("branch", size: 10)
-                                Text("Will commit to ")
-                                + Text(branch).font(TahoeFont.mono(11)).foregroundColor(t.fg2)
+                                Text("Will commit to")
+                                Text(branch).font(TahoeFont.mono(11)).foregroundColor(t.fg2)
                             }
                             .font(TahoeFont.body(11))
                             .foregroundStyle(t.fg3)
                         } else if isDemo {
                             HStack(spacing: 4) {
                                 TahoeIcon("branch", size: 10)
-                                Text("Will commit to ")
-                                + Text("fix/settlement-dedupe").font(TahoeFont.mono(11)).foregroundColor(t.fg2)
+                                Text("Will commit to")
+                                Text("fix/settlement-dedupe").font(TahoeFont.mono(11)).foregroundColor(t.fg2)
                             }
                             .font(TahoeFont.body(11))
                             .foregroundStyle(t.fg3)
@@ -1804,7 +1806,7 @@ private struct ComposerBar: View {
     @ViewBuilder
     private var modelMenu: some View {
         Menu {
-            if let agentSession {
+            if agentSession != nil {
                 Section("Active model") {
                     Text(currentModelLabel).foregroundStyle(.secondary)
                 }
@@ -2258,7 +2260,7 @@ private struct ReviewPane: View {
         } else if isDemo {
             ReviewTerm()
         } else if let transcript = previewTranscript {
-            // v0.22.33: JSONL preview — there's no live tmux to attach
+            // v0.22.33: JSONL preview — there's no live runtime to attach
             // to, but the rollout has every Bash/shell tool call + its
             // output stored. Replay them as a terminal-shaped scroll
             // so the user sees the agent's actual command history.
@@ -2545,7 +2547,7 @@ private struct JsonlPRTab: View {
 }
 
 /// v0.22.33: Term tab content for JSONL preview mode. There's no live
-/// tmux to attach to in preview, but the transcript records every
+/// runtime to attach to in preview, but the transcript records every
 /// shell command the agent ran (Bash / shell / exec tool calls) along
 /// with the output. Render them as a terminal-shaped scroll: prompt
 /// + command + output, monospaced, chronological. Better than the

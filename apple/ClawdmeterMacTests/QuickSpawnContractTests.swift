@@ -22,10 +22,9 @@ final class QuickSpawnContractTests: XCTestCase {
     // MARK: - Test harness
 
     /// Bare-bones SessionsModel keyed off temp directories. Matches the
-    /// pattern in `WorkspaceTabsTests.makeIsolatedModel`. The tmux binary
-    /// is wired to `/usr/bin/false` so any real spawn attempt fails
-    /// fast — which is exactly what we want for the failure-surface
-    /// contract.
+    /// pattern in `WorkspaceTabsTests.makeIsolatedModel`. The isolated model
+    /// has no daemon, so any real spawn attempt fails fast — exactly what this
+    /// failure-surface contract needs.
     private func makeModel(_ name: String) throws -> (SessionsModel, URL) {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true)
@@ -37,14 +36,9 @@ final class QuickSpawnContractTests: XCTestCase {
             storeURL: directory.appendingPathComponent("workspaces.json"),
             sessionsURL: directory.appendingPathComponent("sessions.json")
         )
-        let supervisor = TmuxSupervisor(
-            tmux: TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false")),
-            registry: registry
-        )
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
-            supervisor: supervisor,
             workspaceStore: workspaceStore
         )
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
@@ -55,7 +49,7 @@ final class QuickSpawnContractTests: XCTestCase {
 
     /// The bug the user kept re-reporting: clicking "+" on a known repo
     /// row was opening the New Session sheet instead of just spawning.
-    /// Even when the underlying spawn fails (no daemon, no tmux), the
+    /// Even when the underlying spawn fails (no daemon), the
     /// SHEET must stay closed — failures surface as toasts, not popups.
     func test_quickSpawnIntoKnownRepo_neverOpensSheet() async throws {
         let (model, _) = try makeModel("quickspawn-known")
@@ -81,8 +75,8 @@ final class QuickSpawnContractTests: XCTestCase {
             "quick-spawn for a known repo must NEVER open the New Session sheet — that's the regression that keeps coming back"
         )
 
-        // Let the async spawn Task run + fail (tmux is /usr/bin/false,
-        // AppDelegate.runtime is nil in tests). The contract still
+        // Let the async spawn Task run + fail (AppDelegate.runtime is nil in
+        // tests). The contract still
         // holds: failure path must surface via toast, not the sheet.
         await Task.yield()
         await Task.yield()

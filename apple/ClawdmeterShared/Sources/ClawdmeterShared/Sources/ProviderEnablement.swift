@@ -65,16 +65,6 @@ public enum ProviderEnablement {
         set { UserDefaults.standard.set(newValue, forKey: "clawdmeter.usage.dataAccessGranted") }
     }
 
-    /// Code sidebar discovery. External Claude/Codex session discovery is
-    /// intentionally disabled: the sidebar shows only managed repos and
-    /// Clawdmeter-owned sessions. Stale persisted opt-ins are ignored so a
-    /// previous "discover parallel sessions" tap cannot reintroduce outside
-    /// Claude sessions into the Code sidebar.
-    public static var discoverParallelSessions: Bool {
-        get { false }
-        set { UserDefaults.standard.set(false, forKey: "clawdmeter.code.discoverParallelSessions") }
-    }
-
     /// First-run welcome sheet gate.
     public static var hasOnboarded: Bool {
         get { UserDefaults.standard.bool(forKey: "clawdmeter.hasOnboarded") }

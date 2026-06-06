@@ -174,8 +174,8 @@ public enum AgentControlWireVersion {
     /// v27 (2026-06): Code-tab harness migration. `NewSessionRequest` gains
     /// optional `existingWorkspacePath` + `sessionId` so the Mac Code tab can
     /// route codex/cursor/gemini spawns through the daemon's ACP harness
-    /// (reusing a Mac-provisioned worktree + pre-minted id) instead of building
-    /// tmux argv. Both fields decode-if-present, so older daemons ignore them
+    /// (reusing a Mac-provisioned worktree + pre-minted id). Both fields
+    /// decode-if-present, so older daemons ignore them
     /// and older clients omit them — back-compat preserved. `harnessSpawnMinimum
     /// = 27` gates the Mac fork.
     public static let current: Int = 27
@@ -352,7 +352,7 @@ public enum AgentControlWireVersion {
     /// `/vendor-provisioning/vendors/:id/env/import`.
     public static let vendorProvisioningMinimum: Int = 24
     /// v25: minimum wire version exposing `POST /sessions/:id/revive`
-    /// (respawn a degraded session's dead tmux pane). Older Macs 404 the
+    /// (revive a degraded session's runtime). Older Macs 404 the
     /// route; iOS hides the Revive button + shows "Update Clawdmeter on the
     /// Mac" when the paired Mac is below this.
     public static let reviveMinimum: Int = 25
@@ -369,8 +369,7 @@ public enum AgentControlWireVersion {
     /// `NewSessionRequest.existingWorkspacePath` (reuse a Mac-provisioned
     /// worktree) + `sessionId` (pre-minted id) for harness Code-tab spawns.
     /// The Mac gates its Code-tab "spawn via daemon harness" fork on this; an
-    /// older daemon would ignore the fields and double-provision, so the Mac
-    /// falls back to the tmux path below this version.
+    /// older daemon would ignore the fields and double-provision.
     public static let harnessSpawnMinimum: Int = 27
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
@@ -458,7 +457,7 @@ public enum AgentControlWireVersion {
     /// v0.8.1 (wire v10) migrated only the Mac UI's spawn path; iOS's
     /// daemon-initiated start path waits for v0.8.2 (wire v11). When
     /// false, iOS surfaces "Update Clawdmeter on Mac" instead of
-    /// posting to an endpoint that lands in legacy tmux argv.
+    /// posting to an endpoint that lacks the required daemon-side runtime.
     public static func supportsAntigravityChat(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= antigravityChatMinimum
@@ -671,9 +670,9 @@ public struct ChatSessionSearchResponse: Codable, Sendable {
 ///   - `.streaming` → `.completed` on the provider's natural turn end
 ///     (Claude: `result` line in JSONL; Codex SDK: `turn.completed`
 ///     event; Antigravity: `chunk_done` / agentapi terminal frame).
-///   - `.streaming` → `.interrupted` when SessionInterruptDispatcher
-///     dispatches the cancel for that session (tmux ESC / SDK
-///     AbortController.abort() / agentapi /cancel POST).
+    ///   - `.streaming` → `.interrupted` when SessionInterruptDispatcher
+    ///     dispatches the cancel for that session (PTY ESC / SDK
+    ///     AbortController.abort() / agentapi /cancel POST).
 ///   - Any state → `.idle` when the next user prompt arrives (clears
 ///     the previous turn's state so the stopwatch resets).
 public enum TurnState: String, Codable, Hashable, Sendable, CaseIterable {
@@ -1053,9 +1052,9 @@ public struct ModelCatalog: Codable, Sendable {
 
 // MARK: - Repo + Session
 
-/// One session JSONL file that wasn't spawned by Clawdmeter but lived in a
-/// repo we know about. Surfaced in the sidebar so the user can revisit any
-/// past Claude / Codex session as read-only chat.
+/// Legacy wire DTO for external provider JSONL files. Kept decode-compatible
+/// so older clients can read `AgentRepo.recentSessions`, but current
+/// Continuum-produced repo snapshots set that array to empty.
 public struct RecentSession: Codable, Hashable, Sendable, Identifiable {
     /// Absolute path to the JSONL on disk. Doubles as our stable id —
     /// JSONL files don't move once written.
@@ -1069,9 +1068,8 @@ public struct RecentSession: Codable, Hashable, Sendable, Identifiable {
     /// instead of "Claude session" five times in a row. Optional —
     /// empty / parse-failed JSONLs fall back to the generic label.
     public let firstPrompt: String?
-    /// User-supplied memorable name. When non-empty wins over `firstPrompt`
-    /// as the sidebar row title. Persisted on the Mac in
-    /// `~/.clawdmeter/jsonl-aliases.json` keyed by `path`.
+    /// Legacy user-supplied memorable name. Current Continuum UI no longer
+    /// surfaces external JSONL rows or aliases.
     public let customName: String?
     public var id: String { path }
 
@@ -1104,8 +1102,8 @@ public struct RecentSession: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
-/// `POST /jsonl-aliases/rename` body. Sent from iOS to the Mac daemon to
-/// rename a Recent JSONL row. `name` nil-or-empty clears the alias.
+/// Legacy `POST /jsonl-aliases/rename` body. Current daemons keep the route
+/// compatible but do not surface or mutate external JSONL sidebar aliases.
 public struct RenameJSONLRequest: Codable, Sendable {
     public let path: String
     public let name: String?
@@ -1190,9 +1188,8 @@ public struct AgentRepo: Codable, Hashable, Sendable {
     /// "live now" signal (green dot in UI). Optional (default 0) so old
     /// wire stays valid.
     public let liveSessionCount: Int
-    /// Sessions (outside-Clawdmeter) that wrote to disk within the recent
-    /// activity window (30 days by default). Each entry is one JSONL the
-    /// user can open as read-only chat. Sorted newest-first.
+    /// Legacy external-session array. Current repo snapshots emitted by
+    /// Continuum set this to `[]`; the field remains for wire compatibility.
     public let recentSessions: [RecentSession]
 
     public init(
@@ -1288,6 +1285,8 @@ public enum SessionRuntimeKind: String, Codable, Hashable, Sendable, CaseIterabl
     case cursorCLI = "cursor_cli"
     case cursorSDK = "cursor_sdk"
     case vscodeBridge = "vscode_bridge"
+    case codexAppServer = "codex_app_server"
+    case agyHeadless = "agy_headless"
     /// Native ACP drivers (wire v26). Per-agent (not a single `.acp`) for
     /// diagnostic/migration fidelity — Grok and Cursor differ in
     /// spawn/auth/config/resume behavior.
@@ -1309,16 +1308,14 @@ public enum SessionRuntimeKind: String, Codable, Hashable, Sendable, CaseIterabl
         case .claude:
             return .claudeCLI
         case .codex:
-            return codexBackend == .sdk ? .codexSDK : .codexCLI
+            return codexBackend == .sdk ? .codexSDK : .codexAppServer
         case .gemini:
-            // Gemini drives via the headless `agy` harness bridge; no legacy
-            // runtime kind. Routing keys off the live bridge, not this.
-            return .unknown
+            return .agyHeadless
         case .opencode:
             return .opencodeServer
         case .cursor:
-            // Phase 5: Cursor is now driven over the native ACP harness
-            // (`cursor-agent acp`), not the legacy tmux/poll CLI path.
+            // Phase 5: Cursor is driven over the native ACP harness
+            // (`cursor-agent acp`).
             return .acpCursor
         case .grok:
             return .acpGrok
@@ -1327,9 +1324,17 @@ public enum SessionRuntimeKind: String, Codable, Hashable, Sendable, CaseIterabl
         }
     }
 
-    /// True for the native ACP harness runtime kinds (Grok, Cursor) — the
-    /// daemon drives these through `AcpHarnessBridge`, not tmux/SDK/serve.
-    public var isACPDriven: Bool { self == .acpGrok || self == .acpCursor }
+    /// True for runtimes driven by a daemon-side harness bridge. If the in-memory
+    /// bridge is missing after daemon restart, callers surface an explicit stale
+    /// harness response instead of falling back to legacy terminal transports.
+    public var isACPDriven: Bool {
+        switch self {
+        case .acpGrok, .acpCursor, .codexAppServer, .agyHeadless:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 /// How trustworthy a cost/usage value is. Provider-reported costs should
@@ -1411,8 +1416,8 @@ public struct SessionRuntimeCapabilities: Codable, Hashable, Sendable {
                 supportsUsage: false,
                 supportsTerminal: true
             )
-        case .acpGrok, .acpCursor:
-            // ACP drivers: full turn loop + permission prompts + usage.
+        case .acpGrok, .acpCursor, .codexAppServer, .agyHeadless:
+            // Harness drivers: full turn loop + permission prompts + usage.
             // Terminal stays off until the Phase 6 fs/terminal trust model.
             return SessionRuntimeCapabilities(
                 supportsCancel: true,
@@ -1851,7 +1856,7 @@ public enum MobileCommandKind: String, Codable, Hashable, Sendable, CaseIterable
     case cloneFromGitHub = "clone_from_github"
     case quickStartRepo = "quick_start_repo"
     case wakeMac = "wake_mac"
-    /// v25: respawn a degraded session's dead tmux pane.
+    /// v25: revive a degraded session's runtime.
     case revive
 
     public init(from decoder: Decoder) throws {
@@ -1965,9 +1970,9 @@ public struct InterruptRequest: Codable, Sendable {
     }
 }
 
-/// `POST /sessions/:id/revive` body (v25). Respawns a degraded session's
-/// dead tmux pane. Carries only the optional idempotency key so a retried
-/// revive replays the cached response instead of double-spawning.
+/// `POST /sessions/:id/revive` body (v25). Revives a degraded session's
+/// runtime. Carries only the optional idempotency key so a retried revive
+/// replays the cached response instead of double-spawning.
 public struct ReviveRequest: Codable, Sendable {
     public let idempotencyKey: String?
 
@@ -2026,7 +2031,7 @@ public struct OpenLocalFolderRequest: Codable, Sendable {
 /// `owner/repo`, `https://github.com/owner/repo[.git]`, or
 /// `git@github.com:owner/repo.git`; daemon normalizes to `owner/repo`.
 /// `destinationParent` must canonicalize under `defaultParent` or one of
-/// the configured scan roots; otherwise → 403.
+/// the configured allowed roots; otherwise -> 403.
 public struct CloneFromGitHubRequest: Codable, Sendable {
     public let spec: String
     public let destinationParent: String?
@@ -2097,10 +2102,10 @@ public struct WorkspaceAllowListResponse: Codable, Sendable {
     }
 }
 
-/// Typed error surface for the Add-Repo flow. Used by Mac UI (LocalizedError
-/// conformance lives on the Mac side in `RepoOnboardingError+Localized.swift`)
-/// AND by iOS (decoded from non-2xx daemon response bodies). Conforms to
-/// `Codable` + `Error` here in shared so both surfaces see the same shape.
+/// Typed error surface for the Add-Repo flow. Used by Mac UI and by iOS
+/// (decoded from non-2xx daemon response bodies). Conforms to `Codable`,
+/// `Error`, and `LocalizedError` here in shared so both surfaces see and
+/// display the same shape.
 public enum RepoOnboardingError: Error, Codable, Sendable, Equatable {
     case pathMissing
     case notADirectory
@@ -2169,6 +2174,59 @@ public enum RepoOnboardingError: Error, Codable, Sendable, Equatable {
             try c.encode(Kind.pathNotAllowed, forKey: .kind)
             try c.encode(reason, forKey: .reason)
         }
+    }
+}
+
+extension RepoOnboardingError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .pathMissing:
+            return "Folder doesn't exist"
+        case .notADirectory:
+            return "Selected path isn't a folder"
+        case .alreadyRegistered:
+            return "Already in your projects"
+        case .notAGitRepo:
+            return "Folder isn't a git repository"
+        case .ghAuthFailed:
+            return "GitHub authentication failed"
+        case .cloneFailed(let stderr):
+            return "Clone failed: \(firstLine(stderr))"
+        case .gitInitFailed(let stderr):
+            return "git init failed: \(firstLine(stderr))"
+        case .persistenceFailed(let message):
+            return "Couldn't save workspace: \(message)"
+        case .pathNotAllowed(let reason):
+            return "Path not allowed: \(reason)"
+        }
+    }
+
+    public var recoverySuggestion: String? {
+        switch self {
+        case .pathMissing:
+            return "Pick a different folder."
+        case .notADirectory:
+            return "Select a folder, not a file."
+        case .alreadyRegistered:
+            return "Open it from the sidebar."
+        case .notAGitRepo:
+            return "Run `git init` in the folder, or pick a different one."
+        case .ghAuthFailed:
+            return "Run `gh auth login` in Terminal and try again."
+        case .cloneFailed:
+            return "Check the URL and your network, then retry."
+        case .gitInitFailed:
+            return "Make sure the parent folder is writable."
+        case .persistenceFailed:
+            return "Restart Clawdmeter and try again."
+        case .pathNotAllowed:
+            return "Pick a folder under your configured default-parent."
+        }
+    }
+
+    private func firstLine(_ s: String) -> String {
+        s.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+            .first.map(String.init) ?? s
     }
 }
 
@@ -2548,7 +2606,7 @@ public enum SessionKind: String, Codable, Hashable, Sendable, CaseIterable {
 /// resolution). Customer-selectable; default is `.sdk` because the SDK
 /// surfaces typed events + multi-subscriber + iOS handoff. CLI is the
 /// uniform-with-Claude fallback for users who hit SDK provisioning
-/// trouble or just prefer the tmux path.
+/// trouble or prefer the CLI relay path.
 ///
 /// **Per-session pinning**: the backend chosen at spawn time is stored on
 /// the AgentSession and used for the lifetime of that chat. Flipping the
@@ -2567,17 +2625,19 @@ public enum CodexChatBackend: String, Codable, Hashable, Sendable, CaseIterable 
 
 // MARK: - Multi-terminal (G12)
 
-/// One tmux pane belonging to a session. A session can own N panes — the
-/// primary pane runs the agent CLI, secondary panes are shell scratch space
-/// the user spawns from the workspace's terminal tab strip.
+/// One terminal instance belonging to a session. A session can own N terminals:
+/// the primary instance may mirror the agent transport, while secondary
+/// instances are shell scratch space spawned from the workspace's terminal tab
+/// strip.
 public struct TerminalPaneRef: Codable, Hashable, Sendable, Identifiable {
     public let id: UUID
-    /// tmux pane identifier (e.g. "%7"). Targets `send-keys` / `paste-buffer`.
+    /// Direct PTY terminal instance id. Older persisted values may be legacy
+    /// pane ids and are decode-compatible only.
     public let paneId: String
     /// User-facing label. Empty = "Pane <index>".
     public let title: String
-    /// True when this is the agent's primary pane (created at spawn time).
-    /// Primary pane can't be deleted via the tab strip's × button.
+    /// True when this is the agent's primary terminal. Primary terminals can't
+    /// be deleted via the tab strip's x button.
     public let isPrimary: Bool
     public let createdAt: Date
 
@@ -2599,9 +2659,8 @@ public struct TerminalPaneRef: Codable, Hashable, Sendable, Identifiable {
 // MARK: - Scheduled follow-ups (G15)
 
 /// One scheduled prompt that the SessionScheduler will inject into the
-/// session's primary tmux pane at `fireAt`. Persisted so they survive
-/// app restarts; on launch the scheduler re-arms timers for any not-yet-
-/// fired entries.
+/// session's live runtime at `fireAt`. Persisted so they survive app restarts;
+/// on launch the scheduler re-arms timers for any not-yet-fired entries.
 public struct ScheduledFollowUp: Codable, Hashable, Sendable, Identifiable {
     public let id: UUID
     /// Wall-clock when the prompt should fire.
@@ -2634,7 +2693,7 @@ public enum AgentSessionStatus: String, Codable, Hashable, Sendable {
     case paused
     /// Done-detector fired (D4) — agent reached its stated goal.
     case done
-    /// tmux server lost / pane unknown; needs supervisor recovery.
+    /// Runtime process/channel is unavailable and needs a fresh attach or revive.
     case degraded
 }
 
@@ -2673,11 +2732,11 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// Per-worktree creation/copy audit for Clawdmeter-owned isolated
     /// sessions. Nil for legacy, local, and externally-owned sessions.
     public let provisioning: WorktreeProvisioningMetadata?
-    /// Underlying tmux window id (e.g. "@3"). `nil` while a session is
-    /// pending or degraded.
+    /// Legacy persisted window id. New sessions encode nil; non-nil values are
+    /// decode-compatible retired-session metadata.
     public let tmuxWindowId: String?
-    /// Active tmux pane id within the window (e.g. "%5"). Used by the
-    /// terminal WS bridge to target `send-keys` / `paste-buffer`.
+    /// Legacy persisted pane id. New sessions encode nil; non-nil values are
+    /// decode-compatible retired-session metadata.
     public let tmuxPaneId: String?
     /// Session lifecycle phase.
     public let status: AgentSessionStatus
@@ -2708,12 +2767,11 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// are hidden from the default sidebar but recoverable via "Show archived".
     /// Done-detector auto-archives sessions older than the configured threshold.
     public let archivedAt: Date?
-    /// Additional tmux panes spawned via the workspace terminal tab strip.
-    /// The primary pane lives at `tmuxPaneId`; this collection is everything
-    /// else. Empty for pre-G2 sessions (decoded as `[]`).
+    /// Additional direct terminal instances spawned via the workspace terminal
+    /// tab strip. Empty for pre-G2 sessions (decoded as `[]`).
     public let terminalPanes: [TerminalPaneRef]
     /// Pending follow-up prompts scheduled by the user; the SessionScheduler
-    /// fires them and writes back into the session via `paste-buffer`.
+    /// fires them through the live runtime transport.
     public let scheduledFollowUps: [ScheduledFollowUp]
     /// If this session was spawned as a sub-chat (Cmd+;), the id of the
     /// parent session. Sidebar nests sub-rows under the parent.
@@ -2797,11 +2855,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// (PairingSettings.defaultCodexChatBackend) does not migrate live
     /// sessions; this field captures the irreversible spawn-time choice.
     public let codexChatBackend: CodexChatBackend?
-    /// For Codex-SDK chat sessions, the server-side threadId returned by
-    /// the SDK on first turn. Persisted across DG3 idle-evictions so the
-    /// daemon can call `CodexSubscriptionRelay.start(threadId:)` on
-    /// reopening and reconstruct the same conversation (NEW-T13 verified).
-    /// Nil for CLI chat and code sessions.
+    /// Legacy Codex-SDK chat thread id. This decodes old session records, but
+    /// new Codex sessions use the app-server harness and leave it nil.
     public let codexChatThreadId: String?
 
     // MARK: - Schema v6 additions (v0.8.1 agy-migration, wire v10)
@@ -3053,7 +3108,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     }
 
     /// The session's effective working directory — what every filesystem,
-    /// git, tmux, and JSONL operation needs. For code sessions: the
+    /// git, provider runtime, and JSONL operation needs. For code sessions: the
     /// worktree if `useWorktree` was on at create, else the repo root.
     /// For chat sessions: the chat-cwd in `worktreePath` (always set
     /// at spawn). The daemon enforces the invariant that at least one
@@ -3285,11 +3340,11 @@ public struct ChangeEffortRequest: Codable, Sendable {
 }
 
 /// `POST /sessions/:id/send` body. Inject a prompt into the running agent's
-/// tmux pane. >256 bytes uses paste-buffer; otherwise send-keys.
+/// live runtime transport.
 public struct SendPromptRequest: Codable, Sendable {
     public let text: String
-    /// If true, the daemon writes to tmux paste-buffer + pastes (good for
-    /// multi-line / IME / large content). If false, plain send-keys.
+    /// If true, caller is sending a follow-up/continuation. Runtime-specific
+    /// transports decide how to submit it.
     public let asFollowUp: Bool
     /// Code V2 mobile outbox dedupe key. Optional for legacy clients;
     /// durable mobile sends should populate it.
@@ -3302,13 +3357,9 @@ public struct SendPromptRequest: Codable, Sendable {
     }
 }
 
-/// `POST /sessions/continue-readonly` body. Used by the iOS app to promote
-/// a Recent JSONL row (outside Clawdmeter) into a live Clawdmeter-owned
-/// session and optionally send a first prompt — the same flow the Mac runs
-/// inline via `SessionsModel.continueCurrentReadOnly`. The daemon parses
-/// the JSONL header for the CLI session id, spawns a fresh tmux pane with
-/// `--resume <id>` (Claude) or `resume <id>` (Codex), and returns the new
-/// AgentSession's id.
+/// Legacy `POST /sessions/continue-readonly` body. Current Continuum UI does
+/// not expose external JSONL continuation, and current daemons reject this
+/// route without creating a session.
 public struct ContinueReadOnlyRequest: Codable, Sendable {
     /// Absolute path to the JSONL on the Mac. Stable id for the outside
     /// session (`RecentSession.path`).
@@ -3330,9 +3381,7 @@ public struct ContinueReadOnlyRequest: Codable, Sendable {
     }
 }
 
-/// `POST /sessions/continue-readonly` response. Carries the new live
-/// session id so the client can swap its open-state from the outside
-/// JSONL path to the live `AgentSession`.
+/// Legacy `POST /sessions/continue-readonly` response.
 public struct ContinueReadOnlyResponse: Codable, Sendable {
     public let sessionId: UUID
 
@@ -4252,8 +4301,9 @@ public struct PermissionOption: Codable, Sendable, Hashable, Identifiable {
 /// Request body for `POST /sessions/:id/permission-respond`. The daemon
 /// looks up the pending prompt for the session, validates that
 /// `promptId` matches (rejects stale clicks if the prompt was already
-/// answered), maps `optionId` to the CLI-specific key sequence, sends
-/// it via tmux, and clears the pending prompt on the session's store.
+/// answered), maps `optionId` to the CLI-specific key sequence, sends it
+/// through the session runtime, and clears the pending prompt on the session's
+/// store.
 public struct PermissionRespondRequest: Codable, Sendable {
     public let promptId: String
     public let optionId: String
@@ -4355,9 +4405,6 @@ public enum AgentEventKind: String, Codable, Hashable, Sendable {
     case paused
     /// Session was deleted.
     case sessionDeleted
-    /// tmux server died / recovered.
-    case tmuxServerLost
-    case tmuxServerRecovered
     /// Snapshot frame for cursor reconnect (sent when client's `?since=<seq>`
     /// is older than the retention window).
     case snapshot
@@ -4499,10 +4546,9 @@ public struct RegisterAPNSDeviceTokenRequest: Codable, Sendable {
 
 // MARK: - Terminal frames (Phase 3)
 
-/// WS frame for `/sessions/:id/terminal` — binary payload carries the
-/// `%output` bytes from tmux (already octal-decoded) for the SwiftTerm view
-/// to consume. Inbound (client → server) frames carry keystroke bytes that
-/// the server forwards to tmux via `send-keys -l` or `paste-buffer`.
+/// WS frame for `/sessions/:id/terminal` — binary payload carries raw PTY bytes
+/// for the SwiftTerm view to consume. Inbound (client -> server) frames carry
+/// keystroke bytes that the server forwards to the direct PTY host.
 ///
 /// The wire envelope is sent as a single byte tag followed by the body:
 /// - tag `0x01` = OUTPUT, body = raw bytes for terminal
@@ -4530,9 +4576,8 @@ public struct TerminalResize: Codable, Sendable {
 // MARK: - Transcript
 
 /// Response shape for `GET /transcript?path=<jsonl>`. Lets the iOS client
-/// render the actual chat for any read-only outside-Clawdmeter session
-/// (Conductor / Cursor / Terminal-launched agent) AND the live transcript
-/// for a Clawdmeter-spawned session. The chat content is the same
+/// render the actual chat for Continuum-owned live or archived sessions.
+/// The chat content is the same
 /// `ChatMessage` shape the Mac uses in `SessionChatStore.snapshot.items`
 /// after flattening tool runs — keeping the wire shape simple and the
 /// iOS renderer minimal.

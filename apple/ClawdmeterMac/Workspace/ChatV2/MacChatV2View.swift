@@ -368,7 +368,7 @@ private struct Sidebar: View {
         }
     }
 
-    fileprivate static func computeGroupRows(_ sessions: [AgentSession]) -> [SidebarRow] {
+    nonisolated fileprivate static func computeGroupRows(_ sessions: [AgentSession]) -> [SidebarRow] {
         var seenGroups = Set<UUID>()
         var rows: [SidebarRow] = []
         for session in sessions.sorted(by: { $0.lastEventAt > $1.lastEventAt }) {
@@ -1926,8 +1926,8 @@ private struct ComposerBar: View {
                 } else {
                     let vendor = selectedVendors.first ?? store.primaryVendor
                     // Optimistic single-column skeleton so the loading animation
-                    // shows during the ~9-10s tmux spawn (Claude cold start) —
-                    // not a blank center. Reuses the broadcast pending overlay.
+                    // shows during Claude cold start, not a blank center. Reuses
+                    // the broadcast pending overlay.
                     pendingBroadcast = PendingBroadcast(
                         prompt: trimmed,
                         columns: [PendingBroadcast.Column(

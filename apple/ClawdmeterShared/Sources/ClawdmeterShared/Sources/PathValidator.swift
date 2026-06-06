@@ -20,7 +20,7 @@ public enum PathValidator {
 
     /// Reject anything that contains ASCII control bytes (C0 + DEL).
     /// These are command-injection vectors when the path is later
-    /// composed into a tmux line / shell argument.
+    /// composed into a shell argument or subprocess invocation.
     public static func containsControlBytes(_ path: String) -> Bool {
         for scalar in path.unicodeScalars {
             if scalar.value < 0x20 || scalar.value == 0x7F { return true }

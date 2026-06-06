@@ -68,6 +68,10 @@ public final class KeychainTokenProvider: TokenProvider, @unchecked Sendable {
     /// This exists for `TokenProvider` conformance, but normal app polling
     /// should use `PastedAnthropicTokenProvider` after the explicit import.
     public func refreshIfNeeded() async throws -> Bool {
+        try refreshFromKeychain()
+    }
+
+    private func refreshFromKeychain() throws -> Bool {
         lock.lock(); defer { lock.unlock() }
 
         // Drop the comparison cache and re-read Claude Code's item so an

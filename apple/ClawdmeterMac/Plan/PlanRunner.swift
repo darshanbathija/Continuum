@@ -10,7 +10,7 @@ import AppKit
 ///   - Terminal windows are immediately visible to the user, so a "did
 ///     this actually start?" check is just glancing at the screen.
 ///   - Each window is independent; closing one doesn't kill the others.
-///   - We don't need ChatV2 / tmux / worktree-manager wiring for a
+    ///   - We don't need ChatV2 / direct runtime / worktree-manager wiring for a
 ///     one-shot fan-out — that machinery is for in-app chat sessions.
 ///
 /// Per spawn we write two files into the worktree root:

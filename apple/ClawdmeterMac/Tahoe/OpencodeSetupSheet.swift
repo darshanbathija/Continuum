@@ -9,25 +9,20 @@ private let sheetLogger = Logger(subsystem: "com.clawdmeter.mac", category: "Ope
 ///
 /// Hosts an `opencode auth login` / `auth logout` / diagnostic
 /// session inside the Mac app — user never drops to a Terminal.
-/// Uses `MacInProcessTerminalView` to pipe SwiftTerm I/O directly
-/// to `TmuxControlClient`, with ESC-safe key routing per O3.
+/// Uses `DirectPtyTerminalView` to pipe SwiftTerm I/O directly to a
+/// per-sheet PTY host.
 ///
 /// Lifecycle (on present):
 ///   1. Resolve `OpencodeProcessManager.shared.binaryPath` (preflight).
-///   2. `await tmuxClient.start()` (idempotent).
-///   3. Create a per-sheet exit-sentinel tempfile.
-///   4. Spawn a tmux pane running
-///      `bash -c '<opencode> <args>; echo $? > <sentinel>'`. The
-///      sentinel carries the child exit code back (O2 — TmuxControlClient
-///      windowClosed carries only the windowId, no exit status).
-///   5. Wait on tmux lifecycle for `.windowClosed(windowId)` matching
-///      the pane's window.
-///   6. Read the sentinel → publish `exitCode`.
-///   7. `await OpencodeProcessManager.shared.reprobe()` to trigger
+///   2. Create a per-sheet exit-sentinel tempfile.
+///   3. Spawn a direct PTY running
+///      `bash -c '<opencode> <args>; echo $? > <sentinel>'`.
+///   4. Read the sentinel → publish `exitCode`.
+///   5. `await OpencodeProcessManager.shared.reprobe()` to trigger
 ///      O5 serve-restart-on-auth-change if needed.
 ///
 /// Dismiss is BLOCKED while an OAuth URL is in-flight (A4): we scan
-/// the visible pane buffer for `https://...?code=` or "paste this
+/// the visible terminal buffer for `https://...?code=` or "paste this
 /// URL" tokens. Done button becomes "Waiting for OAuth…" disabled,
 /// explicit Cancel button kills the pane.
 public struct OpencodeSetupSheet: View {
@@ -79,11 +74,10 @@ public struct OpencodeSetupSheet: View {
         }
     }
 
-    let tmuxClient: TmuxControlClient
     let command: Command
     var onCompletion: () -> Void = {}
 
-    @State private var paneId: String?
+    @State private var host: TerminalPtyHost?
     @State private var exitFile: URL?
     @State private var exitCode: Int32?
     @State private var preflightError: String?
@@ -91,11 +85,9 @@ public struct OpencodeSetupSheet: View {
     @State private var lifecycleTask: Task<Void, Never>?
 
     public init(
-        tmuxClient: TmuxControlClient,
         command: Command,
         onCompletion: @escaping () -> Void = {}
     ) {
-        self.tmuxClient = tmuxClient
         self.command = command
         self.onCompletion = onCompletion
     }
@@ -108,8 +100,8 @@ public struct OpencodeSetupSheet: View {
 
             if let preflightError {
                 preflightFailure(preflightError)
-            } else if let paneId {
-                MacInProcessTerminalView(tmuxClient: tmuxClient, paneId: paneId)
+            } else if let host {
+                DirectPtyTerminalView(host: host)
                     .frame(minWidth: 720, minHeight: 480)
             } else {
                 ProgressView("Starting…")
@@ -125,10 +117,8 @@ public struct OpencodeSetupSheet: View {
         }
         .onDisappear {
             lifecycleTask?.cancel()
-            if let paneId {
-                let pid = paneId
-                let client = tmuxClient
-                Task { try? await client.killPane(pid) }
+            if let host {
+                Task { await host.kill() }
             }
             cleanupSentinel()
         }
@@ -188,7 +178,7 @@ public struct OpencodeSetupSheet: View {
                      : "Exited with code \(code)")
                     .font(.footnote)
                     .foregroundStyle(code == 0 ? Color.primary : Color.red)
-            } else if paneId != nil {
+            } else if host != nil {
                 ProgressView()
                     .controlSize(.small)
                 Text("Running…")
@@ -198,10 +188,8 @@ public struct OpencodeSetupSheet: View {
             Spacer()
             if oauthInFlight {
                 Button("Cancel") {
-                    if let paneId {
-                        let pid = paneId
-                        let client = tmuxClient
-                        Task { try? await client.killPane(pid) }
+                    if let host {
+                        Task { await host.kill() }
                     }
                     dismiss()
                 }
@@ -221,14 +209,6 @@ public struct OpencodeSetupSheet: View {
             preflightError = "OpenCode binary not found. Reinstall the app or install opencode via brew."
             return
         }
-        // Preflight 2: tmux up
-        do {
-            try await tmuxClient.start()
-        } catch {
-            preflightError = "Couldn't start tmux: \(error.localizedDescription)"
-            return
-        }
-
         // Sentinel file for O2 child-exit detection.
         let sentinel = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("clawdmeter-opencode-\(UUID().uuidString).exit")
@@ -238,46 +218,34 @@ public struct OpencodeSetupSheet: View {
             .replacingOccurrences(of: "'", with: "'\\''")
         let shellCommand = "\(command.shellTail(binary: binary)); echo $? > '\(escapedSentinel)'"
 
-        // Spawn the pane.
-        let window: TmuxControlClient.WindowRef
         do {
-            window = try await tmuxClient.newWindow(
+            let spawned = try await TerminalPtyRegistry.shared.spawnCommand(
+                shellCommand,
                 cwd: NSHomeDirectory(),
-                child: ["/bin/bash", "-c", shellCommand]
+                title: command.title
             )
+            host = spawned
         } catch {
-            preflightError = "Couldn't spawn opencode pane: \(error.localizedDescription)"
+            preflightError = "Couldn't spawn opencode setup terminal: \(error.localizedDescription)"
             return
         }
-        paneId = window.paneId
-        sheetLogger.info("opencode setup pane=\(window.paneId, privacy: .public) cmd=\(command.id, privacy: .public)")
+        sheetLogger.info("opencode setup terminal cmd=\(command.id, privacy: .public)")
 
-        // Listen for window-closed + scan for OAuth-URL token.
-        lifecycleTask = Task { [windowId = window.windowId, sentinel] in
-            await runLifecycle(windowId: windowId, sentinel: sentinel)
+        lifecycleTask = Task { [sentinel] in
+            await runLifecycle(sentinel: sentinel)
         }
     }
 
     @MainActor
-    private func runLifecycle(windowId: String, sentinel: URL) async {
-        // Lifecycle subscription: poll for windowClosed AND poll
-        // pane scrollback for OAuth URL emission. Both are weak signals
-        // — the tmux lifecycle stream isn't typed exhaustively here,
-        // so we use a polling fallback.
+    private func runLifecycle(sentinel: URL) async {
         let pollInterval: UInt64 = 500_000_000  // 500ms
         var sawOAuthMarker = false
 
         while !Task.isCancelled {
-            // Detect window closed → child exited.
-            if !(await isWindowAlive(windowId: windowId)) {
-                // Read sentinel for exit code.
-                if let data = try? Data(contentsOf: sentinel),
-                   let s = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   let code = Int32(s) {
-                    exitCode = code
-                } else {
-                    exitCode = -1
-                }
+            if let data = try? Data(contentsOf: sentinel),
+               let s = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               let code = Int32(s) {
+                exitCode = code
                 if exitCode == 0 {
                     onCompletion()
                 }
@@ -287,8 +255,8 @@ public struct OpencodeSetupSheet: View {
                 break
             }
 
-            // OAuth-URL detection — scan the pane scrollback.
-            if !sawOAuthMarker, let paneId, await scrollbackContainsOAuthURL(paneId: paneId) {
+            // OAuth-URL detection — scan the PTY output ring.
+            if !sawOAuthMarker, await scrollbackContainsOAuthURL() {
                 sawOAuthMarker = true
                 oauthInFlight = true
             }
@@ -297,30 +265,13 @@ public struct OpencodeSetupSheet: View {
         }
     }
 
-    private func isWindowAlive(windowId: String) async -> Bool {
-        // Use TmuxControlClient.listWindows to check if our window
-        // still exists. Cheap (~5-10ms tmux RPC).
-        do {
-            let windows = try await tmuxClient.listWindows()
-            return windows.contains { $0.windowId == windowId }
-        } catch {
-            // RPC error — assume still alive to avoid premature exit.
-            return true
-        }
-    }
-
-    private func scrollbackContainsOAuthURL(paneId: String) async -> Bool {
-        // tmux capture-pane to grab recent scrollback. Cheap.
-        do {
-            let result = try await tmuxClient.command(["capture-pane", "-p", "-t", paneId, "-S", "-200"])
-            let buffer = result.lines.joined(separator: "\n")
-            if buffer.range(of: #"https://[^\s]+\?[^\s]*code="#, options: .regularExpression) != nil { return true }
-            if buffer.range(of: "paste this URL", options: .caseInsensitive) != nil { return true }
-            if buffer.range(of: "open this URL", options: .caseInsensitive) != nil { return true }
-            return false
-        } catch {
-            return false
-        }
+    private func scrollbackContainsOAuthURL() async -> Bool {
+        guard let host else { return false }
+        let buffer = String(decoding: await host.snapshot(), as: UTF8.self)
+        if buffer.range(of: #"https://[^\s]+\?[^\s]*code="#, options: .regularExpression) != nil { return true }
+        if buffer.range(of: "paste this URL", options: .caseInsensitive) != nil { return true }
+        if buffer.range(of: "open this URL", options: .caseInsensitive) != nil { return true }
+        return false
     }
 
     private func cleanupSentinel() {
