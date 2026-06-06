@@ -284,7 +284,7 @@ private struct OAuthUsageEnvelope: Decodable {
     }
 
     struct WindowReading: Decodable {
-        let utilization: Double?      // 0.0...1.0
+        let utilization: Double?      // 0.0...1.0 or 0...100, depending on API shape
         let usedPercentage: Double?   // 0...100 (statusline-style)
         let resetsAt: AnyDate?
     }
@@ -352,19 +352,24 @@ private struct OAuthUsageEnvelope: Decodable {
         let reading: WindowReading? = (which == .fiveHour) ? fiveHourReading : sevenDayReading
         if let reading {
             let pct: Int
-            if let p = reading.usedPercentage { pct = Int(p.rounded()) }
-            else if let u = reading.utilization { pct = Int((u * 100).rounded()) }
+            if let p = reading.usedPercentage { pct = Self.normalizedPercent(p, alreadyPercent: true) }
+            else if let u = reading.utilization { pct = Self.normalizedPercent(u, alreadyPercent: false) }
             else { return nil }
             let resetEpoch = reading.resetsAt.map { Int($0.date.timeIntervalSince1970) }
                 ?? Int(Date().addingTimeInterval(60).timeIntervalSince1970)
             return (pct, resetEpoch)
         }
         if let u = fallbackBinding {
-            let pct = Int((u * 100).rounded())
+            let pct = Self.normalizedPercent(u, alreadyPercent: false)
             let resetEpoch = fallbackResetEpoch ?? Int(Date().addingTimeInterval(60).timeIntervalSince1970)
             return (pct, resetEpoch)
         }
         return nil
+    }
+
+    private static func normalizedPercent(_ value: Double, alreadyPercent: Bool) -> Int {
+        let percent = alreadyPercent || abs(value) > 1 ? value : value * 100
+        return min(100, max(0, Int(percent.rounded())))
     }
 }
 
