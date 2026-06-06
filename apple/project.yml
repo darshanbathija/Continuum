@@ -19,8 +19,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.31.6"
-    CURRENT_PROJECT_VERSION: "206"
+    MARKETING_VERSION: "0.31.7"
+    CURRENT_PROJECT_VERSION: "207"
 
 packages:
   ClawdmeterShared:
@@ -34,8 +34,6 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: "2.9.2"
-  TmuxControlMode:
-    path: ../tools/tmux-control-mode-core
 
 targets:
   # ───────────────────────────────────────────────────────────────
@@ -96,8 +94,6 @@ targets:
         product: SwiftTerm
       - package: Sparkle
         product: Sparkle
-      - package: TmuxControlMode
-        product: TmuxControlMode
       - target: ClawdmeterMacWidgets
         embed: true
     preBuildScripts:

@@ -1252,14 +1252,12 @@ struct SidebarPane: View {
 
     /// One row per JSONL surfaced from `repo.recentSessions` — these were
     /// not spawned by Clawdmeter (Conductor / Cursor / Terminal). Click
-    /// promotes them via `Continue here`. v0.4.6: matches the iOS row
+    /// opens the JSONL transcript read-only. v0.4.6: matches the iOS row
     /// treatment — provider badge on the leading edge, color-tinted
     /// provider name in the subtitle, optional repo chip (for the
     /// non-Repo groupings where the row has no repo section header
     /// above it), green ring around the badge when the JSONL was
-    /// touched in the last 5 minutes. The "Read-only" copy and eye
-    /// icon are gone — v0.4.1 made the row continuable from the
-    /// composer so calling it read-only was misleading.
+    /// touched in the last 5 minutes.
     private func recentSessionRow(_ recent: RecentSession, isOpen: Bool, repo: AgentRepo, showRepoChip: Bool = false) -> some View {
         let isHovered = hoveredRecentPath == recent.path
         return HStack(alignment: .top, spacing: 8) {
@@ -1298,8 +1296,8 @@ struct SidebarPane: View {
         }
         .help(recent.path)
         .contextMenu {
-            Button("Continue here", systemImage: "play.fill") {
-                Task { _ = await model.continueOutsideSession(recent: recent, repoKey: repo.key, repoDisplayName: repo.displayName) }
+            Button("Open read-only", systemImage: "doc.text") {
+                model.openOutsideSession(recent: recent, repoKey: repo.key, repoDisplayName: repo.displayName)
             }
             Button("Rename…", systemImage: "pencil") {
                 renameJSONLTarget = recent

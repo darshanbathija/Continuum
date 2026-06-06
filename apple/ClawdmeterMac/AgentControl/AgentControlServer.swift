@@ -5423,7 +5423,7 @@ public final class AgentControlServer {
         }
 
         let codexBackend = provider == .codex
-            ? (requestedCodexBackend ?? vendor.codexBackend ?? .sdk)
+            ? (requestedCodexBackend ?? .sdk)
             : nil
         return ResolvedChatRuntimeMetadata(
             vendor: vendor,

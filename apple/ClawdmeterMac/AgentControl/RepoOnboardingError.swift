@@ -23,3 +23,55 @@ extension RepoOnboardingError {
     }
 
 }
+
+extension RepoOnboardingError: @retroactive LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .pathMissing:
+            return "Folder doesn't exist."
+        case .notADirectory:
+            return "Path isn't a folder."
+        case .alreadyRegistered:
+            return "Already in your projects."
+        case .notAGitRepo:
+            return "Folder isn't a git repository."
+        case .ghAuthFailed:
+            return "GitHub authentication failed."
+        case .cloneFailed(let stderr):
+            return "Clone failed: \(Self.firstLine(stderr))"
+        case .gitInitFailed(let stderr):
+            return "git init failed: \(Self.firstLine(stderr))"
+        case .persistenceFailed(let message):
+            return message
+        case .pathNotAllowed(let reason):
+            return "Path not allowed: \(reason)"
+        }
+    }
+
+    public var recoverySuggestion: String? {
+        switch self {
+        case .pathMissing:
+            return "Choose an existing folder and try again."
+        case .notADirectory:
+            return "Choose a folder, not a file."
+        case .alreadyRegistered:
+            return nil
+        case .notAGitRepo:
+            return "Pick a repository folder or clone from GitHub."
+        case .ghAuthFailed:
+            return "Run `gh auth login` on this Mac and try again."
+        case .cloneFailed:
+            return "Check the repo name and your GitHub access."
+        case .gitInitFailed:
+            return "Check folder permissions and try again."
+        case .persistenceFailed:
+            return "Try again. If it repeats, restart Continuum."
+        case .pathNotAllowed:
+            return "Choose a folder under an allowed workspace root."
+        }
+    }
+
+    private static func firstLine(_ text: String) -> String {
+        text.split(separator: "\n").first.map(String.init) ?? text
+    }
+}

@@ -928,24 +928,10 @@ public final class AgentSessionRegistry: ObservableObject {
         chatVendor: ChatVendor? = nil,
         billingProvider: String? = nil
     ) -> SessionRuntimeBinding {
-        var runtime = SessionRuntimeKind.inferred(
+        let runtime = SessionRuntimeKind.inferred(
             agent: agent,
             codexBackend: codexBackend
         )
-        if chatVendor != nil {
-            switch agent {
-            case .codex:
-                runtime = .codexAppServer
-            case .gemini:
-                runtime = .agyHeadless
-            case .cursor:
-                runtime = .acpCursor
-            case .grok:
-                runtime = .acpGrok
-            default:
-                break
-            }
-        }
         let resolvedBillingProvider: String? = billingProvider ?? {
             switch agent {
             case .claude: return "claude"

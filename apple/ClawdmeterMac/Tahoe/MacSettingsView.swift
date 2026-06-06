@@ -283,16 +283,12 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var deviceSettings: some View {
-        SettingsCard(title: "Quota & sync",
-                     sub: "Behavior that affects the menu-bar agent and the paired iPhone.") {
-            SettingsRow(label: "Auto-revive 5h timer",
-                        hint: supportsAnyAutoRevive
-                            ? "Keeps rolling quota windows warm for providers that support a non-consuming keepalive."
-                            : "Paused until a provider exposes a non-consuming keepalive endpoint.") {
-                if supportsAnyAutoRevive {
+        if supportsAnyAutoRevive {
+            SettingsCard(title: "Quota & sync",
+                         sub: "Behavior that affects the menu-bar agent and the paired iPhone.") {
+                SettingsRow(label: "Auto-revive 5h timer",
+                            hint: "Keeps rolling quota windows warm for providers that support a non-consuming keepalive.") {
                     TahoeToggleView(on: autoReviveBinding)
-                } else {
-                    SettingsUnavailableBadge()
                 }
             }
         }
