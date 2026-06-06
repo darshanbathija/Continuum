@@ -163,12 +163,13 @@ final class AcpHarnessBridge {
             guard let binary, let executable = AcpStdioChild.resolve(binary) else {
                 throw ACPError.startFailed("\(binary ?? "agent") not found on PATH. Install/sign in first.")
             }
+            let childEnv = SpawnPathResolver.merged(into: env)
             // pump child stdout -> connection; child exit -> fail in-flight requests
             let conn = connection
             await child.setOnStdout { data in await conn.feed(data) }
             await child.setOnExit { code in Task { await conn.close(code: code) } }
             do {
-                try await child.launch(executable: executable, arguments: arguments, cwd: cwd, env: env)
+                try await child.launch(executable: executable, arguments: arguments, cwd: cwd, env: childEnv)
             } catch {
                 throw ACPError.startFailed("failed to launch \(binary): \(error)")
             }
@@ -176,9 +177,21 @@ final class AcpHarnessBridge {
             self.reapablePid = await child.pid
             self.reapableBinary = binary
         }
-        externalSessionId = try await driver.start(
-            model: model, effort: effort, cwd: cwd ?? "", alwaysApprove: alwaysApprove
-        )
+        do {
+            externalSessionId = try await driver.start(
+                model: model, effort: effort, cwd: cwd ?? "", alwaysApprove: alwaysApprove
+            )
+        } catch {
+            var message = error.localizedDescription
+            if let child {
+                let stderrText = await child.stderrText
+                let stderr = stderrText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !stderr.isEmpty {
+                    message += "\nstderr: \(stderr)"
+                }
+            }
+            throw ACPError.startFailed(message)
+        }
         startConsuming()
     }
 

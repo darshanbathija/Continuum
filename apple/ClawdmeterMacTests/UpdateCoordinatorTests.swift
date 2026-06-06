@@ -97,6 +97,27 @@ final class UpdateCoordinatorTests: XCTestCase {
         let (coordinator, driver) = makeCoordinator()
         coordinator.checkForUpdates()
         XCTAssertEqual(driver.manualChecks, 1)
+        XCTAssertEqual(driver.informationChecks, 0)
+        XCTAssertEqual(coordinator.state, .checking)
+    }
+
+    func testRefreshUpdateStatusUsesInformationOnlyProbe() {
+        let (coordinator, driver) = makeCoordinator()
+        coordinator.refreshUpdateStatus()
+        XCTAssertEqual(driver.manualChecks, 0)
+        XCTAssertEqual(driver.informationChecks, 1)
+        XCTAssertEqual(coordinator.state, .checking)
+    }
+
+    func testUpdateAvailableForegroundCheckBypassesProbeDebounce() {
+        let (coordinator, driver) = makeCoordinator()
+        coordinator.refreshUpdateStatus()
+        driver.emitFound(SparkleUpdateInfo(version: "156", displayVersion: "0.29.17"))
+
+        coordinator.checkForUpdates()
+
+        XCTAssertEqual(driver.informationChecks, 1)
+        XCTAssertEqual(driver.manualChecks, 1)
         XCTAssertEqual(coordinator.state, .checking)
     }
 
@@ -324,6 +345,7 @@ final class FakeSparkleUpdateDriver: SparkleUpdateDriving {
     var lastUpdateCheckDate: Date?
     var didStart = false
     var manualChecks = 0
+    var informationChecks = 0
     var backgroundChecks = 0
     var startError: Error?
 
@@ -334,6 +356,11 @@ final class FakeSparkleUpdateDriver: SparkleUpdateDriving {
 
     func checkForUpdates() {
         manualChecks += 1
+        delegate?.updateDriverDidStartChecking()
+    }
+
+    func checkForUpdateInformation() {
+        informationChecks += 1
         delegate?.updateDriverDidStartChecking()
     }
 

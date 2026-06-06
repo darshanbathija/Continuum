@@ -73,7 +73,7 @@ public enum RpcId: Sendable, Hashable, Codable {
 }
 
 /// Errors surfaced by the ACP transport / driver.
-public enum ACPError: Error, Sendable, Equatable {
+public enum ACPError: Error, Sendable, Equatable, LocalizedError, CustomStringConvertible {
     /// The agent returned a JSON-RPC error to one of our requests.
     case rpc(code: Int, message: String)
     /// Spawn / handshake / auth failed before a turn could start (two-phase
@@ -85,4 +85,25 @@ public enum ACPError: Error, Sendable, Equatable {
     case decode(String)
     /// No auth method offered by the agent matched what we can satisfy.
     case noUsableAuthMethod(offered: [String])
+
+    public var errorDescription: String? { description }
+
+    public var description: String {
+        switch self {
+        case .rpc(let code, let message):
+            return "agent RPC error \(code): \(message)"
+        case .startFailed(let message):
+            return message
+        case .processExited(let code):
+            if let code {
+                return "agent process exited with status \(code)"
+            }
+            return "agent process exited"
+        case .decode(let message):
+            return "failed to decode agent frame: \(message)"
+        case .noUsableAuthMethod(let offered):
+            let methods = offered.isEmpty ? "none" : offered.joined(separator: ", ")
+            return "no usable auth method offered by agent (offered: \(methods))"
+        }
+    }
 }

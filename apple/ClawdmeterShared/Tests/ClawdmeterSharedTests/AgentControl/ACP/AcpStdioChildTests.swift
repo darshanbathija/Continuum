@@ -41,6 +41,17 @@ final class AcpStdioChildTests: XCTestCase {
         XCTAssertNotNil(AcpStdioChild.resolve("cat"))
         XCTAssertNil(AcpStdioChild.resolve("definitely-not-a-real-binary-xyz"))
     }
+
+    func testACPErrorLocalizedDescriptionIsActionable() {
+        XCTAssertEqual(
+            ACPError.startFailed("codex not found on PATH").localizedDescription,
+            "codex not found on PATH"
+        )
+        XCTAssertEqual(
+            ACPError.processExited(code: 1).localizedDescription,
+            "agent process exited with status 1"
+        )
+    }
 }
 
 actor ByteSink {

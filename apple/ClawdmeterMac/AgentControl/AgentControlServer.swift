@@ -6062,7 +6062,7 @@ public final class AgentControlServer {
         let bridge: AcpHarnessBridge
         switch provider {
         case .codex:
-            binary = "codex"
+            binary = ShellRunner.locateBinary("codex") ?? "codex"
             arguments = ["app-server"]
             bridge = .codexAppServer(
                 sessionId: session.id, store: store,
@@ -6078,7 +6078,7 @@ public final class AgentControlServer {
                 try? ChatCwdManager.remove(for: session.id)
                 throw HarnessChatSpawnError.unsupportedProvider
             }
-            binary = support.binaryName
+            binary = AgentSpawner.cursorBinaryPath() ?? support.binaryName
             arguments = support.spawnArgv(model: nil, effort: nil, alwaysApprove: false)
             bridge = .acp(
                 sessionId: session.id, support: support, store: store,
@@ -6923,6 +6923,9 @@ public final class AgentControlServer {
                 id: session.id, worktreePath: chatCwd,
                 tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
             )
+            if slot.provider == .claude {
+                ChatCwdManager.markTrustedForClaude(path: chatCwd)
+            }
             let updated = registry.session(id: session.id) ?? session
             let argv = AgentSpawner.argv(for: updated)
             if argv.isEmpty && updated.agent == .codex && updated.codexChatBackend == .sdk {
