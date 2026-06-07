@@ -40,6 +40,7 @@ public enum AgentSpawner {
         acceptEdits: Bool = false,
         resumeSessionId: String? = nil,
         deepResearch: Bool = false,
+        strictMcp: Bool = false,
         extraArgs: [String] = []
     ) -> [String]? {
         guard let claude = ShellRunner.locateBinary("claude") else { return nil }
@@ -48,7 +49,18 @@ public enum AgentSpawner {
             argv += ["--resume", resumeSessionId]
         }
         if let model, !model.isEmpty {
-            argv += ["--model", model]
+            // The model catalog encodes the 1M-context Opus variants as
+            // "<id>-1m" (e.g. claude-opus-4-8-1m), but the Claude CLI's --model
+            // flag only accepts the bracket form "<id>[1m]". The "-1m" alias is
+            // silently rejected and the CLI never starts a turn — the chat /
+            // broadcast column just stays blank with no thinking animation.
+            // Normalize the stable catalog id to the CLI form at the spawn
+            // boundary (verified: `claude --model 'claude-opus-4-8[1m]'` works,
+            // `claude-opus-4-8-1m` produces nothing).
+            let cliModel = model.hasSuffix("-1m")
+                ? String(model.dropLast(3)) + "[1m]"
+                : model
+            argv += ["--model", cliModel]
         }
         // Permission mode precedence: plan > bypass (autopilot) > acceptEdits
         // > ask (default). Only one --permission-mode flag may be set.
@@ -77,6 +89,16 @@ public enum AgentSpawner {
             }
         } else if let effort {
             argv += ["--effort", effort.claudeFlagValue]
+        }
+        if strictMcp {
+            // Continuum chat runs in fresh per-chat cwds where the user's
+            // global MCP servers (docker/playwright/etc. in ~/.claude.json) are
+            // unapproved, so Claude would block on a modal "New MCP server
+            // found… 1/2/3" prompt BEFORE reaching the chat input — the daemon's
+            // first prompt then just answers that dialog and the real prompt is
+            // swallowed (blank chat, no reply, no rollout). Ignore all ambient
+            // MCP config so chat sessions boot straight to the input.
+            argv += ["--strict-mcp-config"]
         }
         argv.append(contentsOf: extraArgs)
         return argv
@@ -146,7 +168,8 @@ public enum AgentSpawner {
                 // `claude --resume` continues the conversation. nil for a fresh
                 // session means clean start.
                 resumeSessionId: session.claudeSessionId,
-                deepResearch: session.deepResearch
+                deepResearch: session.deepResearch,
+                strictMcp: session.kind == .chat
             ) ?? []
         case (.codex, _), (.gemini, _), (.cursor, _), (.opencode, _), (.grok, _):
             // Managed transports do not have direct CLI argv. Keep this empty so

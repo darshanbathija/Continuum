@@ -6484,6 +6484,22 @@ public final class AgentControlServer {
         // below. A registered bridge is authoritative (mirrors the Solo send path's
         // SessionCommandRouter `.harnessBridge` route).
         if let bridge = harnessRegistry.bridge(for: session.id) {
+            // Echo the user prompt into the child store so the broadcast column
+            // renders the user's "You" bubble. Harness bridges (Codex / Gemini /
+            // Grok / Cursor) don't record the user turn the way Claude's JSONL
+            // tail and the OpenCode handler do, so without this the column shows
+            // only the assistant answer (the projector sees prompt == nil).
+            if let store = chatStoreRegistry.snapshotStore(for: session) {
+                store.appendSDKMessages([
+                    ChatMessage(
+                        id: "frontier-user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))",
+                        kind: .userText,
+                        title: "You",
+                        body: text,
+                        at: Date()
+                    )
+                ])
+            }
             guard await bridge.prompt(text, origin: origin, allowLiveProviderSpend: Self.allowLiveProviderSpend) else {
                 return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "provider_prompt_blocked")
             }
@@ -7395,7 +7411,8 @@ public final class AgentControlServer {
             model: session.model,
             planMode: false,
             effort: session.effort,
-            autopilot: false
+            autopilot: false,
+            strictMcp: session.kind == .chat
         ) else {
             serverLogger.error("approve-plan: missing CLI binary for \(session.agent.rawValue, privacy: .public)")
             sendResponse(.internalError, on: connection)

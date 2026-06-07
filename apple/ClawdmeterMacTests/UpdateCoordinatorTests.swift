@@ -291,6 +291,35 @@ final class UpdateCoordinatorTests: XCTestCase {
         XCTAssertNotNil(coordinator.releaseMetadataError)
     }
 
+    func testCurrentVersionReleaseNotes404DoesNotSurfaceError() async {
+        // Regression: when the app is up to date, the current version's notes
+        // markdown is frequently absent on GitHub Pages (404). That must degrade
+        // to a calm empty state, NOT a user-facing "Release notes unavailable:
+        // NSURLErrorDomain error -1011". History.json still loads fine, so its
+        // own error path must stay clean too.
+        MockURLProtocol.responder = { request in
+            if request.url?.path == "/Continuum/updates/history.json" {
+                let data = """
+                [{"version":"0.29.16","build":"155","title":"Sparkle","publishedAt":null,"notesURL":null}]
+                """.data(using: .utf8)!
+                return MockURLProtocol.response(url: request.url!, status: 200, data: data)
+            }
+            // Per-version release-notes doc is not published for this build.
+            return MockURLProtocol.response(url: request.url!, status: 404, data: Data())
+        }
+
+        let (coordinator, _) = makeCoordinator()
+        coordinator.refreshReleaseMetadata()
+        await Self.waitForMetadata(coordinator)
+
+        XCTAssertEqual(coordinator.releaseHistory.first?.version, "0.29.16")
+        XCTAssertNil(coordinator.releaseNotes)
+        XCTAssertNil(
+            coordinator.releaseMetadataError,
+            "A 404 on the current version's release notes must not surface a user-facing updater error"
+        )
+    }
+
     func testOpenReleaseNotesPrefersAvailableUpdateURL() {
         var opened: URL?
         let notesURL = URL(string: "https://example.test/Continuum-0.29.17.md")!

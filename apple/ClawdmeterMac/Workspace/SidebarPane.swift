@@ -1715,6 +1715,22 @@ struct SidebarPane: View {
                         .background(terraCotta, in: Capsule())
                         .help("\(queued) queued follow-up\(queued == 1 ? "" : "s")")
                 }
+                // Hover-revealed archive affordance (matches the reference
+                // sidebar). Archive otherwise lives only in the right-click menu.
+                if isHovered && session.archivedAt == nil {
+                    Button {
+                        Task { try? await model.registry.archive(id: session.id) }
+                    } label: {
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(t.fg3)
+                            .frame(width: 18, height: 18)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .help("Archive session")
+                    .accessibilityLabel("Archive session")
+                }
             }
             .padding(.leading, 24 + CGFloat(depth) * 6)
             .padding(.trailing, 24)

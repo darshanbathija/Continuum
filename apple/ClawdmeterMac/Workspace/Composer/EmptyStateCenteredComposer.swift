@@ -58,12 +58,7 @@ struct EmptyStateCenteredComposer: View {
                     .font(.system(size: 22, weight: .semibold, design: .serif))
                     .foregroundStyle(.primary)
                     .multilineTextAlignment(.center)
-                Text("Pick a repo and start typing. ⌘N if you'd rather configure advanced options first.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
             }
-            quickChips
             VStack(spacing: 0) {
                 repoPickerRow
                 Divider()
@@ -78,7 +73,8 @@ struct EmptyStateCenteredComposer: View {
                         store.permissionMode = newMode
                         store.planMode = (newMode == .plan)
                     },
-                    permissionMode: store.permissionMode
+                    permissionMode: store.permissionMode,
+                    minimalChrome: true
                 )
             }
             .frame(maxWidth: 760)
@@ -103,13 +99,20 @@ struct EmptyStateCenteredComposer: View {
             if workspaceDraft == nil,
                store.repoKey == nil,
                let firstRepo = model.repos.first,
-               let defaultAgent = launcher.selectableAgents.first {
+               let defaultAgent = launcher.selectableAgents.first(where: { $0 == .codex }) ?? launcher.selectableAgents.first {
                 store.resetChipsForRepo(
                     firstRepo.key,
                     defaults: launcher.chipDefaults(for: defaultAgent)
                 )
             }
             launcher.normalize(store)
+            // New-session default = Full access (bypass) per product decision.
+            // The per-repo trust gate still applies on first spawn; draft
+            // handoffs from iOS keep whatever mode they arrived with.
+            if workspaceDraft == nil {
+                store.permissionMode = .bypass
+                store.planMode = false
+            }
         }
         .onChange(of: launcher.availability) { _, _ in
             launcher.normalize(store)
@@ -135,9 +138,9 @@ struct EmptyStateCenteredComposer: View {
     private var headline: String {
         if let repo = store.repoKey, !repo.isEmpty {
             let last = (repo as NSString).lastPathComponent
-            return "What should we work on in \(last)?"
+            return "What should we build in \(last)?"
         }
-        return "What should we work on?"
+        return "What should we build?"
     }
 
     private var repoPickerRow: some View {
@@ -159,7 +162,7 @@ struct EmptyStateCenteredComposer: View {
                     get: { store.repoKey ?? "" },
                     set: { newKey in
                         let key = newKey.isEmpty ? nil : newKey
-                        if let defaultAgent = launcher.selectableAgents.first {
+                        if let defaultAgent = launcher.selectableAgents.first(where: { $0 == .codex }) ?? launcher.selectableAgents.first {
                             store.resetChipsForRepo(
                                 key,
                                 defaults: launcher.chipDefaults(for: defaultAgent)

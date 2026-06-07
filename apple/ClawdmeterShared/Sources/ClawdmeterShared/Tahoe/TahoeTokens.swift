@@ -138,7 +138,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         // points at "OpencodeLogo". Naming kept consistent for the
         // future Tahoe-art swap.
         case .opencode: return "tahoe-opencode-mark"
-        case .cursor: return "tahoe-codex-mark"
+        case .cursor: return "tahoe-cursor-mark"
         case .grok: return "tahoe-grok-mark"
         }
     }

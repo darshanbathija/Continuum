@@ -370,16 +370,23 @@ public final class DaemonChatStoreRegistry {
                     store.start()
                     return store
                 }
-                // No JSONL yet — fall through to sdkOnly. The session will
-                // remain empty until the CLI writes its first turn; the next
-                // snapshotStore() call after that point will see the file.
-                // (For v0.8 the store stays sdkOnly forever; v0.8.x can wire
-                // a directory-watch retry. Acceptable trade — empty thread
-                // beats wrong thread.) v0.9.x.1: replay the transcript
-                // mirror in case the user opened the chat post-evict.
-                let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
+                // No rollout on disk yet — Claude PTY writes its JSONL only
+                // once it processes the first turn. A Claude PTY child has NO
+                // bridge feeding appendSDKMessages, so an sdkOnly store would
+                // stay empty FOREVER, and a long-lived frontier-/chat-subscribe
+                // WS subscriber (which acquires the store once) never
+                // re-resolves it — the "Claude broadcast column blank, no
+                // thinking animation" bug. Hand back a real JSONL-backed store
+                // aimed at a sentinel and re-aim it in place once the rollout
+                // lands: switchTailedFile keeps the SAME instance so the live WS
+                // Combine subscription self-heals and ingestTail seeds the
+                // already-written turn. JSONLTail tolerates the missing sentinel
+                // (it watches the parent dir until the file appears).
+                let sentinel = URL(fileURLWithPath: session.effectiveCwd)
+                    .appendingPathComponent(".continuum-pending-chat.jsonl")
+                let store = SessionChatStore(sessionId: session.id, sessionFileURL: sentinel)
                 store.start()
-                SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
+                watchForClaudeChatRollout(chatCwd: session.effectiveCwd, store: store)
                 return store
             }
             // Codex CLI chat: bind to the rollout whose session_meta.cwd
@@ -450,6 +457,26 @@ public final class DaemonChatStoreRegistry {
     /// chat-mode Claude session. The encoded dir name is deterministic per
     /// session UUID, so we can target it directly without the parent-walk
     /// fuzzy-match that ISSUE-003 fixed for unrelated paths.
+    /// Claude PTY chat writes its rollout JSONL only after it processes the
+    /// first turn, so `createStore` hands back a JSONL-backed store aimed at a
+    /// sentinel path. Poll for the real rollout and re-aim that SAME store the
+    /// moment it appears — `switchTailedFile` preserves store identity, so a
+    /// live frontier-/chat-subscribe WS subscriber self-heals (the WS channel
+    /// acquires the store once and never re-resolves). Bounded so a child that
+    /// never boots can't leak the Task.
+    private func watchForClaudeChatRollout(chatCwd: String, store: SessionChatStore) {
+        Task { @MainActor [weak store] in
+            for _ in 0..<240 {                       // ~120s @ 500ms, then give up
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let store else { return }      // store evicted → stop polling
+                if let url = Self.chatCwdClaudeJSONL(chatCwd: chatCwd) {
+                    store.switchTailedFile(to: url)
+                    return
+                }
+            }
+        }
+    }
+
     private static func chatCwdClaudeJSONL(chatCwd: String) -> URL? {
         let home = ClawdmeterRealHome.url()
         let projects = home.appendingPathComponent(".claude/projects")

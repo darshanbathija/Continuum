@@ -374,7 +374,7 @@ struct UpdatePopoverContent: View {
                 .foregroundStyle(ContinuumTokens.fg2)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
-            Text("Release notes will appear here after the appcast is available.")
+            Text("No release notes to show for this version.")
                 .font(ContinuumFont.body(12))
                 .foregroundStyle(ContinuumTokens.fg2)
         }
