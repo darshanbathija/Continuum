@@ -25,6 +25,16 @@
 fastlane_version "2.219.0"
 default_platform :ios
 
+# Force a UTF-8 locale for the whole Fastfile run. Without it, Ruby's default
+# external encoding is US-ASCII and `xcpretty` 0.4.1 (which `gym`/`build_app`
+# pipes xcodebuild output through) crashes with
+# `ArgumentError: invalid byte sequence in US-ASCII` on the first non-ASCII
+# byte in the build log — and with `set -o pipefail` that fails the entire
+# archive/upload (hit live during a TestFlight push). `||=` so an explicitly
+# set caller locale still wins.
+ENV["LANG"] ||= "en_US.UTF-8"
+ENV["LC_ALL"] ||= "en_US.UTF-8"
+
 # ---------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------
