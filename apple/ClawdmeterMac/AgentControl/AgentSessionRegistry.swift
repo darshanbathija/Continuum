@@ -622,6 +622,22 @@ public final class AgentSessionRegistry: ObservableObject {
             try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: siblingId, session: siblingProjected)
             update(id: siblingId) { _ in siblingProjected }
         }
+        // Reclaim the worktree checkout to Trash so archived sessions don't pile
+        // up ~54 MB each. Runs AFTER the record is archived (best-effort: a Trash
+        // failure can't block archiving). The branch is kept, so committed work
+        // survives and `unarchive` re-provisions the checkout.
+        await reclaimWorktreeOnArchive(s)
+    }
+
+    /// Stop the runtime + move the session's worktree to the macOS Trash.
+    /// No-op for chat-cwd sessions and non-worktree sessions (only paths under
+    /// our managed `~/Clawdmeter/workspaces/` root are touched).
+    private func reclaimWorktreeOnArchive(_ s: AgentSession) async {
+        guard let wt = s.worktreePath,
+              wt.contains("/Clawdmeter/workspaces/"),
+              let repoRoot = s.repoKey else { return }
+        await AppDelegate.runtime?.agentControlServer.teardownRuntimeForReclaim(id: s.id)
+        await WorktreeManager.shared.trashWorktree(repoRoot: repoRoot, worktreePath: wt)
     }
 
     public func unarchive(id: UUID) async throws {
@@ -629,6 +645,16 @@ public final class AgentSessionRegistry: ObservableObject {
         let projected = with(s, archivedAt: .some(nil))
         try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
         update(id: id) { _ in projected }
+        // Re-check-out the worktree archive moved to Trash, from its branch.
+        if let wt = s.worktreePath,
+           wt.contains("/Clawdmeter/workspaces/"),
+           let repoRoot = s.repoKey,
+           let branch = s.provisioning?.branchName,
+           !FileManager.default.fileExists(atPath: wt) {
+            _ = await WorktreeManager.shared.reprovision(
+                repoRoot: repoRoot, worktreePath: wt, branchName: branch
+            )
+        }
     }
 
     // MARK: - A/B pair operations (Phase 7 + E3 atomic CAS)
@@ -1107,9 +1133,17 @@ public final class AgentSessionRegistry: ObservableObject {
             if loaded.count != file.sessions.count {
                 registryLogger.info("Dropped \(file.sessions.count - loaded.count) orphaned provisional session(s) on load")
             }
-            self.sessions = loaded
+            // Collapse duplicate session-id entries (a persistence race could
+            // write the same id twice) — keep the first. A duplicate id otherwise
+            // renders as two identical workspace tabs for one session.
+            var seenSessionIds = Set<UUID>()
+            let deduped = loaded.filter { seenSessionIds.insert($0.id).inserted }
+            if deduped.count != loaded.count {
+                registryLogger.warning("Collapsed \(loaded.count - deduped.count) duplicate-id session(s) on load")
+            }
+            self.sessions = deduped
             // Restore per-session seq counters from the loaded data.
-            for session in loaded {
+            for session in deduped {
                 nextEventSeqBySession[session.id] = session.lastEventSeq + 1
             }
             registryLogger.info("Loaded \(loaded.count) sessions from \(self.storeURL.path, privacy: .public)")

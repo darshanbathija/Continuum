@@ -56,12 +56,20 @@ public enum SDKChatTranscriptMirror {
             .appendingPathComponent("\(sessionId.uuidString).jsonl")
     }
 
-    /// Append a batch of ChatMessages to the session's mirror file.
-    /// Creates the directory + file if missing. Best-effort — errors
-    /// are logged but never thrown so a mirror write failure can't
-    /// break the live chat.
-    public static func append(sessionId: UUID, messages: [ChatMessage]) {
-        guard !messages.isEmpty else { return }
+    /// Persist the session's COMPLETE message set, atomically replacing the
+    /// mirror file. The caller (SessionChatStore) owns the running, deduped
+    /// transcript and hands the whole thing here on every change.
+    ///
+    /// Why full-rewrite instead of incremental append: the previous `append`
+    /// implementation opened the file with `FileHandle(forWritingTo:)` +
+    /// `seekToEnd` for every subsequent message. When that append-mode write
+    /// silently failed, the mirror kept ONLY the first message ever written —
+    /// every harness chat on disk collapsed to a single line, so reopening a
+    /// chat after evict/restart wiped all but one turn. An atomic full rewrite
+    /// (`Data.write(.atomic)` = write-temp-then-rename) can't truncate or drop
+    /// turns: at every moment the file is either the previous complete set or
+    /// the new complete set. Best-effort; errors are logged, never thrown.
+    public static func persist(sessionId: UUID, messages: [ChatMessage]) {
         let url = mirrorURL(sessionId: sessionId)
         let dir = url.deletingLastPathComponent()
         do {
@@ -72,6 +80,8 @@ public enum SDKChatTranscriptMirror {
             mirrorLogger.warning("mkdir failed: \(error.localizedDescription, privacy: .public)")
             return
         }
+        // Never clobber an existing transcript with an empty write.
+        guard !messages.isEmpty else { return }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         var payload = Data()
@@ -81,27 +91,10 @@ public enum SDKChatTranscriptMirror {
             payload.append(0x0a)
         }
         guard !payload.isEmpty else { return }
-        // Append-mode write. Open + close per batch so we don't hold a
-        // file handle across appendSDKMessages calls (could leak if the
-        // store outlives the actor context).
-        if FileManager.default.fileExists(atPath: url.path) {
-            if let handle = try? FileHandle(forWritingTo: url) {
-                do {
-                    try handle.seekToEnd()
-                    try handle.write(contentsOf: payload)
-                    try handle.close()
-                } catch {
-                    mirrorLogger.warning("append-write failed: \(error.localizedDescription, privacy: .public)")
-                }
-            } else {
-                mirrorLogger.warning("open for append failed: \(url.path, privacy: .public)")
-            }
-        } else {
-            do {
-                try payload.write(to: url, options: [.atomic])
-            } catch {
-                mirrorLogger.warning("create-write failed: \(error.localizedDescription, privacy: .public)")
-            }
+        do {
+            try payload.write(to: url, options: [.atomic])
+        } catch {
+            mirrorLogger.warning("persist-write failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

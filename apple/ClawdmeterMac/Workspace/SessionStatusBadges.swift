@@ -99,12 +99,16 @@ struct SessionHoverActions: View {
     let onArchive: () -> Void
 
     var body: some View {
+        // Bare archive glyph (Conductor-style) revealed on row hover. The
+        // always-on chip background was dropped so it reads as a light
+        // affordance, not a heavy button; `codeHoverChrome` still draws a
+        // subtle highlight when the cursor is on the glyph itself.
         Button(action: onArchive) {
             Image(systemName: "archivebox")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(.secondary)
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
-                .background(ContinuumTokens.surface2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(PressableButtonStyle())
         .codeHoverChrome(

@@ -681,6 +681,61 @@ public actor WorktreeManager {
         }
     }
 
+    /// Move a worktree's checkout to the macOS Trash (recoverable) and prune
+    /// git's now-stale worktree entry. Used by Archive to reclaim disk.
+    ///
+    /// Differs from `delete` on purpose: NO clean-tree gate (the user opted into
+    /// "trash as-is" — Trash keeps it recoverable), and the BRANCH is left fully
+    /// intact, so committed work survives in the main repo's object store and
+    /// `reprovision` can re-check-it-out on unarchive. Best-effort; a Trash
+    /// failure leaves the worktree in place rather than throwing.
+    @discardableResult
+    public func trashWorktree(repoRoot: String, worktreePath: String) async -> DeleteResult {
+        // Guard against trashing the main repo or a path outside our managed
+        // workspace root — only ever Trash Clawdmeter-provisioned worktrees.
+        guard worktreePath.contains("/Clawdmeter/workspaces/"),
+              worktreePath != repoRoot else {
+            return .skipped(reason: "Path is not a Clawdmeter-managed worktree")
+        }
+        if FileManager.default.fileExists(atPath: worktreePath) {
+            do {
+                var trashed: NSURL?
+                try FileManager.default.trashItem(
+                    at: URL(fileURLWithPath: worktreePath), resultingItemURL: &trashed
+                )
+            } catch {
+                worktreeLogger.warning("trashItem failed \(worktreePath, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                return .skipped(reason: "Could not move worktree to Trash: \(error.localizedDescription)")
+            }
+        }
+        // `.git/worktrees/<name>` now points at a missing dir; prune so the
+        // branch can be re-checked-out later without "already checked out".
+        _ = try? await runGit(args: ["worktree", "prune"], cwd: repoRoot)
+        worktreeLogger.info("Trashed worktree \(worktreePath, privacy: .public)")
+        return .deleted
+    }
+
+    /// Re-check-out a previously-trashed worktree at its original path from its
+    /// (still-present) branch — the unarchive counterpart to `trashWorktree`.
+    /// Returns true on success. No-op success if the path already exists.
+    public func reprovision(repoRoot: String, worktreePath: String, branchName: String) async -> Bool {
+        if FileManager.default.fileExists(atPath: worktreePath) { return true }
+        try? FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: worktreePath).deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        // Belt-and-suspenders: prune any stale entry so `add` won't refuse.
+        _ = try? await runGit(args: ["worktree", "prune"], cwd: repoRoot)
+        let result = try? await runGit(
+            args: ["worktree", "add", worktreePath, branchName], cwd: repoRoot
+        )
+        let ok = (result?.exitStatus == 0)
+        if !ok {
+            worktreeLogger.warning("reprovision failed \(worktreePath, privacy: .public): \(result?.stderrString.prefix(200) ?? "", privacy: .public)")
+        }
+        return ok
+    }
+
     // MARK: - Helpers
 
     private func runGit(args: [String], cwd: String) async throws -> ShellRunner.Result {

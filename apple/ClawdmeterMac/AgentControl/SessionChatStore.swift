@@ -546,13 +546,27 @@ public final class SessionChatStore {
             model: model
         )
         Task { [staging] in await staging.ingest(line) }
-        // v0.9.x.1 — mirror every appended message to disk so a fresh
-        // store post-evict can backfill the chat thread. Only sdkOnly
-        // stores need this (CLI/JSONL-backed stores already have a
-        // disk transcript). suppressMirror=true is set during replay
-        // so we don't re-write the same messages on every replay cycle.
+        // Durable transcript mirror for sdkOnly (harness/SDK) stores — they
+        // have no provider-owned JSONL, so this disk copy is the ONLY thing a
+        // fresh post-evict/restart store can backfill from. CLI/JSONL-backed
+        // stores skip it (they re-read the provider file). suppressMirror=true
+        // during replay so re-feeding the disk set doesn't re-persist it.
+        //
+        // We keep the COMPLETE, id-deduped message set in `mirroredMessages`
+        // and rewrite the whole file each change. The old per-call incremental
+        // append dropped every turn after the first when its append-mode write
+        // failed (all 262 on-disk mirrors had collapsed to a single line).
+        // Dedup-by-id means a streaming message that arrives several times
+        // (growing body) updates in place instead of duplicating.
         if sdkOnly && !suppressMirror && !messages.isEmpty {
-            SDKChatTranscriptMirror.append(sessionId: sessionId, messages: messages)
+            for message in messages {
+                if let idx = mirroredMessages.firstIndex(where: { $0.id == message.id }) {
+                    mirroredMessages[idx] = message
+                } else {
+                    mirroredMessages.append(message)
+                }
+            }
+            SDKChatTranscriptMirror.persist(sessionId: sessionId, messages: mirroredMessages)
         }
     }
 
@@ -629,6 +643,14 @@ public final class SessionChatStore {
     /// transcript lives server-side, the SDK streams events.
     private let sdkOnly: Bool
 
+    /// Complete, id-deduped transcript for an sdkOnly store, kept so the disk
+    /// mirror can be rewritten in full on every change (see appendSDKMessages).
+    /// Seeded from the on-disk mirror in `init(sessionId:sdkOnly:)` so a fresh
+    /// post-evict/restart store extends the existing transcript instead of
+    /// overwriting it with only the new turns. MainActor-isolated (the whole
+    /// class is `@MainActor`), so no locking needed.
+    @ObservationIgnored private var mirroredMessages: [ChatMessage] = []
+
     /// v0.8 QA: expose the current JSONL file the store is tailing so
     /// DaemonChatStoreRegistry can detect rollout rotation in chat-mode
     /// Codex CLI sessions (Codex CLI writes a fresh rollout per turn).
@@ -692,6 +714,11 @@ public final class SessionChatStore {
         self.sessionId = sessionId
         self.sessionFileURL = URL(fileURLWithPath: "/dev/null")
         self.sdkOnly = true
+        // Seed the durable-mirror accumulator from disk so the first live
+        // append after evict/restart rewrites the FULL transcript (existing
+        // turns + new), not just the new turns. `replay()` separately re-feeds
+        // these same messages into the snapshot with suppressMirror:true.
+        self.mirroredMessages = SDKChatTranscriptMirror.readAll(sessionId: sessionId)
     }
 
     public func start() {

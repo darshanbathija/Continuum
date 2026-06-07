@@ -78,6 +78,11 @@ public final class AgentControlServer {
     /// ACP harness: live `AcpHarnessBridge`s keyed by session id. Non-Claude
     /// providers are driven through one of these instead of a terminal pane.
     private let harnessRegistry = HarnessSessionRegistry()
+    /// In-flight async harness bridge spawns (Chat-tab fast create). Keyed by
+    /// session id; `handleSendPrompt` awaits the matching task so a prompt that
+    /// races the background ACP handshake isn't dropped on the no-live-bridge
+    /// path. Cleared by the awaiter once the spawn settles.
+    private var harnessStartTasks: [UUID: Task<Void, Never>] = [:]
     /// Per-session direct PTY hosts for Claude session-drive.
     let claudePtyRegistry = ClaudePtyRegistry.shared
     private var claudePtyExitWired = false
@@ -1825,9 +1830,36 @@ public final class AgentControlServer {
         // the branch ORDER + bodies are unchanged — rate-limit still sits
         // between the agentapi branch and the rest, exactly as before.
         let routeCtx = routeContext(for: session)
-        let route = SessionCommandRouter.resolve(routeCtx)
+        var route = SessionCommandRouter.resolve(routeCtx)
         guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSend, on: connection); return
+        }
+        // Echo the user turn for harness sends (ACP/headless bridges don't
+        // record it, so without this the thread shows only the assistant
+        // reply). Covers warm sends AND the Solo Chat cold-start case where the
+        // create handler returned before the bridge finished spawning: echo
+        // immediately so the bubble renders the instant the prompt is sent,
+        // then wait out the in-flight spawn so the prompt routes to the live
+        // bridge instead of the no-bridge 503. Re-resolve the route after the
+        // wait (the bridge registered, flipping the route to .harnessBridge).
+        let harnessSpawnInFlight = harnessStartTasks[uuid] != nil
+        if route == .harnessBridge || harnessSpawnInFlight {
+            if let store = chatStoreRegistry.snapshotStore(for: session) {
+                store.appendSDKMessages([
+                    ChatMessage(
+                        id: "solo-user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))",
+                        kind: .userText,
+                        title: "You",
+                        body: req.text,
+                        at: Date()
+                    )
+                ])
+            }
+            if harnessSpawnInFlight, let startTask = harnessStartTasks[uuid] {
+                _ = await startTask.value
+                harnessStartTasks[uuid] = nil
+                route = SessionCommandRouter.resolve(routeContext(for: session))
+            }
         }
         // Claude over a per-session PTY. Resume-or-spawn the host
         // (single-flight) and submit directly.
@@ -1885,6 +1917,7 @@ public final class AgentControlServer {
         // off the bridge registry so retired legacy sessions never masquerade
         // as live harnesses.
         if route == .harnessBridge, let bridge = harnessRegistry.bridge(for: uuid) {
+            // (User turn already echoed above — covers warm + cold-start sends.)
             guard await bridge.prompt(req.text, origin: req.origin, allowLiveProviderSpend: Self.allowLiveProviderSpend) else {
                 sendResponse(blockedProviderPromptHTTPResponse(reason: "provider_prompt_blocked", origin: req.origin), on: connection)
                 return
@@ -4073,6 +4106,25 @@ public final class AgentControlServer {
         chatStoreRegistry.release(sessionId: id)
     }
 
+    /// Stop every runtime attached to a session (harness bridge, Claude PTY,
+    /// terminal panes) WITHOUT deleting the session record. Called by Archive
+    /// before its worktree is moved to Trash, so a live agent isn't left
+    /// running in a cwd that's about to vanish. Mirrors `handleDeleteSession`'s
+    /// teardown block; fully idempotent (every step no-ops when nothing is
+    /// attached), so it's safe on already-idle sessions.
+    func teardownRuntimeForReclaim(id uuid: UUID) async {
+        if harnessRegistry.contains(uuid) {
+            await harnessRegistry.remove(uuid)
+            chatStoreRegistry.release(sessionId: uuid)
+        }
+        await claudePtyRegistry.suspend(uuid)
+        if let session = registry.session(id: uuid) {
+            for pane in session.terminalPanes {
+                await terminalRegistry.kill(id: pane.paneId)
+            }
+        }
+    }
+
     /// Generic harness spawn (Grok/Cursor over ACP, Codex over app-server,
     /// Antigravity over gRPC). Mirrors `handleSpawnOpencodeSession`: the daemon
     /// drives an `AgentDriver` via `AcpHarnessBridge` (built by
@@ -5857,7 +5909,8 @@ public final class AgentControlServer {
         chatVendor: ChatVendor?,
         billingProvider: String?,
         frontierGroupId: UUID? = nil,
-        frontierChildIndex: Int? = nil
+        frontierChildIndex: Int? = nil,
+        deferBridgeStart: Bool = false
     ) async throws -> AgentSession {
         // Step 1: write-ahead the chat session. codexChatBackend stays nil
         // because Codex chat is now driven by the app-server harness.
@@ -5975,6 +6028,60 @@ public final class AgentControlServer {
         // Step 5: start the bridge. Chat inherits the daemon env (PATH/HOME) and
         // runs in the sandbox cwd.
         let childEnv = ProcessInfo.processInfo.environment
+
+        // FAST-PATH (Solo Chat create): the session record, sandbox cwd, and
+        // pinned store all exist now — everything the UI needs to render the
+        // sidebar row + thread. The only slow part left is the ACP/headless
+        // child spawn + handshake (seconds). Spawn it in the BACKGROUND and
+        // return the session immediately so create feels instant; the first
+        // `/send` awaits `harnessStartTasks[id]` before delivering (that wait
+        // is the model-response latency the user already expects). Failures
+        // surface as an error bubble in the thread instead of a blocked create.
+        if deferBridgeStart {
+            let sid = session.id
+            let display = providerDisplayName(provider)
+            harnessStartTasks[sid] = Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await bridge.start(
+                        binary: binary, arguments: arguments,
+                        cwd: chatCwd, env: childEnv, effort: nil, alwaysApprove: false
+                    )
+                    // The session can be deleted while the child is still
+                    // spawning (user closes the brand-new chat). teardown ran
+                    // early then — the bridge wasn't registered yet — so DON'T
+                    // register an orphan now; tear the child down + release the
+                    // store ourselves. (No-op pins are idempotent.)
+                    guard self.registry.session(id: sid) != nil else {
+                        await bridge.teardown()
+                        self.chatStoreRegistry.release(sessionId: sid)
+                        return
+                    }
+                    self.harnessRegistry.register(bridge, for: sid)
+                    AgentEventStream.recordEvent(
+                        sessionId: sid, kind: .sessionCreated,
+                        payload: ["chat": "true", "provider": provider.rawValue,
+                                  "harness": "true", "frontier": "false"]
+                    )
+                } catch {
+                    // Keep the session so the failure is visible (user can retry
+                    // or delete); tear the dead bridge down so it can't look live.
+                    await bridge.teardown()
+                    store.appendSDKMessages([
+                        ChatMessage(
+                            id: "harness-start-error-\(sid.uuidString.prefix(8))",
+                            kind: .assistantText,
+                            title: display,
+                            body: "Couldn't start \(display): \(error.localizedDescription)",
+                            at: Date(),
+                            isError: true
+                        )
+                    ])
+                }
+            }
+            return registry.session(id: session.id) ?? staged
+        }
+
         do {
             try await bridge.start(
                 binary: binary, arguments: arguments,
@@ -6005,10 +6112,16 @@ public final class AgentControlServer {
         connection: NWConnection
     ) async {
         do {
+            // deferBridgeStart: return the session the moment the record + store
+            // exist (sub-second) so the Chat sidebar row + thread render
+            // instantly; the ACP child spawns in the background and the first
+            // /send waits it out. (Frontier per-child spawns keep the synchronous
+            // path so a broadcast only opens once every column is live.)
             let session = try await createHarnessChatSessionCore(
                 provider: req.provider, model: req.model, effort: req.effort,
                 deepResearch: req.deepResearch, chatVendor: metadata.vendor,
-                billingProvider: metadata.billingProvider
+                billingProvider: metadata.billingProvider,
+                deferBridgeStart: true
             )
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
