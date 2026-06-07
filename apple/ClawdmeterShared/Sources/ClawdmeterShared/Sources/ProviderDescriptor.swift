@@ -67,7 +67,7 @@ public struct ProviderDescriptor: Sendable, Identifiable {
             chatVendor: .cursor,
             analyticsProvider: .cursor,
             agentDisplayName: "Cursor",
-            assetName: "CodexLogo",
+            assetName: "CursorLogo",
             isTemplateAsset: true,
             accentRGB: (0x7F, 0xA8, 0xB5),
             settingsRank: 3,

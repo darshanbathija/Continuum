@@ -336,7 +336,7 @@ struct MenuBarGaugeView {
     ///     is Apple's standard "template" PNG (alpha mask, tints with menu bar)
     ///   - GeminiLogo: 4-pointed Gemini star (SVG, fill auto-tinted)
     static func isTemplateAsset(_ name: String) -> Bool {
-        name == "ClaudeLogo" || name == "CodexLogo" || name == "GeminiLogo" || name == "GrokLogo"
+        name == "ClaudeLogo" || name == "CodexLogo" || name == "GeminiLogo" || name == "GrokLogo" || name == "CursorLogo"
     }
 
     /// Backwards-compat shim until callers migrate to `providerBadgeImage`.

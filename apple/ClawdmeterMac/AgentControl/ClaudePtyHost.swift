@@ -201,6 +201,38 @@ actor ClaudePtyHost {
         AnsiStrip.plain(String(decoding: ring, as: UTF8.self))
     }
 
+    /// Block until the freshly-spawned Claude Ink TUI has finished its initial
+    /// render and is in raw mode accepting input. Without this, the daemon's
+    /// first `submitPrompt()` can write before the TUI is listening and the
+    /// bytes are swallowed — the symptom is a chat that spawns "ready" but
+    /// never starts a turn (no rollout JSONL, no reply, blank thread). The
+    /// 300ms submit settle is far too short for a cold TUI boot (~1-3s).
+    /// Heuristic: wait for PTY output to appear and then stay stable for
+    /// `stableWindow`, capped by `timeout`. The registry only calls this on the
+    /// cold-spawn path, so a warm host never pays the wait.
+    func waitUntilReady(timeout: TimeInterval = 8, stableWindow: TimeInterval = 0.45) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        var last = ""
+        var stableSince: Date?
+        while Date() < deadline {
+            guard isRunning else { return }
+            let out = recentOutput()
+            if out.isEmpty {
+                stableSince = nil
+            } else if out == last {
+                if let since = stableSince {
+                    if Date().timeIntervalSince(since) >= stableWindow { return }
+                } else {
+                    stableSince = Date()
+                }
+            } else {
+                last = out
+                stableSince = nil
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)   // 100ms poll
+        }
+    }
+
     /// Raw output stream for terminal clients. The current ring is yielded
     /// first so attach-after-output clients receive useful scrollback.
     func outputStream() -> AsyncStream<Data> {

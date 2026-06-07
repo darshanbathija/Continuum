@@ -89,7 +89,7 @@ public enum PermissionMode: String, Codable, Hashable, Sendable, CaseIterable {
         case .ask:         return "Ask"
         case .acceptEdits: return "Accept edits"
         case .plan:        return "Plan"
-        case .bypass:      return "Bypass"
+        case .bypass:      return "Full access"
         }
     }
 

@@ -231,7 +231,12 @@ public actor ChatProviderProbe {
         )
         let (cursorAuth, cursorReason) = resolveAuth(
             key: "cursor",
-            fallback: probes.cursorState.authenticated
+            // Passive discovery never logs into cursor-agent, so
+            // cursorState.authenticated is always false here — which made an
+            // enabled Cursor permanently un-selectable in the chat picker.
+            // Gate availability on binary presence; a real auth failure still
+            // arrives via the AuthObserver override and surfaces at first send.
+            fallback: probes.cursorState.binaryPath != nil
         )
         let (grokAuth, grokReason) = resolveAuth(key: "grok", fallback: probes.grokAvailable)
         let opencodeDefaultReason: String? = {

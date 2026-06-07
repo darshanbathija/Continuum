@@ -93,7 +93,10 @@ final class SessionLauncherModel: ObservableObject {
         if cursorEnabled {
             let cursorState = await CursorModelProbe.shared.currentState()
             nextCatalog = nextCatalog.replacingCursor(cursorState.models)
-            cursorReady = cursorState.binaryPath != nil && cursorState.authenticated
+            // Show Cursor in the launcher on binary presence; defer the login
+            // check to spawn-time (a logged-out cursor-agent surfaces its auth
+            // error then) so an enabled-but-not-yet-probed Cursor is selectable.
+            cursorReady = cursorState.binaryPath != nil
         }
 
         if grokEnabled {

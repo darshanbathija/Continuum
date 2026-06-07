@@ -4,6 +4,23 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.10 build 210] - 2026-06-08 - QA fix pass: Claude chat, Cursor, updater, Code/new-session polish (`claude/condescending-poitras-ebc78e`)
+
+### Fixed
+
+- **Claude chat / broadcast was blank.** Four compounding causes: (1) every fresh per-chat cwd tripped Claude Code's modal "New MCP server found…" approval prompt (from the user's global `~/.claude.json` MCP servers), swallowing the first prompt — chat Claude now spawns with `--strict-mcp-config`; (2) the 1M-context Opus catalog id `claude-opus-4-8-1m` is rejected by the CLI `--model` flag — normalized to the bracket form `claude-opus-4-8[1m]`; (3) the daemon submitted the first prompt before the Ink TUI entered raw mode — `ClaudePtyHost.waitUntilReady()` now gates the cold-spawn first submit; (4) the broadcast WS subscriber held an `sdkOnly` chat store that never upgraded — it now gets a JSONL-backed store + a rollout watcher that re-aims it in place.
+- **Broadcast columns now echo the user's prompt.** Harness-bridge providers (Codex/Gemini/Grok/Cursor) didn't record the user turn, so columns showed only the answer — the send path now appends the "You" bubble (Claude/OpenCode already did).
+- **Cursor wasn't selectable in Chat/Code after enabling it.** The passive probe hardcodes `authenticated:false`; availability now gates on binary presence and enforces auth lazily at send-time.
+- **Per-provider menu-bar toggle no-op'd for Cursor.** The Usage checkbox defaulted shown while the gauge defaulted hidden — defaults now aligned via `menuBarDefaultShown`.
+- **Cursor logo rendered the Codex mark everywhere.** Wired the real Cursor cube into all three logo systems (`TahoeTokens` glyph, `ProviderDescriptor`/`ProviderBadgeImage`, Mac menu-bar template gate) + new asset catalogs (Mac/iOS/shared Tahoe).
+- **Updater "Release notes unavailable: NSURLErrorDomain error -1011".** A benign 404 on the current version's notes is no longer surfaced as a raw URLError; it degrades to a calm empty state (+ regression test).
+
+### Changed
+
+- **Code tab polish.** Tab bar is Chrome-style (`+` beside the last tab, wider tabs); session rows reveal a hover archive button.
+- **New-session page redesign.** Single-row composer bar (`+ · Full access · model+effort · ↑`), "Do anything" placeholder, "What should we build in …?" headline, preset-button clutter removed; defaults to ChatGPT `gpt-5.5` / Max + Full access. `PermissionMode.bypass` chip relabeled "Full access".
+- Bumps `VERSION` 0.31.9 → 0.31.10, `MARKETING_VERSION` 0.31.9 → 0.31.10, and `CURRENT_PROJECT_VERSION` 209 → 210.
+
 ## [0.31.9 build 209] - 2026-06-07 - Provider opt-in onboarding (`darshanbathija/provider-opt-in-onboarding`)
 
 ### Added

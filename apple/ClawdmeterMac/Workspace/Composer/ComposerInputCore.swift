@@ -52,6 +52,10 @@ struct ComposerInputCore: View {
     /// still renders in a disabled state and hides action chips that require
     /// a live pane.
     var isReadOnly: Bool = false
+    /// Collapse the composer to the reference single-row bar
+    /// (+ · access · model+effort · send) for the centered empty-state.
+    /// The in-session composer keeps the full chrome (defaults false).
+    var minimalChrome: Bool = false
 
     @StateObject private var dictation = SpeechDictation()
     @ObservedObject private var skillCatalog = SkillCatalog.shared
@@ -125,7 +129,11 @@ struct ComposerInputCore: View {
                 inputRow
                     .opacity(planApprovalMode ? 0.56 : 1)
                     .disabled(planApprovalMode)
-                chipRow
+                if minimalChrome {
+                    minimalChipRow
+                } else {
+                    chipRow
+                }
                 if let err = store.lastError {
                     Text(err.localizedDescription)
                         .font(.system(size: 11))
@@ -417,6 +425,54 @@ struct ComposerInputCore: View {
         }
     }
 
+    /// Reference single-row composer bar for the centered empty-state:
+    /// + (attach) · access · ……… · model+effort · send. Drops the
+    /// history/saved/strip/expand/mic/usage chrome the bound composer carries.
+    @ViewBuilder
+    private var minimalChipRow: some View {
+        HStack(spacing: 8) {
+            plusAttachButton
+            if !isReadOnly, onChangePermissionMode != nil {
+                PermissionModeChip(
+                    mode: permissionMode,
+                    availableModes: availablePermissionModes,
+                    onChange: { newMode in onChangePermissionMode?(newMode) }
+                )
+            }
+            Spacer(minLength: 8)
+            let resolvedInfo = usageStatus ?? Self.placeholderUsage(modelId: store.modelId, effort: store.effort, catalog: catalog)
+            ModelEffortChip(
+                info: resolvedInfo,
+                catalog: catalog,
+                agent: { if case .bound = store.modeKind { return agentForModelPicker } else { return store.agent } }(),
+                selectedModelId: $store.modelId,
+                selectedEffort: $store.effort,
+                modelSupportsEffort: modelSupportsEffort,
+                enabledVendors: enabledModelPickerVendors,
+                onSelectAgent: { newAgent in
+                    guard case .emptyState = store.modeKind, newAgent != store.agent else { return }
+                    store.agent = newAgent
+                    if newAgent == .cursor, store.permissionMode == .plan {
+                        onChangePermissionMode?(.ask)
+                    }
+                }
+            )
+            sendOrStopButton
+        }
+    }
+
+    private var plusAttachButton: some View {
+        Button(action: { isShowingFileImporter = true }) {
+            Image(systemName: "plus")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 26, height: 26)
+        }
+        .buttonStyle(PressableButtonStyle())
+        .help("Attach a file or add context")
+        .accessibilityIdentifier("code.composer.attach")
+    }
+
     /// Synthesise a `UsageStatusInfo` when the parent didn't supply one —
     /// happens on the empty-state composer (no chat snapshot yet) and on
     /// bound sessions before the first assistant turn lands. The chip still
@@ -614,7 +670,9 @@ struct ComposerInputCore: View {
                 return true
             }
 
-            sendOrStopButton
+            if !minimalChrome {
+                sendOrStopButton
+            }
         }
     }
 
@@ -866,11 +924,7 @@ struct ComposerInputCore: View {
             }
             return "Continue the session here   (⌘↩ to send)"
         case .emptyState:
-            if let repo = store.repoKey, !repo.isEmpty {
-                let last = (repo as NSString).lastPathComponent
-                return "What should we work on in \(last)?"
-            }
-            return "What should we work on?"
+            return "Do anything"
         }
     }
 

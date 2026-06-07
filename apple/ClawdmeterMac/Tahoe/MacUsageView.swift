@@ -408,6 +408,18 @@ private struct ProviderColumn: View {
         return "clawdmeter.\(id).menuBarShown"
     }
 
+    /// Opt-in providers (Cursor / OpenCode) default their standalone menu-bar
+    /// gauge OFF — mirror AppDelegate.applyVisibilityFromPrefs so the checkbox's
+    /// shown-default matches the gauge's. Otherwise the box reads "checked"
+    /// while the gauge is hidden, and the first toggle writes a value that
+    /// already equals the applied state → it no-ops ("toggle does nothing").
+    private var menuBarDefaultShown: Bool {
+        switch provider {
+        case .cursor, .opencode: return false
+        default: return true
+        }
+    }
+
     private var quotaLabel: String {
         switch provider {
         case .grok: return "credits used"
@@ -491,7 +503,7 @@ private struct ProviderColumn: View {
         }
         .onAppear {
             autoRevive = row.autoReviveOn
-            menuBar = UserDefaults.standard.object(forKey: menuBarPrefKey) as? Bool ?? true
+            menuBar = UserDefaults.standard.object(forKey: menuBarPrefKey) as? Bool ?? menuBarDefaultShown
         }
         .onChange(of: row.autoReviveOn) { _, v in autoRevive = v }
         .onChange(of: autoRevive) { _, v in

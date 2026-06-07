@@ -381,7 +381,13 @@ final class UpdateCoordinator: ObservableObject {
             }
             releaseNotes = String(data: data, encoding: .utf8)
         } catch {
-            if releaseMetadataError == nil { releaseMetadataError = error.localizedDescription }
+            // Release notes are a best-effort informational extra. A missing
+            // per-version notes doc (404) — or any transient fetch failure —
+            // must NOT surface a raw URLError ("NSURLErrorDomain error -1011")
+            // in the updater popover. The genuine history/appcast failure path
+            // owns releaseMetadataError; leave the notes panel in its calm empty
+            // state and drop any stale notes from a prior load.
+            releaseNotes = nil
             updateLogger.debug("Release notes unavailable: \(error.localizedDescription, privacy: .public)")
         }
     }

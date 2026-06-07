@@ -83,39 +83,38 @@ struct WorkspaceTabStrip: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    ForEach(items) { item in
-                        switch item {
-                        case .session(let session):
-                            tabButton(for: session)
-                        case .draft:
-                            draftButton
-                        case .terminal(let tab, let session):
-                            terminalButton(tab, session: session)
-                        case .document(let tab):
-                            documentButton(tab)
-                        }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(items) { item in
+                    switch item {
+                    case .session(let session):
+                        tabButton(for: session)
+                    case .draft:
+                        draftButton
+                    case .terminal(let tab, let session):
+                        terminalButton(tab, session: session)
+                    case .document(let tab):
+                        documentButton(tab)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                // New-tab button sits immediately after the last tab
+                // (Chrome-style), not pinned to the window's right edge.
+                Menu {
+                    Button("Chat") { onNewChat() }
+                        .keyboardShortcut("t", modifiers: [.command])
+                    Button("Terminal") { onNewTerminal() }
+                        .keyboardShortcut("t", modifiers: [.command, .shift])
+                        .disabled(!terminalAvailable)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 26, height: 26)
+                }
+                .menuStyle(.borderlessButton)
+                .help("New workspace tab")
             }
-            Menu {
-                Button("Chat") { onNewChat() }
-                    .keyboardShortcut("t", modifiers: [.command])
-                Button("Terminal") { onNewTerminal() }
-                    .keyboardShortcut("t", modifiers: [.command, .shift])
-                    .disabled(!terminalAvailable)
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 26, height: 26)
-            }
-            .menuStyle(.borderlessButton)
-            .help("New workspace tab")
-            .padding(.trailing, 10)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
         }
         .frame(height: 40)
         .background(t.dark ? Color.white.opacity(0.035) : Color.black.opacity(0.025))
@@ -242,7 +241,7 @@ struct WorkspaceTabStrip: View {
                     .foregroundStyle(t.fg3)
                     .lineLimit(1)
             }
-            .frame(maxWidth: 150, alignment: .leading)
+            .frame(minWidth: 130, idealWidth: 160, maxWidth: 190, alignment: .leading)
             Button(action: closeAction) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))

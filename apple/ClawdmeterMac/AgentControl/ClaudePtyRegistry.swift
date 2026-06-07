@@ -110,6 +110,11 @@ actor ClaudePtyRegistry {
                 await host.kill()
                 throw CancellationError()
             }
+            // Cold-spawn only: block until the Ink TUI is actually accepting
+            // input before handing the host back. The caller (send / approve-
+            // plan) submits the first prompt immediately, and writing it before
+            // the TUI enters raw mode gets it swallowed (blank chat, no turn).
+            await host.waitUntilReady()
             return host
         }
         inflight[id] = task
