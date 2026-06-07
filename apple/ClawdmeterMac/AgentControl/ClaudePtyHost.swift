@@ -201,33 +201,68 @@ actor ClaudePtyHost {
         AnsiStrip.plain(String(decoding: ring, as: UTF8.self))
     }
 
-    /// Block until the freshly-spawned Claude Ink TUI has finished its initial
-    /// render and is in raw mode accepting input. Without this, the daemon's
-    /// first `submitPrompt()` can write before the TUI is listening and the
-    /// bytes are swallowed — the symptom is a chat that spawns "ready" but
-    /// never starts a turn (no rollout JSONL, no reply, blank thread). The
-    /// 300ms submit settle is far too short for a cold TUI boot (~1-3s).
-    /// Heuristic: wait for PTY output to appear and then stay stable for
-    /// `stableWindow`, capped by `timeout`. The registry only calls this on the
-    /// cold-spawn path, so a warm host never pays the wait.
-    func waitUntilReady(timeout: TimeInterval = 8, stableWindow: TimeInterval = 0.45) async {
-        let deadline = Date().addingTimeInterval(timeout)
-        var last = ""
-        var stableSince: Date?
+    /// Block until the freshly-spawned Claude Ink TUI is ACTUALLY accepting
+    /// input. MEASURED (Opus 4.8 1M, plan mode): the TUI renders its input box
+    /// and the PTY output "stabilizes" at ~1.1s, but it does NOT enter raw mode
+    /// + complete the Continuum Remote-Control handshake until ~2.5s. A stable-
+    /// output check therefore fires ~1.4s too early and the daemon's first
+    /// `submitPrompt()` is swallowed — the chat spawns "ready" but never starts
+    /// a turn (no rollout JSONL, blank thread). So gate on the Remote-Control
+    /// "active" marker (the real input-ready signal) plus a small buffer, with a
+    /// string-independent time floor as a fallback if the marker is absent
+    /// (Remote Control off / text changed), capped by `timeout`. Cold-spawn
+    /// only — the registry calls this once at spawn, so a warm host never pays.
+    ///
+    /// STARTUP MODAL (root cause of the "first chat message dropped" bug): a
+    /// fresh chat-cwd makes Claude block on a confirmation modal that BOTH
+    /// swallows the first prompt AND stalls the Remote-Control handshake until
+    /// answered — so "Control active" never arrives and we'd submit straight
+    /// into the modal. Two variants seen:
+    ///   • "New MCP server found in this project: MCP_DOCKER" — Claude walks up
+    ///     from the nested chat-cwd to a user-level `~/.mcp.json`. This fires in
+    ///     interactive mode EVEN under `--strict-mcp-config` / `--mcp-config`
+    ///     (those only gate which servers load, not the discovery prompt), and
+    ///     is NOT suppressible via the per-project enabled/disabled keys.
+    ///   • "Do you trust the files in this folder?" — untrusted cwd (normally
+    ///     pre-empted by ChatCwdManager.markTrustedForClaude, but Esc covers the
+    ///     race where that write loses to a concurrent ~/.claude.json rewrite).
+    /// Esc cancels either one, KEEPS plan mode (verified: status stays "⏸ plan
+    /// mode on"), and lets the handshake complete. We send it (debounced) only
+    /// while a modal is detected, so a clean ready box never gets a stray Esc.
+    func waitUntilReady(timeout: TimeInterval = 12) async {
+        let start = Date()
+        let deadline = start.addingTimeInterval(timeout)
+        var lastEscAt: Date?
         while Date() < deadline {
             guard isRunning else { return }
+            let elapsed = Date().timeIntervalSince(start)
             let out = recentOutput()
-            if out.isEmpty {
-                stableSince = nil
-            } else if out == last {
-                if let since = stableSince {
-                    if Date().timeIntervalSince(since) >= stableWindow { return }
-                } else {
-                    stableSince = Date()
-                }
-            } else {
-                last = out
-                stableSince = nil
+            // Space-collapsed copy: AnsiStrip joins cursor-positioned cells, so
+            // "New MCP server" can render as "NewMCPserver". Match both.
+            let squished = out.replacingOccurrences(of: " ", with: "")
+            let modalShowing =
+                squished.contains("NewMCPserver")
+                || squished.contains("MCP_DOCKER")
+                || squished.contains("Esctocancel")      // both modals' footer
+                || squished.contains("trustthefiles")
+                || squished.contains("trustthisfolder")
+                || squished.contains("safetycheck")
+            // Dismiss the modal with Esc, ~1/sec so we don't fight a redraw.
+            if modalShowing, lastEscAt.map({ Date().timeIntervalSince($0) > 0.8 }) ?? true {
+                writeBytes(Data([0x1B]))
+                lastEscAt = Date()
+            }
+            // Fast path: Remote-Control link reports active (~2.5s, and only
+            // AFTER any modal clears) → input live.
+            if elapsed >= 3.5, !modalShowing,
+               out.contains("Control active") || out.contains("Controlactive") {
+                return
+            }
+            // Fallback floor: never trust output-stable alone (settles ~1.1s,
+            // before raw mode). Hold a hard floor — but never return INTO a
+            // modal, or the first prompt gets eaten again.
+            if elapsed >= 5.5, !modalShowing, !out.isEmpty {
+                return
             }
             try? await Task.sleep(nanoseconds: 100_000_000)   // 100ms poll
         }

@@ -59,7 +59,11 @@ struct WorkspaceTabStrip: View {
                 return $0.id.uuidString < $1.id.uuidString
             }
         }
-        return grouped
+        // Defensive: collapse any duplicate session-id so one session can't
+        // render as two tabs (the registry dedupes on load, but guard the
+        // render path too in case a duplicate slips in at runtime).
+        var seen = Set<UUID>()
+        return grouped.filter { seen.insert($0.id).inserted }
     }
 
     private var items: [TabItem] {

@@ -111,7 +111,14 @@ private struct ChatRoot: View {
             .frame(width: 252)
 
             VStack(spacing: 10) {
-                Header(store: store, openTarget: openTarget, children: frontierChildren)
+                Header(
+                    store: store,
+                    openTarget: openTarget,
+                    openSession: openTarget.flatMap { tgt in
+                        tgt.isFrontier ? nil : client.chatSessions.first(where: { $0.id == tgt.id })
+                    },
+                    children: frontierChildren
+                )
                 if openTarget == nil, let pending = pendingBroadcast {
                     PendingBroadcastView(pending: pending)
                 } else if let openTarget {
@@ -511,6 +518,11 @@ private struct Header: View {
     @Environment(\.tahoe) private var t
     @ObservedObject var store: ChatV2Store
     let openTarget: ChatOpenTarget?
+    /// The resolved solo/transcript session being viewed (nil for a new draft
+    /// or a frontier group). When set, the header MUST reflect THIS session's
+    /// agent+model — not the composer's last-picked vendor/model, which only
+    /// describes a not-yet-sent draft.
+    let openSession: AgentSession?
     let children: [AgentSession]
 
     var body: some View {
@@ -519,7 +531,12 @@ private struct Header: View {
                 ForEach(children, id: \.id) { child in
                     ProviderSummary(session: child)
                 }
+            } else if let openSession {
+                // Opened an existing chat: show its own provider+model (e.g.
+                // Cursor / cursor-auto), not the global composer selection.
+                ProviderSummary(session: openSession)
             } else {
+                // New draft (no session yet): the composer pick is what we'll send.
                 ForEach(store.selectedVendors, id: \.self) { vendor in
                     ProviderDraftSummary(vendor: vendor, store: store)
                 }
