@@ -19,7 +19,7 @@ For _fastlane_ installation instructions, see [Installing _fastlane_](https://do
 [bundle exec] fastlane build_mac_dmg
 ```
 
-Package the Mac app into a local DMG. Sparkle publishing uses release_mac_sparkle.
+Package the Mac app into a local DMG via tools/build-mac-dmg.sh. Sparkle publishing uses release_mac_sparkle.
 
 ### release_mac_sparkle
 

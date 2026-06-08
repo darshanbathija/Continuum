@@ -18,23 +18,18 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSMotionUsageDescription</key>
 	<string>Detect when the watch is placed flat or sideways to activate Desk Mode.</string>
 	<key>WKApplication</key>
 	<true/>
-	<!-- WKBackgroundModes=[extended-runtime] removed — 'extended-runtime' is
-	     not a valid WKBackgroundModes value (App Store validation 90362).
-	     Desk Mode's WKExtendedRuntimeSession is started programmatically and
-	     only needs the usage descriptions below, not a background mode. -->
+	<key>WKCompanionAppBundleIdentifier</key>
+	<string>ai.continuum.ios</string>
 	<key>WKExtendedRuntimeSessionDescriptions</key>
 	<dict>
 		<key>smart-alarm</key>
 		<string>Keep the Clawdmeter dashboard visible while the watch rests on a desk.</string>
 	</dict>
-	<!-- Companion watch app: pairs with the iOS app (ai.continuum.ios) and
-	     receives the token/usage over WCSession. Embedded inside the iOS
-	     app's Watch/ folder so it installs alongside the iPhone app. -->
-	<key>WKCompanionAppBundleIdentifier</key>
-	<string>ai.continuum.ios</string>
 </dict>
 </plist>

@@ -1709,6 +1709,8 @@
 				607B294A61BE70FE7A3F494D /* PBXTargetDependency */,
 			);
 			name = ClawdmeterMacUITests;
+			packageProductDependencies = (
+			);
 			productName = ClawdmeterMacUITests;
 			productReference = FCEA6256CB6D114C219DA5E1 /* ClawdmeterMacUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -2502,8 +2504,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "ClawdmeterMac/ClawdmeterMac-Release.entitlements";
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2516,7 +2517,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac;
 				PRODUCT_MODULE_NAME = Clawdmeter;
 				PRODUCT_NAME = Continuum;
-				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac";
 				SDKROOT = macosx;
 				SPARKLE_PUBLIC_ED_KEY = "dA6tbvVkaBnCj16gub64AzmBY+peo39LeTOowaFHRIY=";
 			};
@@ -2633,8 +2633,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements;
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2647,7 +2646,6 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.widgets;
 				PRODUCT_NAME = ClawdmeterMacWidgets;
-				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac.widgets";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 			};
@@ -2658,8 +2656,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMac/ClawdmeterMac.entitlements;
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2672,7 +2669,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac;
 				PRODUCT_MODULE_NAME = Clawdmeter;
 				PRODUCT_NAME = Continuum;
-				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac";
 				SDKROOT = macosx;
 				SPARKLE_PUBLIC_ED_KEY = "dA6tbvVkaBnCj16gub64AzmBY+peo39LeTOowaFHRIY=";
 			};
@@ -2720,8 +2716,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements;
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2734,7 +2729,6 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.widgets;
 				PRODUCT_NAME = ClawdmeterMacWidgets;
-				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac.widgets";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 			};
