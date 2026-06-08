@@ -2469,7 +2469,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 218;
+				CURRENT_PROJECT_VERSION = 219;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -2538,6 +2538,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios;
 				PRODUCT_NAME = Clawdmeter;
 				SDKROOT = iphoneos;
@@ -2580,6 +2581,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.widgets;
 				PRODUCT_NAME = ClawdmeteriOSWidgets;
 				SDKROOT = iphoneos;
@@ -2703,6 +2705,7 @@
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeterWatch/Info.plist;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.watchkitapp;
 				PRODUCT_NAME = Clawdmeter;
 				SDKROOT = watchos;
@@ -2748,6 +2751,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.widgets;
 				PRODUCT_NAME = ClawdmeteriOSWidgets;
 				SDKROOT = iphoneos;
@@ -2790,7 +2794,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 218;
+				CURRENT_PROJECT_VERSION = 219;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -2847,6 +2851,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.watchkitapp.widgets;
 				PRODUCT_NAME = ClawdmeterWatchWidgets;
 				SDKROOT = watchos;
@@ -2869,6 +2874,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.watchkitapp.widgets;
 				PRODUCT_NAME = ClawdmeterWatchWidgets;
 				SDKROOT = watchos;
@@ -2915,6 +2921,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios;
 				PRODUCT_NAME = Clawdmeter;
 				SDKROOT = iphoneos;
@@ -2931,6 +2938,7 @@
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeterWatch/Info.plist;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.watchkitapp;
 				PRODUCT_NAME = Clawdmeter;
 				SDKROOT = watchos;
