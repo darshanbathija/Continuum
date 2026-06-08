@@ -221,6 +221,18 @@ struct SettingsView: View {
                 } header: {
                     Text("About")
                 }
+                Section {
+                    Link(destination: AIDataSharingConsent.privacyURL) {
+                        Label("Privacy Policy", systemImage: "hand.raised")
+                    }
+                    Link(destination: AIDataSharingConsent.termsURL) {
+                        Label("Terms of Use", systemImage: "doc.text")
+                    }
+                } header: {
+                    Text("Privacy & Data")
+                } footer: {
+                    Text("When you send a message or file, it's transmitted to the AI provider you choose (Anthropic, OpenAI, Cursor, xAI, Google, or OpenCode) to generate a response, under that provider's privacy policy.")
+                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

@@ -11,6 +11,8 @@ public struct IOSRootView: View {
     @State private var pushedScreen: Screen?
     @State private var newSessionPresented: Bool = false
     @State private var settingsPresented: Bool = false
+    /// First-run AI data-sharing consent gate (App Store 5.1.1(i)/5.1.2(i)).
+    @State private var showConsent: Bool = false
     @StateObject private var presentationStore: SessionPresentationStore
     // v0.27.0: focusedCodeRepoKey state is unused now that the Design
     // → Code handoff is gone. Kept as a placeholder for future
@@ -50,6 +52,9 @@ public struct IOSRootView: View {
         let args = ProcessInfo.processInfo.arguments
         let demo = args.contains("--ios-code-demo")
         self.screenshotDemo = demo
+        // Gate the app behind the AI data-sharing disclosure until the user
+        // agrees (skipped in screenshot-demo mode). Persisted → one-time.
+        _showConsent = State(initialValue: !demo && !AIDataSharingConsent.hasConsented)
         _theme = State(initialValue: TahoeThemeStore.loaded())
         _tab = State(initialValue: demo ? .code : .chat)
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -142,6 +147,11 @@ public struct IOSRootView: View {
             // v0.22.29: pass agentClient so SettingsView can surface
             // Pair-with-Mac (Scan QR + Paste URL + Forget pairing).
             SettingsView(model: usageModel, agentClient: agentClient, presentationStore: presentationStore)
+        }
+        // Required AI data-sharing consent — covers everything on first launch;
+        // nothing is sent to a provider until the user accepts (non-dismissible).
+        .fullScreenCover(isPresented: $showConsent) {
+            AIDataSharingConsentView(onAgree: { showConsent = false })
         }
     }
 

@@ -4,6 +4,15 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.11 build 219] - 2026-06-08 - App Store privacy consent gate (5.1.1(i)/5.1.2(i)) + export-compliance (`fix/appstore-privacy-consent`)
+
+### Fixed
+
+- **App Store rejection — privacy consent for third-party AI data sharing.** The app sends user prompts/files to third-party AI providers but didn't disclose this or get permission first. Added a required first-launch consent gate (`AIDataSharingConsentView` in ClawdmeterShared, presented by `IOSRootView` as a non-dismissible `fullScreenCover`) that discloses WHAT is sent (your messages/prompts + attached/referenced files) and TO WHOM (Anthropic, OpenAI, Cursor, xAI, Google, OpenCode), routed via the paired Mac, and requires "I Agree" before anything is sent. Acceptance persists under `continuum.ai.dataSharingConsent.v1`. Added a "Privacy & Data" section to iOS Settings linking the policy + terms.
+- **Hosted privacy policy + terms** on GitHub Pages (`docs/privacy.html`, `docs/terms.html`, `docs/index.html`) → https://darshanbathija.github.io/Continuum/privacy.html — names the AI providers + what's shared, as required by 5.1.1(i).
+- **Export compliance:** `ITSAppUsesNonExemptEncryption = NO` added to the iOS, Watch, and iOS-Widgets Info.plists so TestFlight/App Store builds stop showing the "Missing Compliance" prompt (the app uses only standard HTTPS/TLS).
+- Bumps `CURRENT_PROJECT_VERSION` 218 → 219.
+
 ## [0.31.11 build 218] - 2026-06-08 - Fix Claude chat first-prompt swallowed by startup modal, instant harness chat create, durable harness transcripts, wrong header model, missing solo "You" echo, duplicate session tab (`fix/claude-chat-readiness`)
 
 ### Fixed
