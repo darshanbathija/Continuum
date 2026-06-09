@@ -2,7 +2,32 @@
 
 Date: 2026-06-09 05:20 ICT
 
-Latest evidence update: 2026-06-09 22:33 ICT.
+Latest evidence update: 2026-06-10 (post-merge re-baseline on `main` at `d215a7c5` + first authorized live-spend smoke pass).
+
+## 2026-06-10 Live Smoke Results (first authorized live-spend run)
+
+Live spend was explicitly authorized by the user on 2026-06-10. Gates set: `CLAWDMETER_LIVE_VERIFY=1`, `CLAWDMETER_ALLOW_PROVIDER_SPEND=1`, `~/.continuum-live-verify`. Runner: direct `xcrun xctest` on the app-hosted `ClawdmeterMacTests` bundle after `build-for-testing`.
+
+| Provider | Live result | Evidence |
+| --- | --- | --- |
+| Codex | PASS (20.7s) — real prompt, streamed reply | `/tmp/cw-live-drive-results.log` |
+| Gemini/Antigravity | PASS (17.6s) — real prompt via `agy`, streamed reply | `/tmp/cw-live-drive-results.log` |
+| Grok | PASS (23.7s) — real prompt via headless driver, reply | `/tmp/cw-live-drive-results.log` |
+| Cursor | SKIP — account quota state: `provider quota/plan unavailable: Upgrade your plan to continue`. Surfacing quota at spawn-time (instead of hanging or mis-sending) is the documented intended behavior; the skip is an account-state fact, not a product failure. | `/tmp/cw-live-drive-results.log` |
+| OpenCode/OpenRouter | FAIL on first run → PASS (5.96s) after fixing four stacked live-path bugs (below). Reply token round-tripped through real `opencode serve` 1.16.2 SSE: `LIVE OpenCode replied: CONTINUUM_OPENCODE_LIVE_OK_…` | first fail `/tmp/cw-live-drive-results.log`; pass `/tmp/cw-live-oc-jsondispatch.log` |
+
+Route-level live smokes through the real daemon also passed (gate note: the daemon-side spend check needs `CLAWDMETER_LIVE_PROVIDER_TESTS=1` in addition to the LiveDrive env, and `CLAWDMETER_PROVIDER_<ID>_ENABLED=1` overrides because providers default to opt-in-off under a bare test host): `test_liveCodeProviderSmoke_createsOwnedWorktreesWithoutPermissionPrompts` (Claude+Codex+Cursor+OpenCode+Gemini real worktree spawns, 73.5s — the live Claude coverage), `test_cursorRoute_createsSessionWhenProbePasses`, `test_openRouterRoute_createsOpenCodeSessionAndLiveSendWhenAvailable` (real OpenRouter live send, 3.6s), and `testFrontierGeminiBroadcastDrivesViaAgy` (real agy broadcast reply, 9.2s).
+
+### OpenCode live-path defect chain (found + fixed 2026-06-10)
+
+The first-ever live execution of the OpenCode path exposed that the SSE consume loop had **never** delivered a live event in any prior version — its 29 fake-event tests call the dispatch layer directly and so never exercised the transport/parse layers. Four independent, individually-fatal bugs, all fixed in `OpencodeSSEAdapter.swift`:
+
+1. **Retired event vocabulary** — the adapter handled only `message.added` (opencode ≤1.15); live 1.16.2 streams `message.updated` + `message.part.updated` + `message.part.delta` + `session.status`/`session.idle`. Fixed with full 1.16 projection: per-message role tracking, per-part cumulative text buffers, completion-time token/model deltas, idle terminal safety net (which never overrides an interrupted/error state). Body projects once at completion because the chat store's staging pipeline is first-wins by message id.
+2. **Directory-scoped `/event`** — opencode ≥1.16 scopes the event stream to one project directory per connection; the adapter's single unscoped subscription only ever sees the serve process's own cwd project. Fixed with one scoped stream per registered session directory (LRU-capped at 32 concurrent streams, per-directory reconnect/backoff, envelope-id dedupe so overlapping streams cannot double-count token deltas).
+3. **Compressed SSE buffering** — URLSession's default `Accept-Encoding` (gzip/br) made opencode compress the stream, and the streaming decompressor buffered events indefinitely: HTTP 200, then zero bytes delivered ("connected but silent"). Fixed by requesting `Accept-Encoding: identity` on the event stream.
+4. **Swallowed frame terminators** — `URLSession.AsyncBytes.lines` never yields blank lines, so the blank-line-terminated SSE frame parser dispatched nothing (observed live: 129 data lines consumed, zero events dispatched). Fixed by dispatching as soon as the accumulated `data:` payload parses as one complete JSON object.
+
+Regression coverage added: `ChatSendPerProviderTests/test_opencodeServeSSE_v116_dispatchesLiveCaptureSequenceToReplyAndCompletion` (verbatim live-captured event sequence through `dispatchEvent`), `test_opencodeServeSSE_v116_deltasOnlyReplyProjectsAndCompletes`, `test_opencodeServeSSE_v116_sessionIdleDoesNotOverrideInterruptedTurn`, and `OpencodeSSEAdapterTests/test_register_startsScopedEventStreamPerDirectoryWithLRUCap`. A live-verify-gated stderr debug trace (stream lifecycle + event types only — never prompt/response bodies) stays in the adapter for future live debugging.
 
 Scope: provider/model paths selectable from the current Code-tab source catalog and fixtures. This file records source-level availability and test evidence. It does not claim live provider success unless a live smoke test was actually run.
 

@@ -7128,9 +7128,10 @@ public final class AgentControlServer {
     ///      a minimal `parts: [{type: "text", text: <prompt>}]` body.
     ///      opencode picks the user's default provider+model — we
     ///      don't override unless a session-specific override is set.
-    ///   4. Return 200; the reply streams back asynchronously via
-    ///      `message.added` SSE events that OpencodeSSEAdapter routes
-    ///      into the same SessionChatStore.
+    ///   4. Return 200; the reply streams back asynchronously via the
+    ///      opencode SSE stream that OpencodeSSEAdapter routes into the
+    ///      same SessionChatStore (`message.added` on serves ≤1.15;
+    ///      `message.updated`/`message.part.*`/`session.idle` on ≥1.16).
     ///
     /// Error surfaces:
     ///   - opencode serve down → 503 `opencode_server_unreachable`

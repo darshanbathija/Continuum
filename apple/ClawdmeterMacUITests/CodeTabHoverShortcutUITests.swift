@@ -48,6 +48,13 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             "-clawdmeter.sidebar.grouping", "status",
             "-clawdmeter.sidebar.sorting", "recency",
             "-clawdmeter.sidebar.historyExpanded", "NO",
+            // Composer drafts persist in UserDefaults.standard keyed by
+            // session id; the fixed seed UUID otherwise leaks one run's
+            // typed text into the next (NSArgumentDomain overrides the
+            // persisted value for reads, so restoreDraftIfNeeded sees an
+            // empty draft every launch).
+            "-clawdmeter.composer.draft.\(Self.seedSessionId)", "",
+            "-clawdmeter.composer.draft.empty", "",
         ]
         if usesPlanApprovalFixture {
             app.launchArguments += [
@@ -200,14 +207,28 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(save.waitForExistence(timeout: 5), "Expanded editor should expose Save Prompt.")
         XCTAssertTrue(save.isEnabled, "Save Prompt should enable for non-empty editor text.")
         save.click()
-        XCTAssertTrue(
-            waitUntil(timeout: 5) {
-                let json = self.sessionPresentationJSON()
-                return json.contains("Saved UI Prompt")
-                    && json.contains("Draft body from expanded editor with saved prompt details")
-            },
-            "Save Prompt from the rendered expanded editor should persist the prompt."
-        )
+        let persisted = waitUntil(timeout: 5) {
+            let json = self.sessionPresentationJSON()
+            return json.contains("Saved UI Prompt")
+                && json.contains("Draft body from expanded editor with saved prompt details")
+        }
+        if !persisted {
+            // Failure diagnostics: capture what actually persisted and what
+            // the rendered editor held, so a red run is debuggable from the
+            // result bundle without rerunning locally.
+            let json = sessionPresentationJSON()
+            let attachment = XCTAttachment(string: """
+            session-presentation.json:
+            \(json.isEmpty ? "<missing/empty>" : json)
+
+            expanded input value: \(accessibilityValue(of: element("code.composer.expanded.input")))
+            expanded title value: \(accessibilityValue(of: element("code.composer.expanded.title")))
+            """)
+            attachment.name = "save-prompt-persistence-diagnostics"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertTrue(persisted, "Save Prompt from the rendered expanded editor should persist the prompt.")
 
         element("code.composer.expanded.done").click()
         XCTAssertTrue(waitForNonExistence(element("code.composer.expanded-editor"), timeout: 5), "Done should close the expanded editor sheet.")

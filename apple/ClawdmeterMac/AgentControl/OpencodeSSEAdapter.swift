@@ -32,6 +32,24 @@
 //   data: {"type":"session.created","properties":{"id":"opc_abc","title":"…"}}\n\n
 //   data: {"type":"message.added","properties":{"sessionID":"opc_abc","message":{"role":"assistant","content":[…]}}}\n\n
 //
+// opencode ≥1.16 retired `message.added` and streams turns as (captured
+// 2026-06-10 against a live opencode v1.16.2 serve):
+//
+//   message.updated       — {sessionID, info:{id, role, time:{created, completed?},
+//                            tokens?, modelID?, finish?}} message lifecycle; the
+//                            assistant info gains `time.completed` + `tokens` when done.
+//   message.part.updated  — {sessionID, part:{id, messageID, type:"text"|"reasoning"|
+//                            "step-start", text?}} cumulative part snapshot.
+//   message.part.delta    — {sessionID, messageID, partID, field:"text", delta}
+//                            incremental text for BOTH text and reasoning parts.
+//   session.status        — {sessionID, status:{type:"busy"|"idle"}} turn activity.
+//   session.idle          — {sessionID} terminal turn marker.
+//
+// Without the ≥1.16 handlers below, a live 1.16 serve streams an entire
+// reply that the adapter logs as "unhandled event type" — the Code tab
+// composer stays on Stop forever and the reply never renders. The legacy
+// handlers stay untouched for older serves.
+//
 // The properties payload is opaque to this file — we hand the raw JSON
 // dict to the registry/stream rather than reifying every opencode
 // schema into a Swift struct. That keeps the adapter resilient to
@@ -48,6 +66,17 @@ public final class OpencodeSSEAdapter {
     public static let shared = OpencodeSSEAdapter()
 
     private let logger = Logger(subsystem: "com.clawdmeter.mac", category: "OpencodeSSEAdapter")
+
+    /// Live-verify debug trace. os_log debug lines are not persisted from
+    /// xctest hosts, which made the 2026-06-10 live SSE failure opaque —
+    /// this prints stream lifecycle + event TYPES (never bodies/tokens)
+    /// to stderr only when the live-verify gate is already set.
+    private static let liveDebugEnabled =
+        ProcessInfo.processInfo.environment["CLAWDMETER_LIVE_VERIFY"] == "1"
+    nonisolated private static func liveDebug(_ message: @autoclosure () -> String) {
+        guard liveDebugEnabled else { return }
+        FileHandle.standardError.write(Data("[opencode-sse] \(message())\n".utf8))
+    }
 
     /// Bi-directional UUID map between opencode session ids (opaque
     /// strings the server hands out — typically "ses_<base32>" or
@@ -81,40 +110,126 @@ public final class OpencodeSSEAdapter {
     /// the right repo for analytics bucketing.
     private var repoBySessionID: [String: String] = [:]
 
-    /// Reconnect attempt counter; resets on a successful event read.
-    private var reconnectCount: Int = 0
+    /// opencode ≥1.16 streaming state. Replies arrive as per-part
+    /// cumulative snapshots (`message.part.updated`) interleaved with
+    /// incremental deltas (`message.part.delta`), so we keep one text
+    /// buffer per part and re-project the joined assistant message on
+    /// every change. Role/kind maps gate projection: only `text` parts
+    /// of `assistant` messages become chat rows (reasoning/step parts
+    /// only drive the streaming indicator, and user parts are skipped
+    /// because the daemon already echoed the prompt locally at send).
+    private var messageRoleByID: [String: String] = [:]
+    private var messageOpencodeSessionByID: [String: String] = [:]
+    private var partKindByID: [String: String] = [:]
+    private var partTextByID: [String: String] = [:]
+    private var partOrderByMessageID: [String: [String]] = [:]
+    /// Runaway guard: a stream that never completes its messages (or an
+    /// out-of-band serve we observe but never registered) must not grow
+    /// these maps forever. Crossing the cap drops all buffered part
+    /// state — worst case the in-flight reply re-projects from the next
+    /// cumulative part snapshot.
+    private static let maxBufferedParts = 4096
+
+    /// Reconnect attempt counters, keyed by stream directory ("" is the
+    /// unscoped serve-cwd stream). Per-directory so one dead project
+    /// stream cannot exhaust the budget for every other session.
+    private var reconnectCounts: [String: Int] = [:]
     private static let maxReconnects = 10
 
-    /// Active streaming task. Cancelled on `stop()`.
-    private var streamTask: Task<Void, Never>?
+    /// Active streaming tasks keyed by directory. opencode ≥1.16 scopes
+    /// `/event` to one project directory per connection — an unscoped
+    /// subscription only ever sees the serve process's own cwd project,
+    /// so every registered session directory needs its own stream.
+    /// Cancelled on `stop()`.
+    private var streamTasksByDirectory: [String: Task<Void, Never>] = [:]
 
-    /// Last event id we processed — sent on reconnect as Last-Event-ID
-    /// so the server can resume from where we dropped off.
-    private var lastEventId: String?
+    /// Directories in registration order (oldest first) for the LRU cap.
+    private var streamDirectoryOrder: [String] = []
+
+    /// Every Continuum chat/code session gets its own cwd, so an
+    /// unbounded app run would otherwise accumulate one idle SSE
+    /// connection per historical session. Oldest streams die first;
+    /// an idle old session that wakes up re-registers on its next send.
+    private static let maxDirectoryStreams = 32
+
+    /// True between start() and stop(): newly registered directories
+    /// spin their stream up immediately instead of waiting for restart.
+    private var streamingActive = false
+
+    /// Last event id we processed per directory — sent on reconnect as
+    /// Last-Event-ID so the server can resume where we dropped off.
+    private var lastEventIds: [String: String] = [:]
+
+    /// Recently dispatched envelope ids. Streams for nested/duplicate
+    /// directories can overlap; replaying a completion event would
+    /// double-count its token deltas, so dispatch dedupes on the
+    /// envelope id opencode stamps on every event.
+    private var recentEventIds: [String] = []
+    private var recentEventIdSet: Set<String> = []
+    private static let maxRecentEventIds = 512
 
     // MARK: - Public API
 
-    /// Start the SSE subscription. Returns immediately; the stream
-    /// runs in a detached task. Safe to call multiple times — the old
-    /// task is cancelled before a new one starts (used on restart-after-
-    /// crash from OpencodeProcessManager).
+    /// Start the SSE subscriptions. Returns immediately; each stream
+    /// runs in its own task. Safe to call multiple times — old tasks
+    /// are cancelled before new ones start (used on restart-after-
+    /// crash from OpencodeProcessManager). Starts the unscoped stream
+    /// (serve-cwd project) plus one scoped stream per directory already
+    /// registered; later `register` calls add their directory's stream
+    /// on the fly.
     public func start() {
-        streamTask?.cancel()
-        streamTask = Task { [weak self] in
-            await self?.runStreamLoop()
+        for task in streamTasksByDirectory.values { task.cancel() }
+        streamTasksByDirectory.removeAll()
+        streamDirectoryOrder.removeAll()
+        streamingActive = true
+        ensureStreamRunning(directory: "")
+        for directory in Set(repoBySessionID.values) {
+            ensureStreamRunning(directory: directory)
         }
     }
 
-    /// Cancel the stream + clear in-flight state. Called from
+    /// Cancel the streams + clear in-flight state. Called from
     /// OpencodeProcessManager.stop() and from AppRuntime teardown.
     public func stop() {
-        streamTask?.cancel()
-        streamTask = nil
-        reconnectCount = 0
-        lastEventId = nil
+        streamingActive = false
+        for task in streamTasksByDirectory.values { task.cancel() }
+        streamTasksByDirectory.removeAll()
+        streamDirectoryOrder.removeAll()
+        reconnectCounts.removeAll()
+        lastEventIds.removeAll()
+        recentEventIds.removeAll()
+        recentEventIdSet.removeAll()
         sessionMap.removeAll()
         repoBySessionID.removeAll()
+        messageRoleByID.removeAll()
+        messageOpencodeSessionByID.removeAll()
+        partKindByID.removeAll()
+        partTextByID.removeAll()
+        partOrderByMessageID.removeAll()
         logger.info("opencode SSE adapter stopped")
+    }
+
+    /// Spin up (or keep) the SSE stream for one directory. Applies the
+    /// LRU cap: registering stream N+1 cancels the oldest directory's
+    /// stream first.
+    private func ensureStreamRunning(directory: String) {
+        guard streamingActive else { return }
+        if let existing = streamTasksByDirectory[directory], !existing.isCancelled {
+            return
+        }
+        while streamDirectoryOrder.count >= Self.maxDirectoryStreams,
+              let oldest = streamDirectoryOrder.first {
+            logger.info("opencode SSE: stream cap reached; closing oldest directory stream")
+            streamTasksByDirectory[oldest]?.cancel()
+            streamTasksByDirectory.removeValue(forKey: oldest)
+            streamDirectoryOrder.removeFirst()
+        }
+        streamDirectoryOrder.removeAll { $0 == directory }
+        streamDirectoryOrder.append(directory)
+        Self.liveDebug("starting stream for directory=\(directory.isEmpty ? "<unscoped>" : directory)")
+        streamTasksByDirectory[directory] = Task { [weak self] in
+            await self?.runStreamLoop(directory: directory)
+        }
     }
 
     /// Register a Clawdmeter session id → opencode session id mapping.
@@ -132,29 +247,34 @@ public final class OpencodeSSEAdapter {
         sessionMap.set(clawdmeterID: clawdmeterID, opencodeID: opencodeID)
         if let repo {
             repoBySessionID[opencodeID] = repo
+            // opencode ≥1.16 scopes /event by directory; this session's
+            // events only flow on a stream subscribed with its repo dir.
+            ensureStreamRunning(directory: repo)
         }
     }
 
     // MARK: - Stream loop
 
-    private func runStreamLoop() async {
+    private func runStreamLoop(directory: String) async {
         while !Task.isCancelled {
-            guard let request = makeStreamRequest() else {
+            guard let request = makeStreamRequest(directory: directory) else {
                 // OpencodeProcessManager isn't running. Wait + retry.
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 continue
             }
             let backoffAttempt: Int
             do {
-                try await consumeStream(request: request)
+                try await consumeStream(request: request, directory: directory)
                 // consumeStream returns when the server closes the
                 // connection cleanly — drop into reconnect with backoff.
-                resetReconnectFailuresAfterCleanClose()
+                Self.liveDebug("stream closed cleanly directory=\(directory.isEmpty ? "<unscoped>" : directory)")
+                resetReconnectFailuresAfterCleanClose(directory: directory)
                 backoffAttempt = 1
             } catch {
                 logger.warning("opencode SSE error: \(error.localizedDescription, privacy: .public)")
-                guard !recordReconnectFailureAndShouldStop() else { return }
-                backoffAttempt = reconnectCount
+                Self.liveDebug("stream error directory=\(directory.isEmpty ? "<unscoped>" : directory): \(error.localizedDescription)")
+                guard !recordReconnectFailureAndShouldStop(directory: directory) else { return }
+                backoffAttempt = reconnectCounts[directory] ?? 1
             }
             // Backoff before reconnecting.
             let clampedAttempt = max(1, backoffAttempt)
@@ -163,14 +283,15 @@ public final class OpencodeSSEAdapter {
         }
     }
 
-    private func resetReconnectFailuresAfterCleanClose() {
-        reconnectCount = 0
+    private func resetReconnectFailuresAfterCleanClose(directory: String = "") {
+        reconnectCounts[directory] = 0
     }
 
     @discardableResult
-    private func recordReconnectFailureAndShouldStop() -> Bool {
-        reconnectCount += 1
-        if reconnectCount > Self.maxReconnects {
+    private func recordReconnectFailureAndShouldStop(directory: String = "") -> Bool {
+        let count = (reconnectCounts[directory] ?? 0) + 1
+        reconnectCounts[directory] = count
+        if count > Self.maxReconnects {
             logger.error("opencode SSE: exhausted \(Self.maxReconnects) reconnect attempts; stopping")
             return true
         }
@@ -178,7 +299,7 @@ public final class OpencodeSSEAdapter {
     }
 
     internal var reconnectCountForTesting: Int {
-        reconnectCount
+        reconnectCounts[""] ?? 0
     }
 
     internal func recordCleanStreamCompletionForTesting() {
@@ -190,41 +311,66 @@ public final class OpencodeSSEAdapter {
         recordReconnectFailureAndShouldStop()
     }
 
-    private func makeStreamRequest() -> URLRequest? {
-        guard var req = OpencodeProcessManager.shared.makeAuthorizedRequest(path: "/event") else {
+    internal var activeStreamDirectoriesForTesting: [String] {
+        streamDirectoryOrder
+    }
+
+    private func makeStreamRequest(directory: String) -> URLRequest? {
+        guard var req = OpencodeProcessManager.shared.makeAuthorizedRequest(
+            path: "/event",
+            directory: directory.isEmpty ? nil : directory
+        ) else {
             return nil
         }
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        if let lastEventId {
+        // SSE must not ride a buffering content-coding: a gzip/br window
+        // holds events back until flush, which reads as "connected but
+        // silent" on long-lived streams.
+        req.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        if let lastEventId = lastEventIds[directory] {
             req.setValue(lastEventId, forHTTPHeaderField: "Last-Event-ID")
         }
         req.timeoutInterval = 0  // SSE: never time out
         return req
     }
 
-    private func consumeStream(request: URLRequest) async throws {
+    /// Consume one SSE connection. `nonisolated` on purpose: iterating
+    /// `URLSession.AsyncBytes.lines` from the MainActor starved the
+    /// stream inside app-hosted processes (observed live 2026-06-10:
+    /// HTTP 200, then zero lines ever yielded while a background-task
+    /// consumer of the identical request streamed fine) — and SSE
+    /// parsing is exactly the kind of continuous I/O work that should
+    /// never sit on the main actor anyway. Each complete event hops to
+    /// the MainActor once for dispatch/bookkeeping.
+    nonisolated private func consumeStream(request: URLRequest, directory: String) async throws {
         let session = URLSession(configuration: .ephemeral)
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
         guard http.statusCode == 200 else {
+            Self.liveDebug("stream HTTP \(http.statusCode) directory=\(directory.isEmpty ? "<unscoped>" : directory)")
             throw URLError(.badServerResponse, userInfo: ["statusCode": http.statusCode])
         }
-        // Each SSE event ends with a blank line. We accumulate the
-        // event's `data:` payload across lines, then dispatch when the
-        // blank-line terminator arrives.
+        Self.liveDebug("stream connected HTTP 200 directory=\(directory.isEmpty ? "<unscoped>" : directory) content-type=\(http.value(forHTTPHeaderField: "Content-Type") ?? "?") content-encoding=\(http.value(forHTTPHeaderField: "Content-Encoding") ?? "none")")
+        // SSE frames end with a blank line, but `AsyncBytes.lines` never
+        // yields empty lines — a terminator-driven parser dispatches
+        // NOTHING (observed live 2026-06-10: 129 data lines consumed,
+        // zero events dispatched). Instead, dispatch as soon as the
+        // accumulated `data:` payload parses as complete JSON; partial
+        // payloads (multi-line data frames) keep accumulating.
         var dataAccumulator = ""
         var idForCurrentEvent: String?
         for try await line in bytes.lines {
             if line.isEmpty {
-                // Event terminator. Dispatch if we have a payload.
+                // Defensive: dispatch on a terminator if the line
+                // iterator ever starts yielding blanks.
                 if !dataAccumulator.isEmpty {
-                    dispatchEvent(jsonString: dataAccumulator)
-                    reconnectCount = 0  // success: reset backoff
-                    if let id = idForCurrentEvent {
-                        lastEventId = id
-                    }
+                    await ingestStreamPayload(
+                        jsonString: dataAccumulator,
+                        eventId: idForCurrentEvent,
+                        directory: directory
+                    )
                 }
                 dataAccumulator = ""
                 idForCurrentEvent = nil
@@ -240,10 +386,37 @@ public final class OpencodeSSEAdapter {
                 } else {
                     dataAccumulator += "\n" + chunk
                 }
+                if Self.isCompleteJSONObject(dataAccumulator) {
+                    await ingestStreamPayload(
+                        jsonString: dataAccumulator,
+                        eventId: idForCurrentEvent,
+                        directory: directory
+                    )
+                    dataAccumulator = ""
+                    idForCurrentEvent = nil
+                }
             } else if line.hasPrefix("id:") {
                 idForCurrentEvent = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
             }
             // Other field lines (event:, retry:, comments) are ignored.
+        }
+    }
+
+    /// True when the accumulated `data:` payload is one complete JSON
+    /// object — the dispatch trigger that replaces the blank-line frame
+    /// terminator `AsyncBytes.lines` swallows.
+    nonisolated internal static func isCompleteJSONObject(_ payload: String) -> Bool {
+        guard payload.hasPrefix("{"), payload.hasSuffix("}"),
+              let data = payload.data(using: .utf8) else { return false }
+        return (try? JSONSerialization.jsonObject(with: data)) is [String: Any]
+    }
+
+    /// MainActor landing point for one complete SSE event.
+    private func ingestStreamPayload(jsonString: String, eventId: String?, directory: String) {
+        dispatchEvent(jsonString: jsonString)
+        reconnectCounts[directory] = 0  // success: reset backoff
+        if let eventId {
+            lastEventIds[directory] = eventId
         }
     }
 
@@ -258,8 +431,19 @@ public final class OpencodeSSEAdapter {
             logger.warning("opencode SSE: dropped malformed event payload")
             return
         }
+        // Overlapping directory streams can deliver the same event twice;
+        // replaying a completion would double-count its token deltas.
+        if let eventId = envelope["id"] as? String, !eventId.isEmpty {
+            if recentEventIdSet.contains(eventId) { return }
+            recentEventIdSet.insert(eventId)
+            recentEventIds.append(eventId)
+            if recentEventIds.count > Self.maxRecentEventIds {
+                recentEventIdSet.remove(recentEventIds.removeFirst())
+            }
+        }
         let type = envelope["type"] as? String ?? ""
         let properties = envelope["properties"] as? [String: Any] ?? [:]
+        Self.liveDebug("event type=\(type)")
         handleEvent(type: type, properties: properties)
     }
 
@@ -275,12 +459,231 @@ public final class OpencodeSSEAdapter {
             handleUsage(properties: properties)
         case "session.error":
             handleSessionError(properties: properties)
+        // opencode ≥1.16 turn vocabulary (message.added is retired there).
+        case "message.updated":
+            handleMessageUpdated(properties: properties)
+        case "message.part.updated":
+            handleMessagePartUpdated(properties: properties)
+        case "message.part.delta":
+            handleMessagePartDelta(properties: properties)
+        case "session.status":
+            handleSessionStatus(properties: properties)
+        case "session.idle":
+            handleSessionIdle(properties: properties)
         case "":
             // Empty type — opencode occasionally emits keep-alive frames.
             return
         default:
             logger.debug("opencode SSE: unhandled event type \(type, privacy: .public)")
         }
+    }
+
+    // MARK: - opencode ≥1.16 turn projection
+
+    /// `message.updated` carries the message's role and, for assistant
+    /// messages, the completion marker (`info.time.completed` /
+    /// `info.finish`) plus token totals and model id. Role arrives
+    /// before the message's parts in practice; recording it here is
+    /// what lets the part handlers decide assistant-vs-user projection.
+    private func handleMessageUpdated(properties: [String: Any]) {
+        guard let info = properties["info"] as? [String: Any],
+              let messageID = info["id"] as? String else { return }
+        let opencodeID = (properties["sessionID"] as? String)
+            ?? (info["sessionID"] as? String)
+        if let role = info["role"] as? String {
+            messageRoleByID[messageID] = role
+        }
+        if let opencodeID {
+            messageOpencodeSessionByID[messageID] = opencodeID
+        }
+        guard messageRoleByID[messageID] == "assistant",
+              let opencodeID,
+              let clawdmeterID = sessionMap.opencodeToClawdmeter[opencodeID] else { return }
+
+        let time = info["time"] as? [String: Any]
+        let isCompleted = time?["completed"] != nil || info["finish"] != nil
+        guard let store = chatStoreAccessor?(clawdmeterID) else { return }
+
+        if isCompleted {
+            // Final projection: re-upsert the joined text (covers a
+            // completion racing ahead of the last part snapshot) and
+            // attach the turn's token totals + model in the same append
+            // so cost/usage land with the finished message.
+            let body = joinedAssistantText(messageID: messageID)
+            let tokens = info["tokens"] as? [String: Any]
+            let cache = tokens?["cache"] as? [String: Any]
+            let input = (tokens?["input"] as? Int) ?? 0
+            // opencode reports reasoning tokens separately; they bill as
+            // output-side generation, so fold them into the output delta.
+            let output = ((tokens?["output"] as? Int) ?? 0) + ((tokens?["reasoning"] as? Int) ?? 0)
+            let cacheWrite = (cache?["write"] as? Int) ?? 0
+            let cacheRead = (cache?["read"] as? Int) ?? 0
+            let model = info["modelID"] as? String
+            var messages: [ChatMessage] = []
+            if !body.isEmpty {
+                messages = [ChatMessage(
+                    id: messageID,
+                    kind: .assistantText,
+                    title: "Assistant",
+                    body: body,
+                    at: Date()
+                )]
+            }
+            store.appendSDKMessages(
+                messages,
+                deltaInputTokens: input,
+                deltaOutputTokens: output,
+                deltaCacheCreationTokens: cacheWrite,
+                deltaCacheReadTokens: cacheRead,
+                model: model
+            )
+            store.setCurrentTurnState(.completed)
+            cleanupBuffers(forMessageID: messageID)
+            AgentEventStream.recordEvent(
+                sessionId: clawdmeterID,
+                kind: .snapshot,
+                payload: ["opencodeSessionID": opencodeID]
+            )
+        } else {
+            store.setCurrentTurnState(.streaming)
+        }
+    }
+
+    /// `message.part.updated` carries a cumulative snapshot of one part.
+    /// SET semantics on the part buffer keep this idempotent against the
+    /// interleaved `message.part.delta` appends regardless of arrival order.
+    private func handleMessagePartUpdated(properties: [String: Any]) {
+        guard let part = properties["part"] as? [String: Any],
+              let partID = part["id"] as? String,
+              let messageID = part["messageID"] as? String else { return }
+        enforceBufferCap()
+        let kind = (part["type"] as? String) ?? ""
+        partKindByID[partID] = kind
+        if let opencodeID = (properties["sessionID"] as? String) ?? (part["sessionID"] as? String) {
+            messageOpencodeSessionByID[messageID] = opencodeID
+        }
+        if var order = partOrderByMessageID[messageID] {
+            if !order.contains(partID) {
+                order.append(partID)
+                partOrderByMessageID[messageID] = order
+            }
+        } else {
+            partOrderByMessageID[messageID] = [partID]
+        }
+        if kind == "text", let text = part["text"] as? String {
+            partTextByID[partID] = text
+        }
+        markAssistantStreaming(messageID: messageID)
+    }
+
+    /// `message.part.delta` appends incremental text to a part buffer.
+    /// Deltas stream for reasoning parts too, so projection still gates
+    /// on the part's recorded kind; a delta that precedes its part's
+    /// first `message.part.updated` buffers under an unknown kind and
+    /// projects once the kind is known.
+    private func handleMessagePartDelta(properties: [String: Any]) {
+        guard let partID = properties["partID"] as? String,
+              let messageID = properties["messageID"] as? String,
+              (properties["field"] as? String) == "text",
+              let delta = properties["delta"] as? String else { return }
+        enforceBufferCap()
+        if let opencodeID = properties["sessionID"] as? String {
+            messageOpencodeSessionByID[messageID] = opencodeID
+        }
+        if var order = partOrderByMessageID[messageID] {
+            if !order.contains(partID) {
+                order.append(partID)
+                partOrderByMessageID[messageID] = order
+            }
+        } else {
+            partOrderByMessageID[messageID] = [partID]
+        }
+        partTextByID[partID] = (partTextByID[partID] ?? "") + delta
+        markAssistantStreaming(messageID: messageID)
+    }
+
+    /// `session.status` mirrors busy/idle turn activity; `session.idle`
+    /// is the terminal marker. Idle only upgrades a streaming turn to
+    /// completed — it must not overwrite an interrupted/error state.
+    private func handleSessionStatus(properties: [String: Any]) {
+        guard let opencodeID = properties["sessionID"] as? String,
+              let clawdmeterID = sessionMap.opencodeToClawdmeter[opencodeID],
+              let status = properties["status"] as? [String: Any],
+              let statusType = status["type"] as? String else { return }
+        switch statusType {
+        case "busy":
+            chatStoreAccessor?(clawdmeterID)?.setCurrentTurnState(.streaming)
+        case "idle":
+            completeStreamingTurn(opencodeID: opencodeID, clawdmeterID: clawdmeterID)
+        default:
+            break
+        }
+    }
+
+    private func handleSessionIdle(properties: [String: Any]) {
+        guard let opencodeID = properties["sessionID"] as? String,
+              let clawdmeterID = sessionMap.opencodeToClawdmeter[opencodeID] else { return }
+        completeStreamingTurn(opencodeID: opencodeID, clawdmeterID: clawdmeterID)
+    }
+
+    private func completeStreamingTurn(opencodeID: String, clawdmeterID: UUID) {
+        if let store = chatStoreAccessor?(clawdmeterID),
+           store.snapshot.currentTurnState == .streaming {
+            store.setCurrentTurnState(.completed)
+        }
+        // Idle is per-session terminal: drop buffered part state for every
+        // message we tracked against this opencode session.
+        let messageIDs = messageOpencodeSessionByID.filter { $0.value == opencodeID }.map(\.key)
+        for messageID in messageIDs {
+            cleanupBuffers(forMessageID: messageID)
+        }
+        AgentEventStream.recordEvent(
+            sessionId: clawdmeterID,
+            kind: .snapshot,
+            payload: ["opencodeSessionID": opencodeID]
+        )
+    }
+
+    /// Keep the turn in streaming state while an assistant message's
+    /// parts/deltas flow. The body itself projects exactly once, at the
+    /// `message.updated` completion marker — the chat store's staging
+    /// pipeline is first-wins by message id (no in-place body growth),
+    /// so partial appends would freeze the row at its first fragment.
+    private func markAssistantStreaming(messageID: String) {
+        guard messageRoleByID[messageID] == "assistant",
+              let opencodeID = messageOpencodeSessionByID[messageID],
+              let clawdmeterID = sessionMap.opencodeToClawdmeter[opencodeID],
+              let store = chatStoreAccessor?(clawdmeterID) else { return }
+        store.setCurrentTurnState(.streaming)
+    }
+
+    private func joinedAssistantText(messageID: String) -> String {
+        let order = partOrderByMessageID[messageID] ?? []
+        return order
+            .filter { partKindByID[$0] == "text" }
+            .compactMap { partTextByID[$0] }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+    }
+
+    private func cleanupBuffers(forMessageID messageID: String) {
+        for partID in partOrderByMessageID[messageID] ?? [] {
+            partTextByID.removeValue(forKey: partID)
+            partKindByID.removeValue(forKey: partID)
+        }
+        partOrderByMessageID.removeValue(forKey: messageID)
+        messageRoleByID.removeValue(forKey: messageID)
+        messageOpencodeSessionByID.removeValue(forKey: messageID)
+    }
+
+    private func enforceBufferCap() {
+        guard partTextByID.count > Self.maxBufferedParts else { return }
+        logger.warning("opencode SSE: part buffer cap exceeded; dropping buffered turn state")
+        messageRoleByID.removeAll()
+        messageOpencodeSessionByID.removeAll()
+        partKindByID.removeAll()
+        partTextByID.removeAll()
+        partOrderByMessageID.removeAll()
     }
 
     private func handleSessionCreated(properties: [String: Any]) {
