@@ -7,7 +7,8 @@ struct WorkspaceTabStrip: View {
     let workspaceKey: WorkspaceKey
     let activeSession: AgentSession?
     let activeSessionId: UUID?
-    let draftTab: WorkspaceDraftTab?
+    let draftTabs: [WorkspaceDraftTab]
+    let activeDraftTabId: UUID?
     let terminalTabs: [WorkspaceTerminalTab]
     let activeTerminalTabId: UUID?
     let documentTabs: [WorkspaceDocumentTab]
@@ -21,6 +22,15 @@ struct WorkspaceTabStrip: View {
     let onCloseDocument: (WorkspaceDocumentTab) -> Void
 
     @Environment(\.tahoe) private var t
+    private static let newTabButtonId = "workspace-new-tab-button"
+    private static let stripHorizontalPadding: CGFloat = 20
+    private static let tabSpacing: CGFloat = 6
+    private static let newTabButtonWidth: CGFloat = 26
+    private static let chatTabChromeWidth: CGFloat = 41
+    private static let compactLabelWidth: CGFloat = 44
+    private static let idealLabelWidth: CGFloat = 118
+    private static let expandedLabelWidth: CGFloat = 170
+    private static let compactFitTarget = 4
 
     private enum TabItem: Identifiable {
         case session(AgentSession)
@@ -68,7 +78,7 @@ struct WorkspaceTabStrip: View {
 
     private var items: [TabItem] {
         var out = sessions.map(TabItem.session)
-        if let draftTab, draftTab.workspaceKey == workspaceKey {
+        for draftTab in draftTabs where draftTab.workspaceKey == workspaceKey {
             out.append(.draft(draftTab))
         }
         for tab in terminalTabs {
@@ -86,39 +96,65 @@ struct WorkspaceTabStrip: View {
         }
     }
 
+    private var itemIDs: [String] {
+        items.map(\.id)
+    }
+
+    private var activeItemId: String? {
+        if let activeDocumentTabId {
+            return "document-\(activeDocumentTabId.uuidString)"
+        }
+        if let activeTerminalTabId {
+            return "terminal-\(activeTerminalTabId.uuidString)"
+        }
+        if let activeDraftTabId {
+            return "draft-\(activeDraftTabId.uuidString)"
+        }
+        if let activeSessionId {
+            return "session-\(activeSessionId.uuidString)"
+        }
+        return nil
+    }
+
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(items) { item in
-                    switch item {
-                    case .session(let session):
-                        tabButton(for: session)
-                    case .draft:
-                        draftButton
-                    case .terminal(let tab, let session):
-                        terminalButton(tab, session: session)
-                    case .document(let tab):
-                        documentButton(tab)
+        GeometryReader { geometry in
+            let labelWidth = Self.adaptiveChatTabLabelWidth(
+                availableWidth: geometry.size.width,
+                itemCount: items.count
+            )
+            let tabScrollWidth = Self.scrollableTabContentWidth(
+                availableWidth: geometry.size.width,
+                labelWidth: labelWidth,
+                itemCount: items.count
+            )
+            HStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: Self.tabSpacing) {
+                            ForEach(items) { item in
+                                tabView(item, labelWidth: labelWidth)
+                                    .id(item.id)
+                            }
+                        }
+                        .padding(.leading, Self.stripHorizontalPadding / 2)
+                        .padding(.vertical, 7)
+                    }
+                    .onAppear {
+                        scrollActiveTabIntoView(proxy)
+                    }
+                    .onChange(of: activeItemId) { _, _ in
+                        scrollActiveTabIntoView(proxy)
+                    }
+                    .onChange(of: itemIDs) { _, _ in
+                        scrollActiveTabIntoView(proxy)
                     }
                 }
-                // New-tab button sits immediately after the last tab
-                // (Chrome-style), not pinned to the window's right edge.
-                Menu {
-                    Button("Chat") { onNewChat() }
-                        .keyboardShortcut("t", modifiers: [.command])
-                    Button("Terminal") { onNewTerminal() }
-                        .keyboardShortcut("t", modifiers: [.command, .shift])
-                        .disabled(!terminalAvailable)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 26, height: 26)
-                }
-                .menuStyle(.borderlessButton)
-                .help("New workspace tab")
+                .frame(width: tabScrollWidth, alignment: .leading)
+
+                newTabButton
+                    .padding(.trailing, Self.stripHorizontalPadding / 2)
+                    .padding(.vertical, 7)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
         }
         .frame(height: 40)
         .background(t.dark ? Color.white.opacity(0.035) : Color.black.opacity(0.025))
@@ -127,17 +163,122 @@ struct WorkspaceTabStrip: View {
                 .fill(t.hairline)
                 .frame(height: 1)
         }
+        .overlay(alignment: .topLeading) {
+            Text("\(items.count)")
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(width: 1, height: 1)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(items.count)")
+                .accessibilityIdentifier("code.workspace.tab-strip")
+                .accessibilityValue("\(items.count)")
+        }
     }
 
-    private func tabButton(for session: AgentSession) -> some View {
+    static func adaptiveChatTabLabelWidth(availableWidth: CGFloat, itemCount: Int) -> CGFloat {
+        guard itemCount > 0,
+              availableWidth.isFinite,
+              availableWidth > 0
+        else { return Self.idealLabelWidth }
+
+        let fitCount = max(1, min(itemCount, Self.compactFitTarget))
+        let widthForLabels = availableWidth
+            - Self.stripHorizontalPadding
+            - Self.newTabButtonWidth
+            - (CGFloat(fitCount) * Self.tabSpacing)
+            - (CGFloat(fitCount) * Self.chatTabChromeWidth)
+        let candidate = floor(widthForLabels / CGFloat(fitCount))
+        return max(Self.compactLabelWidth, min(Self.expandedLabelWidth, candidate))
+    }
+
+    static func scrollableTabContentWidth(availableWidth: CGFloat, labelWidth: CGFloat, itemCount: Int) -> CGFloat {
+        let maxScrollableWidth = max(0, availableWidth - Self.newTabButtonWidth - (Self.stripHorizontalPadding / 2))
+        guard itemCount > 0 else {
+            return min(Self.stripHorizontalPadding / 2, maxScrollableWidth)
+        }
+        let contentWidth = (Self.stripHorizontalPadding / 2)
+            + (CGFloat(itemCount) * (labelWidth + Self.chatTabChromeWidth))
+            + (CGFloat(max(0, itemCount - 1)) * Self.tabSpacing)
+        return min(contentWidth, maxScrollableWidth)
+    }
+
+    static func estimatedChatTabStripWidth(labelWidth: CGFloat, itemCount: Int) -> CGFloat {
+        guard itemCount > 0 else {
+            return Self.stripHorizontalPadding + Self.newTabButtonWidth
+        }
+        return Self.stripHorizontalPadding
+            + Self.newTabButtonWidth
+            + (CGFloat(itemCount) * Self.tabSpacing)
+            + (CGFloat(itemCount) * (labelWidth + Self.chatTabChromeWidth))
+    }
+
+    @ViewBuilder
+    private func tabView(_ item: TabItem, labelWidth: CGFloat) -> some View {
+        switch item {
+        case .session(let session):
+            tabButton(for: session, labelWidth: labelWidth)
+        case .draft(let draft):
+            draftButton(draft, labelWidth: labelWidth)
+        case .terminal(let tab, let session):
+            terminalButton(tab, session: session, labelWidth: labelWidth)
+        case .document(let tab):
+            documentButton(tab, labelWidth: labelWidth)
+        }
+    }
+
+    private func scrollActiveTabIntoView(_ proxy: ScrollViewProxy) {
+        guard let target = activeItemId else { return }
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.12)) {
+                proxy.scrollTo(target, anchor: .trailing)
+            }
+        }
+    }
+
+    private var newTabButton: some View {
         Button {
+            DispatchQueue.main.async {
+                onNewChat()
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: Self.newTabButtonWidth, height: 26)
+        }
+        .id(Self.newTabButtonId)
+        .buttonStyle(PressableButtonStyle())
+        .help("New chat tab")
+        .accessibilityIdentifier("code.workspace.new-tab")
+        .contextMenu {
+            Button("Chat") {
+                DispatchQueue.main.async {
+                    onNewChat()
+                }
+            }
+            .accessibilityIdentifier("code.workspace.new-tab.chat")
+            Button("Terminal") {
+                DispatchQueue.main.async {
+                    onNewTerminal()
+                }
+            }
+            .disabled(!terminalAvailable)
+            .accessibilityIdentifier("code.workspace.new-tab.terminal")
+        }
+    }
+
+    private func tabButton(for session: AgentSession, labelWidth: CGFloat) -> some View {
+        let isActive = activeTerminalTabId == nil
+            && activeDocumentTabId == nil
+            && session.id == activeSessionId
+        return Button {
             model.openSession(session)
         } label: {
             tabLabel(
                 title: title(for: session),
                 subtitle: workspaceSubtitle(for: session),
                 systemImage: nil,
-                isActive: activeTerminalTabId == nil && activeDocumentTabId == nil && session.id == activeSessionId,
+                isActive: isActive,
+                labelWidth: labelWidth,
                 closeAction: {
                     Task {
                         await model.endSession(id: session.id)
@@ -147,6 +288,8 @@ struct WorkspaceTabStrip: View {
         }
         .buttonStyle(PressableButtonStyle())
         .help(session.effectiveCwd)
+        .accessibilityIdentifier("code.workspace.tab.session")
+        .accessibilityValue("\(isActive ? "selected" : "not selected") \(session.id.uuidString) \(session.agent.rawValue) \(session.model ?? "")")
         .contextMenu {
             Button("Close", role: .destructive) {
                 Task { await model.endSession(id: session.id) }
@@ -161,21 +304,28 @@ struct WorkspaceTabStrip: View {
         }
     }
 
-    private var draftButton: some View {
-        Button { model.selectDraftWorkspaceTab() } label: {
+    private func draftButton(_ draft: WorkspaceDraftTab, labelWidth: CGFloat) -> some View {
+        let isActive = activeSessionId == nil
+            && activeDraftTabId == draft.id
+            && activeTerminalTabId == nil
+            && activeDocumentTabId == nil
+        return Button { model.selectDraftWorkspaceTab(draft) } label: {
             tabLabel(
                 title: "Untitled",
                 subtitle: "Draft",
                 systemImage: nil,
-                isActive: activeSessionId == nil && activeTerminalTabId == nil && activeDocumentTabId == nil,
-                closeAction: { model.clearDraftWorkspaceTab() }
+                isActive: isActive,
+                labelWidth: labelWidth,
+                closeAction: { model.clearDraftWorkspaceTab(draft) }
             )
         }
         .buttonStyle(PressableButtonStyle())
         .help("Draft chat tab")
+        .accessibilityIdentifier("code.workspace.tab.draft")
+        .accessibilityValue("\(isActive ? "selected" : "not selected") \(draft.id.uuidString)")
     }
 
-    private func terminalButton(_ tab: WorkspaceTerminalTab, session: AgentSession) -> some View {
+    private func terminalButton(_ tab: WorkspaceTerminalTab, session: AgentSession, labelWidth: CGFloat) -> some View {
         Button {
             onSelectTerminal(tab)
         } label: {
@@ -184,11 +334,13 @@ struct WorkspaceTabStrip: View {
                 subtitle: terminalSubtitle(for: session),
                 systemImage: "terminal.fill",
                 isActive: activeTerminalTabId == tab.id,
+                labelWidth: labelWidth,
                 closeAction: { onCloseTerminal(tab) }
             )
         }
         .buttonStyle(PressableButtonStyle())
         .help("\(terminalTitle(for: tab, session: session))\n\(session.effectiveCwd)")
+        .accessibilityIdentifier("code.workspace.tab.terminal")
         .contextMenu {
             Button("Close") {
                 onCloseTerminal(tab)
@@ -196,7 +348,7 @@ struct WorkspaceTabStrip: View {
         }
     }
 
-    private func documentButton(_ tab: WorkspaceDocumentTab) -> some View {
+    private func documentButton(_ tab: WorkspaceDocumentTab, labelWidth: CGFloat) -> some View {
         Button {
             onSelectDocument(tab)
         } label: {
@@ -205,11 +357,13 @@ struct WorkspaceTabStrip: View {
                 subtitle: "Document",
                 systemImage: "doc.richtext",
                 isActive: activeDocumentTabId == tab.id,
+                labelWidth: labelWidth,
                 closeAction: { onCloseDocument(tab) }
             )
         }
         .buttonStyle(PressableButtonStyle())
         .help(tab.path)
+        .accessibilityIdentifier("code.workspace.tab.document")
         .contextMenu {
             Button("Close") {
                 onCloseDocument(tab)
@@ -226,6 +380,7 @@ struct WorkspaceTabStrip: View {
         subtitle: String,
         systemImage: String?,
         isActive: Bool,
+        labelWidth: CGFloat,
         closeAction: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 7) {
@@ -245,7 +400,7 @@ struct WorkspaceTabStrip: View {
                     .foregroundStyle(t.fg3)
                     .lineLimit(1)
             }
-            .frame(minWidth: 130, idealWidth: 160, maxWidth: 190, alignment: .leading)
+            .frame(width: labelWidth, alignment: .leading)
             Button(action: closeAction) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
@@ -254,6 +409,7 @@ struct WorkspaceTabStrip: View {
             .buttonStyle(PressableButtonStyle())
             .foregroundStyle(t.fg3)
             .help("Close tab")
+            .accessibilityIdentifier("code.workspace.tab.close")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)

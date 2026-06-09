@@ -163,6 +163,14 @@ final class UIPrimitivesTests: XCTestCase {
     func testTextUtilitiesStripAnsiHashAndPreview() {
         XCTAssertEqual(ClawdmeterTextUtilities.stripANSI("\u{001B}[31mred\u{001B}[0m plain"), "red plain")
         XCTAssertEqual(
+            ClawdmeterTextUtilities.stripANSI("\u{001B}]0;terminal title\u{0007}\u{001B}[200~paste\u{001B}[201~"),
+            "paste"
+        )
+        XCTAssertEqual(
+            ClawdmeterTextUtilities.stripANSI("\u{001B}]8;;https://example.com\u{0007}label\u{001B}]8;;\u{0007}"),
+            "label"
+        )
+        XCTAssertEqual(
             ClawdmeterTextUtilities.stableContentHash("same"),
             ClawdmeterTextUtilities.stableContentHash("same")
         )

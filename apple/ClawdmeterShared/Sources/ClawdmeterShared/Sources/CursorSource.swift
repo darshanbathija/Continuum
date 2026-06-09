@@ -207,10 +207,9 @@ public final class CursorSource: AISource, @unchecked Sendable {
         // Find the first message frame (trailer frames have the 0x80 flag).
         guard let payload = frames.first(where: { $0.isTrailer == false })?.body else {
             // Check trailer for an explicit grpc-status if present.
-            if let trailer = frames.first(where: { $0.isTrailer })?.body,
-               let trailerText = String(data: trailer, encoding: .utf8) {
+            if let trailer = frames.first(where: { $0.isTrailer })?.body {
                 throw AISourceError.dataSourceContractViolation(
-                    detail: "Cursor returned no message frame; trailer: \(trailerText.prefix(180))"
+                    detail: "Cursor returned no message frame; trailer bytes=\(trailer.count)"
                 )
             }
             throw AISourceError.dataSourceContractViolation(detail: "Cursor returned no frames")

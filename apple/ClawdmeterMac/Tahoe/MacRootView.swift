@@ -29,6 +29,65 @@ private struct MacRootNotificationHandlers: ViewModifier {
     }
 }
 
+enum MacRootCommandRouting {
+    static func codeTabCommands(
+        canOpenChatTab: Bool,
+        canOpenTerminalTab: Bool
+    ) -> [ClawdmeterCommandDescriptor] {
+        [
+            .init(
+                id: "code.newChatTab",
+                title: "New Workspace Chat Tab",
+                subtitle: canOpenChatTab ? "Open another draft in this workspace" : "No workspace selected",
+                keywords: ["tab", "chat", "draft", "workspace"],
+                scope: .code,
+                kind: .action,
+                shortcutID: "code.newChatTab",
+                isEnabled: canOpenChatTab,
+                disabledReason: canOpenChatTab ? nil : "Open a code workspace first"
+            ),
+            .init(
+                id: "code.newTerminalTab",
+                title: "New Workspace Terminal Tab",
+                subtitle: canOpenTerminalTab ? "Open a shell in this workspace" : "No terminal source selected",
+                keywords: ["tab", "terminal", "shell", "workspace"],
+                scope: .code,
+                kind: .action,
+                shortcutID: "code.newTerminalTab",
+                isEnabled: canOpenTerminalTab,
+                disabledReason: canOpenTerminalTab ? nil : "Open a code workspace first"
+            ),
+        ]
+    }
+
+    static func sessionRenameCommand(session: AgentSession?) -> ClawdmeterCommandDescriptor {
+        .init(
+            id: "session.rename",
+            title: "Rename Open Session",
+            subtitle: session?.displayLabel ?? "No session selected",
+            keywords: ["title", "name"],
+            scope: .session,
+            kind: .session,
+            shortcutID: "session.rename",
+            isEnabled: session != nil,
+            disabledReason: session == nil ? "No session selected" : nil
+        )
+    }
+
+    static func workspaceNotificationName(for commandID: ClawdmeterCommandID) -> Notification.Name? {
+        switch commandID.rawValue {
+        case "code.newChatTab":
+            return .newCodeChatTab
+        case "code.newTerminalTab":
+            return .newCodeTerminalTab
+        case "session.rename":
+            return .renameOpenSession
+        default:
+            return nil
+        }
+    }
+}
+
 /// Tahoe 26 Mac window root — replaces `DashboardView` as the primary
 /// SwiftUI scene content. Owns the global `TahoeThemeStore`, paints the
 /// wallpaper layer, and hosts the four titlebar tabs (Chat / Usage / Code /
@@ -86,6 +145,7 @@ struct MacRootView: View {
     @State private var showingShortcutSheet: Bool = false
     @State private var showingFilePicker: Bool = false
     @State private var showingPlanQueue: Bool = false
+    @State private var composerModelPickerActive: Bool = false
     @State private var planQueue: PlanQueue = PlanQueue(rows: [])
     @StateObject private var presentationStore: SessionPresentationStore
     private let shortcutRegistry = ClawdmeterShortcutRegistry()
@@ -125,7 +185,7 @@ struct MacRootView: View {
         _visitedTabs = State(initialValue: [initialTab])
         _presentationStore = StateObject(wrappedValue: SessionPresentationStore(
             storeURL: SessionPresentationStore.defaultStoreURL(
-                appSupportDirectory: WorkspaceStore.defaultStoreURL().deletingLastPathComponent()
+                appSupportDirectory: runtime.appSupportDirectory
             )
         ))
     }
@@ -256,6 +316,9 @@ struct MacRootView: View {
                     // a tab on demand (lazy load). Subsequent visits
                     // re-show the already-mounted view in one frame.
                     visitedTabs.insert(tab)
+                    if tab == .usage {
+                        refreshUsageTabData()
+                    }
                 }
             }
         }
@@ -314,6 +377,9 @@ struct MacRootView: View {
             transientToastStartedAt = Date()
             scheduleTransientToastDismiss(duration: newValue.duration)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .composerModelPickerActiveChanged)) { note in
+            composerModelPickerActive = (note.userInfo?["isActive"] as? Bool) ?? false
+        }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: handoffToast)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: transientToast)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: modalOverlayKey)
@@ -324,12 +390,25 @@ struct MacRootView: View {
                 shortcuts: shortcutRegistry,
                 overrides: presentationStore.snapshot.shortcutOverrides,
                 commands: buildCommandRegistry(),
+                suppressGlobalNavigationShortcuts: composerModelPickerActive,
                 onRun: runGlobalCommand
             )
         )
         .onAppear {
             skillCatalog.refreshIfStale()
+            if tab == .usage {
+                refreshUsageTabData()
+            }
         }
+    }
+
+    private func refreshUsageTabData() {
+        if ProviderEnablement.isEnabled("claude") { claudeModel.forcePoll() }
+        if ProviderEnablement.isEnabled("codex") { codexModel.forcePoll() }
+        if ProviderEnablement.isEnabled("gemini") { geminiModel.forcePoll() }
+        if ProviderEnablement.isEnabled("cursor") { cursorModel.forcePoll() }
+        if ProviderEnablement.isEnabled("grok") { grokModel.forcePoll() }
+        runtime.usageHistoryStore.forceRefresh()
     }
 
     private func paletteScrim<Content: View>(@ViewBuilder content: () -> Content) -> some View {
@@ -588,7 +667,7 @@ struct MacRootView: View {
     }
 
     private func buildCommandRegistry() -> ClawdmeterCommandRegistry {
-        var registry = ClawdmeterCommandRegistry(commands: [
+        var commands: [ClawdmeterCommandDescriptor] = [
             .init(id: "global.palette", title: "Open Command Palette", subtitle: "Search every action", keywords: ["spotlight", "actions"], scope: .global, kind: .action, shortcutID: "global.palette"),
             .init(id: "global.shortcuts", title: "Show Keyboard Shortcuts", subtitle: "Search the shortcut cheat sheet", keywords: ["help", "cheat sheet"], scope: .global, kind: .action, shortcutID: "global.shortcuts"),
             .init(id: "global.filePicker", title: "Open Repo File", subtitle: openSessionRepoRoot ?? "No code session selected", keywords: ["file", "quick open", "cmd p"], scope: .global, kind: .navigation, shortcutID: "global.filePicker", isEnabled: openSessionRepoRoot != nil, disabledReason: openSessionRepoRoot == nil ? "Open a code session first" : nil),
@@ -608,15 +687,32 @@ struct MacRootView: View {
             .init(id: "composer.send", title: "Send Prompt", subtitle: "Send the current composer draft", keywords: ["submit"], scope: .composer, kind: .action, shortcutID: "composer.send"),
             .init(id: "composer.queue", title: "Queue Follow-up", subtitle: "Queue the current draft for the running session", keywords: ["follow up", "later"], scope: .composer, kind: .action, shortcutID: "composer.queue"),
             .init(id: "composer.dictation", title: "Toggle Dictation", subtitle: "Start or stop composer dictation", keywords: ["voice", "microphone"], scope: .composer, kind: .action, shortcutID: "composer.dictation"),
+            .init(id: "composer.attach", title: "Add Attachment", subtitle: "Attach files or context to the Code composer", keywords: ["file", "paperclip", "context"], scope: .composer, kind: .action, shortcutID: "composer.attach"),
+            .init(id: "composer.modelEffort", title: "Open Model And Effort", subtitle: "Open the Code model picker", keywords: ["model", "provider", "effort"], scope: .composer, kind: .action, shortcutID: "composer.modelEffort"),
+            .init(id: "composer.context", title: "Open Context Usage", subtitle: "Show context-window and plan usage", keywords: ["context", "usage", "tokens"], scope: .composer, kind: .action, shortcutID: "composer.context"),
+            .init(id: "composer.effortNext", title: "Increase Effort", subtitle: "Cycle the current model effort up", keywords: ["effort", "reasoning"], scope: .composer, kind: .action, shortcutID: "composer.effortNext"),
+            .init(id: "composer.effortPrevious", title: "Decrease Effort", subtitle: "Cycle the current model effort down", keywords: ["effort", "reasoning"], scope: .composer, kind: .action, shortcutID: "composer.effortPrevious"),
+            .init(id: "composer.permission.ask", title: "Permission Mode: Ask", subtitle: "Require approval before edits or commands", keywords: ["permission", "ask"], scope: .composer, kind: .action, shortcutID: "composer.permission.ask"),
+            .init(id: "composer.permission.acceptEdits", title: "Permission Mode: Accept Edits", subtitle: "Allow edits while still asking for other actions", keywords: ["permission", "edits"], scope: .composer, kind: .action, shortcutID: "composer.permission.acceptEdits"),
+            .init(id: "composer.permission.plan", title: "Permission Mode: Plan", subtitle: "Ask the provider to plan before editing", keywords: ["permission", "plan"], scope: .composer, kind: .action, shortcutID: "composer.permission.plan"),
+            .init(id: "composer.permission.bypass", title: "Permission Mode: Bypass", subtitle: "Use the trusted full-access mode when available", keywords: ["permission", "bypass", "full access"], scope: .composer, kind: .action, shortcutID: "composer.permission.bypass"),
+        ]
+        commands.append(contentsOf: MacRootCommandRouting.codeTabCommands(
+            canOpenChatTab: sessionsModel.canOpenNewWorkspaceChatDraftTab(),
+            canOpenTerminalTab: sessionsModel.canOpenNewWorkspaceTerminalTab()
+        ))
+        commands.append(contentsOf: [
             .init(id: "code.search", title: "Focus Code Search", subtitle: "Search sessions and projects", keywords: ["filter"], scope: .code, kind: .action, shortcutID: "code.search"),
             .init(id: "code.workspaceSwitcher", title: "Open Workspace Switcher", subtitle: "Switch workspace or session", keywords: ["repo", "session", "switch"], scope: .code, kind: .navigation, shortcutID: "code.workspaceSwitcher"),
             .init(id: "code.reviewPane", title: "Toggle Review Pane", subtitle: "Show or hide Plan/Diff/PR/Terminal", keywords: ["plan", "diff", "terminal"], scope: .code, kind: .action, shortcutID: "code.reviewPane"),
             .init(id: "settings.pairIPhone", title: "Pair Or Manage iPhone", subtitle: "Open Settings for desktop sync", keywords: ["phone", "sync", "qr"], scope: .settings, kind: .setting),
             .init(id: "settings.updates", title: "Updates", subtitle: "Check for app updates", keywords: ["release", "sparkle", "changelog"], scope: .settings, kind: .setting),
         ])
+        var registry = ClawdmeterCommandRegistry(commands: commands)
         if let session = sessionsModel.openSession {
             let transcriptURL = sessionsModel.chatStore(for: session)?.currentFileURL
             registry.upsert(.init(id: "session.subchat", title: "Create Sub-chat", subtitle: "Branch from \(session.displayLabel)", keywords: ["branch", "child"], scope: .session, kind: .session, shortcutID: "session.subchat"))
+            registry.upsert(MacRootCommandRouting.sessionRenameCommand(session: session))
             registry.upsert(.init(id: "session.archive", title: "Archive Open Session", subtitle: session.displayLabel, keywords: ["hide", "done"], scope: .session, kind: .session, shortcutID: "session.archive", isEnabled: session.archivedAt == nil, disabledReason: session.archivedAt == nil ? nil : "Session is already archived"))
             registry.upsert(.init(id: "session.export", title: "Export Open Session", subtitle: "Write transcript, metadata, and diff bundle", keywords: ["bundle", "download"], scope: .session, kind: .external, shortcutID: "session.export"))
             registry.upsert(.init(id: "session.copyID", title: "Copy Open Session ID", subtitle: session.id.uuidString, keywords: ["uuid"], scope: .session, kind: .session))
@@ -635,6 +731,7 @@ struct MacRootView: View {
             }
         } else {
             registry.upsert(.init(id: "session.subchat", title: "Create Sub-chat", subtitle: "No session selected", scope: .session, kind: .session, shortcutID: "session.subchat", isEnabled: false, disabledReason: "No session selected"))
+            registry.upsert(MacRootCommandRouting.sessionRenameCommand(session: nil))
             registry.upsert(.init(id: "session.archive", title: "Archive Open Session", subtitle: "No session selected", scope: .session, kind: .session, shortcutID: "session.archive", isEnabled: false, disabledReason: "No session selected"))
         }
         for session in agentSessionRegistry.sessions.filter({ $0.archivedAt == nil }).sorted(by: { $0.lastEventAt > $1.lastEventAt }).prefix(10) {
@@ -719,6 +816,36 @@ struct MacRootView: View {
         case "composer.dictation":
             tab = .code
             DispatchQueue.main.async { NotificationCenter.default.post(name: .composerToggleDictation, object: nil) }
+        case "composer.attach":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .composerAttach, object: nil) }
+        case "composer.modelEffort":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .composerOpenModelEffort, object: nil) }
+        case "composer.context":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .composerOpenContextUsage, object: nil) }
+        case "composer.effortNext":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .composerCycleEffortNext, object: nil) }
+        case "composer.effortPrevious":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .composerCycleEffortPrevious, object: nil) }
+        case "composer.permission.ask":
+            postPermissionModeShortcut(.ask)
+        case "composer.permission.acceptEdits":
+            postPermissionModeShortcut(.acceptEdits)
+        case "composer.permission.plan":
+            postPermissionModeShortcut(.plan)
+        case "composer.permission.bypass":
+            postPermissionModeShortcut(.bypass)
+        case "code.newChatTab", "code.newTerminalTab", "session.rename":
+            visitedTabs.insert(.code)
+            tab = .code
+            guard let notificationName = MacRootCommandRouting.workspaceNotificationName(for: command.id) else { return }
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: notificationName, object: nil)
+            }
         case "code.search":
             tab = .code
             DispatchQueue.main.async { NotificationCenter.default.post(name: .focusSidebarSearch, object: nil) }
@@ -751,6 +878,17 @@ struct MacRootView: View {
                 tab = .code
                 ComposerInsertionInbox.shared.enqueue(text: "/\(skill)\n", autoSend: true)
             }
+        }
+    }
+
+    private func postPermissionModeShortcut(_ mode: PermissionMode) {
+        tab = .code
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .composerSetPermissionMode,
+                object: nil,
+                userInfo: ["mode": mode.rawValue]
+            )
         }
     }
 
@@ -880,11 +1018,18 @@ private struct ShortcutOverrideMonitor: NSViewRepresentable {
     let shortcuts: ClawdmeterShortcutRegistry
     let overrides: [String: String]
     let commands: ClawdmeterCommandRegistry
+    let suppressGlobalNavigationShortcuts: Bool
     let onRun: (ClawdmeterCommandDescriptor) -> Void
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        context.coordinator.update(shortcuts: shortcuts, overrides: overrides, commands: commands, onRun: onRun)
+        context.coordinator.update(
+            shortcuts: shortcuts,
+            overrides: overrides,
+            commands: commands,
+            suppressGlobalNavigationShortcuts: suppressGlobalNavigationShortcuts,
+            onRun: onRun
+        )
         context.coordinator.monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             context.coordinator.handle(event)
         }
@@ -892,7 +1037,13 @@ private struct ShortcutOverrideMonitor: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.update(shortcuts: shortcuts, overrides: overrides, commands: commands, onRun: onRun)
+        context.coordinator.update(
+            shortcuts: shortcuts,
+            overrides: overrides,
+            commands: commands,
+            suppressGlobalNavigationShortcuts: suppressGlobalNavigationShortcuts,
+            onRun: onRun
+        )
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -909,17 +1060,20 @@ private struct ShortcutOverrideMonitor: NSViewRepresentable {
         private var shortcuts = ClawdmeterShortcutRegistry()
         private var overrides: [String: String] = [:]
         private var commands = ClawdmeterCommandRegistry()
+        private var suppressGlobalNavigationShortcuts = false
         private var onRun: ((ClawdmeterCommandDescriptor) -> Void)?
 
         func update(
             shortcuts: ClawdmeterShortcutRegistry,
             overrides: [String: String],
             commands: ClawdmeterCommandRegistry,
+            suppressGlobalNavigationShortcuts: Bool,
             onRun: @escaping (ClawdmeterCommandDescriptor) -> Void
         ) {
             self.shortcuts = shortcuts
             self.overrides = overrides
             self.commands = commands
+            self.suppressGlobalNavigationShortcuts = suppressGlobalNavigationShortcuts
             self.onRun = onRun
         }
 
@@ -934,10 +1088,23 @@ private struct ShortcutOverrideMonitor: NSViewRepresentable {
                       let command = commands.command(id: commandID),
                       command.isEnabled
                 else { continue }
+                if suppressGlobalNavigationShortcuts,
+                   Self.isGlobalNavigation(command.id.rawValue) {
+                    return event
+                }
                 onRun?(command)
                 return nil
             }
             return event
+        }
+
+        private static func isGlobalNavigation(_ commandID: String) -> Bool {
+            switch commandID {
+            case "nav.chat", "nav.usage", "nav.code", "nav.settings":
+                return true
+            default:
+                return false
+            }
         }
 
         private static func normalizedChord(for event: NSEvent) -> String {
@@ -953,6 +1120,16 @@ private struct ShortcutOverrideMonitor: NSViewRepresentable {
 
         private static func keyName(for event: NSEvent) -> String {
             switch event.keyCode {
+            case 18: return "1"
+            case 19: return "2"
+            case 20: return "3"
+            case 21: return "4"
+            case 23: return "5"
+            case 22: return "6"
+            case 26: return "7"
+            case 28: return "8"
+            case 25: return "9"
+            case 29: return "0"
             case 36, 76: return "Return"
             case 125: return "Down"
             case 126: return "Up"
@@ -1003,6 +1180,7 @@ private struct TabSlotVisibility: ViewModifier {
         content
             .opacity(active ? 1 : 0)
             .allowsHitTesting(active)
+            .accessibilityHidden(!active)
             // Inactive slots collapse to zero apparent size for SwiftUI's
             // layout pass while still measuring their own content
             // intrinsically. We use `.zIndex` to keep the active slot on
@@ -1200,6 +1378,7 @@ struct MacTitlebar: View {
                 codeActionButton(icon: "sliders", help: "Focus Code filters") {
                     NotificationCenter.default.post(name: .focusSidebarSearch, object: nil)
                 }
+                .accessibilityIdentifier("code.titlebar.focus-filters")
                 paneMenuButton
             }
             .padding(.horizontal, 7)
@@ -1230,6 +1409,7 @@ struct MacTitlebar: View {
             }) {
                 Label("Collapse pane", systemImage: "sidebar.trailing")
             }
+            .accessibilityIdentifier("code.titlebar.right-pane.collapse")
         } label: {
             TahoeIcon("sidebar", size: 12)
                 .foregroundStyle(t.fg3)
@@ -1240,6 +1420,7 @@ struct MacTitlebar: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Right pane")
+        .accessibilityIdentifier("code.titlebar.right-pane")
     }
 
     /// Menu row that opens a specific workbench tab. `WorkbenchPaneTab`
@@ -1249,11 +1430,13 @@ struct MacTitlebar: View {
     @ViewBuilder
     private func paneMenuItem(_ tab: WorkbenchPaneTab, shortcut: String? = nil) -> some View {
         Button(action: {
-            NotificationCenter.default.post(
-                name: .openCodeReviewPane,
-                object: nil,
-                userInfo: ["tab": tab.rawValue]
-            )
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .openCodeReviewPane,
+                    object: nil,
+                    userInfo: ["tab": tab.rawValue]
+                )
+            }
         }) {
             HStack {
                 Label(tab.rawValue, systemImage: tab.systemImage)
@@ -1265,6 +1448,7 @@ struct MacTitlebar: View {
                 }
             }
         }
+        .accessibilityIdentifier("code.titlebar.right-pane.\(tab.accessibilityKey)")
     }
 
     private func codeActionButton(icon: String, help: String, action: @escaping () -> Void) -> some View {

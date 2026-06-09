@@ -2,10 +2,7 @@ import Foundation
 
 public enum ClawdmeterTextUtilities {
     public static func stripANSI(_ text: String) -> String {
-        let pattern = "\u{001B}\\[[0-?]*[ -/]*[@-~]"
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        return regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+        AnsiStrip.plain(text)
     }
 
     public static func stableContentHash(_ text: String) -> String {

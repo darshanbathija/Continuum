@@ -10,6 +10,9 @@ import ClawdmeterShared
 ///   • Part 2 — the HARNESS send path (shared by codex / grok / cursor / gemini
 ///     chat) actually delivers the prompt to the driver AND streams the reply
 ///     into the chat store, via a fake driver (no binary).
+///   • Part 3 — the non-harness providers (Claude PTY JSONL and OpenCode
+///     serve SSE) project fake stream events into the same chat store and
+///     lifecycle state without a real provider binary.
 ///
 /// True end-to-end with real agents is the live-verify gate, confirmed manually
 /// 2026-06-03: `codex app-server` ✓, `cursor-agent acp` ✓, grok headless ✓;
@@ -70,10 +73,32 @@ final class ChatSendPerProviderTests: XCTestCase {
 
     // MARK: - Part 2 — harness send delivery (fake driver, no binary)
 
+    private struct HarnessProviderCase {
+        let agent: AgentKind
+        let displayName: String
+        let model: String
+        let effort: String?
+    }
+
+    private struct DriverStart: Equatable {
+        let model: String?
+        let effort: String?
+        let cwd: String
+        let alwaysApprove: Bool
+    }
+
+    private let sharedHarnessProviderCases: [HarnessProviderCase] = [
+        HarnessProviderCase(agent: .codex, displayName: "Codex", model: "gpt-5.5", effort: "high"),
+        HarnessProviderCase(agent: .gemini, displayName: "Gemini", model: "gemini-3.5-flash-thinking", effort: nil),
+        HarnessProviderCase(agent: .cursor, displayName: "Cursor", model: "cursor-default", effort: nil),
+        HarnessProviderCase(agent: .grok, displayName: "Grok", model: "grok-build", effort: "high")
+    ]
+
     /// Minimal AgentDriver double with a controllable event stream + prompt log.
     private actor SendFakeDriver: AgentDriver {
         nonisolated let events: AsyncStream<HarnessEvent>
         private nonisolated let cont: AsyncStream<HarnessEvent>.Continuation
+        private(set) var starts: [DriverStart] = []
         private(set) var prompts: [String] = []
         init() {
             var c: AsyncStream<HarnessEvent>.Continuation!
@@ -81,7 +106,10 @@ final class ChatSendPerProviderTests: XCTestCase {
             cont = c
         }
         nonisolated func emit(_ e: HarnessEvent) { cont.yield(e) }
-        func start(model: String?, effort: String?, cwd: String, alwaysApprove: Bool) async throws -> String { "fake" }
+        func start(model: String?, effort: String?, cwd: String, alwaysApprove: Bool) async throws -> String {
+            starts.append(DriverStart(model: model, effort: effort, cwd: cwd, alwaysApprove: alwaysApprove))
+            return "fake"
+        }
         func prompt(_ text: String) async { prompts.append(text) }
         func cancel() async {}
         func respondToPermission(requestId: RpcId, optionId: String?) async {}
@@ -93,6 +121,8 @@ final class ChatSendPerProviderTests: XCTestCase {
     override func tearDown() async throws {
         for s in startedStores { s.stop() }
         startedStores = []
+        OpencodeSSEAdapter.shared.chatStoreAccessor = nil
+        OpencodeSSEAdapter.shared.stop()
         try await super.tearDown()
     }
 
@@ -105,17 +135,39 @@ final class ChatSendPerProviderTests: XCTestCase {
         return predicate()
     }
 
-    private func makeHarnessBridge(displayName: String) -> (AcpHarnessBridge, SessionChatStore, SendFakeDriver) {
+    private func makeHarnessBridge(
+        displayName: String,
+        model: String = "m"
+    ) -> (AcpHarnessBridge, SessionChatStore, SendFakeDriver) {
         let id = UUID()
         let store = SessionChatStore(sessionId: id, sdkOnly: true)
         store.start()
         startedStores.append(store)
         let driver = SendFakeDriver()
         let bridge = AcpHarnessBridge(
-            sessionId: id, store: store, model: "m",
+            sessionId: id, store: store, model: model,
             agentDisplayName: displayName, driver: driver, child: nil, connection: nil
         )
         return (bridge, store, driver)
+    }
+
+    private func makeJSONLStore() throws -> (SessionChatStore, URL) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clawdmeter-provider-stream-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("session.jsonl")
+        FileManager.default.createFile(atPath: url.path, contents: Data())
+        let store = SessionChatStore(sessionId: UUID(), sessionFileURL: url)
+        store.start()
+        startedStores.append(store)
+        return (store, url)
+    }
+
+    private func appendJSONLine(_ line: String, to url: URL) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((line + "\n").utf8))
     }
 
     /// The path codex / grok / cursor / gemini chat all share once a bridge is
@@ -174,5 +226,204 @@ final class ChatSendPerProviderTests: XCTestCase {
         let row = store.messages.first { $0.kind == .assistantText && $0.body == "fake grok reply" }
         XCTAssertEqual(row?.title, "Grok")
         await bridge.teardown()
+    }
+
+    func test_harnessProviderMatrix_deliversPromptStreamsCompletionForEverySharedHarnessProvider() async throws {
+        for fixture in sharedHarnessProviderCases {
+            let (bridge, store, driver) = makeHarnessBridge(displayName: fixture.displayName, model: fixture.model)
+            try await bridge.start(
+                binary: nil,
+                arguments: [],
+                cwd: "/tmp/\(fixture.agent.rawValue)",
+                env: [:],
+                effort: fixture.effort,
+                alwaysApprove: false
+            )
+
+            let starts = await driver.starts
+            XCTAssertEqual(
+                starts,
+                [DriverStart(model: fixture.model, effort: fixture.effort, cwd: "/tmp/\(fixture.agent.rawValue)", alwaysApprove: false)],
+                "\(fixture.agent.rawValue) must start with the selected model/effort instead of inheriting a stale tab"
+            )
+
+            let prompt = "hello \(fixture.agent.rawValue)"
+            await bridge.prompt(prompt, origin: .userComposer)
+            let delivered = await driver.prompts
+            XCTAssertEqual(delivered, [prompt], "\(fixture.agent.rawValue) prompt must reach the live bridge")
+
+            let streaming = await waitUntil { store.snapshot.currentTurnState == .streaming }
+            XCTAssertTrue(streaming, "\(fixture.agent.rawValue) send must surface streaming state immediately")
+
+            let body = "\(fixture.displayName) fake reply"
+            driver.emit(.agentMessageDelta("\(fixture.displayName) "))
+            driver.emit(.agentMessageDelta("fake reply"))
+            driver.emit(.turnEnded(.endTurn))
+
+            let replied = await waitUntil {
+                store.messages.contains {
+                    $0.kind == .assistantText
+                        && $0.title == fixture.displayName
+                        && $0.body == body
+                        && !$0.isError
+                }
+            }
+            XCTAssertTrue(replied, "\(fixture.agent.rawValue) streamed completion must land in the transcript")
+            let completed = await waitUntil { store.snapshot.currentTurnState == .completed }
+            XCTAssertTrue(completed, "\(fixture.agent.rawValue) completion must clear the active turn")
+            await bridge.teardown()
+        }
+    }
+
+    func test_harnessProviderMatrix_projectsProviderErrorsForEverySharedHarnessProvider() async throws {
+        for fixture in sharedHarnessProviderCases {
+            let (bridge, store, driver) = makeHarnessBridge(displayName: fixture.displayName, model: fixture.model)
+            try await bridge.start(
+                binary: nil,
+                arguments: [],
+                cwd: "/tmp/\(fixture.agent.rawValue)",
+                env: [:],
+                effort: fixture.effort,
+                alwaysApprove: false
+            )
+
+            let prompt = "trigger \(fixture.agent.rawValue) error"
+            await bridge.prompt(prompt, origin: .userComposer)
+            driver.emit(.error(code: fixture.agent.rawValue, message: "\(fixture.displayName) failed"))
+
+            let projected = await waitUntil {
+                store.messages.contains {
+                    $0.kind == .assistantText
+                        && $0.title == fixture.displayName
+                        && $0.body == "\(fixture.displayName) failed"
+                        && $0.isError
+                }
+            }
+            XCTAssertTrue(projected, "\(fixture.agent.rawValue) provider error must render as an error row")
+            let interrupted = await waitUntil { store.snapshot.currentTurnState == .interrupted }
+            XCTAssertTrue(interrupted, "\(fixture.agent.rawValue) provider error must leave the turn interruptible/recoverable")
+            await bridge.teardown()
+        }
+    }
+
+    // MARK: - Part 3 — non-harness provider streams
+
+    func test_claudePtyJsonlStream_projectsPromptReplyUsageAndLifecycle() async throws {
+        let (store, url) = try makeJSONLStore()
+
+        try appendJSONLine(
+            #"{"type":"user","timestamp":"2026-06-09T00:00:00Z","message":{"role":"user","content":"hello claude"}}"#,
+            to: url
+        )
+        let promptProjected = await waitUntil {
+            store.snapshot.currentTurnState == .streaming
+                && store.messages.contains { $0.kind == .userText && $0.body == "hello claude" }
+        }
+        XCTAssertTrue(promptProjected, "Claude PTY JSONL user line must project into chat and mark the turn streaming")
+
+        try appendJSONLine(
+            #"{"type":"assistant","timestamp":"2026-06-09T00:00:01Z","message":{"id":"claude-reply-1","role":"assistant","model":"claude-sonnet-4-5","stop_reason":"end_turn","content":[{"type":"text","text":"Claude fake reply"}],"usage":{"input_tokens":123,"output_tokens":45,"cache_creation_input_tokens":6,"cache_read_input_tokens":7}}}"#,
+            to: url
+        )
+
+        let replyProjected = await waitUntil {
+            store.snapshot.currentTurnState == .completed
+                && store.messages.contains {
+                    $0.kind == .assistantText
+                        && $0.title == "Claude"
+                        && $0.body == "Claude fake reply"
+                }
+                && store.snapshot.lastInputTokens == 123
+                && store.snapshot.lastOutputTokens == 45
+                && store.snapshot.lastCacheCreationTokens == 6
+                && store.snapshot.lastCacheReadTokens == 7
+                && store.snapshot.modelHint == "claude-sonnet-4-5"
+        }
+        XCTAssertTrue(replyProjected, "Claude PTY JSONL assistant completion must update transcript, usage, model, and turn state")
+    }
+
+    func test_opencodeServeSSE_projectsPromptReplyAndLifecycle() async throws {
+        let id = UUID()
+        let store = SessionChatStore(sessionId: id, sdkOnly: true)
+        store.start()
+        startedStores.append(store)
+
+        OpencodeSSEAdapter.shared.register(clawdmeterID: id, opencodeID: "opc-stream")
+        OpencodeSSEAdapter.shared.chatStoreAccessor = { lookup in
+            lookup == id ? store : nil
+        }
+
+        OpencodeSSEAdapter.shared.handleEvent(
+            type: "message.added",
+            properties: [
+                "sessionID": "opc-stream",
+                "message": [
+                    "id": "opc-user-1",
+                    "role": "user",
+                    "content": "hello opencode"
+                ]
+            ]
+        )
+        let promptProjected = await waitUntil {
+            store.snapshot.currentTurnState == .streaming
+                && store.messages.contains { $0.kind == .userText && $0.body == "hello opencode" }
+        }
+        XCTAssertTrue(promptProjected, "OpenCode user SSE event must keep the turn streaming")
+
+        OpencodeSSEAdapter.shared.handleEvent(
+            type: "message.added",
+            properties: [
+                "sessionID": "opc-stream",
+                "message": [
+                    "id": "opc-assistant-1",
+                    "role": "assistant",
+                    "content": [
+                        ["type": "text", "text": "OpenCode fake reply"]
+                    ]
+                ]
+            ]
+        )
+        let replyProjected = await waitUntil {
+            store.snapshot.currentTurnState == .completed
+                && store.messages.contains {
+                    $0.kind == .assistantText
+                        && $0.title == "Assistant"
+                        && $0.body == "OpenCode fake reply"
+                        && !$0.isError
+                }
+        }
+        XCTAssertTrue(replyProjected, "OpenCode assistant SSE event must land in chat and complete the active turn")
+    }
+
+    func test_opencodeServeSSE_projectsProviderErrorAndInterruptsTurn() async throws {
+        let id = UUID()
+        let store = SessionChatStore(sessionId: id, sdkOnly: true)
+        store.start()
+        startedStores.append(store)
+        store.setCurrentTurnState(.streaming)
+
+        OpencodeSSEAdapter.shared.register(clawdmeterID: id, opencodeID: "opc-error")
+        OpencodeSSEAdapter.shared.chatStoreAccessor = { lookup in
+            lookup == id ? store : nil
+        }
+
+        OpencodeSSEAdapter.shared.handleEvent(
+            type: "session.error",
+            properties: [
+                "sessionID": "opc-error",
+                "error": "OpenCode failed"
+            ]
+        )
+
+        let errorProjected = await waitUntil {
+            store.snapshot.currentTurnState == .interrupted
+                && store.messages.contains {
+                    $0.kind == .assistantText
+                        && $0.title == "OpenCode"
+                        && $0.body == "OpenCode failed"
+                        && $0.isError
+                }
+        }
+        XCTAssertTrue(errorProjected, "OpenCode session.error must render as provider error and interrupt the turn")
     }
 }

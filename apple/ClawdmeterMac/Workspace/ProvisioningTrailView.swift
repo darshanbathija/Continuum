@@ -33,11 +33,13 @@ struct ProvisioningProgress: Equatable {
 @available(macOS 14, *)
 struct ProvisioningTrailView: View {
     let progress: ProvisioningProgress
+    let agent: AgentKind
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var accent: Color { SessionsV2Theme.accent }
     private var doneColor: Color { SessionsV2Theme.success }
     private var tint: Color { progress.allDone ? doneColor : accent }
+    private var providerName: String { agent.tahoeProvider.displayName }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -148,7 +150,7 @@ struct ProvisioningTrailView: View {
         case .worktree: return "Creating worktree"
         case .files:    return "Copying files"
         case .setup:    return "Running setup"
-        case .agent:    return "Starting Codex"
+        case .agent:    return "Starting \(providerName)"
         }
     }
 
@@ -163,7 +165,7 @@ struct ProvisioningTrailView: View {
         case .setup:
             return progress.setupRan ? "Setup complete" : "No setup script"
         case .agent:
-            return "Codex ready"
+            return "\(providerName) ready"
         }
     }
 }

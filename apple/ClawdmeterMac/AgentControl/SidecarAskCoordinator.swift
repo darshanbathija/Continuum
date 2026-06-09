@@ -88,7 +88,7 @@ public actor SidecarAskCoordinator {
                 continuation: cont,
                 decided: nil
             )
-            askLogger.info("ask registered uuid=\(promptUUID.uuidString, privacy: .public) question=\(question, privacy: .public)")
+            askLogger.info("ask registered uuid=\(promptUUID.uuidString, privacy: .public)")
 
             // Arm timeout. If neither surface decides within `timeout`
             // seconds, default to deny.

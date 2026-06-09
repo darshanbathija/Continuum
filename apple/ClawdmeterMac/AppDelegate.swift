@@ -364,12 +364,14 @@ final class ProviderStatusController: NSObject {
         self.runtime = runtime
         super.init()
         // Mirror the model's @Published changes onto the status item button.
-        // `objectWillChange` fires before `usage` is updated, so hop one
-        // runloop tick later via `Task { @MainActor in ... }` to read the
-        // new value.
+        // `objectWillChange` may arrive off-main; enqueue repaint on the main
+        // actor so AppKit and SwiftUI observers never update from poller threads.
         model.objectWillChange
             .sink { [weak self] _ in
-                Task { @MainActor in self?.refreshImage() }
+                Task { @MainActor [weak self] in
+                    self?.refreshImage()
+                }
+                CFRunLoopWakeUp(CFRunLoopGetMain())
             }
             .store(in: &cancellables)
     }

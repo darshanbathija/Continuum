@@ -27,6 +27,7 @@
 		07CF13F1F81B504018EC7775 /* ClawdmeterWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B6A356416D72BB7ECCD6548 /* ClawdmeterWatchApp.swift */; };
 		086265D32AA72CD0970CA018 /* IOSWorkspaceDocumentTabsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26C5754995E30EFF8A7FCC93 /* IOSWorkspaceDocumentTabsTests.swift */; };
 		08BE5FDB4A47495B6B5C587B /* ChatSendPerProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89238D6504115C6F85FDA4E7 /* ChatSendPerProviderTests.swift */; };
+		7B3A6F4D08A941E5B1C73D2A /* ComposerSendStopRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C84A9B20F5D4E37983AC651 /* ComposerSendStopRenderingTests.swift */; };
 		09F8537FFF30AAD7F60D4552 /* AttachmentStagingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1678CE51452C2927CECCDE78 /* AttachmentStagingTests.swift */; };
 		0A52CA517B8CC06F96C47B4B /* clawdmeter-agents in Resources */ = {isa = PBXBuildFile; fileRef = 79D79ED15DA6749FE08041C6 /* clawdmeter-agents */; };
 		0A534978725831C07CADCF8F /* PlanItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0333C5711CC570F220CC61 /* PlanItem.swift */; };
@@ -692,6 +693,7 @@
 		882E7B0B1D24591A17536772 /* TailscaleHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TailscaleHost.swift; sourceTree = "<group>"; };
 		88501FECEB4876BDEAAF06B7 /* AntigravityPlanPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityPlanPane.swift; sourceTree = "<group>"; };
 		89238D6504115C6F85FDA4E7 /* ChatSendPerProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSendPerProviderTests.swift; sourceTree = "<group>"; };
+		6C84A9B20F5D4E37983AC651 /* ComposerSendStopRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerSendStopRenderingTests.swift; sourceTree = "<group>"; };
 		8B1A00A70CD4E6DD901790A3 /* PlanCompletionSurfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanCompletionSurfaces.swift; sourceTree = "<group>"; };
 		8B6A356416D72BB7ECCD6548 /* ClawdmeterWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawdmeterWatchApp.swift; sourceTree = "<group>"; };
 		8C1B8A7FA6946383349924D1 /* AgentSessionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionRegistry.swift; sourceTree = "<group>"; };
@@ -1260,6 +1262,7 @@
 				AA51A0428BF8248DE24EF7DD /* ClaudePtyE2ETests.swift */,
 				13323AB70617753B08B0D66D /* ClaudePtyHostTests.swift */,
 				2BC6D46113D2E229933540E3 /* CodeTabVisualSnapshotTests.swift */,
+				6C84A9B20F5D4E37983AC651 /* ComposerSendStopRenderingTests.swift */,
 				A5D45DC56F208EECABE85A42 /* DaemonChatStoreRegistryRoutingTests.swift */,
 				21210F0340F6B45C7BF28AB0 /* DiagnosticsSupportBundleTests.swift */,
 				1079DC5DFB5709D11EDAACB2 /* DoneDetectorTests.swift */,
@@ -2003,6 +2006,7 @@
 				B584F755412DA522F9801672 /* ClaudePtyE2ETests.swift in Sources */,
 				EC62ACDEAF3D8503A279AAAF /* ClaudePtyHostTests.swift in Sources */,
 				257EFEEA37AAC333B7482C9F /* CodeTabVisualSnapshotTests.swift in Sources */,
+				7B3A6F4D08A941E5B1C73D2A /* ComposerSendStopRenderingTests.swift in Sources */,
 				86B9A292813B9712CED436F7 /* DaemonChatStoreRegistryRoutingTests.swift in Sources */,
 				024E7E6118D32B5F735F6477 /* DeepResearchArgvTests.swift in Sources */,
 				961138F14762FD98647ADA23 /* DiagnosticsSupportBundleTests.swift in Sources */,
@@ -2622,6 +2626,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
+					"@loader_path/../../../../MacOS",
+					"@loader_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.tests;
@@ -2829,6 +2835,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
+					"@loader_path/../../../../MacOS",
+					"@loader_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.tests;

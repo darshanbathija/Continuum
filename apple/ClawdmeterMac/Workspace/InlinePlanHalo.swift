@@ -17,6 +17,46 @@ struct InlinePlanHalo: View {
     let onApprove: () -> Void
     let canApprove: Bool
 
+    struct PlanActionDescriptor: Equatable {
+        enum Kind: Equatable {
+            case refine
+            case edit
+            case approve
+        }
+
+        let kind: Kind
+        let visibleTitle: String
+        let accessibilityLabel: String
+        let accessibilityIdentifier: String
+        let isEnabled: Bool
+    }
+
+    static func actionDescriptors(canApprove: Bool) -> [PlanActionDescriptor] {
+        [
+            PlanActionDescriptor(
+                kind: .refine,
+                visibleTitle: "Refine",
+                accessibilityLabel: "Refine plan",
+                accessibilityIdentifier: "code.plan-halo.refine",
+                isEnabled: true
+            ),
+            PlanActionDescriptor(
+                kind: .edit,
+                visibleTitle: "Edit plan",
+                accessibilityLabel: "Edit plan",
+                accessibilityIdentifier: "code.plan-halo.edit",
+                isEnabled: true
+            ),
+            PlanActionDescriptor(
+                kind: .approve,
+                visibleTitle: "Approve & run",
+                accessibilityLabel: "Approve plan and run",
+                accessibilityIdentifier: "code.plan-halo.approve",
+                isEnabled: canApprove
+            ),
+        ]
+    }
+
     private var steps: [String] {
         guard let plan = session.planText else { return [] }
         return TahoePlanParser.steps(from: plan, cap: 8)
@@ -29,6 +69,10 @@ struct InlinePlanHalo: View {
         // breathing animation — the halo conveys state once, not ambiently.
         // Quiet Black: no glow halo. The card is a flat raised panel; state is
         // conveyed by structure + the etched label, not an ambient aura.
+        let actions = Self.actionDescriptors(canApprove: canApprove)
+        let refineAction = actions[0]
+        let editAction = actions[1]
+        let approveAction = actions[2]
         return ZStack {
             TahoeGlass(radius: 8, tone: .raised) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -84,11 +128,15 @@ struct InlinePlanHalo: View {
                     HStack(spacing: 8) {
                         TahoeGhostButton(size: .m, action: onRefine) {
                             TahoeIcon("chat", size: 11)
-                            Text("Refine")
+                            Text(refineAction.visibleTitle)
                         }
+                        .accessibilityLabel(refineAction.accessibilityLabel)
+                        .accessibilityIdentifier(refineAction.accessibilityIdentifier)
                         TahoeGhostButton(size: .m, action: onRefine) {
-                            Text("Edit plan")
+                            Text(editAction.visibleTitle)
                         }
+                        .accessibilityLabel(editAction.accessibilityLabel)
+                        .accessibilityIdentifier(editAction.accessibilityIdentifier)
                         Spacer(minLength: 10)
                         if let branch = session.worktreePath.map({ URL(fileURLWithPath: $0).lastPathComponent }), !branch.isEmpty {
                             VStack(alignment: .trailing, spacing: 1) {
@@ -106,12 +154,14 @@ struct InlinePlanHalo: View {
                             }
                             .frame(maxWidth: 190)
                         }
-                        TahoeAccentButton(size: .m, disabled: !canApprove, action: onApprove) {
-                            Text("Approve & run")
+                        TahoeAccentButton(size: .m, disabled: !approveAction.isEnabled, action: onApprove) {
+                            Text(approveAction.visibleTitle)
                             Text("⇧⏎")
                                 .fontWeight(.regular)
                                 .opacity(0.75)
                         }
+                        .accessibilityLabel(approveAction.accessibilityLabel)
+                        .accessibilityIdentifier(approveAction.accessibilityIdentifier)
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
@@ -120,6 +170,8 @@ struct InlinePlanHalo: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("code.plan-halo")
     }
 
     private var estimatedToolCalls: Int {

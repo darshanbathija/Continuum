@@ -85,7 +85,7 @@ final class AgentSessionRegistryEventStoreWireTests: XCTestCase {
         // Phase 3: cold-open a new registry pointed at the same event store.
         do {
             let (reg, _) = try makeRegistry()
-            // Wait for the synchronous replay-in-init to land.
+            await reg.waitForEventReplaySeedForTesting()
             let projected = reg.sessions
             XCTAssertEqual(Set(projected.map(\.id)), expectedSessionIds,
                 "Replay must rebuild exactly the same session id set")
@@ -94,6 +94,38 @@ final class AgentSessionRegistryEventStoreWireTests: XCTestCase {
                     "Replay must preserve the latest status per session")
             }
         }
+    }
+
+    func test_replaySeedDoesNotBlockRegistryInitOnMainActor() async throws {
+        let store = try OrchestrationEventStore(storeURL: storeURL)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let now = Date(timeIntervalSince1970: 1_775_000_000)
+        let commands = try (0..<750).map { index -> OrchestrationCommand in
+            let session = replayFixtureSession(index: index, now: now)
+            return OrchestrationCommand(
+                source: "test",
+                kind: .sessionCreated,
+                sessionId: session.id.uuidString,
+                timestamp: now.addingTimeInterval(Double(index)),
+                runtimeEvent: nil,
+                payload: try encoder.encode(session)
+            )
+        }
+        _ = try await store.appendBatch(commands)
+        try await store.checkpoint()
+
+        let start = ProcessInfo.processInfo.systemUptime
+        let reg = AgentSessionRegistry(storeURL: sessionsURL, eventStore: store)
+        let elapsed = ProcessInfo.processInfo.systemUptime - start
+
+        XCTAssertLessThan(
+            elapsed,
+            0.1,
+            "Registry init must not synchronously replay the event log on the MainActor."
+        )
+        await reg.waitForEventReplaySeedForTesting()
+        XCTAssertEqual(reg.sessions.count, commands.count)
     }
 
     /// F2-wire — recordCommand is the public write-ahead API. With
@@ -126,6 +158,194 @@ final class AgentSessionRegistryEventStoreWireTests: XCTestCase {
         )
         // Should return immediately without throwing.
         try await reg.recordCommand(cmd)
+    }
+
+    func test_bulkArchive_archivesAllSessionsAndReplays() async throws {
+        let archivedIds: [UUID]
+        do {
+            let (reg, store) = try makeRegistry()
+            let first = try await reg.create(
+                repoKey: "/tmp/repo", repoDisplayName: "repo", agent: .claude, model: "sonnet",
+                goal: nil, worktreePath: "/tmp/repo/a", tmuxWindowId: nil, tmuxPaneId: nil,
+                planMode: false, mode: .worktree
+            )
+            let second = try await reg.create(
+                repoKey: "/tmp/repo", repoDisplayName: "repo", agent: .codex, model: "gpt-5.5",
+                goal: nil, worktreePath: "/tmp/repo/b", tmuxWindowId: nil, tmuxPaneId: nil,
+                planMode: false, mode: .worktree
+            )
+
+            archivedIds = [first.id, second.id]
+            try await reg.archive(ids: archivedIds)
+
+            XCTAssertNotNil(reg.session(id: first.id)?.archivedAt)
+            XCTAssertNotNil(reg.session(id: second.id)?.archivedAt)
+
+            let firstRows = try await store.loadForSession(first.id.uuidString)
+            let secondRows = try await store.loadForSession(second.id.uuidString)
+            XCTAssertTrue(firstRows.contains { $0.command.kind == .sessionMetadataUpdated })
+            XCTAssertTrue(secondRows.contains { $0.command.kind == .sessionMetadataUpdated })
+            try await store.checkpoint()
+        }
+
+        try? FileManager.default.removeItem(at: sessionsURL)
+        let (replayed, _) = try makeRegistry()
+        await replayed.waitForEventReplaySeedForTesting()
+        for id in archivedIds {
+            XCTAssertNotNil(replayed.session(id: id)?.archivedAt)
+        }
+    }
+
+    func test_bulkArchiveCoalescesSnapshotSaveWithinFeedbackBudget() async throws {
+        let registry = AgentSessionRegistry(storeURL: sessionsURL, eventStore: nil)
+        var ids: [UUID] = []
+        for index in 0..<250 {
+            let session = try await registry.create(
+                repoKey: "/tmp/repo",
+                repoDisplayName: "repo",
+                agent: index.isMultiple(of: 2) ? .codex : .claude,
+                model: index.isMultiple(of: 2) ? "gpt-5.5" : "claude-sonnet-4-6",
+                goal: "bulk-\(index)",
+                worktreePath: "/tmp/repo/worktrees/bulk-\(index)",
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                planMode: false,
+                mode: .worktree
+            )
+            ids.append(session.id)
+        }
+
+        let start = ContinuousClock.now
+        try await registry.archive(ids: ids)
+        let elapsed = start.duration(to: ContinuousClock.now)
+
+        XCTContext.runActivity(named: "Bulk archive feedback latency") { activity in
+            activity.add(XCTAttachment(string: """
+            sessions=250
+            elapsed=\(elapsed)
+            budget=100ms
+            """))
+        }
+        XCTAssertLessThan(
+            elapsed,
+            .milliseconds(100),
+            "Archive all must coalesce registry mutation and snapshot save so rows disappear within the feedback budget."
+        )
+        XCTAssertEqual(registry.sessions.filter { $0.archivedAt != nil }.count, ids.count)
+    }
+
+    func test_archiveReclaimEligibilityRequiresExplicitOwnedProvisioningMetadata() {
+        let managedPath = "/Users/dev/Clawdmeter/workspaces/repo/bergen"
+        XCTAssertTrue(AgentSessionRegistry.canReclaimWorktreeOnArchive(Self.reclaimSession(
+            worktreePath: managedPath,
+            ownsWorktree: true,
+            provisioning: Self.reclaimMetadata(worktreePath: managedPath)
+        )))
+        XCTAssertFalse(AgentSessionRegistry.canReclaimWorktreeOnArchive(Self.reclaimSession(
+            worktreePath: managedPath,
+            ownsWorktree: false,
+            provisioning: Self.reclaimMetadata(worktreePath: managedPath)
+        )))
+        XCTAssertFalse(AgentSessionRegistry.canReclaimWorktreeOnArchive(Self.reclaimSession(
+            worktreePath: managedPath,
+            ownsWorktree: true,
+            provisioning: nil
+        )))
+        XCTAssertFalse(AgentSessionRegistry.canReclaimWorktreeOnArchive(Self.reclaimSession(
+            worktreePath: managedPath,
+            ownsWorktree: true,
+            provisioning: Self.reclaimMetadata(worktreePath: managedPath, markerId: "")
+        )))
+        XCTAssertFalse(AgentSessionRegistry.canReclaimWorktreeOnArchive(Self.reclaimSession(
+            worktreePath: managedPath,
+            ownsWorktree: true,
+            provisioning: Self.reclaimMetadata(worktreePath: "/Users/dev/Clawdmeter/workspaces/repo/other")
+        )))
+        XCTAssertFalse(AgentSessionRegistry.canReclaimWorktreeOnArchive(Self.reclaimSession(
+            worktreePath: "/Users/dev/project/.claude/worktrees/bergen",
+            ownsWorktree: true,
+            provisioning: Self.reclaimMetadata(worktreePath: "/Users/dev/project/.claude/worktrees/bergen")
+        )))
+        XCTAssertFalse(AgentSessionRegistry.canReclaimWorktreeOnArchive(Self.reclaimSession(
+            repoKey: managedPath,
+            worktreePath: managedPath,
+            ownsWorktree: true,
+            provisioning: Self.reclaimMetadata(worktreePath: managedPath)
+        )))
+        XCTAssertFalse(AgentSessionRegistry.canReclaimWorktreeOnArchive(Self.reclaimSession(
+            worktreePath: managedPath,
+            ownsWorktree: true,
+            provisioning: Self.reclaimMetadata(worktreePath: managedPath),
+            kind: .chat
+        )))
+    }
+
+    func test_setLaunchConfiguration_updatesProviderModelAndClearsEffortAndReplays() async throws {
+        let sessionId: UUID
+        do {
+            let (reg, store) = try makeRegistry()
+            let session = try await reg.create(
+                repoKey: "/tmp/repo", repoDisplayName: "repo", agent: .codex, model: "gpt-5.5",
+                goal: nil, worktreePath: "/tmp/repo/cleveland", tmuxWindowId: nil, tmuxPaneId: nil,
+                planMode: true, mode: .worktree, effort: .max
+            )
+            sessionId = session.id
+
+            try await reg.setLaunchConfiguration(
+                id: session.id,
+                agent: .gemini,
+                model: "gemini-3.5-flash-thinking",
+                effort: nil
+            )
+
+            let updated = try XCTUnwrap(reg.session(id: session.id))
+            XCTAssertEqual(updated.agent, .gemini)
+            XCTAssertEqual(updated.model, "gemini-3.5-flash-thinking")
+            XCTAssertNil(updated.effort)
+            XCTAssertEqual(updated.runtimeBinding?.providerModelId, "gemini-3.5-flash-thinking")
+            XCTAssertEqual(updated.runtimeBinding?.billingProvider, "antigravity")
+
+            let rows = try await store.loadForSession(session.id.uuidString)
+            XCTAssertTrue(rows.contains { $0.command.kind == .sessionMetadataUpdated })
+            try await store.checkpoint()
+        }
+
+        try? FileManager.default.removeItem(at: sessionsURL)
+        let (replayed, _) = try makeRegistry()
+        await replayed.waitForEventReplaySeedForTesting()
+        let restored = try XCTUnwrap(replayed.session(id: sessionId))
+        XCTAssertEqual(restored.agent, .gemini)
+        XCTAssertEqual(restored.model, "gemini-3.5-flash-thinking")
+        XCTAssertNil(restored.effort)
+        XCTAssertEqual(restored.runtimeBinding?.providerModelId, "gemini-3.5-flash-thinking")
+        XCTAssertEqual(restored.runtimeBinding?.billingProvider, "antigravity")
+    }
+
+    func test_previewLaunchConfiguration_isInMemoryOnlyForFastPickerToggles() async throws {
+        let (reg, store) = try makeRegistry()
+        let session = try await reg.create(
+            repoKey: "/tmp/repo", repoDisplayName: "repo", agent: .claude, model: "sonnet",
+            goal: nil, worktreePath: "/tmp/repo/charlotte", tmuxWindowId: nil, tmuxPaneId: nil,
+            planMode: true, mode: .worktree, effort: .max
+        )
+        let rowsBefore = try await store.loadForSession(session.id.uuidString)
+
+        reg.previewLaunchConfiguration(
+            id: session.id,
+            agent: .cursor,
+            model: CursorModelCatalog.autoModelId,
+            effort: nil
+        )
+
+        let updated = try XCTUnwrap(reg.session(id: session.id))
+        XCTAssertEqual(updated.agent, .cursor)
+        XCTAssertEqual(updated.model, CursorModelCatalog.autoModelId)
+        XCTAssertNil(updated.effort)
+        XCTAssertEqual(updated.runtimeBinding?.providerModelId, CursorModelCatalog.autoModelId)
+
+        let rowsAfter = try await store.loadForSession(session.id.uuidString)
+        XCTAssertEqual(rowsAfter.count, rowsBefore.count)
+        XCTAssertFalse(rowsAfter.dropFirst(rowsBefore.count).contains { $0.command.kind == .sessionMetadataUpdated })
     }
 
     /// F2-wire — `delete` writes a `.sessionDeleted` receipt BEFORE
@@ -214,6 +434,7 @@ final class AgentSessionRegistryEventStoreWireTests: XCTestCase {
 
         try? FileManager.default.removeItem(at: sessionsURL)
         let (replayed, _) = try makeRegistry()
+        await replayed.waitForEventReplaySeedForTesting()
         let restored = try XCTUnwrap(replayed.session(id: sessionId))
         XCTAssertEqual(restored.terminalPanes.first?.title, "Build logs")
     }
@@ -223,4 +444,72 @@ final class AgentSessionRegistryEventStoreWireTests: XCTestCase {
     // (the workspace-tab-aware `create` signature was a separate piece of #185 that overlapped
     // with #174 and was dropped in the surgical rebase). Dropping the test for now to keep the
     // file compiling; restore it if/when the same-workspace-tab create overload lands.
+
+    private func replayFixtureSession(index: Int, now: Date) -> AgentSession {
+        let id = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index + 1))!
+        let path = "/tmp/replay-\(index)"
+        return AgentSession(
+            id: id,
+            repoKey: path,
+            repoDisplayName: "replay-\(index)",
+            agent: index.isMultiple(of: 2) ? .claude : .codex,
+            model: nil,
+            goal: "Replay \(index)",
+            worktreePath: path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            status: .running,
+            planText: nil,
+            createdAt: now,
+            lastEventAt: now.addingTimeInterval(Double(index)),
+            lastEventSeq: UInt64(index),
+            mode: .worktree
+        )
+    }
+
+    private static func reclaimMetadata(
+        worktreePath: String,
+        markerId: String = "continuum-owned"
+    ) -> WorktreeProvisioningMetadata {
+        WorktreeProvisioningMetadata(
+            ownershipMarkerId: markerId,
+            branchName: "bergen",
+            worktreePath: worktreePath,
+            storageRoot: "/Users/dev/Clawdmeter/workspaces",
+            projectSlug: "repo",
+            workspaceSlug: "bergen",
+            branchAliasPath: nil,
+            filesToCopy: WorktreeFileCopySummary(source: .disabled, patterns: [])
+        )
+    }
+
+    private static func reclaimSession(
+        repoKey: String? = "/Users/dev/project",
+        worktreePath: String?,
+        ownsWorktree: Bool,
+        provisioning: WorktreeProvisioningMetadata?,
+        kind: SessionKind = .code
+    ) -> AgentSession {
+        let now = Date(timeIntervalSince1970: 1_777_200_000)
+        return AgentSession(
+            id: UUID(),
+            repoKey: repoKey,
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: nil,
+            worktreePath: worktreePath,
+            provisioning: provisioning,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            status: .running,
+            planText: nil,
+            createdAt: now,
+            lastEventAt: now,
+            lastEventSeq: 1,
+            mode: .worktree,
+            kind: kind,
+            ownsWorktree: ownsWorktree
+        )
+    }
 }

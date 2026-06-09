@@ -49,17 +49,120 @@ struct TahoeDiffPreviewPane: View {
             }
             .background(t.dark ? Color.black.opacity(0.18) : Color.black.opacity(0.03))
         }
+        .onAppear {
+            Task { await load() }
+        }
         .task(id: repoCwd) { await load() }
     }
 
+    struct ActionDescriptor: Equatable {
+        let title: String
+        let accessibilityIdentifier: String
+        let isEnabled: Bool
+        let systemImage: String
+
+        init(
+            title: String,
+            accessibilityIdentifier: String,
+            isEnabled: Bool = true,
+            systemImage: String = ""
+        ) {
+            self.title = title
+            self.accessibilityIdentifier = accessibilityIdentifier
+            self.isEnabled = isEnabled
+            self.systemImage = systemImage
+        }
+    }
+
+    struct ToolbarDescriptor: Equatable {
+        static let accessibilityIdentifier = "code.diff.toolbar"
+        static let fileCountAccessibilityIdentifier = "code.diff.files-count"
+        static let unviewedCountAccessibilityIdentifier = "code.diff.unviewed-count"
+        static let layoutAccessibilityIdentifier = "code.diff.layout"
+        static let nextAccessibilityIdentifier = "code.diff.next-unviewed"
+        static let markAllAccessibilityIdentifier = "code.diff.mark-all-viewed"
+
+        let fileCountText: String
+        let unviewedCountText: String
+        let nextEnabled: Bool
+        let markAllEnabled: Bool
+    }
+
+    struct FileActionDescriptors: Equatable {
+        static let rowAccessibilityIdentifier = "code.diff.file.row"
+
+        let reviewed: ActionDescriptor
+        let flagChanges: ActionDescriptor
+        let markViewed: ActionDescriptor
+        let open: ActionDescriptor
+    }
+
+    struct HunkActionDescriptors: Equatable {
+        static let rowAccessibilityIdentifier = "code.diff.hunk.row"
+
+        let toggle: ActionDescriptor
+        let explain: ActionDescriptor
+    }
+
+    static func toolbarDescriptor(fileCount: Int, unviewedCount: Int) -> ToolbarDescriptor {
+        ToolbarDescriptor(
+            fileCountText: "\(fileCount) files",
+            unviewedCountText: "\(unviewedCount) unviewed",
+            nextEnabled: unviewedCount > 0,
+            markAllEnabled: fileCount > 0
+        )
+    }
+
+    static func fileActionDescriptors(viewed: Bool) -> FileActionDescriptors {
+        FileActionDescriptors(
+            reviewed: ActionDescriptor(
+                title: "Mark reviewed",
+                accessibilityIdentifier: "code.diff.file.mark-reviewed"
+            ),
+            flagChanges: ActionDescriptor(
+                title: "Flag changes",
+                accessibilityIdentifier: "code.diff.file.flag-changes"
+            ),
+            markViewed: ActionDescriptor(
+                title: viewed ? "Viewed" : "Mark viewed",
+                accessibilityIdentifier: "code.diff.file.mark-viewed",
+                isEnabled: !viewed
+            ),
+            open: ActionDescriptor(
+                title: "Open",
+                accessibilityIdentifier: "code.diff.file.open"
+            )
+        )
+    }
+
+    static func hunkActionDescriptors(collapsed: Bool) -> HunkActionDescriptors {
+        HunkActionDescriptors(
+            toggle: ActionDescriptor(
+                title: collapsed ? "Expand hunk" : "Collapse hunk",
+                accessibilityIdentifier: "code.diff.hunk.toggle-collapse",
+                systemImage: collapsed ? "chevron.right" : "chevron.down"
+            ),
+            explain: ActionDescriptor(
+                title: "Explain",
+                accessibilityIdentifier: "code.diff.hunk.explain"
+            )
+        )
+    }
+
     private func diffToolbar(proxy: ScrollViewProxy) -> some View {
-        HStack(spacing: 8) {
-            Text("\(changedPaths.count) files")
+        let descriptor = Self.toolbarDescriptor(
+            fileCount: changedPaths.count,
+            unviewedCount: unviewedPaths.count
+        )
+        return HStack(spacing: 8) {
+            Text(descriptor.fileCountText)
                 .font(TahoeFont.body(11, weight: .semibold))
                 .foregroundStyle(t.fg3)
-            Text("\(unviewedPaths.count) unviewed")
+                .accessibilityIdentifier(ToolbarDescriptor.fileCountAccessibilityIdentifier)
+            Text(descriptor.unviewedCountText)
                 .font(TahoeFont.body(11))
-                .foregroundStyle(unviewedPaths.isEmpty ? t.fg4 : t.accent)
+                .foregroundStyle(descriptor.nextEnabled ? t.accent : t.fg4)
+                .accessibilityIdentifier(ToolbarDescriptor.unviewedCountAccessibilityIdentifier)
             Spacer()
             Picker("Diff layout", selection: diffModeBinding) {
                 ForEach(DiffDisplayMode.allCases, id: \.self) { mode in
@@ -69,19 +172,24 @@ struct TahoeDiffPreviewPane: View {
             .pickerStyle(.segmented)
             .frame(width: 132)
             .labelsHidden()
+            .accessibilityIdentifier(ToolbarDescriptor.layoutAccessibilityIdentifier)
             Button("Next") { jumpToNextUnviewed(proxy: proxy) }
                 .font(TahoeFont.body(11, weight: .semibold))
                 .buttonStyle(PressableButtonStyle())
-                .disabled(unviewedPaths.isEmpty)
+                .disabled(!descriptor.nextEnabled)
                 .help("Jump to the next unviewed file")
+                .accessibilityIdentifier(ToolbarDescriptor.nextAccessibilityIdentifier)
             Button("Mark all viewed") { markAllViewed() }
                 .font(TahoeFont.body(11, weight: .semibold))
                 .buttonStyle(PressableButtonStyle())
-                .disabled(changedPaths.isEmpty)
+                .disabled(!descriptor.markAllEnabled)
                 .help("Persist viewed state for all changed files")
+                .accessibilityIdentifier(ToolbarDescriptor.markAllAccessibilityIdentifier)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(ToolbarDescriptor.accessibilityIdentifier)
     }
 
     @ViewBuilder
@@ -91,6 +199,7 @@ struct TahoeDiffPreviewPane: View {
         if line.isFileHeader, let path = line.path {
             let viewed = isViewed(path)
             let focused = focusedPath == path
+            let actions = Self.fileActionDescriptors(viewed: viewed)
             HStack(spacing: 8) {
                 Image(systemName: viewed ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(viewed ? .green : t.fg3)
@@ -120,25 +229,31 @@ struct TahoeDiffPreviewPane: View {
                 }
                 .font(TahoeFont.body(10.5, weight: .semibold))
                 .buttonStyle(PressableButtonStyle())
+                .accessibilityIdentifier(actions.reviewed.accessibilityIdentifier)
                 Button("Flag changes") {
                     try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .changesRequested)
                 }
                 .font(TahoeFont.body(10.5, weight: .semibold))
                 .buttonStyle(PressableButtonStyle())
-                Button(viewed ? "Viewed" : "Mark viewed") {
+                .accessibilityIdentifier(actions.flagChanges.accessibilityIdentifier)
+                Button(actions.markViewed.title) {
                     markViewed(path)
                 }
                 .font(TahoeFont.body(10.5, weight: .semibold))
                 .buttonStyle(PressableButtonStyle())
-                .disabled(viewed)
+                .disabled(!actions.markViewed.isEnabled)
+                .accessibilityIdentifier(actions.markViewed.accessibilityIdentifier)
                 Button("Open") { open(path) }
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .buttonStyle(PressableButtonStyle())
+                    .accessibilityIdentifier(actions.open.accessibilityIdentifier)
             }
             .id(Self.headerID(for: path))
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
             .background(focused ? t.accentAlpha(0.18) : (viewed ? t.hair2.opacity(0.45) : t.accentAlpha(0.10)))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(FileActionDescriptors.rowAccessibilityIdentifier)
             .onHover { inside in
                 hoveredPath = inside ? path : (hoveredPath == path ? nil : hoveredPath)
             }
@@ -152,14 +267,16 @@ struct TahoeDiffPreviewPane: View {
             }
         } else if line.kind == .hunk, let hunkId = line.hunkId {
             let collapsed = isHunkCollapsed(hunkId)
+            let actions = Self.hunkActionDescriptors(collapsed: collapsed)
             HStack(spacing: 8) {
                 Button {
                     try? presentationStore.setDiffHunkCollapsed(sessionId: sessionId, hunkId: hunkId, collapsed: !collapsed)
                 } label: {
-                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    Image(systemName: actions.toggle.systemImage)
                         .font(.system(size: 10, weight: .bold))
                 }
                 .buttonStyle(PressableButtonStyle())
+                .accessibilityIdentifier(actions.toggle.accessibilityIdentifier)
                 Text(line.text)
                     .font(TahoeFont.mono(11.5, weight: .semibold))
                     .foregroundStyle(t.fg3)
@@ -170,10 +287,13 @@ struct TahoeDiffPreviewPane: View {
                 }
                 .font(TahoeFont.body(10.5, weight: .semibold))
                 .buttonStyle(PressableButtonStyle())
+                .accessibilityIdentifier(actions.explain.accessibilityIdentifier)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 5)
             .background(t.hair2)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(HunkActionDescriptors.rowAccessibilityIdentifier)
             .contextMenu {
                 Button(collapsed ? "Expand hunk" : "Collapse hunk") {
                     try? presentationStore.setDiffHunkCollapsed(sessionId: sessionId, hunkId: hunkId, collapsed: !collapsed)

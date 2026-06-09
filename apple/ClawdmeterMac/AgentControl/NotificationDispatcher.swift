@@ -135,6 +135,7 @@ public actor NotificationDispatcher {
 
 private enum MacLocalNotificationPresenter {
     static func present(_ event: NotificationEvent, preferences: NotificationPresentationPreferences) async {
+        guard !notificationsDisabledForUITesting else { return }
         await playChimeIfNeeded(preferences: preferences)
         guard await ensureAuthorization() else { return }
 
@@ -162,6 +163,7 @@ private enum MacLocalNotificationPresenter {
 
     static func presentBatch(_ events: [NotificationEvent], preferences: NotificationPresentationPreferences) async {
         guard let first = events.first else { return }
+        guard !notificationsDisabledForUITesting else { return }
         await playChimeIfNeeded(preferences: preferences)
         guard await ensureAuthorization() else { return }
 
@@ -190,6 +192,7 @@ private enum MacLocalNotificationPresenter {
     }
 
     private static func ensureAuthorization() async -> Bool {
+        guard !notificationsDisabledForUITesting else { return false }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         switch settings.authorizationStatus {
@@ -211,5 +214,11 @@ private enum MacLocalNotificationPresenter {
     private static func playChimeIfNeeded(preferences: NotificationPresentationPreferences) {
         guard preferences.playChimes else { return }
         ChimeAudioPlayer.shared.playCompletion()
+    }
+
+    private static var notificationsDisabledForUITesting: Bool {
+        let process = ProcessInfo.processInfo
+        return process.environment["CLAWDMETER_UI_TESTING"] == "1"
+            || process.arguments.contains("--ui-testing")
     }
 }

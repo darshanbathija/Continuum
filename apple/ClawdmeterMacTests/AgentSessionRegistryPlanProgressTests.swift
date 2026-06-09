@@ -147,4 +147,82 @@ final class AgentSessionRegistryPlanProgressTests: XCTestCase {
         // "approvedPlanText != nil" gate.
         XCTAssertNil(reg.session(id: session.id)?.planProgress)
     }
+
+    // MARK: - Code-tab Plan controls
+
+    func test_inlinePlanHaloActionsExposeStableTargetsAndApprovalState() {
+        let disabled = InlinePlanHalo.actionDescriptors(canApprove: false)
+
+        XCTAssertEqual(disabled.map(\.kind), [.refine, .edit, .approve])
+        XCTAssertEqual(disabled.map(\.accessibilityIdentifier), [
+            "code.plan-halo.refine",
+            "code.plan-halo.edit",
+            "code.plan-halo.approve",
+        ])
+        XCTAssertEqual(disabled.map(\.visibleTitle), [
+            "Refine",
+            "Edit plan",
+            "Approve & run",
+        ])
+        XCTAssertEqual(disabled.map(\.isEnabled), [true, true, false])
+
+        let enabled = InlinePlanHalo.actionDescriptors(canApprove: true)
+        XCTAssertEqual(enabled.map(\.isEnabled), [true, true, true])
+    }
+
+    func test_reviewPlanPanePresentationPrioritizesPendingApprovalThenApprovedThenTodos() {
+        let pending = TahoeReviewPlanPane.presentation(
+            pendingPlanText: """
+            1. Inspect the route
+            2. Patch the pane
+            """,
+            approvedPlanText: "1. Older approved step",
+            todoTexts: ["fallback todo"],
+            canApprovePendingPlan: true
+        )
+
+        XCTAssertEqual(pending.source, .pending)
+        XCTAssertEqual(pending.steps, ["Inspect the route", "Patch the pane"])
+        XCTAssertEqual(pending.stateTitle, "Pending approval")
+        XCTAssertEqual(pending.approveAction?.accessibilityIdentifier, "code.plan-pane.approve")
+        XCTAssertEqual(pending.approveAction?.isEnabled, true)
+
+        let approved = TahoeReviewPlanPane.presentation(
+            pendingPlanText: "   ",
+            approvedPlanText: """
+            - Approved first step
+            - Approved second step
+            """,
+            todoTexts: ["fallback todo"],
+            canApprovePendingPlan: true
+        )
+
+        XCTAssertEqual(approved.source, .approved)
+        XCTAssertEqual(approved.steps, ["Approved first step", "Approved second step"])
+        XCTAssertNil(approved.approveAction)
+
+        let todos = TahoeReviewPlanPane.presentation(
+            pendingPlanText: nil,
+            approvedPlanText: nil,
+            todoTexts: (1...10).map { "Todo \($0)" },
+            canApprovePendingPlan: true
+        )
+
+        XCTAssertEqual(todos.source, .todos)
+        XCTAssertEqual(todos.steps.count, 8)
+        XCTAssertEqual(todos.steps.first, "Todo 1")
+        XCTAssertEqual(todos.steps.last, "Todo 8")
+        XCTAssertNil(todos.approveAction)
+
+        let empty = TahoeReviewPlanPane.presentation(
+            pendingPlanText: nil,
+            approvedPlanText: nil,
+            todoTexts: [],
+            canApprovePendingPlan: true
+        )
+
+        XCTAssertEqual(empty.source, .empty)
+        XCTAssertEqual(empty.steps, [])
+        XCTAssertNil(empty.approveAction)
+    }
 }

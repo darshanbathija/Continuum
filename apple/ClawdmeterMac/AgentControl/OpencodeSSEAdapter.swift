@@ -313,6 +313,7 @@ public final class OpencodeSSEAdapter {
         if let chatMessage = Self.parseMessageAdded(properties: properties) {
             if let store = chatStoreAccessor?(clawdmeterID) {
                 store.appendSDKMessages([chatMessage])
+                Self.updateTurnState(for: chatMessage, store: store)
                 logger.debug("opencode message.added: appended \(chatMessage.kind.rawValue, privacy: .public) id=\(chatMessage.id, privacy: .public)")
             } else {
                 logger.debug("opencode message.added: no chat-store accessor wired — emitting snapshot only")
@@ -326,6 +327,19 @@ public final class OpencodeSSEAdapter {
             kind: .snapshot,
             payload: ["opencodeSessionID": opencodeID]
         )
+    }
+
+    private static func updateTurnState(for message: ChatMessage, store: SessionChatStore) {
+        if message.isError {
+            store.setCurrentTurnState(.interrupted)
+            return
+        }
+        switch message.kind {
+        case .assistantText:
+            store.setCurrentTurnState(.completed)
+        case .userText, .toolCall, .toolResult, .meta:
+            store.setCurrentTurnState(.streaming)
+        }
     }
 
     /// Convert an opencode `message.added` event into a `ChatMessage`
@@ -547,6 +561,19 @@ public final class OpencodeSSEAdapter {
         guard let opencodeID = properties["sessionID"] as? String,
               let clawdmeterID = sessionMap.opencodeToClawdmeter[opencodeID] else { return }
         let detail = (properties["error"] as? String) ?? "unknown error"
+        if let store = chatStoreAccessor?(clawdmeterID) {
+            store.appendSDKMessages([
+                ChatMessage(
+                    id: "opencode-error-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))",
+                    kind: .assistantText,
+                    title: "OpenCode",
+                    body: detail,
+                    at: Date(),
+                    isError: true
+                )
+            ])
+            store.setCurrentTurnState(.interrupted)
+        }
         AgentEventStream.recordEvent(
             sessionId: clawdmeterID,
             kind: .statusChanged,

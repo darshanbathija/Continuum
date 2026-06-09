@@ -50,6 +50,7 @@ extension Notification.Name {
 
     static let composerAttach = Notification.Name("clawdmeter.workspace.composerAttach")
     static let composerOpenModelEffort = Notification.Name("clawdmeter.workspace.composerOpenModelEffort")
+    static let composerModelPickerActiveChanged = Notification.Name("clawdmeter.workspace.composerModelPickerActiveChanged")
     static let composerOpenContextUsage = Notification.Name("clawdmeter.workspace.composerOpenContextUsage")
     static let composerCycleEffortNext = Notification.Name("clawdmeter.workspace.composerCycleEffortNext")
     static let composerCycleEffortPrevious = Notification.Name("clawdmeter.workspace.composerCycleEffortPrevious")

@@ -182,7 +182,7 @@ final class GitDiffStore: ObservableObject {
                     .map(String.init)
             } else {
                 untrackedPaths = []
-                diffLogger.warning("git ls-files failed: \(untrackedResult.stderrString, privacy: .public)")
+                diffLogger.warning("git ls-files failed exit=\(untrackedResult.exitStatus, privacy: .public) stderrBytes=\(untrackedResult.stderr.count, privacy: .public)")
             }
             let unstagedStdout = unstagedResult.stdoutString
             let stagedStdout = stagedResult.stdoutString
@@ -298,7 +298,7 @@ final class GitDiffStore: ObservableObject {
             )
             if result.exitStatus != 0 {
                 lastError = "\(label) failed: \(result.stderrString.prefix(200))"
-                diffLogger.error("\(label, privacy: .public) failed: \(result.stderrString, privacy: .public)")
+                diffLogger.error("\(label, privacy: .public) failed exit=\(result.exitStatus, privacy: .public) stderrBytes=\(result.stderr.count, privacy: .public)")
             } else {
                 refresh()
             }
@@ -322,7 +322,7 @@ final class GitDiffStore: ObservableObject {
             )
             if result.exitStatus != 0 {
                 lastError = "\(label) failed: \(result.stderrString.prefix(200))"
-                diffLogger.error("\(label, privacy: .public) failed: \(result.stderrString, privacy: .public)")
+                diffLogger.error("\(label, privacy: .public) failed exit=\(result.exitStatus, privacy: .public) stderrBytes=\(result.stderr.count, privacy: .public)")
             } else {
                 refresh()
             }
@@ -637,6 +637,101 @@ struct GitDiffPane: View {
         _store = StateObject(wrappedValue: GitDiffStore(repoCwd: repoCwd))
     }
 
+    struct ActionDescriptor: Equatable {
+        let title: String
+        let accessibilityIdentifier: String
+        let isEnabled: Bool
+
+        init(title: String, accessibilityIdentifier: String, isEnabled: Bool = true) {
+            self.title = title
+            self.accessibilityIdentifier = accessibilityIdentifier
+            self.isEnabled = isEnabled
+        }
+    }
+
+    struct FileActionDescriptors: Equatable {
+        static let rowAccessibilityIdentifier = "code.diff.git.file.row"
+        static let toggleAccessibilityIdentifier = "code.diff.git.file.toggle"
+
+        let stage: ActionDescriptor?
+        let revert: ActionDescriptor?
+        let unstage: ActionDescriptor?
+        let trash: ActionDescriptor?
+    }
+
+    struct HunkActionDescriptors: Equatable {
+        static let rowAccessibilityIdentifier = "code.diff.git.hunk.row"
+
+        let stage: ActionDescriptor?
+        let revert: ActionDescriptor?
+        let unstage: ActionDescriptor?
+    }
+
+    struct CommitSheetDescriptor: Equatable {
+        static let openAccessibilityIdentifier = "code.diff.git.commit.open"
+        static let sheetAccessibilityIdentifier = "code.diff.git.commit.sheet"
+        static let messageAccessibilityIdentifier = "code.diff.git.commit.message"
+        static let cancelAccessibilityIdentifier = "code.diff.git.commit.cancel"
+
+        let submit: ActionDescriptor
+    }
+
+    static func fileActionDescriptors(for changeState: GitDiffChangeState) -> FileActionDescriptors {
+        switch changeState {
+        case .unstaged:
+            return FileActionDescriptors(
+                stage: ActionDescriptor(title: "Stage", accessibilityIdentifier: "code.diff.git.file.stage"),
+                revert: ActionDescriptor(title: "Revert", accessibilityIdentifier: "code.diff.git.file.revert"),
+                unstage: nil,
+                trash: nil
+            )
+        case .staged:
+            return FileActionDescriptors(
+                stage: nil,
+                revert: nil,
+                unstage: ActionDescriptor(title: "Unstage", accessibilityIdentifier: "code.diff.git.file.unstage"),
+                trash: nil
+            )
+        case .untracked:
+            return FileActionDescriptors(
+                stage: ActionDescriptor(title: "Stage", accessibilityIdentifier: "code.diff.git.file.stage"),
+                revert: nil,
+                unstage: nil,
+                trash: ActionDescriptor(title: "Trash", accessibilityIdentifier: "code.diff.git.file.trash")
+            )
+        }
+    }
+
+    static func hunkActionDescriptors(for changeState: GitDiffChangeState) -> HunkActionDescriptors {
+        switch changeState {
+        case .unstaged:
+            return HunkActionDescriptors(
+                stage: ActionDescriptor(title: "Stage", accessibilityIdentifier: "code.diff.git.hunk.stage"),
+                revert: ActionDescriptor(title: "Revert", accessibilityIdentifier: "code.diff.git.hunk.revert"),
+                unstage: nil
+            )
+        case .staged:
+            return HunkActionDescriptors(
+                stage: nil,
+                revert: nil,
+                unstage: ActionDescriptor(title: "Unstage", accessibilityIdentifier: "code.diff.git.hunk.unstage")
+            )
+        case .untracked:
+            return HunkActionDescriptors(stage: nil, revert: nil, unstage: nil)
+        }
+    }
+
+    static func commitSheetDescriptor(message: String, isCommitting: Bool) -> CommitSheetDescriptor {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return CommitSheetDescriptor(
+            submit: ActionDescriptor(
+                title: isCommitting ? "Committing..." : "Commit",
+                accessibilityIdentifier: "code.diff.git.commit.submit",
+                isEnabled: !trimmed.isEmpty && !isCommitting
+            )
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -644,6 +739,14 @@ struct GitDiffPane: View {
             content
             Divider()
             footer
+        }
+        .accessibilityIdentifier("code.diff.git.pane")
+        .overlay(alignment: .topLeading) {
+            Text(accessibilityStateValue)
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(width: 1, height: 1)
+                .accessibilityIdentifier("code.diff.git.state")
         }
         .onAppear { store.start() }
         .onDisappear { store.stop() }
@@ -674,6 +777,7 @@ struct GitDiffPane: View {
                 .foregroundStyle(.secondary)
             if store.isLoading {
                 ProgressView().controlSize(.mini)
+                    .accessibilityIdentifier("code.diff.git.loading")
             }
             Spacer()
             if let last = store.lastRefresh {
@@ -687,9 +791,11 @@ struct GitDiffPane: View {
             }
             .buttonStyle(PressableButtonStyle())
             .help("Refresh diff")
+            .accessibilityIdentifier("code.diff.git.refresh")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .accessibilityIdentifier("code.diff.git.header")
     }
 
     @ViewBuilder
@@ -705,6 +811,7 @@ struct GitDiffPane: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityIdentifier("code.diff.git.error")
         } else if let safetyCheckpointError {
             VStack(spacing: 8) {
                 Image(systemName: "shield.slash")
@@ -716,6 +823,7 @@ struct GitDiffPane: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityIdentifier("code.diff.git.safety-error")
         } else if store.files.isEmpty {
             VStack(spacing: 8) {
                 Image(systemName: "checkmark.circle")
@@ -726,6 +834,7 @@ struct GitDiffPane: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityIdentifier("code.diff.git.clean")
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 4) {
@@ -735,49 +844,60 @@ struct GitDiffPane: View {
                 }
                 .padding(8)
             }
+            .accessibilityIdentifier("code.diff.git.files")
         }
     }
 
     private func fileSection(_ file: GitDiffFile) -> some View {
         let isExpanded = expandedFiles.contains(file.id)
         return VStack(alignment: .leading, spacing: 0) {
-            Button(action: {
-                if isExpanded { expandedFiles.remove(file.id) }
-                else { expandedFiles.insert(file.id) }
-            }) {
-                HStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Button(action: {
+                    if isExpanded { expandedFiles.remove(file.id) }
+                    else { expandedFiles.insert(file.id) }
+                }) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 10)
-                    Image(systemName: fileBadgeIcon(file))
-                        .font(.system(size: 10))
-                        .foregroundStyle(fileBadgeTint(file))
-                    Text(file.path)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(file.changeState.label)
-                        .font(.system(size: 9, weight: .semibold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.secondary.opacity(0.12), in: Capsule())
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text("+\(file.hunks.reduce(0) { $0 + $1.addedCount })")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.green)
-                    Text("-\(file.hunks.reduce(0) { $0 + $1.removedCount })")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.red)
-                    fileActionButtons(file)
                 }
-                .padding(.horizontal, 4)
-                .padding(.vertical, 5)
-                .contentShape(Rectangle())
+                .buttonStyle(PressableButtonStyle())
+                .accessibilityLabel(isExpanded ? "Collapse \(file.path)" : "Expand \(file.path)")
+                .accessibilityIdentifier(FileActionDescriptors.toggleAccessibilityIdentifier)
+                Image(systemName: fileBadgeIcon(file))
+                    .font(.system(size: 10))
+                    .foregroundStyle(fileBadgeTint(file))
+                Text(file.path)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(minWidth: 24, maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(-1)
+                Text(file.changeState.label)
+                    .font(.system(size: 9, weight: .semibold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.12), in: Capsule())
+                    .foregroundStyle(.secondary)
+                Text("+\(file.hunks.reduce(0) { $0 + $1.addedCount })")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.green)
+                Text("-\(file.hunks.reduce(0) { $0 + $1.removedCount })")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.red)
+                fileActionButtons(file)
+                    .fixedSize()
+                    .layoutPriority(2)
             }
-            .buttonStyle(PressableButtonStyle())
+            .padding(.horizontal, 4)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if isExpanded { expandedFiles.remove(file.id) }
+                else { expandedFiles.insert(file.id) }
+            }
+            .accessibilityElement(children: .contain)
 
             if isExpanded {
                 ForEach(file.hunks) { hunk in
@@ -786,19 +906,24 @@ struct GitDiffPane: View {
             }
         }
         .background(Color.secondary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(FileActionDescriptors.rowAccessibilityIdentifier)
     }
 
     @ViewBuilder
     private func fileActionButtons(_ file: GitDiffFile) -> some View {
-        switch file.changeState {
-        case .unstaged:
-            Button("Stage") {
+        let actions = Self.fileActionDescriptors(for: file.changeState)
+        if let stage = actions.stage {
+            Button(stage.title) {
                 Task { await store.stageFile(file) }
             }
             .buttonStyle(.borderless)
             .font(.system(size: 10))
             .help("Stage all hunks in this file")
-            Button("Revert") {
+            .accessibilityIdentifier(stage.accessibilityIdentifier)
+        }
+        if let revert = actions.revert {
+            Button(revert.title) {
                 runDestructiveChange {
                     await store.revertFile(file)
                 }
@@ -807,27 +932,26 @@ struct GitDiffPane: View {
             .font(.system(size: 10))
             .foregroundStyle(.red)
             .help("Revert unstaged hunks in this file")
-        case .staged:
-            Button("Unstage") {
+            .accessibilityIdentifier(revert.accessibilityIdentifier)
+        }
+        if let unstage = actions.unstage {
+            Button(unstage.title) {
                 Task { await store.revertFile(file) }
             }
             .buttonStyle(.borderless)
             .font(.system(size: 10))
             .help("Move this staged file back to unstaged changes")
-        case .untracked:
-            Button("Stage") {
-                Task { await store.stageFile(file) }
-            }
-            .buttonStyle(.borderless)
-            .font(.system(size: 10))
-            .help("Stage this untracked file")
-            Button("Trash") {
+            .accessibilityIdentifier(unstage.accessibilityIdentifier)
+        }
+        if let trash = actions.trash {
+            Button(trash.title) {
                 pendingTrashFile = file
             }
             .buttonStyle(.borderless)
             .font(.system(size: 10))
             .foregroundStyle(.red)
             .help("Move this untracked file to Trash")
+            .accessibilityIdentifier(trash.accessibilityIdentifier)
         }
     }
 
@@ -858,6 +982,7 @@ struct GitDiffPane: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(Color.purple.opacity(0.06))
+            .accessibilityIdentifier(HunkActionDescriptors.rowAccessibilityIdentifier)
 
             ForEach(Array(hunk.lines.enumerated()), id: \.offset) { _, line in
                 hunkLineView(line)
@@ -869,12 +994,15 @@ struct GitDiffPane: View {
 
     @ViewBuilder
     private func hunkActionButtons(_ hunk: GitDiffHunk) -> some View {
-        switch hunk.changeState {
-        case .unstaged:
-            Button("Stage") { Task { await store.stage(hunk) } }
+        let actions = Self.hunkActionDescriptors(for: hunk.changeState)
+        if let stage = actions.stage {
+            Button(stage.title) { Task { await store.stage(hunk) } }
                 .buttonStyle(.borderless)
                 .font(.system(size: 10))
-            Button("Revert") {
+                .accessibilityIdentifier(stage.accessibilityIdentifier)
+        }
+        if let revert = actions.revert {
+            Button(revert.title) {
                 runDestructiveChange {
                     await store.revert(hunk)
                 }
@@ -882,12 +1010,13 @@ struct GitDiffPane: View {
                 .buttonStyle(.borderless)
                 .font(.system(size: 10))
                 .foregroundStyle(.red)
-        case .staged:
-            Button("Unstage") { Task { await store.revert(hunk) } }
+                .accessibilityIdentifier(revert.accessibilityIdentifier)
+        }
+        if let unstage = actions.unstage {
+            Button(unstage.title) { Task { await store.revert(hunk) } }
                 .buttonStyle(.borderless)
                 .font(.system(size: 10))
-        case .untracked:
-            EmptyView()
+                .accessibilityIdentifier(unstage.accessibilityIdentifier)
         }
     }
 
@@ -928,6 +1057,23 @@ struct GitDiffPane: View {
             .background(bg)
     }
 
+    private var accessibilityStateValue: String {
+        if let err = store.lastError {
+            return "error:\(err.prefix(80))"
+        }
+        if let safetyCheckpointError {
+            return "safety-error:\(safetyCheckpointError.prefix(80))"
+        }
+        let staged = store.files.filter { $0.changeState == .staged }.count
+        let unstaged = store.files.filter { $0.changeState == .unstaged }.count
+        let untracked = store.files.filter { $0.changeState == .untracked }.count
+        let loading = store.isLoading ? " loading:true" : ""
+        if store.files.isEmpty {
+            return "clean\(loading)"
+        }
+        return "files:\(store.files.count) staged:\(staged) unstaged:\(unstaged) untracked:\(untracked)\(loading)"
+    }
+
     private var footer: some View {
         HStack(spacing: 8) {
             if !store.files.isEmpty {
@@ -938,6 +1084,7 @@ struct GitDiffPane: View {
                 .buttonStyle(.borderedProminent)
                 .tint(terraCotta)
                 .controlSize(.small)
+                .accessibilityIdentifier(CommitSheetDescriptor.openAccessibilityIdentifier)
             }
             Spacer()
         }
@@ -946,17 +1093,20 @@ struct GitDiffPane: View {
     }
 
     private var commitSheet: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let descriptor = Self.commitSheetDescriptor(message: commitMessage, isCommitting: isCommitting)
+        return VStack(alignment: .leading, spacing: 14) {
             Text("Commit staged changes")
                 .font(.system(size: 16, weight: .semibold))
             TextField("Commit message", text: $commitMessage, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(3...8)
                 .frame(minWidth: 360)
+                .accessibilityIdentifier(CommitSheetDescriptor.messageAccessibilityIdentifier)
             if let err = store.lastError {
                 Text(err)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .accessibilityIdentifier("code.diff.git.commit.error")
             }
             HStack {
                 Spacer()
@@ -965,7 +1115,8 @@ struct GitDiffPane: View {
                     commitMessage = ""
                 }
                 .keyboardShortcut(.cancelAction)
-                Button(isCommitting ? "Committing…" : "Commit") {
+                .accessibilityIdentifier(CommitSheetDescriptor.cancelAccessibilityIdentifier)
+                Button(descriptor.submit.title) {
                     Task {
                         isCommitting = true
                         defer { isCommitting = false }
@@ -979,11 +1130,13 @@ struct GitDiffPane: View {
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .tint(terraCotta)
-                .disabled(commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isCommitting)
+                .disabled(!descriptor.submit.isEnabled)
+                .accessibilityIdentifier(descriptor.submit.accessibilityIdentifier)
             }
         }
         .padding(20)
         .frame(minWidth: 420)
+        .accessibilityIdentifier(CommitSheetDescriptor.sheetAccessibilityIdentifier)
     }
 
     private var terraCotta: Color { SessionsV2Theme.accent }

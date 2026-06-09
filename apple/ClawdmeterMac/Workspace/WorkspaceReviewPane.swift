@@ -8,10 +8,11 @@ struct WorkspaceReviewPane: View {
     @ObservedObject var model: SessionsModel
     @ObservedObject var workbenchState: WorkbenchState
     @ObservedObject var presentationStore: SessionPresentationStore
-    @ObservedObject var browserController: BrowserWorkspaceController
+    let browserControllerProvider: () -> BrowserWorkspaceController
     @Binding var selectedTab: WorkbenchPaneTab
     let onClose: () -> Void
     let onApprove: () -> Void
+    @State private var diffPaneMode: DiffPaneMode = .preview
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
@@ -25,7 +26,18 @@ struct WorkspaceReviewPane: View {
             tabContent
                 .transition(.opacity)
         }
+        .overlay(alignment: .topLeading) {
+            Text(selectedTab.rawValue)
+                .font(.system(size: 1))
+                .frame(width: 1, height: 1)
+                .opacity(0.001)
+                .accessibilityLabel("Selected \(selectedTab.rawValue)")
+                .accessibilityIdentifier("code.review.selected.\(selectedTab.accessibilityKey)")
+        }
         .background(Color.clear)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("code.review.pane")
+        .accessibilityValue(selectedTab.rawValue)
         // P5/P6: the selected-tab pill slides (matchedGeometry) and the pane
         // body cross-fades on switch (160ms) instead of an instant hard cut.
         .animation(SessionsV2Theme.segmentedSelection(reduceMotion: reduceMotion), value: selectedTab)
@@ -84,8 +96,11 @@ struct WorkspaceReviewPane: View {
                 }
             }
             .contentShape(Rectangle())
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("code.review.tab.\(tab.accessibilityKey)")
         }
         .buttonStyle(PressableButtonStyle())
+        .accessibilityIdentifier("code.review.tab.\(tab.accessibilityKey)")
     }
 
     private func tabLabel(_ tab: WorkbenchPaneTab) -> String {
@@ -99,14 +114,11 @@ struct WorkspaceReviewPane: View {
             TahoeReviewPlanPane(
                 pendingPlanText: session.planText,
                 approvedPlanText: session.approvedPlanText,
-                chatStore: chatStore
+                chatStore: chatStore,
+                onApprove: onApprove
             )
         case .diff:
-            TahoeDiffPreviewPane(
-                sessionId: session.id,
-                repoCwd: session.effectiveCwd,
-                presentationStore: presentationStore
-            )
+            diffTab
         case .sources:
             TahoeSourcesPreviewPane(chatStore: chatStore)
         case .artifacts:
@@ -126,7 +138,7 @@ struct WorkspaceReviewPane: View {
                 session: session,
                 model: model,
                 workbenchState: workbenchState,
-                controller: browserController
+                controller: browserControllerProvider()
             )
         case .pr:
             TahoePRCompactPane(
@@ -145,6 +157,79 @@ struct WorkspaceReviewPane: View {
         }
     }
 
+    private enum DiffPaneMode: String, CaseIterable, Identifiable {
+        case preview
+        case git
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .preview: return "Review"
+            case .git: return "Git"
+            }
+        }
+    }
+
+    private var diffTab: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                ForEach(DiffPaneMode.allCases) { mode in
+                    diffModeButton(mode)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("code.diff.mode")
+            TahoeHairline()
+            if diffPaneMode == .preview {
+                TahoeDiffPreviewPane(
+                    sessionId: session.id,
+                    repoCwd: session.effectiveCwd,
+                    presentationStore: presentationStore
+                )
+            } else {
+                GitDiffPane(
+                    repoCwd: session.effectiveCwd,
+                    onBeforeDestructiveChange: {
+                        await createCheckpoint(summary: "Before destructive diff action")
+                    }
+                )
+            }
+        }
+    }
+
+    private func diffModeButton(_ mode: DiffPaneMode) -> some View {
+        let isSelected = diffPaneMode == mode
+        let accessibilityIdentifier = "code.diff.mode.\(mode.rawValue)"
+        return Button {
+            diffPaneMode = mode
+        } label: {
+            Text(mode.title)
+                .font(TahoeFont.body(11, weight: isSelected ? .bold : .semibold))
+                .lineLimit(1)
+                .frame(minWidth: 54, minHeight: 24)
+                .padding(.horizontal, 5)
+                .foregroundStyle(isSelected ? t.fg : t.fg3)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isSelected ? (t.dark ? Color.white.opacity(0.10) : Color.white) : Color.clear)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(isSelected ? t.hairline : Color.clear, lineWidth: 0.5)
+                }
+                .accessibilityIdentifier("\(accessibilityIdentifier).label")
+        }
+        .buttonStyle(PressableButtonStyle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(mode.title)
+        .accessibilityIdentifier(accessibilityIdentifier)
+        .accessibilityValue(isSelected ? "selected" : "not selected")
+    }
+
     /// Live direct PTY terminal in the review pane. Reuses the same
     /// `TerminalTabContainer` that the Cmd+T overlay shows, but inline
     /// so the user can keep the chat and the raw shell side-by-side
@@ -152,7 +237,7 @@ struct WorkspaceReviewPane: View {
     @ViewBuilder
     private var terminalTab: some View {
         if !model.canOpenWorkspaceTerminalTab(from: session) {
-            placeholder(text: "Terminal unavailable for this runtime.")
+            placeholder(text: "Terminal unavailable for this session.")
         } else if let runtime = AppDelegate.runtime,
            let port = runtime.agentControlServer.boundWsPort {
             TerminalTabContainer(

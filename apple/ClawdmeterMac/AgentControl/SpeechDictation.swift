@@ -58,6 +58,10 @@ public final class SpeechDictation: ObservableObject {
 
     public func start() async {
         guard state != .recording, state != .requestingPermission else { return }
+        guard !Self.disabledForUITesting else {
+            state = .unavailable(reason: "Dictation is disabled during UI tests.")
+            return
+        }
         state = .requestingPermission
 
         // Step 1: speech-recognition permission.
@@ -158,5 +162,11 @@ public final class SpeechDictation: ObservableObject {
                 }
             }
         }
+    }
+
+    private static var disabledForUITesting: Bool {
+        let process = ProcessInfo.processInfo
+        return process.environment["CLAWDMETER_UI_TESTING"] == "1"
+            || process.arguments.contains("--ui-testing")
     }
 }

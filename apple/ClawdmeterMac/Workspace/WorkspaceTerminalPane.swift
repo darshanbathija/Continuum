@@ -10,21 +10,26 @@ struct WorkspaceTerminalPane: View {
     let token: String
 
     @State private var sawOutput = false
+    @State private var connectionState: TerminalConnectionState = .connecting
 
     var body: some View {
         ZStack {
             Color.black
-            if terminalTab.paneRefId == nil || paneId != nil {
+            if terminalTab.isPendingDirectShell && terminalTab.paneRefId == nil {
+                terminalPendingOverlay
+                    .accessibilityIdentifier("code.workspace.terminal.pending")
+            } else if terminalTab.paneRefId == nil || paneId != nil {
                 MacTerminalView(
                     sessionId: session.id,
                     host: "127.0.0.1",
                     wsPort: wsPort,
                     token: token,
                     paneId: paneId,
-                    onFirstOutput: { sawOutput = true }
+                    onFirstOutput: { sawOutput = true },
+                    onConnectionStateChange: { connectionState = $0 }
                 )
                 .id(paneId ?? "primary-\(session.id.uuidString)")
-                if !sawOutput {
+                if !sawOutput || connectionState.isAttentionState {
                     terminalPendingOverlay
                 }
             } else {
@@ -37,14 +42,21 @@ struct WorkspaceTerminalPane: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            terminalStatusBadge
+            ZStack(alignment: .topLeading) {
+                terminalStatusBadge
+                terminalStatusAccessibilityMarker
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("code.workspace.terminal.surface")
         .onChange(of: terminalTab.id) { _, _ in
             sawOutput = false
+            connectionState = .connecting
         }
         .onChange(of: paneId ?? "primary-\(session.id.uuidString)") { _, _ in
             sawOutput = false
+            connectionState = .connecting
         }
     }
 
@@ -56,6 +68,10 @@ struct WorkspaceTerminalPane: View {
     }
 
     private var activePaneTitle: String {
+        if let pendingTitle = terminalTab.pendingTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pendingTitle.isEmpty {
+            return pendingTitle
+        }
         guard let paneRefId = terminalTab.paneRefId,
               let pane = session.terminalPanes.first(where: { $0.id == paneRefId })
         else { return "\(session.agent.rawValue.capitalized)" }
@@ -81,7 +97,7 @@ struct WorkspaceTerminalPane: View {
                 .frame(width: 44, height: 44)
 
                 VStack(spacing: 4) {
-                    Text("Connecting to terminal")
+                    Text(connectionState.pendingTitle)
                         .font(TahoeFont.body(13, weight: .semibold))
                         .foregroundStyle(t.fg)
                     Text("Opening \(activePaneTitle) in \(terminalCwdLabel).")
@@ -95,7 +111,7 @@ struct WorkspaceTerminalPane: View {
                     ProgressView()
                         .controlSize(.small)
                         .tint(t.accent)
-                    Text("Waiting for visible shell output")
+                    Text(connectionState.pendingStatusText)
                         .font(TahoeFont.body(10.5, weight: .medium))
                         .foregroundStyle(t.fg3)
                 }
@@ -108,9 +124,9 @@ struct WorkspaceTerminalPane: View {
     private var terminalStatusBadge: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(sawOutput ? Color.green.opacity(0.85) : t.accent)
+                .fill(statusIndicatorColor)
                 .frame(width: 7, height: 7)
-            Text(sawOutput ? "Terminal connected" : "Terminal starting")
+            Text(connectionState.statusText(hasVisibleOutput: sawOutput))
                 .font(TahoeFont.body(10.5, weight: .semibold))
                 .foregroundStyle(t.fg)
             TahoeHair(vertical: true).frame(height: 12)
@@ -132,5 +148,29 @@ struct WorkspaceTerminalPane: View {
         )
         .padding(10)
         .help("\(activePaneTitle)\n\(session.effectiveCwd)")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(connectionState.statusText(hasVisibleOutput: sawOutput))
+        .accessibilityIdentifier("code.workspace.terminal.status")
+    }
+
+    private var terminalStatusAccessibilityMarker: some View {
+        Text(connectionState.statusText(hasVisibleOutput: sawOutput))
+            .font(.system(size: 1))
+            .frame(width: 1, height: 1)
+            .opacity(0.001)
+            .accessibilityIdentifier("code.workspace.terminal.status.state")
+    }
+
+    private var statusIndicatorColor: Color {
+        switch connectionState {
+        case .connected where sawOutput:
+            return Color.green.opacity(0.85)
+        case .reconnecting:
+            return Color.orange.opacity(0.9)
+        case .failed, .disconnected:
+            return Color.red.opacity(0.82)
+        default:
+            return t.accent
+        }
     }
 }

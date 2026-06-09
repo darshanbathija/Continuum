@@ -19,6 +19,8 @@ struct ArtifactsPane: View {
     // permission-prompt flips no longer invalidate this pane.
     @ObservedObject var messagesSlice: ChatMessagesSlice
     @State private var previewURL: URL?
+    @State private var previewedArtifactFilename: String?
+    @State private var previewEscapeMonitor: Any?
     /// Verified-on-disk artifact set. The existence check used to run
     /// synchronously inside `collect()` on every render; with many
     /// artifacts and a slow FS (network mount, heavy disk load) this
@@ -27,6 +29,32 @@ struct ArtifactsPane: View {
     /// `messagesSlice.artifactEntries` changes.
     @State private var verifiedArtifacts: [Artifact] = []
     @State private var lastVerifiedCounter: UInt64 = 0
+
+    static let paneAccessibilityIdentifier = "code.artifacts.pane"
+    static let emptyAccessibilityIdentifier = "code.artifacts.empty"
+    static let gridAccessibilityIdentifier = "code.artifacts.grid"
+    static let cardAccessibilityIdentifier = "code.artifacts.card"
+    static let thumbnailAccessibilityIdentifier = "code.artifacts.thumbnail"
+    static let previewAccessibilityIdentifier = "code.artifacts.preview"
+    static let previewCloseAccessibilityIdentifier = "code.artifacts.preview.close"
+
+    struct ArtifactDescriptor: Equatable {
+        let path: String
+        let filename: String
+        let accessibilityIdentifier: String
+        let accessibilityValue: String
+
+        init(artifact: Artifact) {
+            path = artifact.path
+            filename = artifact.filename
+            accessibilityIdentifier = ArtifactsPane.cardAccessibilityIdentifier
+            accessibilityValue = artifact.path
+        }
+    }
+
+    static func artifactDescriptor(for artifact: Artifact) -> ArtifactDescriptor {
+        ArtifactDescriptor(artifact: artifact)
+    }
 
     init(session: AgentSession, chatStore: SessionChatStore) {
         self.session = session
@@ -48,10 +76,11 @@ struct ArtifactsPane: View {
                         }
                     }
                     .padding(12)
+                    .accessibilityIdentifier(Self.gridAccessibilityIdentifier)
                 }
             }
             if let url = previewURL {
-                QuickLookOverlay(url: url, onClose: { previewURL = nil })
+                QuickLookOverlay(url: url, onClose: { closePreview() })
                     .transition(.opacity)
             }
         }
@@ -59,6 +88,11 @@ struct ArtifactsPane: View {
         .onChange(of: messagesSlice.updateCounter) { _, _ in
             refreshVerified()
         }
+        .onDisappear {
+            removePreviewEscapeMonitor()
+        }
+        .accessibilityIdentifier(Self.paneAccessibilityIdentifier)
+        .accessibilityValue(Text(previewedArtifactFilename.map { "preview:\($0)" } ?? ""))
     }
 
     /// Resolve relative paths, stat each one off-main, and publish the
@@ -112,11 +146,13 @@ struct ArtifactsPane: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 32)
+        .accessibilityIdentifier(Self.emptyAccessibilityIdentifier)
     }
 
     private func artifactCard(_ artifact: Artifact) -> some View {
-        Button(action: {
-            previewURL = artifact.url
+        let descriptor = Self.artifactDescriptor(for: artifact)
+        return Button(action: {
+            openPreview(artifact.url, filename: descriptor.filename)
         }) {
             VStack(spacing: 6) {
                 ZStack {
@@ -126,7 +162,8 @@ struct ArtifactsPane: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .frame(height: 90)
-                Text(artifact.filename)
+                .accessibilityIdentifier(Self.thumbnailAccessibilityIdentifier)
+                Text(descriptor.filename)
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -137,6 +174,36 @@ struct ArtifactsPane: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
+        .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+        .accessibilityLabel(Text(descriptor.filename))
+        .accessibilityValue(Text(descriptor.accessibilityValue))
+    }
+
+    private func openPreview(_ url: URL, filename: String) {
+        previewURL = url
+        previewedArtifactFilename = filename
+        installPreviewEscapeMonitor()
+    }
+
+    private func closePreview() {
+        previewURL = nil
+        previewedArtifactFilename = nil
+        removePreviewEscapeMonitor()
+    }
+
+    private func installPreviewEscapeMonitor() {
+        guard previewEscapeMonitor == nil else { return }
+        previewEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 53 else { return event }
+            closePreview()
+            return nil
+        }
+    }
+
+    private func removePreviewEscapeMonitor() {
+        guard let previewEscapeMonitor else { return }
+        NSEvent.removeMonitor(previewEscapeMonitor)
+        self.previewEscapeMonitor = nil
     }
 
     struct Artifact: Identifiable {
@@ -221,6 +288,7 @@ private struct QuickLookOverlay: View {
                     }
                     .buttonStyle(PressableButtonStyle())
                     .keyboardShortcut(.escape)
+                    .accessibilityIdentifier(ArtifactsPane.previewCloseAccessibilityIdentifier)
                 }
                 .padding(10)
                 QuickLookPreview(url: url)
@@ -230,6 +298,8 @@ private struct QuickLookOverlay: View {
             .background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
             .padding(40)
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(ArtifactsPane.previewAccessibilityIdentifier)
     }
 }
 

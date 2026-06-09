@@ -13,6 +13,8 @@ enum WorkbenchPaneTab: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    var accessibilityKey: String { rawValue.lowercased() }
+
     init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = Self(rawValue: raw) ?? .plan
@@ -370,9 +372,24 @@ final class WorkbenchStateStore {
     }
 
     static func defaultStoreURL() -> URL {
-        WorkspaceStore.defaultStoreURL()
+        if let testSupport = uiTestingAppSupportOverride() {
+            return testSupport.appendingPathComponent("workbench-state.json")
+        }
+        return WorkspaceStore.defaultStoreURL()
             .deletingLastPathComponent()
             .appendingPathComponent("workbench-state.json")
+    }
+
+    private static func uiTestingAppSupportOverride() -> URL? {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["CLAWDMETER_UI_TESTING"] == "1",
+              let rawPath = environment["CLAWDMETER_TEST_APP_SUPPORT_DIR"],
+              !rawPath.isEmpty else {
+            return nil
+        }
+        let url = URL(fileURLWithPath: rawPath, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 
     func load() -> WorkbenchStateSnapshot {
@@ -567,7 +584,13 @@ final class WorkbenchState: ObservableObject {
     }
 
     func latestCheckpoint(for sessionId: UUID) -> CheckpointStateSnapshot? {
-        checkpoints(for: sessionId).first
+        checkpoints(for: sessionId).first { !Self.isSafetyCheckpoint($0) }
+    }
+
+    private static func isSafetyCheckpoint(_ checkpoint: CheckpointStateSnapshot) -> Bool {
+        if checkpoint.turnId?.hasPrefix("safety-") == true { return true }
+        if checkpoint.refName.contains("/safety-") { return true }
+        return checkpoint.summary?.hasPrefix("Safety before restoring") == true
     }
 
     func clearSessionState(sessionId: UUID, preserveCheckpoints: Bool = true) {

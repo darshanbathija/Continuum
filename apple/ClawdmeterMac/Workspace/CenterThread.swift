@@ -94,7 +94,8 @@ struct CenterThread: View {
                     workspaceKey: workspaceKey,
                     activeSession: session,
                     activeSessionId: session.id,
-                    draftTab: model.draftWorkspaceTab,
+                    draftTabs: model.workspaceDraftTabs(in: workspaceKey),
+                    activeDraftTabId: model.draftWorkspaceTab?.id,
                     terminalTabs: model.workspaceTerminalTabs(in: workspaceKey),
                     activeTerminalTabId: nil,
                     documentTabs: model.workspaceDocumentTabs(in: workspaceKey),
@@ -128,6 +129,14 @@ struct CenterThread: View {
         .onChange(of: model.pendingFirstSendRecoveryVersion) { _, _ in
             applyPendingFirstSendRecovery()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .composerSetPermissionMode)) { note in
+            guard !isReadOnly,
+                  let raw = note.userInfo?["mode"] as? String,
+                  let mode = PermissionMode(rawValue: raw),
+                  ComposerInputCore.availablePermissionModes(for: session.agent).contains(mode)
+            else { return }
+            Task { await changePermissionMode(to: mode) }
+        }
         .sheet(isPresented: $showingScheduler) {
             FollowUpSchedulerSheet(session: session, registry: model.registry)
         }
@@ -147,6 +156,11 @@ struct CenterThread: View {
         }
         .onChange(of: session.status) { _, newValue in
             if newValue == .running {
+                dispatchedQueuedTurnForCurrentIdle = false
+            }
+        }
+        .onChange(of: currentTurnState) { _, newValue in
+            if newValue == .streaming {
                 dispatchedQueuedTurnForCurrentIdle = false
             }
         }
@@ -188,16 +202,19 @@ struct CenterThread: View {
                     .font(TahoeFont.body(15, weight: .bold))
                     .foregroundStyle(t.fg)
                     .lineLimit(1)
+                    .accessibilityIdentifier("code.center.header.title")
                 HStack(spacing: 6) {
                     Text(sessionConfigurationSummary)
                         .font(TahoeFont.body(11.5))
                         .foregroundStyle(t.fg3)
                         .lineLimit(1)
+                        .accessibilityIdentifier("code.center.header.configuration")
                     if let checkpointStatusText {
                         Text("· \(checkpointStatusText)")
                             .font(TahoeFont.body(10.5))
                             .foregroundStyle(t.fg3)
                             .lineLimit(1)
+                            .accessibilityIdentifier("code.header.checkpoint-status")
                     }
                 }
             }
@@ -243,6 +260,7 @@ struct CenterThread: View {
                                 Text(densityLabel(option))
                             }
                         }
+                        .accessibilityIdentifier("code.header.density.\(option.rawValue)")
                     }
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
@@ -254,22 +272,36 @@ struct CenterThread: View {
                 .frame(width: 30)
                 .help("Transcript density")
                 .accessibilityLabel("Transcript density")
+                .accessibilityIdentifier("code.header.density")
+                .accessibilityValue(density.rawValue)
+                .overlay(alignment: .topLeading) {
+                    Text(density.rawValue)
+                        .font(.system(size: 1))
+                        .frame(width: 1, height: 1)
+                        .opacity(0.001)
+                        .accessibilityLabel("Selected density \(densityLabel(density))")
+                        .accessibilityIdentifier("code.header.density.selected.\(density.rawValue)")
+                }
                 Menu {
                     Button("Open terminal tab (⇧⌘T)") {
                         Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
                     }
                         .keyboardShortcut("t", modifiers: [.command, .shift])
                         .disabled(!model.canOpenWorkspaceTerminalTab(from: session))
+                        .accessibilityIdentifier("code.header.more-actions.terminal")
                     Button("Schedule follow-up…", systemImage: "clock") {
                         showingScheduler = true
                     }
+                    .accessibilityIdentifier("code.header.more-actions.schedule-follow-up")
                     Button("Create checkpoint", systemImage: "bookmark") {
                         Task { await createCheckpoint() }
                     }
+                    .accessibilityIdentifier("code.header.more-actions.create-checkpoint")
                     if let latest = workbenchState.latestCheckpoint(for: session.id) {
                         Button("Restore latest checkpoint…", systemImage: "arrow.uturn.backward") {
                             Task { await prepareCheckpointRestore(latest) }
                         }
+                        .accessibilityIdentifier("code.header.more-actions.restore-latest-checkpoint")
                     }
                     Button("Pop out window", systemImage: "rectangle.portrait.on.rectangle.portrait") {
                         NotificationCenter.default.post(
@@ -279,6 +311,7 @@ struct CenterThread: View {
                         )
                     }
                     .keyboardShortcut("n", modifiers: [.command, .option])
+                    .accessibilityIdentifier("code.header.more-actions.pop-out")
                     Divider()
                     if session.archivedAt == nil {
                         Button("Archive") {
@@ -292,6 +325,7 @@ struct CenterThread: View {
                                 AttachmentStaging.cleanupWorktree(at: wt, sessionId: session.id)
                             }
                         }
+                        .accessibilityIdentifier("code.header.more-actions.archive")
                     }
                     Button("End session", role: .destructive) {
                         Task {
@@ -303,6 +337,7 @@ struct CenterThread: View {
                             }
                         }
                     }
+                    .accessibilityIdentifier("code.header.more-actions.end-session")
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.system(size: 14))
@@ -312,16 +347,39 @@ struct CenterThread: View {
                 .menuStyle(.borderlessButton)
                 .frame(width: 30)
                 .accessibilityLabel("More actions")
+                .accessibilityIdentifier("code.header.more-actions")
             }
         }
         .padding(.horizontal, 22)
         .padding(.top, 14)
         .padding(.bottom, 10)
+        .accessibilityIdentifier("code.center.header")
+        .accessibilityValue(headerAccessibilityValue)
+        .overlay(alignment: .topLeading) {
+            Text(headerAccessibilityValue)
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(width: 1, height: 1)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(headerAccessibilityValue)
+                .accessibilityIdentifier("code.center.header.state")
+                .accessibilityValue(headerAccessibilityValue)
+        }
     }
 
     // v0.29.25: `permissionModeLabel` + `headerPermissionModes` deleted
     // alongside the redundant header pill. Composer's `PermissionModeChip`
     // owns mode-selection now.
+
+    private var headerAccessibilityValue: String {
+        [
+            session.id.uuidString,
+            headerLabel(for: session),
+            session.agent.rawValue,
+            session.model ?? "",
+            sessionConfigurationSummary
+        ].joined(separator: " ")
+    }
 
     private var workspaceDraftDefaults: ComposerStore.ChipDefaults {
         ComposerStore.ChipDefaults(
@@ -423,16 +481,16 @@ struct CenterThread: View {
         // default for any chat session that somehow reaches this sheet.
         let repoTrusted = AutopilotState.shared.isRepoTrusted(session.repoKey ?? "")
         let needsTrustGrant = !repoTrusted
+        let confirmBody = autopilotConfirmBody(willEnable: true, needsTrustGrant: needsTrustGrant)
         VStack(alignment: .leading, spacing: 12) {
             Label(
                 needsTrustGrant ? "Trust this repo for bypass mode?" : "Enable bypass mode?",
                 systemImage: needsTrustGrant ? "lock.shield.fill" : "bolt.fill"
             )
             .font(.system(size: 14, weight: .semibold))
-            Text(autopilotConfirmBody(willEnable: true, needsTrustGrant: needsTrustGrant))
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("code.permission.bypass.title")
+            BypassPermissionWarningText(text: confirmBody)
+                .frame(width: 420, alignment: .leading)
             if needsTrustGrant, let repoKey = session.repoKey {
                 Text("Repo: \((repoKey as NSString).lastPathComponent)")
                     .font(.system(size: 11, design: .monospaced))
@@ -440,6 +498,7 @@ struct CenterThread: View {
                     .padding(.vertical, 4)
                     .padding(.horizontal, 8)
                     .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+                    .accessibilityIdentifier("code.permission.bypass.repo")
             }
             HStack {
                 Spacer()
@@ -448,6 +507,7 @@ struct CenterThread: View {
                     pendingBypassMode = false
                 }
                 .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("code.permission.bypass.cancel")
                 Button(autopilotConfirmCTA(willEnable: true, needsTrustGrant: needsTrustGrant)) {
                     showingAutopilotConfirm = false
                     pendingBypassMode = false
@@ -459,10 +519,12 @@ struct CenterThread: View {
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .tint(terraCotta)
+                .accessibilityIdentifier("code.permission.bypass.confirm")
             }
         }
         .padding(20)
         .frame(width: 460)
+        .accessibilityIdentifier("code.permission.bypass-sheet")
     }
 
     private func autopilotConfirmBody(willEnable: Bool, needsTrustGrant: Bool) -> String {
@@ -492,7 +554,7 @@ struct CenterThread: View {
             // optimistic "+" session. Sits just above the composer (which stays
             // usable the whole time) and confirms each step with a fact.
             if #available(macOS 14, *), let progress = model.provisioningProgress[session.id] {
-                ProvisioningTrailView(progress: progress)
+                ProvisioningTrailView(progress: progress, agent: session.agent)
                     .padding(.horizontal, 12)
                     .padding(.top, 10)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -526,6 +588,7 @@ struct CenterThread: View {
                 .font(.system(size: 10, weight: .medium))
                 .buttonStyle(PressableButtonStyle())
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier("code.queue.clear")
             }
             ForEach(workbenchState.queuedSends(for: session.id)) { draft in
                 queuedDraftRow(draft)
@@ -534,6 +597,7 @@ struct CenterThread: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(Color.secondary.opacity(0.035))
+        .accessibilityIdentifier("code.queue.panel")
     }
 
     private func queuedDraftRow(_ draft: QueuedWorkbenchSend) -> some View {
@@ -552,6 +616,7 @@ struct CenterThread: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            .accessibilityIdentifier("code.queue.prompt")
             if !draft.attachmentPaths.isEmpty {
                 Label("\(draft.attachmentPaths.count)", systemImage: "paperclip")
                     .font(.system(size: 10, weight: .medium))
@@ -573,9 +638,10 @@ struct CenterThread: View {
                     .font(.system(size: 11, weight: .semibold))
             }
             .buttonStyle(PressableButtonStyle())
-            .disabled(session.status == .running || isDispatchingQueuedSend)
-            .help(session.status == .running ? "Dispatches when the current turn finishes" : "Send queued follow-up now")
+            .disabled(turnIsStreaming || isDispatchingQueuedSend)
+            .help(turnIsStreaming ? "Dispatches when the current turn finishes" : "Send queued prompt now")
             .padding(.top, 6)
+            .accessibilityIdentifier("code.queue.send")
             Button(role: .destructive) {
                 workbenchState.removeQueuedSend(id: draft.id)
             } label: {
@@ -585,6 +651,7 @@ struct CenterThread: View {
             .buttonStyle(PressableButtonStyle())
             .help("Delete queued follow-up")
             .padding(.top, 6)
+            .accessibilityIdentifier("code.queue.delete")
         }
     }
 
@@ -603,16 +670,20 @@ struct CenterThread: View {
                     .lineLimit(1)
             }
             Spacer()
-            Button("Restore") {
+            Button {
                 Task { await prepareCheckpointRestore(checkpoint) }
+            } label: {
+                Text("Restore")
             }
             .font(.system(size: 10, weight: .semibold))
             .buttonStyle(PressableButtonStyle())
             .help("Preview and restore this checkpoint")
+            .accessibilityIdentifier("code.checkpoint-strip.restore")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
         .background(Color.secondary.opacity(0.03))
+        .accessibilityIdentifier("code.checkpoint-strip")
     }
 
     @ViewBuilder
@@ -661,7 +732,7 @@ struct CenterThread: View {
             store: composerStore,
             presentationStore: presentationStore,
             catalog: catalog,
-            agentForModelPicker: session.agent,
+            agentForModelPicker: model.isProvisioning(session.id) ? composerStore.agent : session.agent,
             modelSupportsEffort: modelSupportsEffort,
             onSend: { Task { await performBoundSend() } },
             onQueue: { queueCurrentDraft() },
@@ -670,6 +741,14 @@ struct CenterThread: View {
             onChangePermissionMode: { newMode in
                 Task { await changePermissionMode(to: newMode) }
             },
+            onSelectModelConfiguration: model.isProvisioning(session.id) ? { agent, modelId, effort in
+                model.configureProvisionalLaunch(
+                    sessionId: session.id,
+                    agent: agent,
+                    modelId: modelId,
+                    effort: effort
+                )
+            } : nil,
             permissionMode: PermissionModeStore.shared.currentMode(for: session),
             onApprovePlan: {
                 Task {
@@ -678,7 +757,7 @@ struct CenterThread: View {
                 }
             },
             showApprovePlan: session.planText != nil,
-            sessionIsRunning: session.status == .running && !composerStore.isSending,
+            sessionIsRunning: turnIsStreaming && !composerStore.isSending,
             isReadOnly: isReadOnly,
             mentionSourceProvider: {
                 let openSessions = model.registry.sessions.filter { $0.id != session.id && $0.archivedAt == nil }
@@ -702,7 +781,18 @@ struct CenterThread: View {
             // mid-session reconfigure in v1 — the AgentDriver spawns with the
             // agent's defaults, so the chip is cosmetic. Skip the PTY-only
             // SessionConfigChanger swap so it doesn't fail with a toast.
-            guard !isRepoint, !isReadOnly, !isHarnessDriven, let new, new != session.model else { return }
+            guard !isRepoint, !isReadOnly, let new else { return }
+            if model.isProvisioning(session.id) {
+                let pendingAgent = catalog.entry(forId: new)?.provider ?? composerStore.agent
+                model.configureProvisionalLaunch(
+                    sessionId: session.id,
+                    agent: pendingAgent,
+                    modelId: new,
+                    effort: composerStore.effort
+                )
+                return
+            }
+            guard !isHarnessDriven, new != session.model else { return }
             if let entry = catalog.entry(forId: new) {
                 Task { await model.switchModel(sessionId: session.id, to: entry, effort: composerStore.effort) }
             }
@@ -710,7 +800,19 @@ struct CenterThread: View {
         .onChange(of: composerStore.effort) { _, new in
             let isRepoint = lastEffortChipSessionId != session.id
             lastEffortChipSessionId = session.id
-            guard !isRepoint, !isReadOnly, !isHarnessDriven, let new, new != session.effort else { return }
+            guard !isRepoint, !isReadOnly, let new else { return }
+            if model.isProvisioning(session.id),
+               let pendingModelId = composerStore.modelId ?? effectiveModelId {
+                let pendingAgent = catalog.entry(forId: pendingModelId)?.provider ?? composerStore.agent
+                model.configureProvisionalLaunch(
+                    sessionId: session.id,
+                    agent: pendingAgent,
+                    modelId: pendingModelId,
+                    effort: new
+                )
+                return
+            }
+            guard !isHarnessDriven, new != session.effort else { return }
             Task { await model.switchEffort(sessionId: session.id, to: new) }
         }
         .onChange(of: composerStore.mode) { _, new in
@@ -722,7 +824,7 @@ struct CenterThread: View {
     // MARK: - Send / interrupt / autopilot via daemon (P0 fixes)
 
     private var queueDrainKey: String {
-        "\(session.id.uuidString):\(session.status.rawValue):\(workbenchState.queuedSendCount(for: session.id))"
+        "\(session.id.uuidString):\(currentTurnState.rawValue):\(model.isProvisioning(session.id)):\(workbenchState.queuedSendCount(for: session.id))"
     }
 
     private func queueCurrentDraft() {
@@ -736,7 +838,8 @@ struct CenterThread: View {
     }
 
     private func drainQueuedSendsIfPossible() async {
-        guard session.status != .running,
+        guard !model.isProvisioning(session.id),
+              !turnIsStreaming,
               !isDispatchingQueuedSend,
               !dispatchedQueuedTurnForCurrentIdle,
               let draft = workbenchState.nextQueuedSend(for: session.id),
@@ -747,7 +850,7 @@ struct CenterThread: View {
     }
 
     private func dispatchQueuedDraft(_ draft: QueuedWorkbenchSend, manual: Bool) async {
-        guard session.status != .running else { return }
+        guard !turnIsStreaming else { return }
         guard draft.payload.hasContent else {
             workbenchState.removeQueuedSend(id: draft.id)
             return
@@ -933,6 +1036,8 @@ struct CenterThread: View {
         }
 
         let sender = MacComposerSender(port: Int(port), token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? ""))
+        let chatStore = model.chatStore(for: target)
+        let asFollowUp = Self.shouldSendPromptAsFollowUp(snapshot: chatStore?.snapshot)
         var stagedPaths: [URL] = []
         if let dir = AttachmentStaging.stagingDir(for: target) {
             for att in composerStore.attachments {
@@ -957,8 +1062,8 @@ struct CenterThread: View {
             try await sender.send(
                 sessionId: target.id,
                 body: body,
-                asFollowUp: true,
-                origin: .userComposer,
+                asFollowUp: asFollowUp,
+                origin: asFollowUp ? .userComposer : .userComposerFirstTurn,
                 idempotencyKey: "composer-send:\(target.id.uuidString):\(intentId)",
                 clientIntentId: intentId
             )
@@ -1147,6 +1252,7 @@ struct CenterThread: View {
     /// `.bypass` re-use the existing autopilot trust-grant sheet — for
     /// untrusted repos we surface the same confirm UX before flipping
     /// the daemon-side bypass flag.
+    @MainActor
     private func changePermissionMode(to newMode: PermissionMode) async {
         // `.bypass` is the trust-gated path; defer to the existing
         // autopilot confirm sheet so the user explicitly opts in.
@@ -1370,6 +1476,44 @@ struct CenterThread: View {
         AppDelegate.runtime?.agentControlServer.isHarnessLive(session.id) == true
     }
 
+    private var currentTurnState: TurnState {
+        model.chatStore(for: session)?.snapshot.currentTurnState ?? .idle
+    }
+
+    /// A session can be `.running` because the provider process is idle and
+    /// ready for its first prompt. Only the per-turn stream state means a prompt
+    /// should become a follow-up instead of a normal send.
+    private var turnIsStreaming: Bool {
+        let chatStore = model.chatStore(for: session)
+        return Self.hasActiveProviderTurn(
+            snapshot: chatStore?.snapshot,
+            pendingMessage: chatStore?.pendingMessage
+        )
+    }
+
+    static func shouldSendPromptAsFollowUp(snapshot: SessionChatStore.ChatSnapshot?) -> Bool {
+        guard let snapshot else { return false }
+        return snapshot.messages.contains { message in
+            switch message.kind {
+            case .userText, .assistantText, .toolCall, .toolResult:
+                return true
+            case .meta:
+                return false
+            }
+        }
+    }
+
+    static func hasActiveProviderTurn(
+        snapshot: SessionChatStore.ChatSnapshot?,
+        pendingMessage: SessionChatStore.PendingMessage?
+    ) -> Bool {
+        guard snapshot?.currentTurnState == .streaming else { return false }
+        if pendingMessage?.state == .sending {
+            return true
+        }
+        return shouldSendPromptAsFollowUp(snapshot: snapshot)
+    }
+
     private func applyPendingFirstSendRecovery() {
         guard let recovery = model.takeFirstSendRecovery(sessionId: session.id) else { return }
         composerStore.restoreDraft(
@@ -1383,16 +1527,54 @@ struct CenterThread: View {
         // ahead of the session update, the draft is safely restored to the
         // composer for a manual send.
         let harnessReady = AppDelegate.runtime?.agentControlServer.isHarnessLive(session.id) == true
-        let claudePtyReady = session.agent == .claude
-            && session.tmuxPaneId == nil
-            && session.tmuxWindowId == nil
-        let fresh = Date().timeIntervalSince(recovery.createdAt) <= 90
-        let selected = workbenchState.selectedSessionId == nil || workbenchState.selectedSessionId == session.id
-        let foreground = NSApp.isActive
-        if recovery.autoSendWhenReady, fresh, selected, foreground, claudePtyReady || harnessReady {
+        if Self.shouldAutoFlushFirstSendRecovery(
+            recovery: recovery,
+            session: session,
+            harnessReady: harnessReady,
+            selectedSessionId: workbenchState.selectedSessionId
+        ) {
             Task { await performBoundSend() }
         }
     }
 
+    static func shouldAutoFlushFirstSendRecovery(
+        recovery: PendingFirstSendRecovery,
+        session: AgentSession,
+        harnessReady: Bool,
+        selectedSessionId: UUID?,
+        now: Date = Date()
+    ) -> Bool {
+        guard recovery.autoSendWhenReady else { return false }
+        let fresh = now.timeIntervalSince(recovery.createdAt) <= 90
+        let selected = selectedSessionId == nil || selectedSessionId == session.id
+        let claudePtyReady = session.agent == .claude
+            && session.tmuxPaneId == nil
+            && session.tmuxWindowId == nil
+        return fresh && selected && (claudePtyReady || harnessReady)
+    }
+
     private var terraCotta: Color { SessionsV2Theme.accent }
+}
+
+private struct BypassPermissionWarningText: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(wrappingLabelWithString: text)
+        field.font = .systemFont(ofSize: 11)
+        field.textColor = .secondaryLabelColor
+        field.preferredMaxLayoutWidth = 420
+        field.maximumNumberOfLines = 0
+        field.lineBreakMode = .byWordWrapping
+        field.setContentCompressionResistancePriority(.required, for: .vertical)
+        field.setContentHuggingPriority(.required, for: .vertical)
+        field.setAccessibilityIdentifier("code.permission.bypass.body")
+        field.setAccessibilityLabel(text)
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        field.stringValue = text
+        field.setAccessibilityLabel(text)
+    }
 }

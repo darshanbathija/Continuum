@@ -274,7 +274,7 @@ public actor APNSGatewayClient {
         case .unregistered:
             // 410 — APNS says the device is no longer reachable. Purge.
             APNSPushDeviceTokenStore.shared.purgeByDeviceToken(input.deviceToken)
-            gatewayLogger.info("Push 410 unregistered in \(elapsed, privacy: .public)s; purged token prefix=\(String(input.deviceToken.prefix(8)), privacy: .public)")
+            gatewayLogger.info("Push 410 unregistered in \(elapsed, privacy: .public)s; purged device token")
         case .killSwitch:
             gatewayLogger.warning("Push 503 kill-switch active on gateway")
         case .rateLimited:

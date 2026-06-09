@@ -4,15 +4,15 @@ import ClawdmeterShared
 
 /// v0.23.2 T6 — sendOpencodePrompt path (AgentControlServer.swift:3808).
 ///
-/// The end-to-end happy path (POST → opencode `/session/<id>/message` →
+/// The end-to-end happy path (POST -> opencode `/session/<id>/message` ->
 /// SSE `message.added` round-trips back into the chat store) is exercised
-/// manually with a live `opencode serve` per the T11 smoke checklist.
+/// by `LiveDriveTests/testOpenCodeLiveDrive` behind the live-spend gate.
 /// These unit tests cover the surfaces we can drive without spinning the
 /// full daemon:
 ///   - the public BidirectionalMap lookup that gates the first
 ///     `opencode_session_not_registered` 503
-///   - the request body shape we POST to opencode (single text part plus
-///     optional OpenRouter model override)
+///   - the request body shape we POST to opencode (single text part, plus
+///     an optional OpenRouter model object when the Code picker selected one)
 ///   - the error JSON envelopes are valid JSON with the documented keys
 ///   - parser symmetry: a `message.added` round-trip into ChatMessage
 ///     produces the user-bubble shape we pre-echo on send
@@ -62,29 +62,28 @@ final class OpencodeSendTests: XCTestCase {
         XCTAssertEqual(parts?.first?["text"] as? String, prompt)
     }
 
-    func test_requestBody_omitsModelOverride_v0_29_9() throws {
-        // v0.29.9: Clawdmeter no longer second-guesses opencode's
-        // default model. We POST only `parts` and let `opencode serve`
-        // pick the upstream provider/model from the CLI's own state
-        // (populated by `opencode auth login` + `opencode` defaults).
-        //
-        // This test pins that no `model` or `variant` keys appear in
-        // the body Clawdmeter constructs — a regression here would
-        // re-introduce the cross-product bug where the desktop UI's
-        // model selection silently overrode the CLI default a user
-        // had just configured in Terminal.
+    func test_requestBody_includesModelOverrideForPickedOpenRouterModel() throws {
+        // When the user picked an OpenRouter model in the Code tab, the
+        // opencode message body must carry the matching OpenCode model object.
+        // The opencode-default sentinel still omits the override so the CLI's
+        // own default can run.
+        let model = try XCTUnwrap(AgentControlServer.opencodeModelObject(forModelId: "anthropic/claude-sonnet-4.6"))
         let body: [String: Any] = [
-            "parts": [["type": "text", "text": "hello"]]
+            "parts": [["type": "text", "text": "hello"]],
+            "model": model
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
         let decoded = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        XCTAssertNil(decoded?["model"])
+        let decodedModel = decoded?["model"] as? [String: String]
+        XCTAssertEqual(decodedModel?["providerID"], "openrouter")
+        XCTAssertEqual(decodedModel?["modelID"], "anthropic/claude-sonnet-4.6")
         XCTAssertNil(decoded?["variant"])
         XCTAssertNil(decoded?["providerID"])
         XCTAssertNil(decoded?["modelID"])
         let parts = decoded?["parts"] as? [[String: Any]]
         XCTAssertEqual(parts?.count, 1)
         XCTAssertEqual(parts?.first?["text"] as? String, "hello")
+        XCTAssertNil(AgentControlServer.opencodeModelObject(forModelId: "opencode-default"))
     }
 
     func test_requestBody_preservesPromptWithNewlines() throws {

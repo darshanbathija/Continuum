@@ -86,8 +86,10 @@ public final class JSONLTail: @unchecked Sendable {
         switch initialReadMode {
         case .fromBeginning:
             // Read what's already there so subscribers that need full
-            // history, such as done/plan wiring, can catch up.
-            drainHandle()
+            // history, such as done/plan wiring, can catch up. The drain
+            // happens after the vnode source is armed below so a concurrent
+            // append cannot land between initial drain and registration.
+            try? handle.seek(toOffset: 0)
         case .fromEnd:
             // SessionChatStore seeds recent history separately. Starting
             // this watcher at EOF prevents the first old JSONL line from
@@ -96,9 +98,9 @@ public final class JSONLTail: @unchecked Sendable {
             lineBuffer.removeAll(keepingCapacity: true)
         case .fromOffset(let offset):
             // SessionChatStore snapshots the file size before it seeds the
-            // recent history. Starting here closes the gap between that
-            // snapshot and vnode registration: drainHandle() captures bytes
-            // appended in the meantime, and DispatchSource covers the rest.
+            // recent history. Seek to that snapshot now, then drain after the
+            // vnode source is armed below so appends cannot slip between
+            // catch-up reading and registration.
             if let end = try? handle.seekToEnd() {
                 do {
                     try handle.seek(toOffset: min(offset, end))
@@ -106,7 +108,6 @@ public final class JSONLTail: @unchecked Sendable {
                     _ = try? handle.seekToEnd()
                 }
             }
-            drainHandle()
         }
 
         let src = DispatchSource.makeFileSystemObjectSource(
@@ -119,6 +120,7 @@ public final class JSONLTail: @unchecked Sendable {
         }
         src.resume()
         self.source = src
+        drainHandle()
     }
 
     private func watchParent() {

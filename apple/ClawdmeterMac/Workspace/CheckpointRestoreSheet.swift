@@ -58,6 +58,10 @@ struct CheckpointRestoreSheet: View {
                             .foregroundStyle(.orange)
                     }
                     if !plan.dirtyStatusLines.isEmpty {
+                        Text("Dirty status")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("code.checkpoint.restore-sheet.dirty-status-label")
                         Text(plan.dirtyStatusLines.joined(separator: "\n"))
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.secondary)
@@ -65,8 +69,17 @@ struct CheckpointRestoreSheet: View {
                             .padding(8)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                            .accessibilityIdentifier("code.checkpoint.restore-sheet.dirty-status")
+                            .overlay(alignment: .topLeading) {
+                                Text("Dirty status present")
+                                    .font(.system(size: 1))
+                                    .frame(width: 1, height: 1)
+                                    .opacity(0.001)
+                                    .accessibilityIdentifier("code.checkpoint.restore-sheet.dirty-status.present")
+                            }
                     }
                 }
+                .accessibilityIdentifier("code.checkpoint.restore-sheet.blocking-reasons")
             }
 
             Text("Preview")
@@ -81,20 +94,24 @@ struct CheckpointRestoreSheet: View {
             }
             .frame(minHeight: 240)
             .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+            .accessibilityIdentifier("code.checkpoint.restore-sheet.preview")
 
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("code.checkpoint.restore-sheet.cancel")
                 Button(role: .destructive, action: onRestore) {
                     Text(isRestoring ? "Restoring…" : "Restore to checkpoint")
                 }
                     .keyboardShortcut(.defaultAction)
                     .disabled(plan.isBlocked || isRestoring)
+                    .accessibilityIdentifier("code.checkpoint.restore-sheet.restore")
             }
         }
         .padding(20)
         .frame(minWidth: 620, minHeight: 520)
+        .accessibilityIdentifier("code.checkpoint.restore-sheet")
     }
 
     private func labeledRef(_ label: String, _ ref: String) -> some View {

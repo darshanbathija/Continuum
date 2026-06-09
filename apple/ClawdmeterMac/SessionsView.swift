@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import ClawdmeterShared
 
 /// Sessions/Code data layer. Owns `SessionsModel` (the @MainActor
@@ -274,13 +275,25 @@ struct PendingFirstSendRecovery: Equatable {
     var autoSendWhenReady: Bool = false
 }
 
+private struct ProvisionalLaunchConfiguration: Equatable {
+    let agent: AgentKind
+    let modelId: String
+    let effort: ReasoningEffort?
+}
+
+struct QuickSpawnProvisionalSession: Equatable {
+    let session: AgentSession
+    let slug: String
+    let worktreePath: String
+}
+
 struct WorkspaceDraftTab: Identifiable, Equatable {
     let id: UUID
     let workspaceKey: WorkspaceKey
-    let mode: SessionMode
-    let agent: AgentKind
-    let modelId: String?
-    let effort: ReasoningEffort?
+    var mode: SessionMode
+    var agent: AgentKind
+    var modelId: String?
+    var effort: ReasoningEffort?
     let createdAt: Date
 
     init(
@@ -307,6 +320,8 @@ struct WorkspaceTerminalTab: Identifiable, Equatable {
     let sessionId: UUID
     let workspaceKey: WorkspaceKey
     let paneRefId: UUID?
+    let isPendingDirectShell: Bool
+    let pendingTitle: String?
     let createdAt: Date
 
     init(
@@ -314,12 +329,16 @@ struct WorkspaceTerminalTab: Identifiable, Equatable {
         sessionId: UUID,
         workspaceKey: WorkspaceKey,
         paneRefId: UUID?,
+        isPendingDirectShell: Bool = false,
+        pendingTitle: String? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
         self.sessionId = sessionId
         self.workspaceKey = workspaceKey
         self.paneRefId = paneRefId
+        self.isPendingDirectShell = isPendingDirectShell
+        self.pendingTitle = pendingTitle
         self.createdAt = createdAt
     }
 }
@@ -368,6 +387,39 @@ public final class SessionsModel: ObservableObject {
     /// queue and auto-flush the moment provisioning completes.
     @Published public var provisioningSessionIds: Set<UUID> = []
     public func isProvisioning(_ id: UUID) -> Bool { provisioningSessionIds.contains(id) }
+    private var provisionalLaunchConfigurations: [UUID: ProvisionalLaunchConfiguration] = [:]
+
+    @discardableResult
+    public func configureProvisionalLaunch(
+        sessionId: UUID,
+        agent: AgentKind,
+        modelId: String,
+        effort: ReasoningEffort?
+    ) -> Bool {
+        guard provisioningSessionIds.contains(sessionId),
+              registry.session(id: sessionId) != nil
+        else { return false }
+        let next = ProvisionalLaunchConfiguration(agent: agent, modelId: modelId, effort: effort)
+        if provisionalLaunchConfigurations[sessionId] != next {
+            provisionalLaunchConfigurations[sessionId] = next
+            registry.previewLaunchConfiguration(
+                id: sessionId,
+                agent: agent,
+                model: modelId,
+                effort: effort
+            )
+        }
+        if let store = composerStores[sessionId] {
+            store.agent = agent
+            store.modelId = modelId
+            store.effort = effort
+        }
+        openOutsideJSONLPath = nil
+        selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = nil
+        openSessionId = sessionId
+        return true
+    }
 
     /// Live "Setup Trail" state per provisioning session — drives the animated
     /// step ribbon (worktree → files → setup → agent) shown above the composer.
@@ -400,11 +452,14 @@ public final class SessionsModel: ObservableObject {
     /// Currently-open session in the workspace center pane. nil = empty
     /// center pane (workspace still renders sidebar + review).
     @Published public var openSessionId: UUID?
-    @Published var draftWorkspaceTab: WorkspaceDraftTab?
+    @Published var workspaceDraftTabs: [WorkspaceDraftTab] = []
+    @Published var selectedWorkspaceDraftTabId: UUID?
     @Published var workspaceTerminalTabs: [WorkspaceTerminalTab] = []
     @Published var selectedWorkspaceTerminalTabId: UUID?
     @Published var workspaceDocumentTabs: [WorkspaceDocumentTab] = []
     @Published var selectedWorkspaceDocumentTabId: UUID?
+    private var terminalPanePromotionTasks: [UUID: Task<Void, Never>] = [:]
+    private var terminalPanePromotionTickets: [UUID: UUID] = [:]
 
     /// Per-session URL pin. Drives `chatStore(for:)` to tail the exact JSONL
     /// created for a Continuum-owned session instead of falling back to
@@ -441,6 +496,13 @@ public final class SessionsModel: ObservableObject {
         openOutsideJSONLPath != nil && openSessionId == nil
     }
 
+    var draftWorkspaceTab: WorkspaceDraftTab? {
+        guard let id = selectedWorkspaceDraftTabId,
+              let tab = workspaceDraftTabs.first(where: { $0.id == id })
+        else { return nil }
+        return tab
+    }
+
     var selectedWorkspaceTerminalTab: WorkspaceTerminalTab? {
         guard let id = selectedWorkspaceTerminalTabId,
               let tab = workspaceTerminalTabs.first(where: { $0.id == id }),
@@ -467,11 +529,28 @@ public final class SessionsModel: ObservableObject {
         return tab
     }
 
+    var activeWorkspaceKey: WorkspaceKey? {
+        if let tab = selectedWorkspaceDocumentTab {
+            return tab.workspaceKey
+        }
+        if let tab = selectedWorkspaceTerminalTab {
+            return tab.workspaceKey
+        }
+        if let session = openSession,
+           let key = WorkspaceKey.of(session) {
+            return key
+        }
+        if let draft = draftWorkspaceTab {
+            return draft.workspaceKey
+        }
+        return nil
+    }
+
     public func openOutsideSession(recent: RecentSession, repoKey: String, repoDisplayName: String) {
         let url = URL(fileURLWithPath: recent.path)
         let path = recent.path
         if let existing = syntheticOutsideSessions[path] {
-            draftWorkspaceTab = nil
+            selectedWorkspaceDraftTabId = nil
             selectedWorkspaceTerminalTabId = nil
             selectedWorkspaceDocumentTabId = nil
             openOutsideJSONLPath = path
@@ -503,7 +582,7 @@ public final class SessionsModel: ObservableObject {
         forcedChatStoreURLs[synth.id] = url
         needsURLRevalidation.insert(synth.id)
         externalForcedJSONLPaths.insert(Self.canonicalJSONLPath(path))
-        draftWorkspaceTab = nil
+        selectedWorkspaceDraftTabId = nil
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
         openOutsideJSONLPath = path
@@ -512,12 +591,14 @@ public final class SessionsModel: ObservableObject {
 
     public func closeChatView() {
         openSessionId = nil
+        selectedWorkspaceDraftTabId = nil
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
         openOutsideJSONLPath = nil
     }
 
     public func prepareNewSession(in repoKey: String?) {
+        selectedWorkspaceDraftTabId = nil
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
         openOutsideJSONLPath = nil
@@ -565,51 +646,100 @@ public final class SessionsModel: ObservableObject {
         }
         let effort = Self.quickSpawnEffort(for: agent, modelId: modelId, catalog: catalog)
         let sessionId = UUID()
-        // INSTANT (<250ms): expand the repo + create an optimistic provisional
-        // session (no worktree/pane yet) and open it, so the composer is usable
-        // immediately. The worktree (new branch + Conductor-style file copy +
-        // setup script) and the codex agent are provisioned in the BACKGROUND;
-        // a prompt typed/sent meanwhile is queued and auto-flushes on ready.
         expandedRepoKeys.insert(repoKey)
         selectedRepoKey = repoKey
+        selectedWorkspaceDraftTabId = nil
+        selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = nil
+        openOutsideJSONLPath = nil
+        openSessionId = nil
         provisioningSessionIds.insert(sessionId)
         provisioningProgress[sessionId] = ProvisioningProgress()
         Task { @MainActor in
             do {
-                let provisional = try await registry.create(
+                let provisional = try await createQuickSpawnProvisionalSession(
                     repoKey: repoKey,
-                    repoDisplayName: (repoKey as NSString).lastPathComponent,
+                    agent: agent,
+                    modelId: modelId,
+                    effort: effort,
+                    sessionId: sessionId
+                )
+                provisionAndAttachWorktree(
+                    sessionId: provisional.session.id,
+                    repoKey: repoKey,
                     agent: agent,
                     model: modelId,
-                    goal: nil,
-                    worktreePath: nil,
-                    tmuxWindowId: nil,
-                    tmuxPaneId: nil,
-                    planMode: true,
-                    mode: .worktree,
                     effort: effort,
-                    ownsWorktree: false,
-                    id: sessionId
-                )
-                openOutsideJSONLPath = nil
-                openSessionId = provisional.id
-                provisionAndAttachWorktree(
-                    sessionId: sessionId, repoKey: repoKey,
-                    agent: agent, model: modelId, effort: effort
+                    slug: provisional.slug
                 )
             } catch {
-                // registry.create failed → no session was persisted; just undo
-                // the optimistic UI state (trail + city reservation) + toast.
-                provisioningSessionIds.remove(sessionId)
-                provisioningProgress[sessionId] = nil
-                CityNamer.shared.release(sessionId)
-                if openSessionId == sessionId { openSessionId = nil }
                 NSLog("[Clawdmeter] quickSpawn provisional create failed repo=%@: %@", repoKey, "\(error)")
                 Self.postQuickSpawnFailureToast(
                     title: "Couldn’t start a session in \((repoKey as NSString).lastPathComponent)",
                     detail: Self.humanize(spawnError: error)
                 )
             }
+        }
+    }
+
+    /// Create the visible optimistic row for the Code-tab repo "+" action.
+    ///
+    /// This is intentionally daemon-free and fast: it reserves the eventual
+    /// city/worktree slug, inserts one provisional session keyed to that exact
+    /// worktree, and makes that row the sole active workspace selection. The
+    /// slower worktree provisioning and provider attach happen later.
+    @discardableResult
+    func createQuickSpawnProvisionalSession(
+        repoKey: String,
+        agent: AgentKind,
+        modelId: String,
+        effort: ReasoningEffort?,
+        sessionId: UUID = UUID()
+    ) async throws -> QuickSpawnProvisionalSession {
+        let city = CityNamer.shared.cityName(for: sessionId)
+        let slug = WorktreeManager.slug(city: city)
+        let provisionalWorktreePath = WorktreeManager.worktreePath(repoRoot: repoKey, slug: slug)
+
+        expandedRepoKeys.insert(repoKey)
+        selectedRepoKey = repoKey
+        selectedWorkspaceDraftTabId = nil
+        selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = nil
+        openOutsideJSONLPath = nil
+        openSessionId = nil
+        provisioningSessionIds.insert(sessionId)
+        provisioningProgress[sessionId] = ProvisioningProgress()
+
+        do {
+            let provisional = try await registry.create(
+                repoKey: repoKey,
+                repoDisplayName: (repoKey as NSString).lastPathComponent,
+                agent: agent,
+                model: modelId,
+                goal: nil,
+                worktreePath: provisionalWorktreePath,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                planMode: true,
+                mode: .worktree,
+                effort: effort,
+                ownsWorktree: false,
+                id: sessionId
+            )
+            openOutsideJSONLPath = nil
+            openSessionId = provisional.id
+            return QuickSpawnProvisionalSession(
+                session: provisional,
+                slug: slug,
+                worktreePath: provisionalWorktreePath
+            )
+        } catch {
+            provisioningSessionIds.remove(sessionId)
+            provisionalLaunchConfigurations.removeValue(forKey: sessionId)
+            provisioningProgress[sessionId] = nil
+            CityNamer.shared.release(sessionId)
+            if openSessionId == sessionId { openSessionId = nil }
+            throw error
         }
     }
 
@@ -624,13 +754,12 @@ public final class SessionsModel: ObservableObject {
         repoKey: String,
         agent: AgentKind,
         model: String,
-        effort: ReasoningEffort?
+        effort: ReasoningEffort?,
+        slug: String
     ) {
         Task { @MainActor in
             var provisionedWorktree: WorktreeManager.ProvisionedWorktree?
             do {
-                let city = CityNamer.shared.cityName(for: sessionId)
-                let slug = WorktreeManager.slug(city: city)
                 let provisioned = try await WorktreeManager.shared.provision(
                     repoRoot: repoKey,
                     slug: slug,
@@ -656,14 +785,18 @@ public final class SessionsModel: ObservableObject {
                     port: Int(port),
                     token: runtime.agentControlServer.localLoopbackToken
                 )
-                let createReq = NewSessionRequest(
-                    repoKey: repoKey, agent: agent, model: model, planMode: false,
-                    goal: nil, useWorktree: true, effort: effort,
-                    existingWorkspacePath: cwd, sessionId: sessionId
+                let createReq = makeProvisionedLaunchRequest(
+                    sessionId: sessionId,
+                    repoKey: repoKey,
+                    cwd: cwd,
+                    fallbackAgent: agent,
+                    fallbackModel: model,
+                    fallbackEffort: effort
                 )
                 _ = try await Self.withSpawnTimeout(30) {
                     try await sender.createSession(createReq)
                 }
+                provisionalLaunchConfigurations.removeValue(forKey: sessionId)
                 // Record the worktree provisioning metadata on the (adopted) row
                 // so end-of-session cleanup removes the worktree — the daemon
                 // adopt set worktree/owns but not the metadata (the Mac owns it).
@@ -701,6 +834,7 @@ public final class SessionsModel: ObservableObject {
                 }
             } catch {
                 provisioningSessionIds.remove(sessionId)
+                provisionalLaunchConfigurations.removeValue(forKey: sessionId)
                 provisioningProgress[sessionId] = nil
                 CityNamer.shared.release(sessionId)
                 // v27 timeout-race safety: createSession may have timed out on
@@ -737,6 +871,40 @@ public final class SessionsModel: ObservableObject {
                 )
             }
         }
+    }
+
+    func makeProvisionedLaunchRequest(
+        sessionId: UUID,
+        repoKey: String,
+        cwd: String,
+        fallbackAgent: AgentKind,
+        fallbackModel: String,
+        fallbackEffort: ReasoningEffort?
+    ) -> NewSessionRequest {
+        let launchSession = registry.session(id: sessionId)
+        let launchAgent: AgentKind
+        let launchModel: String?
+        let launchEffort: ReasoningEffort?
+        if let launchConfig = provisionalLaunchConfigurations[sessionId] {
+            launchAgent = launchConfig.agent
+            launchModel = launchConfig.modelId
+            launchEffort = launchConfig.effort
+        } else {
+            launchAgent = launchSession?.agent ?? fallbackAgent
+            launchModel = launchSession?.model ?? fallbackModel
+            launchEffort = launchSession?.effort ?? fallbackEffort
+        }
+        return NewSessionRequest(
+            repoKey: repoKey,
+            agent: launchAgent,
+            model: launchModel,
+            planMode: false,
+            goal: nil,
+            useWorktree: true,
+            effort: launchEffort,
+            existingWorkspacePath: cwd,
+            sessionId: sessionId
+        )
     }
 
     /// Bottom-anchored transient toast wired to MacRootView's existing
@@ -868,6 +1036,7 @@ public final class SessionsModel: ObservableObject {
     public let workspaceStore: WorkspaceStore
     public let repoEnvResolver: RepoEnvRuntimeResolver?
     private var refreshTask: Task<Void, Never>?
+    private var cancellables: Set<AnyCancellable> = []
 
     /// Per-session chat stores, LRU-bound to `maxResidentChatStores`. Each
     /// store holds a JSONLTail dispatch source, a parsed messages array,
@@ -888,6 +1057,10 @@ public final class SessionsModel: ObservableObject {
     /// selections) on every flip. Evicted alongside `chatStores` under the
     /// same LRU window so it stays bounded.
     private var composerStores: [UUID: ComposerStore] = [:]
+    /// Per-draft composer stores. Workspace drafts are not registry sessions yet,
+    /// so they need their own cache keyed by draft tab id; otherwise selecting
+    /// another draft can resurrect another tab's model/text state.
+    private var draftComposerStores: [UUID: ComposerStore] = [:]
     /// The legacy pane token a session's chat store was last resolved against,
     /// keyed by session id ("" = no legacy pane metadata). Forced revalidation
     /// handles runtime changes that can rotate JSONLs; otherwise we avoid the
@@ -936,6 +1109,13 @@ public final class SessionsModel: ObservableObject {
         self.registry = registry
         self.workspaceStore = workspaceStore
         self.repoEnvResolver = repoEnvResolver
+        registry.objectWillChange
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.objectWillChange.send()
+                }
+            }
+            .store(in: &cancellables)
     }
 
     /// Lazy `RepoOnboarding` service. Wired with self-referential closures
@@ -1156,6 +1336,23 @@ public final class SessionsModel: ObservableObject {
         return store
     }
 
+    func composerStore(for draft: WorkspaceDraftTab) -> ComposerStore {
+        if let existing = draftComposerStores[draft.id] { return existing }
+        let store = ComposerStore(mode: .emptyState(repoKey: draft.workspaceKey.repoKey, agent: draft.agent))
+        store.resetChipsForRepo(
+            draft.workspaceKey.repoKey,
+            defaults: ComposerStore.ChipDefaults(
+                agent: draft.agent,
+                modelId: draft.modelId,
+                effort: draft.effort,
+                mode: draft.mode,
+                planMode: false
+            )
+        )
+        draftComposerStores[draft.id] = store
+        return store
+    }
+
     /// G16: lazy PR mirror, attached to this session's chat store on first
     /// access so it can auto-detect a `gh pr create` URL.
     public func prMirror(for session: AgentSession) -> PRMirror {
@@ -1279,7 +1476,7 @@ public final class SessionsModel: ObservableObject {
     public func openVisibleSession(at index: Int) {
         guard index >= 1, index <= visibleSessions.count else { return }
         let session = visibleSessions[index - 1]
-        draftWorkspaceTab = nil
+        selectedWorkspaceDraftTabId = nil
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
         openOutsideJSONLPath = nil
@@ -1287,9 +1484,10 @@ public final class SessionsModel: ObservableObject {
     }
 
     public func openSession(_ session: AgentSession) {
-        // Do NOT clear draftWorkspaceTab here: switching to another tab must not
-        // discard an in-progress "Untitled" draft. The draft persists in the tab
-        // strip until the user closes it (X) or it's consumed by a spawn.
+        // Do not remove draft tabs here: switching to another tab must not
+        // discard in-progress "Untitled" drafts. Drafts persist in the tab strip
+        // until the user closes them or they are consumed by a spawn.
+        selectedWorkspaceDraftTabId = nil
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
         openOutsideJSONLPath = nil
@@ -1297,34 +1495,106 @@ public final class SessionsModel: ObservableObject {
     }
 
     /// Re-select the in-progress draft tab (show its composer) without losing it.
-    public func selectDraftWorkspaceTab() {
-        guard draftWorkspaceTab != nil else { return }
+    func selectDraftWorkspaceTab(_ tab: WorkspaceDraftTab? = nil) {
+        let target = tab ?? draftWorkspaceTab
+        guard let target,
+              workspaceDraftTabs.contains(where: { $0.id == target.id })
+        else { return }
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
         openOutsideJSONLPath = nil
+        selectedWorkspaceDraftTabId = target.id
         openSessionId = nil
     }
 
-    public func openDraftWorkspaceTab(
+    func updateDraftWorkspaceTabConfiguration(
+        id: UUID,
+        agent: AgentKind,
+        modelId: String?,
+        effort: ReasoningEffort?
+    ) {
+        guard let index = workspaceDraftTabs.firstIndex(where: { $0.id == id }) else { return }
+        var tab = workspaceDraftTabs[index]
+        guard tab.agent != agent || tab.modelId != modelId || tab.effort != effort else { return }
+        tab.agent = agent
+        tab.modelId = modelId
+        tab.effort = effort
+        workspaceDraftTabs[index] = tab
+    }
+
+    func workspaceDraftTabs(in workspaceKey: WorkspaceKey) -> [WorkspaceDraftTab] {
+        workspaceDraftTabs
+            .filter { $0.workspaceKey == workspaceKey }
+            .sorted {
+                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+    }
+
+    @discardableResult
+    func openDraftWorkspaceTab(
         from session: AgentSession,
         defaults: ComposerStore.ChipDefaults
-    ) {
-        guard let key = WorkspaceKey.of(session) else { return }
+    ) -> WorkspaceDraftTab? {
+        guard let key = WorkspaceKey.of(session) else { return nil }
+        return openDraftWorkspaceTab(in: key, mode: defaults.mode, defaults: defaults)
+    }
+
+    @discardableResult
+    func openDraftWorkspaceTab(
+        in key: WorkspaceKey,
+        mode: SessionMode,
+        defaults: ComposerStore.ChipDefaults
+    ) -> WorkspaceDraftTab {
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
         openOutsideJSONLPath = nil
-        draftWorkspaceTab = WorkspaceDraftTab(
+        let tab = WorkspaceDraftTab(
             workspaceKey: key,
-            mode: session.mode,
+            mode: mode,
             agent: defaults.agent,
             modelId: defaults.modelId,
             effort: defaults.effort
         )
+        workspaceDraftTabs.append(tab)
+        selectedWorkspaceDraftTabId = tab.id
         openSessionId = nil
+        return tab
     }
 
-    public func clearDraftWorkspaceTab() {
-        draftWorkspaceTab = nil
+    @discardableResult
+    func openDraftWorkspaceTab(from draft: WorkspaceDraftTab) -> WorkspaceDraftTab {
+        openDraftWorkspaceTab(
+            in: draft.workspaceKey,
+            mode: draft.mode,
+            defaults: ComposerStore.ChipDefaults(
+                agent: draft.agent,
+                modelId: draft.modelId,
+                effort: draft.effort,
+                mode: draft.mode,
+                planMode: false
+            )
+        )
+    }
+
+    func canOpenNewWorkspaceChatDraftTab() -> Bool {
+        openSession != nil || draftWorkspaceTab != nil
+    }
+
+    func clearDraftWorkspaceTab(_ tab: WorkspaceDraftTab? = nil) {
+        guard let id = tab?.id ?? selectedWorkspaceDraftTabId else { return }
+        let removed = workspaceDraftTabs.first { $0.id == id }
+        workspaceDraftTabs.removeAll { $0.id == id }
+        if selectedWorkspaceDraftTabId == id {
+            if let workspaceKey = removed?.workspaceKey,
+               let replacement = workspaceDraftTabs(in: workspaceKey).last {
+                selectedWorkspaceDraftTabId = replacement.id
+                openSessionId = nil
+            } else {
+                selectedWorkspaceDraftTabId = nil
+            }
+        }
+        draftComposerStores.removeValue(forKey: id)
     }
 
     /// #185-named convenience over `openDraftWorkspaceTab(from:defaults:)`.
@@ -1346,19 +1616,12 @@ public final class SessionsModel: ObservableObject {
             mode: session.mode,
             planMode: false
         )
-        openDraftWorkspaceTab(from: session, defaults: defaults)
-        // `openDraftWorkspaceTab` minted a fresh `draftWorkspaceTab` with the
-        // session's workspace key. Return its id when it's the one we just
-        // created (a re-entrant call elsewhere could in principle have raced,
-        // so guard on the workspaceKey match).
-        if let draft = draftWorkspaceTab, draft.workspaceKey == key {
-            return draft.id
-        }
-        return nil
+        let draft = openDraftWorkspaceTab(from: session, defaults: defaults)
+        return draft?.workspaceKey == key ? draft?.id : nil
     }
 
     /// #185-named convenience around `openOrCreateWorkspaceTerminalTab(from:)`.
-    /// Resolves the parent session by id, validates the terminal-spawn gate,
+    /// Resolves the parent session by id, validates the worktree-terminal gate,
     /// and forwards. Returns true iff the spawn was actually issued.
     @discardableResult
     public func spawnSameWorkspaceTerminalTab(parentId: UUID) async -> Bool {
@@ -1412,11 +1675,20 @@ public final class SessionsModel: ObservableObject {
               session.tmuxPaneId == nil,
               session.tmuxWindowId == nil
         else { return false }
-        if let binding = session.runtimeBinding,
-           !binding.capabilities.supportsTerminal {
-            return false
-        }
         return true
+    }
+
+    func sourceForNewWorkspaceTerminalTab() -> AgentSession? {
+        if let session = openSession, canOpenWorkspaceTerminalTab(from: session) {
+            return session
+        }
+        guard let draft = draftWorkspaceTab else { return nil }
+        return WorkspaceKey.siblings(of: draft.workspaceKey, in: registry.sessions)
+            .first(where: { canOpenWorkspaceTerminalTab(from: $0) })
+    }
+
+    func canOpenNewWorkspaceTerminalTab() -> Bool {
+        sourceForNewWorkspaceTerminalTab() != nil
     }
 
     func selectWorkspaceTerminalTab(_ tab: WorkspaceTerminalTab) {
@@ -1425,26 +1697,27 @@ public final class SessionsModel: ObservableObject {
               let sessionKey = WorkspaceKey.of(session),
               sessionKey == tab.workspaceKey
         else { return }
-        draftWorkspaceTab = nil
+        selectedWorkspaceDraftTabId = nil
         openOutsideJSONLPath = nil
         openSessionId = tab.sessionId
         selectedWorkspaceDocumentTabId = nil
         selectedWorkspaceTerminalTabId = tab.id
     }
 
+    @discardableResult
     func openWorkspaceTerminalTab(
         from session: AgentSession,
         paneRefId: UUID? = nil,
         createdAt: Date = Date()
-    ) {
+    ) -> WorkspaceTerminalTab? {
         guard canOpenWorkspaceTerminalTab(from: session),
               let workspaceKey = WorkspaceKey.of(session)
-        else { return }
+        else { return nil }
         if let existing = workspaceTerminalTabs.first(where: {
             $0.sessionId == session.id && $0.paneRefId == paneRefId && $0.workspaceKey == workspaceKey
         }) {
             selectWorkspaceTerminalTab(existing)
-            return
+            return existing
         }
         let tab = WorkspaceTerminalTab(
             sessionId: session.id,
@@ -1454,22 +1727,109 @@ public final class SessionsModel: ObservableObject {
         )
         workspaceTerminalTabs.append(tab)
         selectWorkspaceTerminalTab(tab)
+        return tab
     }
 
     func openOrCreateWorkspaceTerminalTab(from session: AgentSession) async {
-        guard canOpenWorkspaceTerminalTab(from: session) else { return }
-        let primary = workspaceTerminalTabs.first {
-            $0.sessionId == session.id && $0.paneRefId == nil
+        guard canOpenWorkspaceTerminalTab(from: session),
+              let workspaceKey = WorkspaceKey.of(session) else { return }
+        let existingTabs = workspaceTerminalTabs.filter {
+            $0.sessionId == session.id && $0.workspaceKey == workspaceKey
         }
-        if primary == nil {
-            openWorkspaceTerminalTab(from: session)
+        let visibleTitle = existingTabs.isEmpty ? "Shell" : "Pane \(existingTabs.count + 1)"
+        guard let pendingTab = openPendingWorkspaceTerminalTab(
+            from: session,
+            workspaceKey: workspaceKey,
+            title: visibleTitle
+        ) else {
+            if let last = existingTabs.sorted(by: { $0.createdAt < $1.createdAt }).last {
+                selectWorkspaceTerminalTab(last)
+            }
             return
         }
-        if let _ = await addTerminalPane(sessionId: session.id),
-           let paneRef = registry.session(id: session.id)?.terminalPanes.last {
-            openWorkspaceTerminalTab(from: session, paneRefId: paneRef.id)
-        } else if let primary {
-            selectWorkspaceTerminalTab(primary)
+
+        let ticket = UUID()
+        let previousPromotion = terminalPanePromotionTasks[session.id]
+        terminalPanePromotionTickets[session.id] = ticket
+        let promotion = Task { @MainActor [weak self] in
+            await previousPromotion?.value
+            guard let self else { return }
+            await self.completePendingWorkspaceTerminalTab(
+                tabId: pendingTab.id,
+                sessionId: session.id,
+                requestedTitle: visibleTitle
+            )
+            if self.terminalPanePromotionTickets[session.id] == ticket {
+                self.terminalPanePromotionTickets.removeValue(forKey: session.id)
+                self.terminalPanePromotionTasks.removeValue(forKey: session.id)
+            }
+        }
+        terminalPanePromotionTasks[session.id] = promotion
+    }
+
+    @discardableResult
+    private func openPendingWorkspaceTerminalTab(
+        from session: AgentSession,
+        workspaceKey: WorkspaceKey,
+        title: String,
+        createdAt: Date = Date()
+    ) -> WorkspaceTerminalTab? {
+        guard canOpenWorkspaceTerminalTab(from: session),
+              WorkspaceKey.of(session) == workspaceKey else { return nil }
+        let tab = WorkspaceTerminalTab(
+            sessionId: session.id,
+            workspaceKey: workspaceKey,
+            paneRefId: nil,
+            isPendingDirectShell: true,
+            pendingTitle: title,
+            createdAt: createdAt
+        )
+        workspaceTerminalTabs.append(tab)
+        selectWorkspaceTerminalTab(tab)
+        return tab
+    }
+
+    private func completePendingWorkspaceTerminalTab(
+        tabId: UUID,
+        sessionId: UUID,
+        requestedTitle: String?
+    ) async {
+        guard workspaceTerminalTabs.contains(where: { $0.id == tabId }) else { return }
+        guard let paneRef = await addTerminalPane(sessionId: sessionId, title: requestedTitle) else {
+            removePendingWorkspaceTerminalTab(tabId: tabId)
+            return
+        }
+
+        let promoted = promotePendingWorkspaceTerminalTab(tabId: tabId, paneRefId: paneRef.id)
+        if !promoted {
+            await closeTerminalPane(sessionId: sessionId, paneRef: paneRef)
+        }
+    }
+
+    @discardableResult
+    private func promotePendingWorkspaceTerminalTab(tabId: UUID, paneRefId: UUID) -> Bool {
+        guard let index = workspaceTerminalTabs.firstIndex(where: { $0.id == tabId }) else { return false }
+        let pending = workspaceTerminalTabs[index]
+        let wasSelected = selectedWorkspaceTerminalTabId == pending.id
+        workspaceTerminalTabs[index] = WorkspaceTerminalTab(
+            id: pending.id,
+            sessionId: pending.sessionId,
+            workspaceKey: pending.workspaceKey,
+            paneRefId: paneRefId,
+            isPendingDirectShell: false,
+            pendingTitle: nil,
+            createdAt: pending.createdAt
+        )
+        if wasSelected {
+            selectedWorkspaceTerminalTabId = pending.id
+        }
+        return true
+    }
+
+    private func removePendingWorkspaceTerminalTab(tabId: UUID) {
+        workspaceTerminalTabs.removeAll { $0.id == tabId }
+        if selectedWorkspaceTerminalTabId == tabId {
+            selectedWorkspaceTerminalTabId = nil
         }
     }
 
@@ -1495,7 +1855,7 @@ public final class SessionsModel: ObservableObject {
               let sessionKey = WorkspaceKey.of(session),
               sessionKey == tab.workspaceKey
         else { return }
-        draftWorkspaceTab = nil
+        selectedWorkspaceDraftTabId = nil
         openOutsideJSONLPath = nil
         openSessionId = tab.sessionId
         selectedWorkspaceTerminalTabId = nil
@@ -1673,7 +2033,7 @@ public final class SessionsModel: ObservableObject {
         let session = try await sender.createSession(req)
         recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
         expandedRepoKeys.insert(repoPath)
-        draftWorkspaceTab = nil
+        selectedWorkspaceDraftTabId = nil
         openOutsideJSONLPath = nil
         openSessionId = session.id
         await refresh()
@@ -1906,7 +2266,7 @@ public final class SessionsModel: ObservableObject {
             payload: ["repo": paths.cwd, "agent": "opencode", "opencodeID": opencodeID]
         )
         expandedRepoKeys.insert(repoPath)
-        draftWorkspaceTab = nil
+        selectedWorkspaceDraftTabId = nil
         openOutsideJSONLPath = nil
         openSessionId = session.id
         await self.refresh()
@@ -2099,22 +2459,24 @@ public final class SessionsModel: ObservableObject {
 
     /// Spawn a new direct shell terminal and add a TerminalPaneRef to the registry.
     @discardableResult
-    public func addTerminalPane(sessionId: UUID) async -> String? {
+    public func addTerminalPane(sessionId: UUID, title requestedTitle: String? = nil) async -> TerminalPaneRef? {
         guard let session = registry.session(id: sessionId),
               session.tmuxPaneId == nil,
               session.tmuxWindowId == nil else { return nil }
+        let trimmedTitle = requestedTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let title = trimmedTitle.isEmpty ? "Pane \(session.terminalPanes.count + 2)" : trimmedTitle
         do {
             let host = try await TerminalPtyRegistry.shared.spawnShell(
                 cwd: session.effectiveCwd,
-                title: "Pane \(session.terminalPanes.count + 2)"
+                title: title
             )
             let ref = TerminalPaneRef(
                 paneId: host.id.uuidString,
-                title: "Pane \(session.terminalPanes.count + 2)",
+                title: title,
                 isPrimary: false
             )
             try await registry.addTerminalPane(sessionId: sessionId, pane: ref)
-            return ref.paneId
+            return ref
         } catch {
             return nil
         }

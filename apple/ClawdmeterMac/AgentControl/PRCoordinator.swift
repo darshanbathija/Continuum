@@ -157,10 +157,10 @@ final class PRCoordinator: ObservableObject {
         if let url {
             manualURL = url
             lastError = nil
+            await refreshDaemonOnce()
         } else {
             lastError = "Create PR failed"
         }
-        await refreshDaemonOnce()
     }
 
     func approve() async {
@@ -214,10 +214,10 @@ final class PRCoordinator: ObservableObject {
             if let pr = response.pr {
                 snapshot = Self.snapshot(from: pr)
             }
+            await refreshDaemonOnce()
         } else {
             lastError = response?.error ?? "Merge failed"
         }
-        await refreshDaemonOnce()
     }
 
     private func startDaemonPolling() {

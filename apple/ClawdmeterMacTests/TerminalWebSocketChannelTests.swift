@@ -98,6 +98,47 @@ final class TerminalWebSocketChannelTests: XCTestCase {
         }
     }
 
+    func test_connectionStatePresentationSurfacesReconnectAndFailure() {
+        XCTAssertEqual(
+            TerminalConnectionState.connected.statusText(hasVisibleOutput: true),
+            "Terminal connected"
+        )
+        XCTAssertEqual(
+            TerminalConnectionState.connected.statusText(hasVisibleOutput: false),
+            "Terminal starting"
+        )
+        XCTAssertEqual(
+            TerminalConnectionState.reconnecting(attempt: 2).statusText(hasVisibleOutput: true),
+            "Terminal reconnecting"
+        )
+        XCTAssertEqual(
+            TerminalConnectionState.failed.statusText(hasVisibleOutput: true),
+            "Terminal connection failed"
+        )
+        XCTAssertEqual(TerminalConnectionState.reconnecting(attempt: 1).pendingTitle, "Reconnecting to terminal")
+        XCTAssertEqual(TerminalConnectionState.failed.pendingStatusText, "Try reopening the terminal tab")
+        XCTAssertTrue(TerminalConnectionState.reconnecting(attempt: 1).isAttentionState)
+    }
+
+    func test_macTerminalCoordinatorPublishesReconnectStateForReadFailure() {
+        var states: [TerminalConnectionState] = []
+        let coordinator = MacTerminalView.Coordinator(
+            sessionId: UUID(),
+            host: "127.0.0.1",
+            wsPort: 9,
+            token: "test-token",
+            paneId: nil,
+            onFirstOutput: nil,
+            onConnectionStateChange: { states.append($0) }
+        )
+        defer { coordinator.disconnect() }
+
+        coordinator.simulateReadFailureForTesting()
+
+        XCTAssertEqual(states.first, .reconnecting(attempt: 1))
+        XCTAssertEqual(coordinator.connectionState, .reconnecting(attempt: 1))
+    }
+
     private func waitUntil(
         timeout: TimeInterval = 2,
         predicate: @escaping () async -> Bool

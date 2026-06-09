@@ -125,6 +125,31 @@ final class WorkbenchStateTests: XCTestCase {
         XCTAssertEqual(reloaded.snapshot.checkpoints[sessionId]?.first?.turnId, "turn-1")
     }
 
+    func test_latestCheckpointIgnoresSafetyRestoreSnapshots() {
+        let sessionId = UUID()
+        let state = WorkbenchState(store: WorkbenchStateStore(storeURL: storeURL))
+        let manual = CheckpointStateSnapshot(
+            sessionId: sessionId,
+            refName: "refs/clawdmeter/checkpoints/\(sessionId.uuidString)/manual",
+            turnId: "turn-1",
+            createdAt: Date(timeIntervalSince1970: 100),
+            summary: "Manual checkpoint"
+        )
+        let safety = CheckpointStateSnapshot(
+            sessionId: sessionId,
+            refName: "refs/clawdmeter/checkpoints/\(sessionId.uuidString)/safety-101",
+            turnId: "safety-101",
+            createdAt: Date(timeIntervalSince1970: 101),
+            summary: "Safety before restoring \(manual.refName)"
+        )
+
+        state.recordCheckpoint(manual)
+        state.recordCheckpoint(safety)
+
+        XCTAssertEqual(state.checkpoints(for: sessionId).map(\.id), [safety.id, manual.id])
+        XCTAssertEqual(state.latestCheckpoint(for: sessionId)?.id, manual.id)
+    }
+
     func test_recordCheckpointInvalidatesLifecycleSubscribers() {
         let sessionId = UUID()
         let state = WorkbenchState(store: WorkbenchStateStore(storeURL: storeURL))
@@ -183,6 +208,151 @@ final class WorkbenchStateTests: XCTestCase {
 
         let average = (CFAbsoluteTimeGetCurrent() - started) / Double(iterations)
         XCTAssertLessThan(average, 0.25)
+    }
+
+    func test_codeWorkbenchLocalControlsSurfaceVisibleFeedbackWithin100ms() {
+        let sessionA = UUID()
+        let sessionB = UUID()
+        let state = WorkbenchState(store: WorkbenchStateStore(storeURL: storeURL))
+        state.selectSession(sessionA)
+
+        assertCodeTabFeedbackLatency(
+            name: "right-pane tab selection",
+            cases: WorkbenchPaneTab.allCases,
+            iterations: 12
+        ) { tab in
+            state.selectRightPane(tab)
+        } verify: { tab in
+            XCTAssertEqual(state.selectedRightPane, tab)
+            XCTAssertEqual(state.snapshot.selectedRightPaneBySession[sessionA], tab)
+            if tab != .browser {
+                XCTAssertNil(state.immersiveBrowserSessionId)
+            }
+        }
+
+        assertCodeTabFeedbackLatency(
+            name: "review-pane visibility toggle",
+            cases: [true, false],
+            iterations: 50
+        ) { visible in
+            state.setReviewPaneVisible(visible)
+        } verify: { visible in
+            XCTAssertEqual(state.showingReviewPane, visible)
+        }
+
+        assertCodeTabFeedbackLatency(
+            name: "transcript density selection",
+            cases: TranscriptDensity.allCases,
+            iterations: 20
+        ) { density in
+            state.setDensity(density)
+        } verify: { density in
+            XCTAssertEqual(state.density, density)
+        }
+
+        assertCodeTabFeedbackLatency(
+            name: "preview chip browser routing",
+            cases: [false, true],
+            iterations: 25
+        ) { forceRestart in
+            state.requestPreview(sessionId: sessionB, forceRestart: forceRestart)
+        } verify: { forceRestart in
+            XCTAssertEqual(state.selectedSessionId, sessionB)
+            XCTAssertEqual(state.selectedRightPane, .browser)
+            XCTAssertEqual(state.immersiveBrowserSessionId, sessionB)
+            XCTAssertFalse(state.showingReviewPane)
+            XCTAssertEqual(state.previewIntent?.sessionId, sessionB)
+            XCTAssertEqual(state.previewIntent?.forceRestart, forceRestart)
+        }
+
+        let queuedDrafts = (0..<40).map { index in
+            QueuedWorkbenchSend(
+                sessionId: sessionA,
+                text: "follow-up \(index)",
+                createdAt: Date(timeIntervalSince1970: Double(index))
+            )
+        }
+
+        assertCodeTabFeedbackLatency(
+            name: "queued follow-up row insertion",
+            cases: queuedDrafts
+        ) { draft in
+            state.queueSend(draft)
+        } verify: { draft in
+            XCTAssertTrue(state.queuedSends(for: sessionA).contains { $0.id == draft.id })
+        }
+
+        assertCodeTabFeedbackLatency(
+            name: "queued follow-up row edit",
+            cases: queuedDrafts
+        ) { draft in
+            state.updateQueuedSend(id: draft.id, text: "edited \(draft.id.uuidString.prefix(6))")
+        } verify: { draft in
+            XCTAssertTrue(state.queuedSends(for: sessionA).contains {
+                $0.id == draft.id && $0.text.hasPrefix("edited ")
+            })
+        }
+
+        assertCodeTabFeedbackLatency(
+            name: "queued follow-up row removal",
+            cases: queuedDrafts
+        ) { draft in
+            state.removeQueuedSend(id: draft.id)
+        } verify: { draft in
+            XCTAssertFalse(state.queuedSends(for: sessionA).contains { $0.id == draft.id })
+        }
+    }
+
+    func test_diffToolbarDescriptorExposesStableTargetsAndEnabledState() {
+        let empty = TahoeDiffPreviewPane.toolbarDescriptor(fileCount: 0, unviewedCount: 0)
+        XCTAssertEqual(empty.fileCountText, "0 files")
+        XCTAssertEqual(empty.unviewedCountText, "0 unviewed")
+        XCTAssertFalse(empty.nextEnabled)
+        XCTAssertFalse(empty.markAllEnabled)
+
+        let populated = TahoeDiffPreviewPane.toolbarDescriptor(fileCount: 3, unviewedCount: 2)
+        XCTAssertEqual(populated.fileCountText, "3 files")
+        XCTAssertEqual(populated.unviewedCountText, "2 unviewed")
+        XCTAssertTrue(populated.nextEnabled)
+        XCTAssertTrue(populated.markAllEnabled)
+
+        XCTAssertEqual(TahoeDiffPreviewPane.ToolbarDescriptor.accessibilityIdentifier, "code.diff.toolbar")
+        XCTAssertEqual(TahoeDiffPreviewPane.ToolbarDescriptor.fileCountAccessibilityIdentifier, "code.diff.files-count")
+        XCTAssertEqual(TahoeDiffPreviewPane.ToolbarDescriptor.unviewedCountAccessibilityIdentifier, "code.diff.unviewed-count")
+        XCTAssertEqual(TahoeDiffPreviewPane.ToolbarDescriptor.layoutAccessibilityIdentifier, "code.diff.layout")
+        XCTAssertEqual(TahoeDiffPreviewPane.ToolbarDescriptor.nextAccessibilityIdentifier, "code.diff.next-unviewed")
+        XCTAssertEqual(TahoeDiffPreviewPane.ToolbarDescriptor.markAllAccessibilityIdentifier, "code.diff.mark-all-viewed")
+    }
+
+    func test_diffRowActionDescriptorsExposeStableTargets() {
+        let unviewedFile = TahoeDiffPreviewPane.fileActionDescriptors(viewed: false)
+        XCTAssertEqual(TahoeDiffPreviewPane.FileActionDescriptors.rowAccessibilityIdentifier, "code.diff.file.row")
+        XCTAssertEqual(unviewedFile.reviewed.title, "Mark reviewed")
+        XCTAssertEqual(unviewedFile.reviewed.accessibilityIdentifier, "code.diff.file.mark-reviewed")
+        XCTAssertTrue(unviewedFile.reviewed.isEnabled)
+        XCTAssertEqual(unviewedFile.flagChanges.title, "Flag changes")
+        XCTAssertEqual(unviewedFile.flagChanges.accessibilityIdentifier, "code.diff.file.flag-changes")
+        XCTAssertEqual(unviewedFile.markViewed.title, "Mark viewed")
+        XCTAssertEqual(unviewedFile.markViewed.accessibilityIdentifier, "code.diff.file.mark-viewed")
+        XCTAssertTrue(unviewedFile.markViewed.isEnabled)
+        XCTAssertEqual(unviewedFile.open.title, "Open")
+        XCTAssertEqual(unviewedFile.open.accessibilityIdentifier, "code.diff.file.open")
+
+        let viewedFile = TahoeDiffPreviewPane.fileActionDescriptors(viewed: true)
+        XCTAssertEqual(viewedFile.markViewed.title, "Viewed")
+        XCTAssertFalse(viewedFile.markViewed.isEnabled)
+
+        let expandedHunk = TahoeDiffPreviewPane.hunkActionDescriptors(collapsed: false)
+        XCTAssertEqual(TahoeDiffPreviewPane.HunkActionDescriptors.rowAccessibilityIdentifier, "code.diff.hunk.row")
+        XCTAssertEqual(expandedHunk.toggle.title, "Collapse hunk")
+        XCTAssertEqual(expandedHunk.toggle.accessibilityIdentifier, "code.diff.hunk.toggle-collapse")
+        XCTAssertEqual(expandedHunk.toggle.systemImage, "chevron.down")
+        XCTAssertEqual(expandedHunk.explain.title, "Explain")
+        XCTAssertEqual(expandedHunk.explain.accessibilityIdentifier, "code.diff.hunk.explain")
+
+        let collapsedHunk = TahoeDiffPreviewPane.hunkActionDescriptors(collapsed: true)
+        XCTAssertEqual(collapsedHunk.toggle.title, "Expand hunk")
+        XCTAssertEqual(collapsedHunk.toggle.systemImage, "chevron.right")
     }
 
     func test_queueDraftsAreEditableAndScopedBySession() {
@@ -393,6 +563,50 @@ final class WorkbenchStateTests: XCTestCase {
         XCTAssertTrue(plan.blockingReasons.contains { $0.contains("Untracked files would be overwritten") })
     }
 
+    func test_checkpointRestoreRevalidatesUntrackedOverwriteRiskAfterPreview() async throws {
+        guard let git = ShellRunner.locateBinary("git") else {
+            throw XCTSkip("git is required for CheckpointService tests")
+        }
+        let repo = tmpDir.appendingPathComponent("checkpoint-race-conflict-repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        try await runGit(git, repo, ["init"])
+        try await runGit(git, repo, ["config", "user.email", "tests@clawdmeter.local"])
+        try await runGit(git, repo, ["config", "user.name", "Clawdmeter Tests"])
+        let conflict = repo.appendingPathComponent("conflict.txt")
+        try "checkpoint tracked\n".write(to: conflict, atomically: true, encoding: .utf8)
+        try await runGit(git, repo, ["add", "conflict.txt"])
+        try await runGit(git, repo, ["commit", "-m", "tracked conflict"])
+
+        let session = makeSession(id: UUID(), repo: repo)
+        let service = CheckpointService(now: { Date(timeIntervalSince1970: 1_700_000_250) })
+        let checkpoint = try await service.createCheckpoint(session: session, summary: "Has conflict file")
+
+        try await runGit(git, repo, ["rm", "conflict.txt"])
+        try await runGit(git, repo, ["commit", "-m", "remove conflict"])
+
+        let plan = try await service.prepareRestore(checkpoint, session: session)
+        XCTAssertFalse(plan.isBlocked)
+        XCTAssertEqual(plan.untrackedOverwritePaths, [])
+
+        try "untracked after preview\n".write(to: conflict, atomically: true, encoding: .utf8)
+
+        do {
+            try await service.restore(plan, in: repo.path)
+            XCTFail("Restore should revalidate and block when an untracked file appears after preview.")
+        } catch let error as CheckpointService.Error {
+            guard case .restoreBlocked(let reasons) = error else {
+                XCTFail("Expected restoreBlocked, got \(error)")
+                return
+            }
+            XCTAssertTrue(reasons.contains { $0.contains("Untracked files would be overwritten") })
+            XCTAssertTrue(reasons.contains { $0.contains("conflict.txt") })
+        }
+
+        XCTAssertEqual(try String(contentsOf: conflict, encoding: .utf8), "untracked after preview\n")
+        let status = try await runGit(git, repo, ["status", "--porcelain"])
+        XCTAssertTrue(status.stdoutString.split(whereSeparator: \.isNewline).contains { $0 == "?? conflict.txt" })
+    }
+
     @discardableResult
     private func runGit(_ git: String, _ repo: URL, _ arguments: [String]) async throws -> ShellRunner.Result {
         try await ShellRunner.shared.runOrThrow(
@@ -420,6 +634,46 @@ final class WorkbenchStateTests: XCTestCase {
             createdAt: Date(),
             lastEventAt: Date(),
             lastEventSeq: 1
+        )
+    }
+
+    private func assertCodeTabFeedbackLatency<Case>(
+        name: String,
+        cases: [Case],
+        iterations: Int = 1,
+        budget: Duration = .milliseconds(100),
+        action: (Case) -> Void,
+        verify: (Case) -> Void,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        var worst = Duration.zero
+        var samples = 0
+
+        for _ in 0..<iterations {
+            for testCase in cases {
+                let start = ContinuousClock.now
+                action(testCase)
+                verify(testCase)
+                let elapsed = start.duration(to: ContinuousClock.now)
+                worst = max(worst, elapsed)
+                samples += 1
+            }
+        }
+
+        XCTContext.runActivity(named: "Code tab \(name) feedback latency") { activity in
+            activity.add(XCTAttachment(string: """
+            samples=\(samples)
+            worst=\(worst)
+            budget=\(budget) per visible local-state interaction
+            """))
+        }
+        XCTAssertLessThan(
+            worst,
+            budget,
+            "Code tab \(name) must update visible local state within \(budget) before async work starts.",
+            file: file,
+            line: line
         )
     }
 }

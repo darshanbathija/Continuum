@@ -103,9 +103,8 @@ public final class APNSPushDeviceTokenStore: @unchecked Sendable {
         )
         entriesBacking[sessionId] = entry
         let count = entriesBacking.count
-        let tokenPrefix = String(deviceToken.prefix(8))
         lock.unlock()
-        deviceTokenLogger.info("Registered APNS token prefix=\(tokenPrefix, privacy: .public) session=\(String(sessionId.prefix(8)), privacy: .public) (now \(count) total)")
+        deviceTokenLogger.info("Registered APNS token session=\(String(sessionId.prefix(8)), privacy: .public) (now \(count) total)")
         persistToDisk()
     }
 

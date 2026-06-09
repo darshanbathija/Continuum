@@ -148,10 +148,10 @@ public actor MacAPNSPusher {
                 break  // ok
             case 410:
                 // BadDeviceToken / Unregistered — drop the token.
-                apnsLogger.info("APNS 410 (unregistered) for token prefix=\(String(token.prefix(8)), privacy: .public)")
+                apnsLogger.info("APNS 410 (unregistered); removing APNS token")
                 registeredTokens.removeValue(forKey: token)
             default:
-                apnsLogger.error("APNS HTTP \(http.statusCode) for token prefix=\(String(token.prefix(8)), privacy: .public)")
+                apnsLogger.error("APNS HTTP \(http.statusCode) while sending live-activity push")
             }
         } catch {
             apnsLogger.error("APNS POST failed: \(error.localizedDescription, privacy: .public)")

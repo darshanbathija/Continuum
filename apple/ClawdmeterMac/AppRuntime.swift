@@ -55,6 +55,7 @@ final class AppRuntime: ObservableObject {
 
     // Sessions feature:
     let repoIndex: RepoIndex
+    let appSupportDirectory: URL
     let agentSessionRegistry: AgentSessionRegistry
     let workspaceStore: WorkspaceStore
     let repoEnvStore: RepoEnvStore
@@ -150,13 +151,15 @@ final class AppRuntime: ObservableObject {
         // v0.29.32: also require Claude to be enabled — the auto-import reads
         // Claude Code's third-party keychain entry, which must not happen until
         // the user opts Claude in.
-        if ProviderEnablement.isEnabled("claude"),
+        if Self.deferProviderSideEffectsForTesting {
+            runtimeLogger.info("Claude auto-import deferred under test/no-spend gate")
+        } else if ProviderEnablement.isEnabled("claude"),
            UserDefaults.standard.bool(forKey: "clawdmeter.claude.autoImportFromClaudeCode") {
             Task.detached(priority: .utility) {
                 if let token = KeychainTokenProvider().currentAccessToken {
                     let didMirror = PastedAnthropicTokenProvider.shared().setToken(token)
                     if didMirror {
-                        runtimeLogger.info("Auto-imported Claude token (\(token.count, privacy: .public) chars) into shared Keychain at launch")
+                        runtimeLogger.info("Auto-imported Claude token into shared Keychain at launch")
                     } else {
                         runtimeLogger.info("Auto-import skipped at launch: shared Keychain write unavailable")
                     }
@@ -241,22 +244,26 @@ final class AppRuntime: ObservableObject {
         // (Settings → Providers / first-run welcome sheet). This is what stops
         // the launch-time keychain prompts. AppModel.start() is idempotent;
         // toggling a provider on later calls start() live (enableProvider).
-        if ProviderEnablement.isEnabled("claude") { claudeModel.start() }
-        if ProviderEnablement.isEnabled("codex") { codexModel.start() }
-        if ProviderEnablement.isEnabled("gemini") { geminiModel.start() }
-        // Cursor: the opt-in flag is the gate now. Enabling Cursor means the
-        // user accepts its cursor-agent keychain prompt.
-        if ProviderEnablement.isEnabled("cursor") {
-            cursorModel.start()
+        if Self.deferProviderSideEffectsForTesting {
+            runtimeLogger.info("Provider pollers deferred under test/no-spend gate; provider picker gates may be enabled without credential reads")
         } else {
-            runtimeLogger.info("Cursor poller deferred (provider disabled); keychain untouched until enabled")
-        }
-        if ProviderEnablement.isEnabled("grok"), !Self.isRunningUnderXCTest {
-            grokModel.start()
-        } else if ProviderEnablement.isEnabled("grok") {
-            runtimeLogger.info("Grok poller deferred under XCTest; CLI untouched during unit-test app bootstrap")
-        } else {
-            runtimeLogger.info("Grok poller deferred (provider disabled); CLI untouched until enabled")
+            if ProviderEnablement.isEnabled("claude") { claudeModel.start() }
+            if ProviderEnablement.isEnabled("codex") { codexModel.start() }
+            if ProviderEnablement.isEnabled("gemini") { geminiModel.start() }
+            // Cursor: the opt-in flag is the gate now. Enabling Cursor means the
+            // user accepts its cursor-agent keychain prompt.
+            if ProviderEnablement.isEnabled("cursor") {
+                cursorModel.start()
+            } else {
+                runtimeLogger.info("Cursor poller deferred (provider disabled); keychain untouched until enabled")
+            }
+            if ProviderEnablement.isEnabled("grok"), !Self.isRunningUnderXCTest {
+                grokModel.start()
+            } else if ProviderEnablement.isEnabled("grok") {
+                runtimeLogger.info("Grok poller deferred under XCTest; CLI untouched during unit-test app bootstrap")
+            } else {
+                runtimeLogger.info("Grok poller deferred (provider disabled); CLI untouched until enabled")
+            }
         }
 
         // Analytics history: walks the on-disk JSONL caches, computes
@@ -283,13 +290,13 @@ final class AppRuntime: ObservableObject {
         // NotificationDispatcher is an actor. SessionsModel bridges to UI.
         // Per the feature flag plan (T18): gate the daemon start on
         // `UserDefaults.clawdmeter.sessions.enabled`. Default on in v1.
-        let uiTestingAppSupport = Self.uiTestingAppSupportOverride()
-        let sessionsStoreURL = uiTestingAppSupport?.appendingPathComponent("sessions.json")
-            ?? AgentSessionRegistry.defaultStoreURL()
-        let workspacesStoreURL = uiTestingAppSupport?.appendingPathComponent("workspaces.json")
-            ?? WorkspaceStore.defaultStoreURL()
-        let repoEnvStoreURL = uiTestingAppSupport?.appendingPathComponent("repo-env-variables.json")
-            ?? RepoEnvStore.defaultStoreURL()
+        let testingAppSupport = Self.testingAppSupportOverride()
+        let appSupportDirectory = testingAppSupport
+            ?? WorkspaceStore.defaultStoreURL().deletingLastPathComponent()
+        self.appSupportDirectory = appSupportDirectory
+        let sessionsStoreURL = appSupportDirectory.appendingPathComponent("sessions.json")
+        let workspacesStoreURL = appSupportDirectory.appendingPathComponent("workspaces.json")
+        let repoEnvStoreURL = appSupportDirectory.appendingPathComponent("repo-env-variables.json")
 
         self.workspaceStore = WorkspaceStore(
             storeURL: workspacesStoreURL,
@@ -321,7 +328,8 @@ final class AppRuntime: ObservableObject {
             notifications: self.notificationDispatcher,
             workspaceStore: self.workspaceStore,
             repoEnvResolver: self.repoEnvRuntimeResolver,
-            vendorProvisioningService: self.vendorProvisioningService
+            vendorProvisioningService: self.vendorProvisioningService,
+            mobileCommandOutbox: Self.mobileCommandOutboxForAppBootstrap()
         )
         // Hand the daemon refs to the live-usage publishers + analytics
         // store so the iPhone's `/usage` and `/analytics` endpoints can
@@ -672,6 +680,10 @@ final class AppRuntime: ObservableObject {
     }
 
     private func bootstrapProviderRuntimes() {
+        guard !Self.deferProviderSideEffectsForTesting else {
+            runtimeLogger.info("Provider runtime warmers deferred under test/no-spend gate")
+            return
+        }
         // Keep pricing current without a rebuild: refresh the LiteLLM snapshot
         // at most once per 24h, then re-aggregate analytics so a newly-released
         // model (e.g. a fresh Opus) stops showing $0 within this session.
@@ -725,6 +737,30 @@ final class AppRuntime: ObservableObject {
 
     private static var isRunningUnderXCTest: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
+    private static var liveProviderVerificationOptIn: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["CLAWDMETER_LIVE_VERIFY"] == "1",
+              environment["CLAWDMETER_ALLOW_PROVIDER_SPEND"] == "1" else {
+            return false
+        }
+        let marker = (NSHomeDirectory() as NSString).appendingPathComponent(".continuum-live-verify")
+        return FileManager.default.fileExists(atPath: marker)
+    }
+
+    private static var deferProviderSideEffectsForTesting: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["CLAWDMETER_UI_TESTING"] == "1"
+            || environment["CLAWDMETER_DISABLE_PROVIDER_POLLERS"] == "1"
+            || (Self.isRunningUnderXCTest && !Self.liveProviderVerificationOptIn)
+    }
+
+    private static func mobileCommandOutboxForAppBootstrap() -> MobileCommandOutbox? {
+        guard Self.deferProviderSideEffectsForTesting else {
+            return nil
+        }
+        return MobileCommandOutbox(replaysAuditLogOnStart: false)
     }
 
     // MARK: - F3-wire instance-aware accessors (Codex eng-review #10)
@@ -945,14 +981,20 @@ final class AppRuntime: ObservableObject {
         runtimeLogger.warning("AppRuntime.deinit")
     }
 
-    private static func uiTestingAppSupportOverride() -> URL? {
+    private static func testingAppSupportOverride() -> URL? {
         let environment = ProcessInfo.processInfo.environment
-        guard environment["CLAWDMETER_UI_TESTING"] == "1",
-              let rawPath = environment["CLAWDMETER_TEST_APP_SUPPORT_DIR"],
-              !rawPath.isEmpty else {
+        if (environment["CLAWDMETER_UI_TESTING"] == "1" || Self.isRunningUnderXCTest),
+           let rawPath = environment["CLAWDMETER_TEST_APP_SUPPORT_DIR"],
+           !rawPath.isEmpty {
+            let url = URL(fileURLWithPath: rawPath, isDirectory: true)
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
+        guard Self.isRunningUnderXCTest else {
             return nil
         }
-        let url = URL(fileURLWithPath: rawPath, isDirectory: true)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClawdmeterMacTests-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }

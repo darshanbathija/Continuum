@@ -148,6 +148,11 @@ public final class AgentControlServer {
     /// Active WebSocket channels keyed by connection. Both terminal +
     /// event streams conform to `WSChannel`.
     private var wsChannels: [ObjectIdentifier: any WSChannel] = [:]
+    private var terminalWSConnectionIds: Set<ObjectIdentifier> = []
+    #if DEBUG
+    private static let terminalWSDropNotification = Notification.Name("ai.continuum.mac.uiTesting.dropTerminalWebSockets")
+    private var terminalWSDropObserver: NSObjectProtocol?
+    #endif
 
     /// JSONL tail + done-detector + plan-watcher wired per active session.
     private var sessionWiring: [UUID: SessionEventWiring] = [:]
@@ -377,6 +382,9 @@ public final class AgentControlServer {
             await outbox.replayFromAuditLog()
         }
         startAutopilotSweep()
+        #if DEBUG
+        installTerminalWSDropObserverForTesting()
+        #endif
     }
 
     public func stop() {
@@ -392,10 +400,54 @@ public final class AgentControlServer {
             channel.stop()
         }
         self.wsChannels.removeAll()
+        self.terminalWSConnectionIds.removeAll()
+        #if DEBUG
+        if let terminalWSDropObserver {
+            DistributedNotificationCenter.default().removeObserver(terminalWSDropObserver)
+            self.terminalWSDropObserver = nil
+        }
+        #endif
         autopilotSweepTask?.cancel()
         autopilotSweepTask = nil
         serverLogger.info("Server stopped")
     }
+
+    #if DEBUG
+    private func installTerminalWSDropObserverForTesting() {
+        guard ProcessInfo.processInfo.environment["CLAWDMETER_UI_TESTING"] == "1",
+              terminalWSDropObserver == nil
+        else { return }
+        terminalWSDropObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Self.terminalWSDropNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                _ = self?.dropTerminalWebSocketsForTesting()
+            }
+        }
+    }
+
+    @discardableResult
+    public func dropTerminalWebSocketsForTesting() -> Int {
+        guard ProcessInfo.processInfo.environment["CLAWDMETER_UI_TESTING"] == "1" else {
+            return 0
+        }
+        let ids = terminalWSConnectionIds
+        terminalWSConnectionIds.removeAll()
+        var dropped = 0
+        for id in ids {
+            if let channel = wsChannels.removeValue(forKey: id) {
+                channel.stop()
+                dropped += 1
+            }
+            if let connection = connections.removeValue(forKey: id) {
+                connection.cancel()
+            }
+        }
+        return dropped
+    }
+    #endif
 
     private static var frontierTurnWinnersURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -568,8 +620,10 @@ public final class AgentControlServer {
                 }
             case .failed, .cancelled:
                 Task { @MainActor in
-                    self?.connections.removeValue(forKey: ObjectIdentifier(connection))
-                    if let channel = self?.wsChannels.removeValue(forKey: ObjectIdentifier(connection)) {
+                    let id = ObjectIdentifier(connection)
+                    self?.connections.removeValue(forKey: id)
+                    self?.terminalWSConnectionIds.remove(id)
+                    if let channel = self?.wsChannels.removeValue(forKey: id) {
                         channel.stop()
                     }
                 }
@@ -666,7 +720,9 @@ public final class AgentControlServer {
                 return
             }
             if let channel = await makeTerminalChannel(connection: connection, session: session, requestedPaneId: envelope.paneId) {
-                wsChannels[ObjectIdentifier(connection)] = channel
+                let id = ObjectIdentifier(connection)
+                wsChannels[id] = channel
+                terminalWSConnectionIds.insert(id)
                 channel.start()
             } else {
                 sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
@@ -827,15 +883,6 @@ public final class AgentControlServer {
                 resize: { cols, rows in await host.resize(cols: cols, rows: rows) }
             )
         }
-        func claudeChannel(for host: ClaudePtyHost) -> TerminalWebSocketChannel {
-            TerminalWebSocketChannel(
-                connection: connection,
-                outputStream: { await host.outputStream() },
-                writeInput: { data in await host.writeBytes(data) },
-                resize: { cols, rows in await host.resize(cols: cols, rows: rows) }
-            )
-        }
-
         if let paneId = requestedPaneId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !paneId.isEmpty {
             guard session.terminalPanes.contains(where: { $0.paneId == paneId }),
@@ -845,19 +892,9 @@ public final class AgentControlServer {
             return channel(for: host)
         }
 
-        if SessionCommandRouter.resolve(routeContext(for: session)) == .claudePty {
-            guard let host = await claudePtyHost(for: session) else { return nil }
-            return claudeChannel(for: host)
-        }
-
         if session.tmuxPaneId != nil || session.tmuxWindowId != nil {
             return nil
         }
-        if let binding = session.runtimeBinding,
-           !binding.capabilities.supportsTerminal {
-            return nil
-        }
-
         if let primary = session.terminalPanes.first(where: { $0.isPrimary }),
            let host = await terminalRegistry.host(id: primary.paneId) {
             return channel(for: host)
@@ -1077,7 +1114,7 @@ public final class AgentControlServer {
             await self?.handleGetModels(connection: conn)
         }
         t.register(method: "GET", pattern: "/provider-defaults") { [weak self] _, conn, _ in
-            self?.handleGetProviderDefaults(connection: conn)
+            await self?.handleGetProviderDefaults(connection: conn)
         }
         t.register(method: "GET", pattern: "/sessions") { [weak self] _, conn, _ in
             self?.handleGetSessions(connection: conn)
@@ -1462,9 +1499,11 @@ public final class AgentControlServer {
         }
     }
 
-    private func handleGetProviderDefaults(connection: NWConnection) {
-        let store = ProviderDefaultsStore()
-        sendCodable(ProviderDefaultsResponse(defaults: store.snapshot), on: connection)
+    private func handleGetProviderDefaults(connection: NWConnection) async {
+        let snapshot = await MainActor.run {
+            ProviderDefaultsStore().snapshot
+        }
+        sendCodable(ProviderDefaultsResponse(defaults: snapshot), on: connection)
     }
 
     private func handlePutProviderDefault(
@@ -1491,15 +1530,16 @@ public final class AgentControlServer {
             return
         }
 
-        let store = ProviderDefaultsStore()
-        let snapshot = store.setDefault(
-            for: vendor,
-            model: req.model,
-            effort: req.effort,
-            clearModel: req.clearModel,
-            clearEffort: req.clearEffort,
-            catalog: catalog
-        )
+        let snapshot = await MainActor.run {
+            ProviderDefaultsStore().setDefault(
+                for: vendor,
+                model: req.model,
+                effort: req.effort,
+                clearModel: req.clearModel,
+                clearEffort: req.clearEffort,
+                catalog: catalog
+            )
+        }
         sendCodable(ProviderDefaultsResponse(defaults: snapshot), on: connection)
     }
 
@@ -1517,6 +1557,10 @@ public final class AgentControlServer {
         defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
             if let key { await outbox.releaseInFlight(key) }
         } }
+        guard SessionConfigChanger.isClaudePty(session) else {
+            sendResponse(.legacySessionRetired, on: connection)
+            return
+        }
         let liveCatalog = await providerEnabledModelCatalog()
         guard !req.model.isEmpty, liveCatalog.entry(forId: req.model) != nil else {
             sendResponse(.badRequest, on: connection); return
@@ -1994,6 +2038,17 @@ public final class AgentControlServer {
             guard let bridge = harnessRegistry.bridge(for: current.id) else {
                 return .unavailable(reason: "acp_session_not_live")
             }
+            if let store = chatStoreRegistry.snapshotStore(for: current) {
+                store.appendSDKMessages([
+                    ChatMessage(
+                        id: "scheduler-user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))",
+                        kind: .userText,
+                        title: "You",
+                        body: followUp.prompt,
+                        at: Date()
+                    )
+                ])
+            }
             guard await bridge.prompt(
                 followUp.prompt,
                 origin: followUp.origin,
@@ -2257,12 +2312,21 @@ public final class AgentControlServer {
             )
             return
         }
-        // v0.23 (Chat V2 — audit P0 #2): route through
-        // SessionInterruptDispatcher so Stop works for Codex SDK and
-        // Gemini agentapi sessions too.
-        // The dispatcher flips currentTurnState to .interrupted up
-        // front so the V2 UI's stopwatch + Send button restore
-        // immediately, then dispatches the per-backend cancel.
+        if let s = registry.session(id: uuid),
+           SessionCommandRouter.resolve(routeContext(for: s)) == .opencodeServe {
+            chatStoreRegistry.snapshotStore(for: s)?.setCurrentTurnState(.interrupted)
+            sendResponse(HTTPResponse(
+                status: 501,
+                reason: "Not Implemented",
+                contentType: "application/json",
+                body: Data(#"{"error":"opencode_interrupt_not_supported","detail":"OpenCode does not expose a per-turn interrupt endpoint yet."}"#.utf8)
+            ), on: connection)
+            return
+        }
+        // Remaining sessions have no active direct cancel route here.
+        // Live harness, Claude PTY, and OpenCode have already been handled
+        // above; the dispatcher maps missing/unsupported fallback cases to
+        // the HTTP response below.
         let dispatcher = SessionInterruptDispatcher(
             registry: registry,
             chatStoreRegistry: chatStoreRegistry
@@ -3587,26 +3651,9 @@ public final class AgentControlServer {
         if session.tmuxPaneId != nil || session.tmuxWindowId != nil {
             sendResponse(.legacySessionRetired, on: connection); return
         }
-        if let binding = session.runtimeBinding,
-           !binding.capabilities.supportsTerminal {
-            sendResponse(HTTPResponse(
-                status: 409, reason: "Conflict",
-                contentType: "application/json",
-                body: Data(#"{"error":"terminal_not_supported"}"#.utf8)
-            ), on: connection)
-            return
-        }
-        guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
-            sendResponse(.tooManyRequestsSwap, on: connection); return
-        }
-        guard session.terminalPanes.count < 7 else {
-            sendResponse(HTTPResponse(
-                status: 409, reason: "Conflict",
-                contentType: "application/json",
-                body: Data(#"{"error":"terminal pane limit reached"}"#.utf8)
-            ), on: connection)
-            return
-        }
+        // Terminal tabs are user-visible workspace tabs, not config swaps.
+        // Keep model/effort/mode throttled, but do not make rapid terminal-tab
+        // creation wait five seconds or hit an arbitrary pane ceiling.
         struct AddTerminalRequest: Codable { let title: String? }
         let req = (try? JSONDecoder().decode(AddTerminalRequest.self, from: request.body)) ?? AddTerminalRequest(title: nil)
         do {
@@ -4093,6 +4140,12 @@ public final class AgentControlServer {
     /// metadata.
     func isHarnessLive(_ id: UUID) -> Bool { harnessRegistry.contains(id) }
 
+#if DEBUG
+    func registerHarnessBridgeForTesting(_ bridge: AcpHarnessBridge, for id: UUID) {
+        harnessRegistry.register(bridge, for: id)
+    }
+#endif
+
     /// v27: tear down a session's harness bridge (stdio child / gRPC channel)
     /// and release the chat store it pinned. Idempotent (no-op when no bridge
     /// is registered). The Mac's `endSession` + the optimistic-"+" failure path
@@ -4183,6 +4236,12 @@ public final class AgentControlServer {
             // On failure the Mac owns the row + worktree cleanup (its createSession
             // call throws), so we don't tear them down here.
             do {
+                try await registry.setLaunchConfiguration(
+                    id: existing.id,
+                    agent: req.agent,
+                    model: req.model,
+                    effort: req.effort
+                )
                 try await registry.updateRuntime(
                     id: existing.id,
                     worktreePath: worktreePath,
@@ -7101,7 +7160,8 @@ public final class AgentControlServer {
         // Echo the user prompt into the chat store so the UI clears
         // its "sending…" state and the user bubble renders without
         // waiting on the SSE round-trip.
-        if let store = chatStoreRegistry.snapshotStore(for: session) {
+        let store = chatStoreRegistry.snapshotStore(for: session)
+        if let store {
             let userMsgId = "opencode-user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))"
             store.appendSDKMessages([
                 ChatMessage(
@@ -7112,10 +7172,12 @@ public final class AgentControlServer {
                     at: Date()
                 )
             ])
+            store.setCurrentTurnState(.streaming)
         }
         // Resolve the opencode session id.
         guard let opencodeID = OpencodeSSEAdapter.shared.opencodeSessionId(for: session.id) else {
             serverLogger.warning("opencode send: no session-id mapping for \(session.id.uuidString, privacy: .public)")
+            store?.setCurrentTurnState(.interrupted)
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
                 contentType: "application/json",
@@ -7128,6 +7190,7 @@ public final class AgentControlServer {
             path: "/session/\(opencodeID)/message",
             directory: session.effectiveCwd
         ) else {
+            store?.setCurrentTurnState(.interrupted)
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
                 contentType: "application/json",
@@ -7153,6 +7216,7 @@ public final class AgentControlServer {
             }
             if !(200..<300).contains(http.statusCode) {
                 serverLogger.warning("opencode send: upstream returned \(http.statusCode, privacy: .public)")
+                store?.setCurrentTurnState(.interrupted)
                 let detailBody = #"{"error":"opencode_send_failed","upstreamStatus":\#(http.statusCode)}"#
                 sendResponse(HTTPResponse(
                     status: 502, reason: "Bad Gateway",
@@ -7175,6 +7239,7 @@ public final class AgentControlServer {
             )
         } catch {
             serverLogger.warning("opencode send: \(error.localizedDescription, privacy: .public)")
+            store?.setCurrentTurnState(.interrupted)
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
                 contentType: "application/json",
@@ -7184,7 +7249,8 @@ public final class AgentControlServer {
     }
 
     private func forwardOpencodePrompt(session: AgentSession, prompt: String) async throws {
-        if let store = chatStoreRegistry.snapshotStore(for: session) {
+        let store = chatStoreRegistry.snapshotStore(for: session)
+        if let store {
             let userMsgId = "opencode-user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))"
             store.appendSDKMessages([
                 ChatMessage(
@@ -7195,8 +7261,10 @@ public final class AgentControlServer {
                     at: Date()
                 )
             ])
+            store.setCurrentTurnState(.streaming)
         }
         guard let opencodeID = OpencodeSSEAdapter.shared.opencodeSessionId(for: session.id) else {
+            store?.setCurrentTurnState(.interrupted)
             throw NSError(
                 domain: "AgentControlServer.OpenCode",
                 code: 1,
@@ -7207,6 +7275,7 @@ public final class AgentControlServer {
             path: "/session/\(opencodeID)/message",
             directory: session.effectiveCwd
         ) else {
+            store?.setCurrentTurnState(.interrupted)
             throw NSError(
                 domain: "AgentControlServer.OpenCode",
                 code: 2,
@@ -7220,6 +7289,7 @@ public final class AgentControlServer {
         let (_, response) = try await URLSession.shared.data(for: req)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            store?.setCurrentTurnState(.interrupted)
             throw NSError(
                 domain: "AgentControlServer.OpenCode",
                 code: status,

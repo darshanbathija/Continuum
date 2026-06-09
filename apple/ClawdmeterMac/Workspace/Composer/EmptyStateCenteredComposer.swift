@@ -1,6 +1,51 @@
 import SwiftUI
 import ClawdmeterShared
 
+struct EmptyStateFirstSendPlan: Equatable, Sendable {
+    let repoPath: String
+    let existingWorkspacePath: String?
+    let agent: AgentKind
+    let planMode: Bool
+    let goal: String?
+    let mode: SessionMode
+    let model: String?
+    let effort: ReasoningEffort?
+    let acceptEdits: Bool
+    let autopilot: Bool
+    let inheritedContextSourceIds: [UUID]
+    let sendAsFollowUp: Bool
+    let sendOrigin: ProviderPromptOrigin
+
+    static func make(
+        repoKey: String,
+        workspaceDraft: WorkspaceDraftTab?,
+        agent: AgentKind,
+        model: String?,
+        effort: ReasoningEffort?,
+        storeMode: SessionMode,
+        permissionMode: PermissionMode,
+        modelSupportsEffort: Bool,
+        goal: String?,
+        inheritedContextSourceIds: [UUID]
+    ) -> EmptyStateFirstSendPlan {
+        EmptyStateFirstSendPlan(
+            repoPath: workspaceDraft?.workspaceKey.repoKey ?? repoKey,
+            existingWorkspacePath: workspaceDraft?.workspaceKey.workspacePath,
+            agent: agent,
+            planMode: permissionMode == .plan,
+            goal: goal,
+            mode: workspaceDraft?.mode ?? storeMode,
+            model: model,
+            effort: modelSupportsEffort ? effort : nil,
+            acceptEdits: permissionMode == .acceptEdits,
+            autopilot: permissionMode == .bypass,
+            inheritedContextSourceIds: inheritedContextSourceIds,
+            sendAsFollowUp: false,
+            sendOrigin: .userComposerFirstTurn
+        )
+    }
+}
+
 /// Codex-style centered composer for the dashboard's empty state (no session open).
 /// First send spawns a fresh session via `SessionsModel.spawnSession` (with the
 /// composer's repo/agent/model/effort/mode chips), then posts the prompt as
@@ -29,19 +74,9 @@ struct EmptyStateCenteredComposer: View {
         self.launcher = launcher
         self.presentationStore = presentationStore
         self.workspaceDraft = workspaceDraft
-        let s = ComposerStore(mode: .emptyState(repoKey: workspaceDraft?.workspaceKey.repoKey, agent: workspaceDraft?.agent ?? .claude))
-        if let workspaceDraft {
-            s.resetChipsForRepo(
-                workspaceDraft.workspaceKey.repoKey,
-                defaults: ComposerStore.ChipDefaults(
-                    agent: workspaceDraft.agent,
-                    modelId: workspaceDraft.modelId,
-                    effort: workspaceDraft.effort,
-                    mode: workspaceDraft.mode,
-                    planMode: false
-                )
-            )
-        } else {
+        let s = workspaceDraft.map { model.composerStore(for: $0) }
+            ?? ComposerStore(mode: .emptyState(repoKey: nil, agent: .claude))
+        if workspaceDraft == nil {
             s.resetChipsForRepo(nil, defaults: .default)
         }
         _store = StateObject(wrappedValue: s)
@@ -119,6 +154,15 @@ struct EmptyStateCenteredComposer: View {
         }
         .onChange(of: launcher.modelCatalog.updatedAt) { _, _ in
             launcher.normalize(store)
+        }
+        .onChange(of: store.agent) { _, _ in
+            persistWorkspaceDraftChips()
+        }
+        .onChange(of: store.modelId) { _, _ in
+            persistWorkspaceDraftChips()
+        }
+        .onChange(of: store.effort) { _, _ in
+            persistWorkspaceDraftChips()
         }
         .onReceive(NotificationCenter.default.publisher(for: .composeDraftIncoming)) { note in
             applyIncomingDraft(note: note)
@@ -238,6 +282,16 @@ struct EmptyStateCenteredComposer: View {
         launcher.supportsEffort(modelId: store.modelId)
     }
 
+    private func persistWorkspaceDraftChips() {
+        guard let workspaceDraft else { return }
+        model.updateDraftWorkspaceTabConfiguration(
+            id: workspaceDraft.id,
+            agent: store.agent,
+            modelId: store.modelId,
+            effort: launcher.supportsEffort(modelId: store.modelId) ? store.effort : nil
+        )
+    }
+
     private var panelBg: Color {
         Color.secondary.opacity(0.06)
     }
@@ -285,6 +339,18 @@ struct EmptyStateCenteredComposer: View {
         do {
             let selectedSourceIds = revalidatedInheritedSourceIds()
             let unavailableSourceIds = unavailableInheritedSourceIds(validSourceIds: selectedSourceIds)
+            let firstSendPlan = EmptyStateFirstSendPlan.make(
+                repoKey: repoKey,
+                workspaceDraft: workspaceDraft,
+                agent: store.agent,
+                model: store.modelId,
+                effort: store.effort,
+                storeMode: store.mode,
+                permissionMode: store.permissionMode,
+                modelSupportsEffort: launcher.supportsEffort(modelId: store.modelId),
+                goal: goal,
+                inheritedContextSourceIds: selectedSourceIds
+            )
             // Stage attachments before spawn so managed/direct runtimes receive
             // the user's actual full prompt (including attachment refs), not
             // the 80-char `goal` slice. Sessions restage below into the final
@@ -317,30 +383,30 @@ struct EmptyStateCenteredComposer: View {
             let session: AgentSession
             if let workspaceDraft {
                 session = try await model.spawnSessionInExistingWorkspace(
-                    repoPath: workspaceDraft.workspaceKey.repoKey,
-                    workspacePath: workspaceDraft.workspaceKey.workspacePath,
-                    agent: store.agent,
-                    planMode: store.permissionMode == .plan,
-                    goal: goal,
-                    mode: workspaceDraft.mode,
-                    model: store.modelId,
-                    effort: launcher.supportsEffort(modelId: store.modelId) ? store.effort : nil,
-                    acceptEdits: store.permissionMode == .acceptEdits,
-                    autopilot: bypassPicked,
+                    repoPath: firstSendPlan.repoPath,
+                    workspacePath: firstSendPlan.existingWorkspacePath ?? workspaceDraft.workspaceKey.workspacePath,
+                    agent: firstSendPlan.agent,
+                    planMode: firstSendPlan.planMode,
+                    goal: firstSendPlan.goal,
+                    mode: firstSendPlan.mode,
+                    model: firstSendPlan.model,
+                    effort: firstSendPlan.effort,
+                    acceptEdits: firstSendPlan.acceptEdits,
+                    autopilot: firstSendPlan.autopilot,
                     initialMessage: initialBody.isEmpty ? nil : initialBody,
-                    inheritedContextSourceIds: selectedSourceIds
+                    inheritedContextSourceIds: firstSendPlan.inheritedContextSourceIds
                 )
             } else {
                 session = try await model.spawnSession(
-                    repoPath: repoKey,
-                    agent: store.agent,
-                    planMode: store.permissionMode == .plan,
-                    goal: goal,
-                    mode: store.mode,
-                    model: store.modelId,
-                    effort: launcher.supportsEffort(modelId: store.modelId) ? store.effort : nil,
-                    acceptEdits: store.permissionMode == .acceptEdits,
-                    autopilot: bypassPicked,
+                    repoPath: firstSendPlan.repoPath,
+                    agent: firstSendPlan.agent,
+                    planMode: firstSendPlan.planMode,
+                    goal: firstSendPlan.goal,
+                    mode: firstSendPlan.mode,
+                    model: firstSendPlan.model,
+                    effort: firstSendPlan.effort,
+                    acceptEdits: firstSendPlan.acceptEdits,
+                    autopilot: firstSendPlan.autopilot,
                     initialMessage: initialBody.isEmpty ? nil : initialBody
                 )
             }
@@ -379,15 +445,17 @@ struct EmptyStateCenteredComposer: View {
                     try await sender.send(
                         sessionId: session.id,
                         body: body,
-                        asFollowUp: false,
-                        origin: .userComposerFirstTurn,
+                        asFollowUp: firstSendPlan.sendAsFollowUp,
+                        origin: firstSendPlan.sendOrigin,
                         idempotencyKey: "first-send:\(session.id.uuidString):\(firstSendIntentId)",
                         clientIntentId: firstSendIntentId
                     )
                 }
             }
             store.endSend()
-            model.clearDraftWorkspaceTab()
+            if let workspaceDraft {
+                model.clearDraftWorkspaceTab(workspaceDraft)
+            }
         } catch let err as MacComposerSender.Error {
             let error = ComposerStore.SendError.daemonError(
                 message: "Session started, but the first message did not send: \(err.localizedDescription)"

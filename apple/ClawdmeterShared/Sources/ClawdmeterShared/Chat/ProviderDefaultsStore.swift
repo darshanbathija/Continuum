@@ -140,6 +140,7 @@ public struct UpdateProviderDefaultRequest: Codable, Hashable, Sendable {
     }
 }
 
+@MainActor
 public final class ProviderDefaultsStore: ObservableObject {
     @Published public private(set) var snapshot: ProviderDefaultsSnapshot
 

@@ -198,6 +198,100 @@ final class PRCoordinatorTests: XCTestCase {
         XCTAssertFalse(PRCoordinator.canMerge(snapshot: base, canUseDaemonActions: false))
     }
 
+    func test_prCompactPaneEmptyActionsExposeStableTargets() {
+        let daemonBacked = TahoePRCompactPane.emptyActionDescriptors(canUseDaemonActions: true)
+
+        XCTAssertEqual(TahoePRCompactPane.EmptyActionDescriptors.rootAccessibilityIdentifier, "code.pr.empty")
+        XCTAssertEqual(TahoePRCompactPane.EmptyActionDescriptors.manualURLAccessibilityIdentifier, "code.pr.manual-url")
+        XCTAssertEqual(daemonBacked.load.title, "Load")
+        XCTAssertEqual(daemonBacked.load.accessibilityIdentifier, "code.pr.load")
+        XCTAssertEqual(daemonBacked.create?.title, "Create PR")
+        XCTAssertEqual(daemonBacked.create?.accessibilityIdentifier, "code.pr.create")
+        XCTAssertEqual(daemonBacked.draft?.title, "Draft PR")
+        XCTAssertEqual(daemonBacked.draft?.accessibilityIdentifier, "code.pr.draft")
+
+        let fallbackOnly = TahoePRCompactPane.emptyActionDescriptors(canUseDaemonActions: false)
+        XCTAssertNil(fallbackOnly.create)
+        XCTAssertNil(fallbackOnly.draft)
+    }
+
+    func test_prCompactPaneLoadedActionsGateRerunAndMerge() throws {
+        let snapshot = try makeSnapshot(checks: [
+            PRCheckMirror(
+                name: "Unit tests",
+                state: .failure,
+                url: "https://github.com/example/repo/actions/runs/987654321"
+            ),
+            PRCheckMirror(name: "Lint", state: .success, url: nil)
+        ])
+
+        let menu = TahoePRCompactPane.actionMenuDescriptors(for: snapshot)
+        XCTAssertEqual(TahoePRCompactPane.ActionMenuDescriptors.menuAccessibilityIdentifier, "code.pr.actions")
+        XCTAssertEqual(menu.openGitHub.accessibilityIdentifier, "code.pr.open-github")
+        XCTAssertEqual(menu.openChecks.accessibilityIdentifier, "code.pr.open-checks")
+        XCTAssertEqual(menu.openDeployments.accessibilityIdentifier, "code.pr.open-deployments")
+        XCTAssertEqual(menu.copyURL.accessibilityIdentifier, "code.pr.copy-url")
+        XCTAssertEqual(menu.copyNumber.accessibilityIdentifier, "code.pr.copy-number")
+        XCTAssertEqual(menu.rerunFailedChecks.accessibilityIdentifier, "code.pr.rerun-failed-checks")
+        XCTAssertTrue(menu.rerunFailedChecks.isEnabled)
+        XCTAssertEqual(menu.askAgentToFixChecks.accessibilityIdentifier, "code.pr.ask-agent-fix-checks")
+        XCTAssertEqual(TahoePRCompactPane.failedCheckRunIDs(in: snapshot), ["987654321"])
+
+        let mergeReady = TahoePRCompactPane.reviewActionDescriptors(
+            for: snapshot,
+            canUseDaemonActions: true,
+            todoGatePassed: true
+        )
+        XCTAssertEqual(mergeReady?.approve.accessibilityIdentifier, "code.pr.approve")
+        XCTAssertEqual(mergeReady?.requestChanges.accessibilityIdentifier, "code.pr.request-changes")
+        XCTAssertEqual(mergeReady?.merge.title, "Merge")
+        XCTAssertEqual(mergeReady?.merge.accessibilityIdentifier, "code.pr.merge")
+        XCTAssertEqual(mergeReady?.merge.isEnabled, true)
+
+        let todoBlocked = TahoePRCompactPane.reviewActionDescriptors(
+            for: snapshot,
+            canUseDaemonActions: true,
+            todoGatePassed: false
+        )
+        XCTAssertEqual(todoBlocked?.merge.title, "Merge blocked")
+        XCTAssertEqual(todoBlocked?.merge.isEnabled, false)
+        XCTAssertNil(TahoePRCompactPane.reviewActionDescriptors(
+            for: snapshot,
+            canUseDaemonActions: false,
+            todoGatePassed: true
+        ))
+    }
+
+    func test_prCompactPaneStatusAndCheckDescriptorsExposeStableTargets() throws {
+        let status = TahoePRCompactPane.statusRowDescriptor(
+            key: "ci",
+            title: "ci",
+            status: "success",
+            passed: true
+        )
+        XCTAssertEqual(status.accessibilityIdentifier, "code.pr.status.ci")
+        XCTAssertEqual(status.status, "success")
+        XCTAssertTrue(status.passed)
+
+        let failingCheck = PRCheckMirror(
+            name: "Build",
+            state: .failure,
+            url: "https://github.com/example/repo/actions/runs/12345"
+        )
+        let check = TahoePRCompactPane.checkRowDescriptor(failingCheck)
+        XCTAssertEqual(TahoePRCompactPane.CheckRowDescriptor.rowAccessibilityIdentifier, "code.pr.check.row")
+        XCTAssertEqual(check.name, "Build")
+        XCTAssertEqual(check.state, "failure")
+        XCTAssertEqual(check.open?.accessibilityIdentifier, "code.pr.check.open")
+        XCTAssertEqual(check.copyName.accessibilityIdentifier, "code.pr.check.copy-name")
+        XCTAssertEqual(check.rerun?.accessibilityIdentifier, "code.pr.check.rerun")
+        XCTAssertEqual(TahoePRCompactPane.runID(from: failingCheck.url), "12345")
+
+        let missingURL = TahoePRCompactPane.checkRowDescriptor(PRCheckMirror(name: "Docs", state: .success))
+        XCTAssertNil(missingURL.open)
+        XCTAssertNil(missingURL.rerun)
+    }
+
     /// merge() success path: a daemon merge that returns ok writes the fresh
     /// snapshot and leaves no stale error. The trailing refreshDaemonOnce()
     /// no-ops because merge set a non-nil snapshot and we're not watching, so
@@ -223,6 +317,221 @@ final class PRCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.snapshot?.number, 7)
         XCTAssertNil(coordinator.lastError)
     }
+
+    func test_createPR_failurePreservesActionErrorAndDoesNotRefreshAwayOutcome() async throws {
+        let stub = StubPRClient()
+        stub.outcomes = [.found(makeStatus(number: 7))]
+        let coordinator = PRCoordinator(sessionId: UUID(), client: stub, fallback: PRMirror(sessionId: UUID()))
+
+        await coordinator.createPR()
+
+        XCTAssertEqual(stub.createPRCalls, 1)
+        XCTAssertEqual(stub.getOutcomeCalls, 0, "A failed create action must not refresh and clear the user-visible action error.")
+        XCTAssertEqual(coordinator.lastError, "Create PR failed")
+        XCTAssertNil(coordinator.snapshot)
+    }
+
+    func test_merge_failurePreservesActionErrorAndDoesNotRefreshAwayOutcome() async throws {
+        let stub = StubPRClient()
+        stub.outcomes = [.found(makeStatus(number: 7))]
+        stub.mergeResult = MergePRResponse(
+            ok: false,
+            merged: false,
+            pr: nil,
+            receipt: nil,
+            error: "Branch protection blocked merge"
+        )
+        let coordinator = PRCoordinator(sessionId: UUID(), client: stub, fallback: PRMirror(sessionId: UUID()))
+
+        await coordinator.merge()
+
+        XCTAssertEqual(stub.mergeCalls, 1)
+        XCTAssertEqual(stub.getOutcomeCalls, 0, "A failed merge action must keep the daemon error visible instead of immediately refreshing it away.")
+        XCTAssertEqual(coordinator.lastError, "Branch protection blocked merge")
+        XCTAssertNil(coordinator.snapshot)
+    }
+
+    func test_approve_runsGitHubReviewAndSurfacesFailureThenClearsOnSuccess() async throws {
+        let stub = StubPRClient()
+        stub.outcomes = [.found(makeStatus(number: 7, reviewDecision: nil))]
+        let runner = StubShellRunner(results: [
+            ShellRunner.Result(exitStatus: 1, stdout: Data(), stderr: Data("denied\n".utf8)),
+            ShellRunner.Result(exitStatus: 0, stdout: Data(), stderr: Data())
+        ])
+        let coordinator = PRCoordinator(
+            sessionId: UUID(),
+            client: stub,
+            fallback: PRMirror(sessionId: UUID()),
+            runner: runner,
+            ghLocator: { "/usr/bin/gh" }
+        )
+        await coordinator.refreshDaemonOnce()
+
+        await coordinator.approve()
+
+        XCTAssertEqual(coordinator.lastError, "approve failed: denied\n")
+        var calls = await runner.recordedCalls()
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(calls[0].executable, "/usr/bin/gh")
+        XCTAssertEqual(calls[0].arguments, ["pr", "review", "--approve", "7", "--repo", "example/repo"])
+        XCTAssertEqual(calls[0].timeout, 30)
+
+        await coordinator.approve()
+
+        XCTAssertNil(coordinator.lastError)
+        calls = await runner.recordedCalls()
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertEqual(calls[1].arguments, ["pr", "review", "--approve", "7", "--repo", "example/repo"])
+    }
+
+    func test_approve_reportsParseErrorWithoutRunningGh() async throws {
+        let stub = StubPRClient()
+        stub.outcomes = [.found(makeStatus(url: "https://github.com/example/repo/pull/99", number: 7))]
+        let runner = StubShellRunner()
+        let coordinator = PRCoordinator(
+            sessionId: UUID(),
+            client: stub,
+            fallback: PRMirror(sessionId: UUID()),
+            runner: runner,
+            ghLocator: { "/usr/bin/gh" }
+        )
+        await coordinator.refreshDaemonOnce()
+
+        await coordinator.approve()
+
+        XCTAssertEqual(coordinator.lastError, "couldn't parse PR URL")
+        let calls = await runner.recordedCalls()
+        XCTAssertEqual(calls.count, 0)
+    }
+
+    func test_approve_reportsMissingGhWithoutRunningShell() async throws {
+        let stub = StubPRClient()
+        stub.outcomes = [.found(makeStatus(number: 7))]
+        let runner = StubShellRunner()
+        let coordinator = PRCoordinator(
+            sessionId: UUID(),
+            client: stub,
+            fallback: PRMirror(sessionId: UUID()),
+            runner: runner,
+            ghLocator: { () -> String? in nil }
+        )
+        await coordinator.refreshDaemonOnce()
+
+        await coordinator.approve()
+
+        XCTAssertEqual(coordinator.lastError, "gh not found — install GitHub CLI")
+        let calls = await runner.recordedCalls()
+        XCTAssertEqual(calls.count, 0)
+    }
+
+    private func makeSnapshot(
+        url rawURL: String = "https://github.com/example/repo/pull/42",
+        number: Int = 42,
+        state: String = "OPEN",
+        reviewState: String? = "APPROVED",
+        checksRollup: String? = "success",
+        checks: [PRCheckMirror] = []
+    ) throws -> PRCoordinator.Snapshot {
+        PRCoordinator.Snapshot(
+            url: try XCTUnwrap(URL(string: rawURL)),
+            number: number,
+            title: "Ship workbench",
+            state: state,
+            author: "octo",
+            additions: 1,
+            deletions: 1,
+            body: "",
+            reviewState: reviewState,
+            checksRollup: checksRollup,
+            checks: checks,
+            lastChecked: Date(),
+            source: .daemon
+        )
+    }
+
+    private func makeStatus(
+        url: String = "https://github.com/example/repo/pull/7",
+        number: Int = 7,
+        title: String = "Ship it",
+        state: PRStatus.State = .open,
+        reviewDecision: String? = "APPROVED",
+        checksRollup: String? = "success"
+    ) -> PRStatus {
+        PRStatus(
+            url: url,
+            number: number,
+            title: title,
+            body: "",
+            state: state,
+            additions: 2,
+            deletions: 1,
+            changedFiles: 1,
+            reviewDecision: reviewDecision,
+            checksRollup: checksRollup
+        )
+    }
+}
+
+final class ReviewPaneContentDescriptorTests: XCTestCase {
+    func test_sourcesPaneDescriptorsCapRowsAndExposeStableTargets() {
+        var entries: [SourceEntry] = (0..<16).map { index in
+            SourceEntry(
+                id: "f:\(index)",
+                kind: .file,
+                label: "File\(index).swift",
+                payload: "/repo/File\(index).swift",
+                count: index == 0 ? 1 : index
+            )
+        }
+        entries.insert(SourceEntry(
+            id: "u:docs",
+            kind: .url,
+            label: "Docs",
+            payload: "https://example.com/docs",
+            count: 4
+        ), at: 1)
+
+        let descriptors = TahoeSourcesPreviewPane.sourceRowDescriptors(from: entries)
+
+        XCTAssertEqual(descriptors.count, TahoeSourcesPreviewPane.maxVisibleEntries)
+        XCTAssertEqual(TahoeSourcesPreviewPane.paneAccessibilityIdentifier, "code.sources.pane")
+        XCTAssertEqual(TahoeSourcesPreviewPane.emptyAccessibilityIdentifier, "code.sources.empty")
+        XCTAssertEqual(TahoeSourcesPreviewPane.rowAccessibilityIdentifier, "code.sources.row")
+
+        XCTAssertEqual(descriptors[0].accessibilityIdentifier, "code.sources.row")
+        XCTAssertEqual(descriptors[0].label, "File0.swift")
+        XCTAssertEqual(descriptors[0].subtitle, "Referenced 1x")
+        XCTAssertNil(descriptors[0].counterText)
+        XCTAssertEqual(descriptors[0].accessibilityValue, "file: /repo/File0.swift")
+
+        XCTAssertEqual(descriptors[1].kind, .url)
+        XCTAssertEqual(descriptors[1].icon, "link")
+        XCTAssertEqual(descriptors[1].subtitle, "Fetched URL")
+        XCTAssertEqual(descriptors[1].counterText, "×4")
+        XCTAssertEqual(descriptors[1].accessibilityValue, "url: https://example.com/docs")
+        XCTAssertEqual(descriptors.last?.label, "File12.swift")
+    }
+
+    func test_artifactsPaneDescriptorExposesStableTargets() {
+        let artifact = ArtifactsPane.Artifact(
+            path: "/tmp/continuum-output/report.pdf",
+            url: URL(fileURLWithPath: "/tmp/continuum-output/report.pdf")
+        )
+
+        let descriptor = ArtifactsPane.artifactDescriptor(for: artifact)
+
+        XCTAssertEqual(ArtifactsPane.paneAccessibilityIdentifier, "code.artifacts.pane")
+        XCTAssertEqual(ArtifactsPane.emptyAccessibilityIdentifier, "code.artifacts.empty")
+        XCTAssertEqual(ArtifactsPane.gridAccessibilityIdentifier, "code.artifacts.grid")
+        XCTAssertEqual(ArtifactsPane.cardAccessibilityIdentifier, "code.artifacts.card")
+        XCTAssertEqual(ArtifactsPane.thumbnailAccessibilityIdentifier, "code.artifacts.thumbnail")
+        XCTAssertEqual(ArtifactsPane.previewAccessibilityIdentifier, "code.artifacts.preview")
+        XCTAssertEqual(ArtifactsPane.previewCloseAccessibilityIdentifier, "code.artifacts.preview.close")
+        XCTAssertEqual(descriptor.filename, "report.pdf")
+        XCTAssertEqual(descriptor.path, "/tmp/continuum-output/report.pdf")
+        XCTAssertEqual(descriptor.accessibilityIdentifier, "code.artifacts.card")
+        XCTAssertEqual(descriptor.accessibilityValue, "/tmp/continuum-output/report.pdf")
+    }
 }
 
 // MARK: - Test stubs
@@ -236,6 +545,8 @@ private final class StubPRClient: PRCoordinatingClient {
     var lastError: String?
     var outcomes: [AgentControlClient.PRStatusOutcome] = []
     var getOutcomeCalls = 0
+    var createPRResult: String?
+    var createPRCalls = 0
     var mergeResult: MergePRResponse?
     var mergeCalls = 0
 
@@ -258,7 +569,10 @@ private final class StubPRClient: PRCoordinatingClient {
         body: String?,
         baseBranch: String?,
         idempotencyKey: String?
-    ) async -> String? { nil }
+    ) async -> String? {
+        createPRCalls += 1
+        return createPRResult
+    }
 
     func merge(
         sessionId: UUID,
@@ -270,5 +584,46 @@ private final class StubPRClient: PRCoordinatingClient {
     ) async -> MergePRResponse? {
         mergeCalls += 1
         return mergeResult
+    }
+}
+
+private actor StubShellRunner: ShellRunning {
+    struct Call: Equatable, Sendable {
+        let executable: String
+        let arguments: [String]
+        let cwd: String?
+        let environment: [String: String]?
+        let timeout: TimeInterval
+    }
+
+    private var results: [ShellRunner.Result]
+    private var calls: [Call] = []
+
+    init(results: [ShellRunner.Result] = []) {
+        self.results = results
+    }
+
+    func run(
+        executable: String,
+        arguments: [String],
+        cwd: String?,
+        environment: [String: String]?,
+        timeout: TimeInterval
+    ) async throws -> ShellRunner.Result {
+        calls.append(Call(
+            executable: executable,
+            arguments: arguments,
+            cwd: cwd,
+            environment: environment,
+            timeout: timeout
+        ))
+        if results.isEmpty {
+            return ShellRunner.Result(exitStatus: 0, stdout: Data(), stderr: Data())
+        }
+        return results.removeFirst()
+    }
+
+    func recordedCalls() -> [Call] {
+        calls
     }
 }

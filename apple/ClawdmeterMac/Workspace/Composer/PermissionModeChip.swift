@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import ClawdmeterShared
 
 /// Compact pill on the left of the composer's bottom bar that opens a
@@ -12,103 +13,169 @@ import ClawdmeterShared
 ///   • Bypass          → yellow (matches Claude Code's "Auto" warning hue)
 struct PermissionModeChip: View {
     let mode: PermissionMode
-    /// Available modes vary by context — the empty-state composer hides
-    /// `.bypass` (no session yet) and the read-only composer hides
-    /// everything except a stub. Callers pass the eligible list.
+    /// Available modes vary by context — Cursor hides `.plan`, and read-only
+    /// composers hide the chip entirely. Callers pass the eligible list.
     let availableModes: [PermissionMode]
     let onChange: (PermissionMode) -> Void
     @State private var isHovered = false
+
+    static func shortcutDigit(for mode: PermissionMode) -> Character {
+        switch mode {
+        case .ask: return "1"
+        case .acceptEdits: return "2"
+        case .plan: return "3"
+        case .bypass: return "4"
+        }
+    }
+
+    static func quickFlipTarget(current mode: PermissionMode, availableModes: [PermissionMode]) -> PermissionMode? {
+        let canPlan = availableModes.contains(.plan)
+        let canEdits = availableModes.contains(.acceptEdits)
+        switch mode {
+        case .plan where canEdits:
+            return .acceptEdits
+        case .acceptEdits where canPlan:
+            return .plan
+        default:
+            if canPlan { return .plan }
+            if canEdits { return .acceptEdits }
+            return nil
+        }
+    }
 
     var body: some View {
         // Single chip, dual behavior:
         //   • click          → quick-flip plan ⇆ acceptEdits (the two
         //                       modes people swap between hourly)
-        //   • hold / arrow   → full menu with ask / accept / plan / bypass
-        // Backed by SwiftUI's `Menu(primaryAction:)` which is the native
-        // pattern for "button with attached menu". Replaces the older
-        // setup that needed a sibling `</> code` chip to provide the
-        // single-click flip.
-        Menu {
-            Section("Mode") {
-                ForEach(Array(availableModes.enumerated()), id: \.element) { (idx, candidate) in
-                    Button(action: { onChange(candidate) }) {
-                        HStack {
-                            Text(candidate.displayName)
-                            if candidate == mode {
-                                Image(systemName: "checkmark")
-                            }
-                            Spacer()
-                            Text("\(idx + 1)")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .keyboardShortcut(KeyEquivalent(Character("\(idx + 1)")), modifiers: [.command, .shift])
+        //   • arrow          → full menu with ask / accept / plan / bypass
+        // The primary action is an explicit Button. `Menu(primaryAction:)`
+        // renders as an AppKit popup on macOS UI automation and opens the
+        // menu instead of quick-flipping, which made the main click path dead.
+        HStack(spacing: 0) {
+            Button {
+                if let target = Self.quickFlipTarget(current: mode, availableModes: availableModes) {
+                    onChange(target)
                 }
-            }
-        } label: {
-            // v0.7.13: chip styled identically to ModelEffortChip — same
-            // Capsule background, same 11pt-medium label + 8pt chevron,
-            // same padding.
-            // v0.7.15: bypass is destructive (no permission prompts —
-            // agent has carte blanche), so it gets a yellow accent ring
-            // + bold label. Plan/Edits/Ask stay neutral-grey to match
-            // the right-side model chip.
-            HStack(spacing: 6) {
+            } label: {
                 Text(mode.shortLabel)
                     .font(.system(size: 12, weight: mode == .bypass ? .bold : .semibold))
                     .foregroundStyle(mode == .bypass ? Color.yellow : .primary)
                     .lineLimit(1)
                     .frame(minWidth: 50, alignment: .leading)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .buttonStyle(.plain)
+            .padding(.leading, 12)
+            .padding(.trailing, 4)
             .frame(minHeight: 32)
-            .background(
-                mode == .bypass
-                    ? AnyShapeStyle(Color.yellow.opacity(isHovered ? 0.22 : 0.15))
-                    : AnyShapeStyle(Color.secondary.opacity(isHovered ? 0.16 : 0.10)),
-                in: Capsule()
+            .accessibilityLabel("Permission mode")
+            .accessibilityValue(mode.shortLabel)
+            .accessibilityIdentifier("code.composer.permission-mode")
+
+            PermissionModeMenuButton(
+                mode: mode,
+                availableModes: availableModes,
+                onSelect: onChange
             )
-            .overlay(
-                Capsule()
-                    .strokeBorder(
-                        mode == .bypass
-                            ? Color.yellow.opacity(0.5)
-                            : (isHovered ? Color.secondary.opacity(0.24) : Color.clear),
-                        lineWidth: 1
-                    )
-            )
-            .contentShape(Capsule())
+            .frame(width: 28, height: 32)
+            .padding(.trailing, 6)
         }
-        primaryAction: {
-            // Quick flip: plan ↔ acceptEdits. Both must be available
-            // (Cursor's acceptEdits-only modes drop into the menu via
-            // long-press). When the current mode is something else
-            // (ask / bypass), the flip lands on plan if available so the
-            // user feels "click to enter plan mode."
-            let canPlan = availableModes.contains(.plan)
-            let canEdits = availableModes.contains(.acceptEdits)
-            switch mode {
-            case .plan where canEdits:
-                onChange(.acceptEdits)
-            case .acceptEdits where canPlan:
-                onChange(.plan)
-            default:
-                if canPlan { onChange(.plan) }
-                else if canEdits { onChange(.acceptEdits) }
-            }
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .background(
+            mode == .bypass
+                ? AnyShapeStyle(Color.yellow.opacity(isHovered ? 0.22 : 0.15))
+                : AnyShapeStyle(Color.secondary.opacity(isHovered ? 0.16 : 0.10)),
+            in: Capsule()
+        )
+        .overlay(
+            Capsule()
+                .strokeBorder(
+                    mode == .bypass
+                        ? Color.yellow.opacity(0.5)
+                        : (isHovered ? Color.secondary.opacity(0.24) : Color.clear),
+                    lineWidth: 1
+                )
+                .allowsHitTesting(false)
+        )
+        .contentShape(Capsule())
         .fixedSize()
-        .help("Click to toggle plan ⇆ code — long-press for ask / bypass (⌘⇧1-4)")
-        .accessibilityLabel("Permission mode")
-        .accessibilityValue(mode.shortLabel)
-        .accessibilityIdentifier("code.composer.permission-mode")
+        .help("Click to toggle plan ⇆ code — use the arrow for ask / bypass (⌘⇧1-4)")
         .onHover { isHovered = $0 }
+    }
+}
+
+private struct PermissionModeMenuButton: NSViewRepresentable {
+    let mode: PermissionMode
+    let availableModes: [PermissionMode]
+    let onSelect: (PermissionMode) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(mode: mode, availableModes: availableModes, onSelect: onSelect)
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton()
+        button.isBordered = false
+        button.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)
+        button.imagePosition = .imageOnly
+        button.contentTintColor = .secondaryLabelColor
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.openMenu(_:))
+        button.setAccessibilityLabel("Permission mode menu")
+        button.setAccessibilityIdentifier("code.composer.permission-mode.menu")
+        button.setAccessibilityRole(.button)
+        button.setAccessibilityValue("Closed" as NSString)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.mode = mode
+        context.coordinator.availableModes = availableModes
+        context.coordinator.onSelect = onSelect
+        context.coordinator.button = button
+    }
+
+    final class Coordinator: NSObject, NSMenuDelegate {
+        var mode: PermissionMode
+        var availableModes: [PermissionMode]
+        var onSelect: (PermissionMode) -> Void
+        weak var button: NSButton?
+
+        init(mode: PermissionMode, availableModes: [PermissionMode], onSelect: @escaping (PermissionMode) -> Void) {
+            self.mode = mode
+            self.availableModes = availableModes
+            self.onSelect = onSelect
+        }
+
+        @objc func openMenu(_ sender: NSButton) {
+            button = sender
+            sender.setAccessibilityValue("Open" as NSString)
+            let menu = NSMenu()
+            menu.delegate = self
+            for candidate in availableModes {
+                let item = NSMenuItem(
+                    title: candidate.displayName,
+                    action: #selector(selectMode(_:)),
+                    keyEquivalent: String(PermissionModeChip.shortcutDigit(for: candidate))
+                )
+                item.keyEquivalentModifierMask = [.command, .shift]
+                item.target = self
+                item.representedObject = candidate.rawValue
+                item.identifier = NSUserInterfaceItemIdentifier("code.composer.permission-mode.\(candidate.rawValue)")
+                item.state = candidate == mode ? .on : .off
+                menu.addItem(item)
+            }
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+        }
+
+        @objc func selectMode(_ item: NSMenuItem) {
+            guard
+                let raw = item.representedObject as? String,
+                let selectedMode = PermissionMode(rawValue: raw)
+            else { return }
+            onSelect(selectedMode)
+        }
+
+        func menuDidClose(_ menu: NSMenu) {
+            button?.setAccessibilityValue("Closed" as NSString)
+        }
     }
 }

@@ -466,6 +466,16 @@ final class SidebarProjectionCacheTests: XCTestCase {
         XCTAssertEqual(normal.workspaceSections.flatMap(\.sessions).map(\.id), [active.id])
         XCTAssertFalse((normal.groups ?? []).flatMap(\.sessions).contains { $0.id == archived.id })
 
+        let archivedVisible = Self.buildProjection(
+            sessions: [active, archived],
+            repos: [Self.repo(key: repoKey)],
+            showArchived: true,
+            statusFilter: .all,
+            grouping: .status,
+            now: now
+        )
+        XCTAssertEqual(archivedVisible.workspaceSections.flatMap(\.sessions).map(\.id), [archived.id, active.id])
+
         let archiveOnly = Self.buildProjection(
             sessions: [active, archived],
             repos: [Self.repo(key: repoKey)],
@@ -638,6 +648,80 @@ final class SidebarProjectionCacheTests: XCTestCase {
         }
     }
 
+    func test_codeSidebarSearchStatusAndArchiveFeedbackUnder100ms_on500Sessions() {
+        let sessions = Self.fixtureSessions()
+        let repos = Self.fixtureRepos(from: sessions)
+        let scenarios: [(query: String, status: SessionStatusFilter, showArchived: Bool)] = [
+            ("", .all, false),
+            ("r", .all, false),
+            ("ref", .active, false),
+            ("refactor", .inReview, false),
+            ("repo", .done, false),
+            ("", .archived, true),
+        ]
+
+        var worst = Duration.zero
+        for scenario in scenarios {
+            let start = ContinuousClock.now
+            let filtered = Self.applySearchFilter(sessions: sessions, query: scenario.query)
+            let projection = SidebarProjectionBuilder.build(
+                searchFilteredSessions: filtered,
+                repos: repos,
+                searchQuery: scenario.query,
+                showArchived: scenario.showArchived,
+                statusFilter: scenario.status,
+                grouping: .status,
+                sorting: .recency,
+                pinnedSessionIds: [],
+                workbenchPRStateBySession: [:]
+            )
+            let elapsed = start.duration(to: ContinuousClock.now)
+            worst = max(worst, elapsed)
+            XCTAssertNotNil(projection.groups)
+        }
+
+        XCTContext.runActivity(named: "Code sidebar projection feedback latency") { activity in
+            activity.add(XCTAttachment(string: """
+            sessions=500
+            scenarios=\(scenarios.count)
+            worst=\(worst)
+            budget=100ms per search/status/archive projection
+            """))
+        }
+        XCTAssertLessThan(
+            worst,
+            .milliseconds(100),
+            "Search text, status buckets, and Archive bucket changes must produce a new Code sidebar projection within the 100ms feedback budget."
+        )
+    }
+
+    func test_statusBucketTapStateTogglesEachBucketAndArchiveVisibility() {
+        let buckets: [SessionStatusFilter] = [.active, .inReview, .done, .archived]
+
+        for bucket in buckets {
+            let selected = SidebarStatusBucketState.nextFilter(current: .all, tapped: bucket)
+            XCTAssertEqual(selected, bucket, "\(bucket.displayName) bucket should select itself from All.")
+            XCTAssertEqual(
+                SidebarStatusBucketState.showsArchived(for: selected),
+                bucket == .archived,
+                "\(bucket.displayName) should \(bucket == .archived ? "" : "not ")enable archived visibility."
+            )
+
+            let toggledOff = SidebarStatusBucketState.nextFilter(current: selected, tapped: bucket)
+            XCTAssertEqual(toggledOff, .all, "Tapping \(bucket.displayName) while selected should return to All.")
+            XCTAssertFalse(
+                SidebarStatusBucketState.showsArchived(for: toggledOff),
+                "Toggling \(bucket.displayName) off must leave Archive visibility disabled."
+            )
+        }
+
+        XCTAssertEqual(
+            SidebarStatusBucketState.nextFilter(current: .active, tapped: .done),
+            .done,
+            "Switching from one bucket to another should select the newly tapped bucket."
+        )
+    }
+
     // MARK: - Helpers
 
     private func makeKey(
@@ -669,6 +753,7 @@ final class SidebarProjectionCacheTests: XCTestCase {
     private static func buildProjection(
         sessions: [AgentSession],
         repos: [AgentRepo],
+        showArchived: Bool = false,
         statusFilter: SessionStatusFilter = .all,
         grouping: SessionGrouping = .repo,
         pinnedSessionIds: [UUID] = [],
@@ -678,7 +763,7 @@ final class SidebarProjectionCacheTests: XCTestCase {
             searchFilteredSessions: sessions,
             repos: repos,
             searchQuery: "",
-            showArchived: false,
+            showArchived: showArchived,
             statusFilter: statusFilter,
             grouping: grouping,
             sorting: .recency,

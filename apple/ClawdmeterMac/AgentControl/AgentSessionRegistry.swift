@@ -53,6 +53,7 @@ public final class AgentSessionRegistry: ObservableObject {
     /// rollback PR can flip it back to `false` if the wired path
     /// regresses in production.
     private let eventStore: OrchestrationEventStore?
+    private var eventReplaySeedTask: Task<Void, Never>?
 
     public init(
         storeURL: URL = AgentSessionRegistry.defaultStoreURL(),
@@ -88,10 +89,8 @@ public final class AgentSessionRegistry: ObservableObject {
         // F2 replay-on-init: if we opened an event store AND the JSON
         // snapshot was empty (cold start on a fresh install where the
         // flag is on) AND the event log has anything, seed state from
-        // replay. The JSON snapshot is the source of truth for now —
-        // events are write-ahead, the snapshot is the projection. The
-        // wire PR will flip this so the event log is the source of
-        // truth and the snapshot becomes a cache.
+        // replay. Replay is scheduled asynchronously so constructing
+        // the registry never parks the MainActor during Code-tab startup.
         if let store = self.eventStore, sessions.isEmpty {
             seedFromEventReplayIfPossible(store: store)
         }
@@ -188,45 +187,61 @@ public final class AgentSessionRegistry: ObservableObject {
     /// receipt, the JSON snapshot becomes derivable and the replay handler
     /// becomes the authoritative loader.
     private func seedFromEventReplayIfPossible(store: OrchestrationEventStore) {
-        // P0 fix (review of PR #146): the replay Task MUST run off MainActor.
-        // The original code used `Task { ... }` here which inherits MainActor
-        // isolation. Combined with `sema.wait()` blocking the MainActor below,
-        // that deadlocked at startup whenever the event log was non-empty —
-        // the MainActor task body could not resume because MainActor was
-        // parked on the semaphore. Use `Task.detached` so the body runs on
-        // a cooperative thread; the actor isolation on `store.loadAll(...)`
-        // still serializes the sqlite work safely.
-        let replayed = Self.runReplayBlocking(store: store)
-        guard let replayed, !replayed.isEmpty else { return }
-        self.sessions = replayed
-        for s in replayed {
-            nextEventSeqBySession[s.id] = s.lastEventSeq + 1
+        eventReplaySeedTask?.cancel()
+        eventReplaySeedTask = Task { [store] in
+            guard
+                let replayed = await Self.replaySessions(store: store),
+                !replayed.isEmpty,
+                !Task.isCancelled
+            else { return }
+
+            var currentById = Dictionary(uniqueKeysWithValues: self.sessions.map { ($0.id, $0) })
+            var seen = Set<UUID>()
+            var merged: [AgentSession] = []
+            merged.reserveCapacity(replayed.count + self.sessions.count)
+            for replaySession in replayed {
+                merged.append(currentById.removeValue(forKey: replaySession.id) ?? replaySession)
+                seen.insert(replaySession.id)
+            }
+            for liveSession in self.sessions where seen.insert(liveSession.id).inserted {
+                merged.append(liveSession)
+            }
+
+            self.sessions = merged
+            self.nextEventSeqBySession.removeAll(keepingCapacity: true)
+            for session in merged {
+                self.nextEventSeqBySession[session.id] = session.lastEventSeq + 1
+            }
+            registryLogger.info("Seeded \(replayed.count) replayed sessions into \(merged.count) live sessions")
         }
-        registryLogger.info("Seeded \(replayed.count) sessions from OrchestrationEventStore replay")
     }
 
-    /// Synchronously run the event-store replay from the MainActor `init`
-    /// body. Uses a detached Task so the replay body does NOT inherit
-    /// MainActor isolation — that is what makes the surrounding
-    /// `DispatchSemaphore.wait()` safe (a MainActor-isolated task body
-    /// would deadlock because resume requires the MainActor that we have
-    /// parked on the semaphore).
-    ///
-    /// The replay is bounded by the codex #9 perf gate (10k events <500ms),
-    /// so blocking init for the duration is acceptable.
-    private nonisolated static func runReplayBlocking(store: OrchestrationEventStore) -> [AgentSession]? {
-        let sema = DispatchSemaphore(value: 0)
-        // Sendable wrapper for the result so we can write from the
-        // detached task and read after the semaphore wait.
-        final class Box: @unchecked Sendable {
-            var value: [AgentSession]?
+    @discardableResult
+    func waitForEventReplaySeedForTesting() async -> Bool {
+        guard let task = eventReplaySeedTask else { return true }
+        await task.value
+        return true
+    }
+
+    func closeEventStoreForTesting() async {
+        eventReplaySeedTask?.cancel()
+        if let task = eventReplaySeedTask {
+            await task.value
+            eventReplaySeedTask = nil
         }
-        let box = Box()
-        Task.detached {
-            defer { sema.signal() }
+        guard let eventStore else { return }
+        do {
+            try await eventStore.close()
+        } catch {
+            registryLogger.error("OrchestrationEventStore close failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private nonisolated static func replaySessions(store: OrchestrationEventStore) async -> [AgentSession]? {
+        await Task.detached(priority: .utility) {
             do {
                 let rows = try await store.loadAll(includeSnapshots: true)
-                guard !rows.isEmpty else { return }
+                guard !rows.isEmpty else { return nil }
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 var projection: [UUID: AgentSession] = [:]
@@ -245,13 +260,12 @@ public final class AgentSessionRegistry: ObservableObject {
                         }
                     }
                 }
-                box.value = Array(projection.values)
+                return Array(projection.values)
             } catch {
                 registryLogger.error("OrchestrationEventStore replay failed: \(error.localizedDescription, privacy: .public)")
+                return nil
             }
-        }
-        sema.wait()
-        return box.value
+        }.value
     }
 
     // MARK: - Mutations
@@ -592,6 +606,64 @@ public final class AgentSessionRegistry: ObservableObject {
         update(id: id) { _ in projected }
     }
 
+    /// Update launch-time provider configuration for an optimistic session that
+    /// has not attached its runtime yet. This is intentionally separate from the
+    /// live SessionConfigChanger path: picker edits made while "+" provisioning
+    /// is still running should alter the pending spawn request, not attempt a
+    /// mid-session swap against an agent that does not exist yet.
+    public func setLaunchConfiguration(
+        id: UUID,
+        agent: AgentKind,
+        model: String?,
+        effort: ReasoningEffort?
+    ) async throws {
+        guard let s = session(id: id) else { return }
+        guard s.agent != agent || s.model != model || s.effort != effort else { return }
+        let binding = Self.makeRuntimeBinding(
+            agent: agent,
+            model: model,
+            codexBackend: s.codexChatBackend
+        )
+        let projected = with(
+            s,
+            agent: agent,
+            model: .some(model),
+            effort: .some(effort),
+            runtimeBinding: binding
+        )
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
+    }
+
+    /// Fast UI-only projection for optimistic "+" sessions. Picker changes can
+    /// happen several times in a second, so they must not write SQLite receipts
+    /// or rewrite sessions.json on every hover/click. The daemon adopt path calls
+    /// `setLaunchConfiguration` once with the final choice.
+    public func previewLaunchConfiguration(
+        id: UUID,
+        agent: AgentKind,
+        model: String?,
+        effort: ReasoningEffort?
+    ) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let s = sessions[idx]
+        guard s.agent != agent || s.model != model || s.effort != effort else { return }
+        let binding = Self.makeRuntimeBinding(
+            agent: agent,
+            model: model,
+            codexBackend: s.codexChatBackend
+        )
+        var next = sessions
+        next[idx] = with(
+            s,
+            agent: agent,
+            model: .some(model),
+            effort: .some(effort),
+            runtimeBinding: binding
+        )
+        sessions = next
+    }
+
     /// Sessions v2: swap effort on a live session (Phase 0).
     public func setEffort(id: UUID, effort: ReasoningEffort) async throws {
         guard let s = session(id: id) else { return }
@@ -612,29 +684,80 @@ public final class AgentSessionRegistry: ObservableObject {
     /// If the session is one half of an A/B pair, the sibling's
     /// `abPairSessionId` is cleared automatically per D16.
     public func archive(id: UUID, at date: Date = Date()) async throws {
-        guard let s = session(id: id) else { return }
-        let projected = with(s, archivedAt: date)
-        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
-        update(id: id) { _ in projected }
-        // D16: promote sibling to standalone with banner.
-        if let siblingId = s.abPairSessionId, let sibling = session(id: siblingId) {
-            let siblingProjected = with(sibling, abPairSessionId: .some(nil))
-            try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: siblingId, session: siblingProjected)
-            update(id: siblingId) { _ in siblingProjected }
+        try await archive(ids: [id], at: date)
+    }
+
+    /// Bulk archive used by Code sidebar "Archive all" paths. This keeps the
+    /// write-ahead receipt contract, but avoids N full `sessions.json` saves and
+    /// schedules worktree reclamation after the rows have disappeared.
+    public func archive(ids rawIds: [UUID], at date: Date = Date()) async throws {
+        var seen: Set<UUID> = []
+        let ids = rawIds.filter { seen.insert($0).inserted }
+        guard !ids.isEmpty else { return }
+
+        var next = sessions
+        var didMutate = false
+        var toReclaim: [AgentSession] = []
+        defer {
+            if didMutate {
+                sessions = next
+                save()
+                scheduleWorktreeReclaims(toReclaim)
+            }
         }
-        // Reclaim the worktree checkout to Trash so archived sessions don't pile
-        // up ~54 MB each. Runs AFTER the record is archived (best-effort: a Trash
-        // failure can't block archiving). The branch is kept, so committed work
-        // survives and `unarchive` re-provisions the checkout.
-        await reclaimWorktreeOnArchive(s)
+
+        for id in ids {
+            guard let idx = next.firstIndex(where: { $0.id == id }) else { continue }
+            let s = next[idx]
+            let projected = with(s, archivedAt: date)
+            try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+            next[idx] = projected
+            didMutate = true
+            toReclaim.append(s)
+
+            // D16: promote sibling to standalone with banner. If the sibling is
+            // also in the bulk archive set, its own projected archive will land
+            // when that id is processed.
+            if let siblingId = s.abPairSessionId,
+               !seen.contains(siblingId),
+               let siblingIdx = next.firstIndex(where: { $0.id == siblingId }) {
+                let sibling = next[siblingIdx]
+                let siblingProjected = with(sibling, abPairSessionId: .some(nil))
+                try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: siblingId, session: siblingProjected)
+                next[siblingIdx] = siblingProjected
+            }
+        }
+    }
+
+    private func scheduleWorktreeReclaims(_ sessions: [AgentSession]) {
+        guard !sessions.isEmpty else { return }
+        Task { @MainActor in
+            for session in sessions {
+                await self.reclaimWorktreeOnArchive(session)
+            }
+        }
+    }
+
+    static func canReclaimWorktreeOnArchive(_ session: AgentSession) -> Bool {
+        guard session.kind == .code,
+              session.ownsWorktree,
+              let worktreePath = session.worktreePath,
+              let repoRoot = session.repoKey,
+              worktreePath != repoRoot,
+              worktreePath.contains("/Clawdmeter/workspaces/"),
+              let provisioning = session.provisioning,
+              !provisioning.ownershipMarkerId.isEmpty,
+              provisioning.worktreePath == worktreePath
+        else { return false }
+        return true
     }
 
     /// Stop the runtime + move the session's worktree to the macOS Trash.
-    /// No-op for chat-cwd sessions and non-worktree sessions (only paths under
-    /// our managed `~/Clawdmeter/workspaces/` root are touched).
+    /// No-op unless the session carries explicit Continuum-owned worktree
+    /// metadata; a managed-looking path alone is not enough to touch user data.
     private func reclaimWorktreeOnArchive(_ s: AgentSession) async {
-        guard let wt = s.worktreePath,
-              wt.contains("/Clawdmeter/workspaces/"),
+        guard Self.canReclaimWorktreeOnArchive(s),
+              let wt = s.worktreePath,
               let repoRoot = s.repoKey else { return }
         await AppDelegate.runtime?.agentControlServer.teardownRuntimeForReclaim(id: s.id)
         await WorktreeManager.shared.trashWorktree(repoRoot: repoRoot, worktreePath: wt)
@@ -646,8 +769,8 @@ public final class AgentSessionRegistry: ObservableObject {
         try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
         update(id: id) { _ in projected }
         // Re-check-out the worktree archive moved to Trash, from its branch.
-        if let wt = s.worktreePath,
-           wt.contains("/Clawdmeter/workspaces/"),
+        if Self.canReclaimWorktreeOnArchive(s),
+           let wt = s.worktreePath,
            let repoRoot = s.repoKey,
            let branch = s.provisioning?.branchName,
            !FileManager.default.fileExists(atPath: wt) {
@@ -858,8 +981,8 @@ public final class AgentSessionRegistry: ObservableObject {
 
     /// Mutate one session by id via a transform closure. Saves on every
     /// successful mutation. Single source of truth for v3-field propagation
-    /// (T41 audit) — every public mutation goes through here, so adding a
-    /// new field is a one-line change to `with(...)` below.
+    /// (T41 audit) for single-session updates; batched paths share `with(...)`
+    /// below and perform their own coalesced save.
     private func update(id: UUID, _ transform: (AgentSession) -> AgentSession) {
         guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
         sessions[idx] = transform(sessions[idx])
@@ -881,6 +1004,7 @@ public final class AgentSessionRegistry: ObservableObject {
     private func with(
         _ s: AgentSession,
         status: AgentSessionStatus? = nil,
+        agent: AgentKind? = nil,
         model: String?? = nil,
         planText: String?? = nil,
         approvedPlanText: String?? = nil,
@@ -916,7 +1040,7 @@ public final class AgentSessionRegistry: ObservableObject {
             id: s.id,
             repoKey: s.repoKey,
             repoDisplayName: s.repoDisplayName,
-            agent: s.agent,
+            agent: agent ?? s.agent,
             model: Self.resolve(model, fallback: s.model),
             goal: s.goal,
             worktreePath: Self.resolve(worktreePath, fallback: s.worktreePath),

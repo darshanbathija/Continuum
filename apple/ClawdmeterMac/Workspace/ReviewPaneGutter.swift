@@ -41,6 +41,7 @@ struct ReviewPaneGutter: View {
                 }
                 .buttonStyle(PressableButtonStyle())
                 .help("Open \(tab.rawValue) pane")
+                .accessibilityIdentifier("code.review.gutter.\(tab.accessibilityKey)")
             }
             Spacer()
         }
