@@ -7,6 +7,60 @@ import OSLog
 
 private let macTermLogger = Logger(subsystem: "com.clawdmeter.mac", category: "MacTerminalView")
 
+public enum TerminalConnectionState: Equatable, Sendable {
+    case connecting
+    case connected
+    case reconnecting(attempt: Int)
+    case failed
+    case disconnected
+
+    public func statusText(hasVisibleOutput: Bool) -> String {
+        switch self {
+        case .connected where hasVisibleOutput:
+            return "Terminal connected"
+        case .reconnecting:
+            return "Terminal reconnecting"
+        case .failed:
+            return "Terminal connection failed"
+        case .disconnected where hasVisibleOutput:
+            return "Terminal disconnected"
+        default:
+            return "Terminal starting"
+        }
+    }
+
+    public var pendingTitle: String {
+        switch self {
+        case .reconnecting:
+            return "Reconnecting to terminal"
+        case .failed:
+            return "Terminal connection failed"
+        default:
+            return "Connecting to terminal"
+        }
+    }
+
+    public var pendingStatusText: String {
+        switch self {
+        case .reconnecting:
+            return "Restoring terminal stream"
+        case .failed:
+            return "Try reopening the terminal tab"
+        default:
+            return "Waiting for visible shell output"
+        }
+    }
+
+    public var isAttentionState: Bool {
+        switch self {
+        case .reconnecting, .failed, .disconnected:
+            return true
+        case .connecting, .connected:
+            return false
+        }
+    }
+}
+
 /// SwiftUI wrapper for SwiftTerm's `TerminalView` on macOS. Connects to the
 /// daemon's WS terminal channel for the given session and pipes bytes
 /// bidirectionally:
@@ -23,6 +77,7 @@ public struct MacTerminalView: NSViewRepresentable {
     /// specific direct PTY instance id. nil = use primary.
     public let paneId: String?
     public let onFirstOutput: (() -> Void)?
+    public let onConnectionStateChange: ((TerminalConnectionState) -> Void)?
 
     public init(
         sessionId: UUID,
@@ -30,7 +85,8 @@ public struct MacTerminalView: NSViewRepresentable {
         wsPort: Int,
         token: String,
         paneId: String? = nil,
-        onFirstOutput: (() -> Void)? = nil
+        onFirstOutput: (() -> Void)? = nil,
+        onConnectionStateChange: ((TerminalConnectionState) -> Void)? = nil
     ) {
         self.sessionId = sessionId
         self.host = host
@@ -38,6 +94,7 @@ public struct MacTerminalView: NSViewRepresentable {
         self.token = token
         self.paneId = paneId
         self.onFirstOutput = onFirstOutput
+        self.onConnectionStateChange = onConnectionStateChange
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -47,7 +104,8 @@ public struct MacTerminalView: NSViewRepresentable {
             wsPort: wsPort,
             token: token,
             paneId: paneId,
-            onFirstOutput: onFirstOutput
+            onFirstOutput: onFirstOutput,
+            onConnectionStateChange: onConnectionStateChange
         )
     }
 
@@ -62,7 +120,7 @@ public struct MacTerminalView: NSViewRepresentable {
     public func updateNSView(_ nsView: TerminalView, context: Context) {}
 
     public static func dismantleNSView(_ nsView: TerminalView, coordinator: Coordinator) {
-        coordinator.disconnect()
+        coordinator.disconnect(publishState: false)
     }
 
     // MARK: - Coordinator: WS lifecycle + SwiftTerm delegate
@@ -75,6 +133,7 @@ public struct MacTerminalView: NSViewRepresentable {
         let token: String
         let paneId: String?
         let onFirstOutput: (() -> Void)?
+        let onConnectionStateChange: ((TerminalConnectionState) -> Void)?
 
         weak var terminalView: TerminalView?
         private var task: URLSessionWebSocketTask?
@@ -84,6 +143,7 @@ public struct MacTerminalView: NSViewRepresentable {
         /// banner). Flipped false on read-loop failure, true once a frame
         /// arrives after a (re)connect.
         @Published public private(set) var isConnected = false
+        @Published public private(set) var connectionState: TerminalConnectionState = .disconnected
 
         /// Exp-backoff schedule between WS reconnect attempts, mirroring the
         /// iOS chat-subscribe ladder (1→30s, capped) so a daemon restart
@@ -101,7 +161,8 @@ public struct MacTerminalView: NSViewRepresentable {
             wsPort: Int,
             token: String,
             paneId: String?,
-            onFirstOutput: (() -> Void)?
+            onFirstOutput: (() -> Void)?,
+            onConnectionStateChange: ((TerminalConnectionState) -> Void)?
         ) {
             self.sessionId = sessionId
             self.host = host
@@ -109,6 +170,7 @@ public struct MacTerminalView: NSViewRepresentable {
             self.token = token
             self.paneId = paneId
             self.onFirstOutput = onFirstOutput
+            self.onConnectionStateChange = onConnectionStateChange
         }
 
         func connect() {
@@ -116,6 +178,7 @@ public struct MacTerminalView: NSViewRepresentable {
             // don't leave a dangling timer that re-arms a second socket.
             reconnectTask?.cancel()
             reconnectTask = nil
+            publishConnectionState(.connecting)
             // Use URLSessionWebSocketTask here too — server-side is via
             // Network.framework, but for the client we keep things simple.
             guard let url = URL(string: "ws://\(host):\(wsPort)/") else { return }
@@ -144,12 +207,15 @@ public struct MacTerminalView: NSViewRepresentable {
             readLoop()
         }
 
-        func disconnect() {
+        func disconnect(publishState: Bool = true) {
             reconnectTask?.cancel()
             reconnectTask = nil
             task?.cancel(with: .goingAway, reason: nil)
             task = nil
-            isConnected = false
+            if publishState {
+                isConnected = false
+                publishConnectionState(.disconnected)
+            }
         }
 
         private func readLoop() {
@@ -168,6 +234,7 @@ public struct MacTerminalView: NSViewRepresentable {
                 case .success(let message):
                     Task { @MainActor in
                         if !self.isConnected { self.isConnected = true }
+                        self.publishConnectionState(.connected)
                         self.reconnectAttempt = 0
                         self.dispatch(message: message)
                         self.readLoop()
@@ -184,9 +251,11 @@ public struct MacTerminalView: NSViewRepresentable {
             guard reconnectTask == nil else { return }
             guard reconnectAttempt < Self.maxReconnectAttempts else {
                 macTermLogger.debug("read: giving up after \(self.reconnectAttempt) reconnect attempts")
+                publishConnectionState(.failed)
                 return
             }
             reconnectAttempt += 1
+            publishConnectionState(.reconnecting(attempt: reconnectAttempt))
             let idx = min(reconnectAttempt - 1, Self.backoffSchedule.count - 1)
             let base = Self.backoffSchedule[idx]
             // 0-20% jitter so a herd of terminals doesn't reconnect in lockstep.
@@ -198,6 +267,18 @@ public struct MacTerminalView: NSViewRepresentable {
                 self.connect()
             }
         }
+
+        private func publishConnectionState(_ state: TerminalConnectionState) {
+            guard connectionState != state else { return }
+            connectionState = state
+            onConnectionStateChange?(state)
+        }
+
+        #if DEBUG
+        internal func simulateReadFailureForTesting() {
+            scheduleReconnect()
+        }
+        #endif
 
         private func dispatch(message: URLSessionWebSocketTask.Message) {
             let bytes: Data

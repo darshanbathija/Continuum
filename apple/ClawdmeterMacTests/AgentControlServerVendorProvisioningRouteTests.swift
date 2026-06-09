@@ -26,6 +26,7 @@ final class AgentControlServerVendorProvisioningRouteTests: XCTestCase {
     private var tempDir: URL!
     private var repoRoot: URL!
     private var server: AgentControlServer!
+    private var registry: AgentSessionRegistry!
     private var workspace: CodeWorkspaceRecord!
     private var envStore: RepoEnvStore!
     private var launchedCommand: String?
@@ -84,9 +85,10 @@ final class AgentControlServerVendorProvisioningRouteTests: XCTestCase {
         )
 
         let portBase = UInt16(Int.random(in: 30_000...60_000))
+        registry = AgentSessionRegistry(storeURL: sessionsURL)
         server = AgentControlServer(
             repoIndex: RepoIndex(),
-            registry: AgentSessionRegistry(storeURL: sessionsURL),
+            registry: registry,
             notifications: NotificationDispatcher(),
             chatStoreRegistry: DaemonChatStoreRegistry(resolveURL: { _, _ in nil }),
             chatFileResolver: SessionFileResolver(
@@ -97,7 +99,7 @@ final class AgentControlServerVendorProvisioningRouteTests: XCTestCase {
             workspaceStore: workspaceStore,
             repoEnvResolver: resolver,
             vendorProvisioningService: vendorService,
-            mobileCommandOutbox: MobileCommandOutbox(),
+            mobileCommandOutbox: MobileCommandOutbox(replaysAuditLogOnStart: false),
             listenPortRange: portBase...(portBase + 20),
             writesServerMetadata: false
         )
@@ -107,6 +109,9 @@ final class AgentControlServerVendorProvisioningRouteTests: XCTestCase {
 
     override func tearDown() async throws {
         server?.stop()
+        server = nil
+        await registry?.closeEventStoreForTesting()
+        registry = nil
         if let tempDir {
             try? FileManager.default.removeItem(at: tempDir)
         }

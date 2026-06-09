@@ -36,11 +36,11 @@ final class SessionLauncherModel: ObservableObject {
     init(
         modelCatalog: ModelCatalog = .bundled,
         availability: SessionLauncherAvailability = SessionLauncherAvailability(),
-        providerDefaults: ProviderDefaultsStore = ProviderDefaultsStore()
+        providerDefaults: ProviderDefaultsStore? = nil
     ) {
         self.modelCatalog = modelCatalog
         self.availability = availability
-        self.providerDefaults = providerDefaults
+        self.providerDefaults = providerDefaults ?? ProviderDefaultsStore()
     }
 
     var selectableAgents: [AgentKind] {

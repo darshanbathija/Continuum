@@ -1,13 +1,86 @@
 import XCTest
+import CoreGraphics
 import ClawdmeterShared
 @testable import Clawdmeter
 
 @MainActor
 final class WorkspaceTabsTests: XCTestCase {
 
+    private func waitUntil(_ timeout: TimeInterval = 3, _ predicate: @escaping () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if predicate() { return true }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return predicate()
+    }
+
+    func test_permissionModeShortcutsStayStableWhenProviderHidesPlanMode() {
+        XCTAssertEqual(ComposerInputCore.availablePermissionModes(for: .cursor), [.ask, .acceptEdits, .bypass])
+        XCTAssertEqual(PermissionModeChip.shortcutDigit(for: .ask), "1")
+        XCTAssertEqual(PermissionModeChip.shortcutDigit(for: .acceptEdits), "2")
+        XCTAssertEqual(PermissionModeChip.shortcutDigit(for: .plan), "3")
+        XCTAssertEqual(PermissionModeChip.shortcutDigit(for: .bypass), "4")
+
+        let cursorModes = ComposerInputCore.availablePermissionModes(for: .cursor)
+        XCTAssertNil(
+            ComposerInputCore.permissionMode(fromShortcutRaw: PermissionMode.plan.rawValue, availableModes: cursorModes),
+            "Cursor must ignore Plan-mode shortcut events because Cursor does not expose plan mode."
+        )
+        XCTAssertEqual(
+            ComposerInputCore.permissionMode(fromShortcutRaw: PermissionMode.bypass.rawValue, availableModes: cursorModes),
+            .bypass,
+            "Bypass must remain the stable Command-Shift-4 action even when Plan is hidden."
+        )
+    }
+
+    func test_permissionModeQuickFlipUsesPlanAndAcceptEditsOnlyWhenAvailable() {
+        let allModes = ComposerInputCore.availablePermissionModes(for: .claude)
+        XCTAssertEqual(PermissionModeChip.quickFlipTarget(current: .ask, availableModes: allModes), .plan)
+        XCTAssertEqual(PermissionModeChip.quickFlipTarget(current: .plan, availableModes: allModes), .acceptEdits)
+        XCTAssertEqual(PermissionModeChip.quickFlipTarget(current: .acceptEdits, availableModes: allModes), .plan)
+        XCTAssertEqual(PermissionModeChip.quickFlipTarget(current: .bypass, availableModes: allModes), .plan)
+
+        let cursorModes = ComposerInputCore.availablePermissionModes(for: .cursor)
+        XCTAssertEqual(PermissionModeChip.quickFlipTarget(current: .ask, availableModes: cursorModes), .acceptEdits)
+        XCTAssertEqual(PermissionModeChip.quickFlipTarget(current: .acceptEdits, availableModes: cursorModes), .acceptEdits)
+        XCTAssertEqual(PermissionModeChip.quickFlipTarget(current: .bypass, availableModes: cursorModes), .acceptEdits)
+    }
+
+    func test_rootCommandRoutingRegistersCodeTabShortcutBackedActions() {
+        let enabledCommands = Dictionary(uniqueKeysWithValues: MacRootCommandRouting
+            .codeTabCommands(canOpenChatTab: true, canOpenTerminalTab: true)
+            .map { ($0.id.rawValue, $0) })
+
+        XCTAssertEqual(enabledCommands["code.newChatTab"]?.shortcutID, "code.newChatTab")
+        XCTAssertEqual(enabledCommands["code.newChatTab"]?.scope, .code)
+        XCTAssertTrue(enabledCommands["code.newChatTab"]?.isEnabled == true)
+        XCTAssertEqual(enabledCommands["code.newTerminalTab"]?.shortcutID, "code.newTerminalTab")
+        XCTAssertEqual(enabledCommands["code.newTerminalTab"]?.scope, .code)
+        XCTAssertTrue(enabledCommands["code.newTerminalTab"]?.isEnabled == true)
+
+        let disabledCommands = Dictionary(uniqueKeysWithValues: MacRootCommandRouting
+            .codeTabCommands(canOpenChatTab: false, canOpenTerminalTab: false)
+            .map { ($0.id.rawValue, $0) })
+        XCTAssertFalse(disabledCommands["code.newChatTab"]?.isEnabled ?? true)
+        XCTAssertFalse(disabledCommands["code.newTerminalTab"]?.isEnabled ?? true)
+
+        XCTAssertEqual(MacRootCommandRouting.workspaceNotificationName(for: "code.newChatTab"), .newCodeChatTab)
+        XCTAssertEqual(MacRootCommandRouting.workspaceNotificationName(for: "code.newTerminalTab"), .newCodeTerminalTab)
+        XCTAssertEqual(MacRootCommandRouting.workspaceNotificationName(for: "session.rename"), .renameOpenSession)
+        XCTAssertNil(MacRootCommandRouting.workspaceNotificationName(for: "code.search"))
+
+        let disabledRename = MacRootCommandRouting.sessionRenameCommand(session: nil)
+        XCTAssertEqual(disabledRename.shortcutID, "session.rename")
+        XCTAssertFalse(disabledRename.isEnabled)
+    }
+
     func test_openDraftWorkspaceTabDoesNotPersistSessionOrChangeWorktree() async throws {
         let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTabsTests")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
         let source = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
@@ -39,9 +112,660 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.draftWorkspaceTab?.workspaceKey.workspacePath, "/repo/.claude/worktrees/kolkata")
     }
 
+    func test_openDraftWorkspaceTabAllowsMultipleUntitledTabsPerWorkspace() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceDraftTabsUnbounded")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let source = try await registry.create(
+            repoKey: "/repo",
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt",
+            goal: "source",
+            worktreePath: "/repo/.claude/worktrees/kolkata",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let key = try XCTUnwrap(WorkspaceKey.of(source))
+
+        let first = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .codex, modelId: "gpt", effort: .max, mode: .worktree, planMode: false)
+        ))
+        model.openSession(source)
+        let second = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .claude, modelId: "sonnet", effort: .max, mode: .worktree, planMode: false)
+        ))
+        let third = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .codex, modelId: "gpt-5.5", effort: .max, mode: .worktree, planMode: false)
+        ))
+
+        XCTAssertEqual(model.workspaceDraftTabs(in: key).map(\.id), [first.id, second.id, third.id])
+        XCTAssertEqual(model.draftWorkspaceTab?.id, third.id)
+
+        model.selectDraftWorkspaceTab(first)
+        model.clearDraftWorkspaceTab(second)
+
+        XCTAssertEqual(model.workspaceDraftTabs(in: key).map(\.id), [first.id, third.id])
+        XCTAssertEqual(model.draftWorkspaceTab?.id, first.id)
+
+        model.clearDraftWorkspaceTab(first)
+
+        XCTAssertEqual(model.workspaceDraftTabs(in: key).map(\.id), [third.id])
+        XCTAssertEqual(model.draftWorkspaceTab?.id, third.id)
+    }
+
+    func test_openDraftWorkspaceTabFromSelectedDraftAppendsUnboundedSiblingDrafts() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceDraftTabsFromDraft")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let source = try await registry.create(
+            repoKey: "/repo",
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "source",
+            worktreePath: "/repo/.claude/worktrees/kolkata",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let key = try XCTUnwrap(WorkspaceKey.of(source))
+        let first = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(
+                agent: .gemini,
+                modelId: "gemini-3.5-flash-thinking",
+                effort: nil,
+                mode: .worktree,
+                planMode: false
+            )
+        ))
+
+        let second = model.openDraftWorkspaceTab(from: first)
+        let third = model.openDraftWorkspaceTab(from: second)
+        let fourth = model.openDraftWorkspaceTab(from: third)
+
+        XCTAssertEqual(model.workspaceDraftTabs(in: key).map(\.id), [first.id, second.id, third.id, fourth.id])
+        XCTAssertEqual(model.draftWorkspaceTab?.id, fourth.id)
+        XCTAssertNil(model.openSessionId)
+        XCTAssertEqual(model.registry.sessions.count, 1, "Opening more Code tabs must not persist sessions before first send.")
+        XCTAssertEqual(model.draftWorkspaceTab?.agent, .gemini)
+        XCTAssertEqual(model.draftWorkspaceTab?.modelId, "gemini-3.5-flash-thinking")
+        XCTAssertNil(model.draftWorkspaceTab?.effort)
+    }
+
+    func test_newWorkspaceTerminalTabCanUseSiblingSourceWhenDraftIsSelected() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalFromDraft")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let source = try await registry.create(
+            repoKey: "/repo",
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "source",
+            worktreePath: "/repo/.claude/worktrees/kolkata",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let draft = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .codex, modelId: "gpt-5.5", effort: .max, mode: .worktree, planMode: false)
+        ))
+
+        XCTAssertNil(model.openSessionId)
+        XCTAssertEqual(model.draftWorkspaceTab?.id, draft.id)
+        XCTAssertTrue(model.canOpenNewWorkspaceChatDraftTab())
+        XCTAssertTrue(model.canOpenNewWorkspaceTerminalTab())
+        XCTAssertEqual(model.sourceForNewWorkspaceTerminalTab()?.id, source.id)
+    }
+
+    func test_activeWorkspaceKeyTracksOneSelectedWorktreeAcrossTabTypes() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceActiveWorktree")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        let alpha = repo.appendingPathComponent("alpha", isDirectory: true)
+        let beta = repo.appendingPathComponent("beta", isDirectory: true)
+        try FileManager.default.createDirectory(at: alpha, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: beta, withIntermediateDirectories: true)
+
+        let first = try await registry.create(
+            repoKey: repo.path,
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "alpha",
+            worktreePath: alpha.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let second = try await registry.create(
+            repoKey: repo.path,
+            repoDisplayName: "repo",
+            agent: .claude,
+            model: "sonnet",
+            goal: "beta",
+            worktreePath: beta.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let alphaKey = try XCTUnwrap(WorkspaceKey.of(first))
+        let betaKey = try XCTUnwrap(WorkspaceKey.of(second))
+        let visibleKeys = [alphaKey, betaKey]
+
+        func activeVisibleKeys() -> [WorkspaceKey] {
+            guard let active = model.activeWorkspaceKey else { return [] }
+            return visibleKeys.filter { $0 == active }
+        }
+
+        model.openSession(first)
+        XCTAssertEqual(activeVisibleKeys(), [alphaKey])
+
+        let draft = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: first,
+            defaults: ComposerStore.ChipDefaults(agent: .codex, modelId: "gpt-5.5", effort: .max, mode: .worktree, planMode: false)
+        ))
+        XCTAssertEqual(activeVisibleKeys(), [alphaKey], "Draft tabs must keep the owning worktree selected even after openSessionId is cleared.")
+
+        model.openSession(second)
+        XCTAssertEqual(activeVisibleKeys(), [betaKey])
+
+        model.selectDraftWorkspaceTab(draft)
+        XCTAssertEqual(activeVisibleKeys(), [alphaKey], "Re-selecting a draft must move selection back to only its worktree.")
+
+        model.openWorkspaceTerminalTab(from: second)
+        XCTAssertEqual(activeVisibleKeys(), [betaKey])
+        XCTAssertNil(model.selectedWorkspaceDraftTabId)
+        XCTAssertNil(model.selectedWorkspaceDocumentTabId)
+
+        model.openWorkspaceDocumentTab(from: first, path: "README.md")
+        XCTAssertEqual(activeVisibleKeys(), [alphaKey])
+        XCTAssertNil(model.selectedWorkspaceDraftTabId)
+        XCTAssertNil(model.selectedWorkspaceTerminalTabId)
+        XCTAssertEqual(model.selectedWorkspaceDocumentTab?.workspaceKey, alphaKey)
+    }
+
+    func test_workspaceDraftComposerStoresStayIsolatedAcrossDraftTabs() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceDraftComposerIsolation")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let source = try await registry.create(
+            repoKey: "/repo",
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "source",
+            worktreePath: "/repo/.claude/worktrees/kolkata",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let key = try XCTUnwrap(WorkspaceKey.of(source))
+        let first = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .codex, modelId: "gpt-5.5", effort: .max, mode: .worktree, planMode: false)
+        ))
+        let second = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .claude, modelId: "claude-sonnet-4-6", effort: .high, mode: .worktree, planMode: false)
+        ))
+
+        let firstStore = model.composerStore(for: first)
+        firstStore.text = "first draft should stay on Antigravity"
+        firstStore.agent = .gemini
+        firstStore.modelId = "gemini-3.5-flash-thinking"
+        firstStore.effort = nil
+        model.updateDraftWorkspaceTabConfiguration(
+            id: first.id,
+            agent: firstStore.agent,
+            modelId: firstStore.modelId,
+            effort: firstStore.effort
+        )
+
+        let secondStore = model.composerStore(for: second)
+        secondStore.text = "second draft should stay on Claude"
+        secondStore.agent = .claude
+        secondStore.modelId = "claude-sonnet-4-6"
+        secondStore.effort = .high
+        model.updateDraftWorkspaceTabConfiguration(
+            id: second.id,
+            agent: secondStore.agent,
+            modelId: secondStore.modelId,
+            effort: secondStore.effort
+        )
+
+        model.selectDraftWorkspaceTab(first)
+        let selectedFirst = try XCTUnwrap(model.draftWorkspaceTab)
+        XCTAssertEqual(selectedFirst.id, first.id)
+        XCTAssertTrue(model.composerStore(for: selectedFirst) === firstStore)
+        XCTAssertEqual(firstStore.text, "first draft should stay on Antigravity")
+        XCTAssertEqual(selectedFirst.agent, .gemini)
+        XCTAssertEqual(selectedFirst.modelId, "gemini-3.5-flash-thinking")
+        XCTAssertNil(selectedFirst.effort)
+
+        model.selectDraftWorkspaceTab(second)
+        let selectedSecond = try XCTUnwrap(model.draftWorkspaceTab)
+        XCTAssertEqual(selectedSecond.id, second.id)
+        XCTAssertTrue(model.composerStore(for: selectedSecond) === secondStore)
+        XCTAssertEqual(secondStore.text, "second draft should stay on Claude")
+        XCTAssertEqual(selectedSecond.agent, .claude)
+        XCTAssertEqual(selectedSecond.modelId, "claude-sonnet-4-6")
+        XCTAssertEqual(selectedSecond.effort, .high)
+        XCTAssertEqual(model.workspaceDraftTabs(in: key).map(\.id), [first.id, second.id])
+    }
+
+    func test_workspaceDraftFirstSendPlanUsesSelectedDraftModelAsFirstTurn() {
+        let inheritedSourceId = UUID()
+        let draft = WorkspaceDraftTab(
+            workspaceKey: WorkspaceKey(
+                repoKey: "/repo/Defx V3",
+                workspacePath: "/repo/Defx V3/.claude/worktrees/charlotte-2"
+            ),
+            mode: .worktree,
+            agent: .claude,
+            modelId: "claude-sonnet-4-6",
+            effort: .max
+        )
+
+        let plan = EmptyStateFirstSendPlan.make(
+            repoKey: "/repo/Defx V3",
+            workspaceDraft: draft,
+            agent: .gemini,
+            model: "gemini-3.5-flash-thinking",
+            effort: .max,
+            storeMode: .worktree,
+            permissionMode: .ask,
+            modelSupportsEffort: false,
+            goal: "hello - tell me about all improvements we could make",
+            inheritedContextSourceIds: [inheritedSourceId]
+        )
+
+        XCTAssertEqual(plan.repoPath, "/repo/Defx V3")
+        XCTAssertEqual(plan.existingWorkspacePath, "/repo/Defx V3/.claude/worktrees/charlotte-2")
+        XCTAssertEqual(plan.agent, .gemini)
+        XCTAssertEqual(plan.model, "gemini-3.5-flash-thinking")
+        XCTAssertNil(plan.effort, "Gemini draft sends must clear stale effort values when the selected model does not support effort.")
+        XCTAssertFalse(plan.planMode)
+        XCTAssertEqual(plan.mode, .worktree)
+        XCTAssertEqual(plan.inheritedContextSourceIds, [inheritedSourceId])
+        XCTAssertFalse(plan.sendAsFollowUp, "A draft tab's first send must not be queued as a follow-up.")
+        XCTAssertEqual(plan.sendOrigin, .userComposerFirstTurn)
+        XCTAssertTrue(
+            ProviderPromptGuard.validate(text: "hello - tell me about all improvements we could make", origin: plan.sendOrigin).allowed
+        )
+    }
+
+    func test_workspaceDraftFirstSendPlanCoversEveryBundledCodeProviderModel() {
+        let inheritedSourceId = UUID()
+        let draft = WorkspaceDraftTab(
+            workspaceKey: WorkspaceKey(
+                repoKey: "/repo/Defx V3",
+                workspacePath: "/repo/Defx V3/.claude/worktrees/charlotte-2"
+            ),
+            mode: .worktree,
+            agent: .claude,
+            modelId: "claude-sonnet-4-6",
+            effort: .max
+        )
+        let cases = AgentKind.allCases.flatMap { provider in
+            ModelCatalog.bundled.entries(for: provider).map { entry in
+                (provider: provider, entry: entry)
+            }
+        }
+        XCTAssertFalse(cases.isEmpty)
+
+        XCTContext.runActivity(named: "Draft first-send bundled provider/model matrix") { activity in
+            activity.add(XCTAttachment(string: cases.map { provider, entry in
+                "\(provider.rawValue): \(entry.id)"
+            }.joined(separator: "\n")))
+        }
+
+        for (provider, entry) in cases {
+            let goal = "hello \(provider.rawValue) \(entry.id)"
+            let plan = EmptyStateFirstSendPlan.make(
+                repoKey: "/repo/Defx V3",
+                workspaceDraft: draft,
+                agent: provider,
+                model: entry.id,
+                effort: .max,
+                storeMode: .local,
+                permissionMode: .ask,
+                modelSupportsEffort: entry.supportsEffort,
+                goal: goal,
+                inheritedContextSourceIds: [inheritedSourceId]
+            )
+
+            XCTAssertEqual(plan.repoPath, "/repo/Defx V3", "\(provider.rawValue) \(entry.id)")
+            XCTAssertEqual(
+                plan.existingWorkspacePath,
+                "/repo/Defx V3/.claude/worktrees/charlotte-2",
+                "\(provider.rawValue) \(entry.id)"
+            )
+            XCTAssertEqual(plan.agent, provider, "\(provider.rawValue) \(entry.id)")
+            XCTAssertEqual(plan.model, entry.id, "\(provider.rawValue) \(entry.id)")
+            XCTAssertEqual(plan.effort, entry.supportsEffort ? .max : nil, "\(provider.rawValue) \(entry.id)")
+            XCTAssertEqual(plan.mode, .worktree, "\(provider.rawValue) \(entry.id)")
+            XCTAssertFalse(plan.planMode, "\(provider.rawValue) \(entry.id)")
+            XCTAssertEqual(plan.inheritedContextSourceIds, [inheritedSourceId], "\(provider.rawValue) \(entry.id)")
+            XCTAssertFalse(plan.sendAsFollowUp, "\(provider.rawValue) \(entry.id)")
+            XCTAssertEqual(plan.sendOrigin, .userComposerFirstTurn, "\(provider.rawValue) \(entry.id)")
+            XCTAssertTrue(
+                ProviderPromptGuard.validate(text: goal, origin: plan.sendOrigin).allowed,
+                "\(provider.rawValue) \(entry.id)"
+            )
+        }
+    }
+
+    func test_workspaceDraftTabActionsSurfaceVisibleStateWithin100ms() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceDraftTabLatency")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let source = try await registry.create(
+            repoKey: "/repo",
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "source",
+            worktreePath: "/repo/.claude/worktrees/kolkata",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let key = try XCTUnwrap(WorkspaceKey.of(source))
+        let defaults = ComposerStore.ChipDefaults(
+            agent: .codex,
+            modelId: "gpt-5.5",
+            effort: .max,
+            mode: .worktree,
+            planMode: false
+        )
+
+        var opened: [WorkspaceDraftTab] = []
+        var worstOpen = Duration.zero
+        var worstSelect = Duration.zero
+        var worstClose = Duration.zero
+
+        for _ in 0..<50 {
+            let start = ContinuousClock.now
+            let draft = try XCTUnwrap(model.openDraftWorkspaceTab(from: source, defaults: defaults))
+            let elapsed = start.duration(to: ContinuousClock.now)
+            worstOpen = max(worstOpen, elapsed)
+            opened.append(draft)
+            XCTAssertEqual(model.draftWorkspaceTab?.id, draft.id)
+            XCTAssertEqual(model.openSessionId, nil)
+        }
+        XCTAssertEqual(model.workspaceDraftTabs(in: key).count, 50)
+
+        for draft in opened {
+            let start = ContinuousClock.now
+            model.selectDraftWorkspaceTab(draft)
+            let elapsed = start.duration(to: ContinuousClock.now)
+            worstSelect = max(worstSelect, elapsed)
+            XCTAssertEqual(model.draftWorkspaceTab?.id, draft.id)
+        }
+
+        for draft in opened.prefix(25) {
+            let start = ContinuousClock.now
+            model.clearDraftWorkspaceTab(draft)
+            let elapsed = start.duration(to: ContinuousClock.now)
+            worstClose = max(worstClose, elapsed)
+        }
+        XCTAssertEqual(model.workspaceDraftTabs(in: key).count, 25)
+
+        XCTContext.runActivity(named: "Code tab draft-tab feedback latency") { activity in
+            activity.add(XCTAttachment(string: """
+            opens=50
+            closes=25
+            worstOpen=\(worstOpen)
+            worstSelect=\(worstSelect)
+            worstClose=\(worstClose)
+            budget=100ms per visible tab-state interaction
+            """))
+        }
+        XCTAssertLessThan(worstOpen, .milliseconds(100), "Clicking Code tab + must surface the new draft tab within 100ms.")
+        XCTAssertLessThan(worstSelect, .milliseconds(100), "Selecting an existing draft tab must surface the selected state within 100ms.")
+        XCTAssertLessThan(worstClose, .milliseconds(100), "Closing a draft tab must remove it from visible tab state within 100ms.")
+    }
+
+    func test_workspaceTabStripCompactsBeyondTwoTabsOnMinimumCenterWidth() {
+        let minimumCenterWidth: CGFloat = 420
+        let fourTabLabelWidth = WorkspaceTabStrip.adaptiveChatTabLabelWidth(
+            availableWidth: minimumCenterWidth,
+            itemCount: 4
+        )
+
+        XCTAssertLessThanOrEqual(
+            WorkspaceTabStrip.estimatedChatTabStripWidth(labelWidth: fourTabLabelWidth, itemCount: 4),
+            minimumCenterWidth,
+            "The rendered Code tab strip must not look capped at two tabs on the minimum center pane; four chat tabs plus + should fit before horizontal scrolling is needed."
+        )
+
+        let manyTabLabelWidth = WorkspaceTabStrip.adaptiveChatTabLabelWidth(
+            availableWidth: minimumCenterWidth,
+            itemCount: 50
+        )
+        XCTAssertEqual(
+            manyTabLabelWidth,
+            fourTabLabelWidth,
+            "Opening more tabs should keep a stable compact width and rely on scrolling, not shrink to zero or drop tab items."
+        )
+
+        let roomyWidth: CGFloat = 900
+        let twoTabLabelWidth = WorkspaceTabStrip.adaptiveChatTabLabelWidth(
+            availableWidth: roomyWidth,
+            itemCount: 2
+        )
+        let twoTabScrollWidth = WorkspaceTabStrip.scrollableTabContentWidth(
+            availableWidth: roomyWidth,
+            labelWidth: twoTabLabelWidth,
+            itemCount: 2
+        )
+        XCTAssertLessThan(
+            twoTabScrollWidth + 36,
+            roomyWidth,
+            "When tabs fit, the + button should sit immediately after the tab content instead of being pushed to the far right."
+        )
+
+        let manyTabScrollWidth = WorkspaceTabStrip.scrollableTabContentWidth(
+            availableWidth: minimumCenterWidth,
+            labelWidth: manyTabLabelWidth,
+            itemCount: 50
+        )
+        XCTAssertEqual(
+            manyTabScrollWidth,
+            minimumCenterWidth - 36,
+            "When tabs overflow, the scroll region should reserve width for the visible + button."
+        )
+    }
+
+    func test_composerTerminalPasteStripsAnsiAndSurfacesTextWithin100ms() {
+        let raw = [
+            "\u{001B}]0;terminal title\u{0007}\u{001B}[32mPASS\u{001B}[0m",
+            "\u{001B}[200~line 1\u{001B}[201~",
+            "\u{001B}]8;;https://example.com/log\u{0007}log link\u{001B}]8;;\u{0007}",
+            "\u{001B}[2Kdone"
+        ].joined(separator: "\n")
+
+        let start = ContinuousClock.now
+        let pasted = ComposerInputCore.textAfterPastingTerminalText(
+            existing: "Investigate:",
+            rawClipboard: raw
+        )
+        let elapsed = start.duration(to: ContinuousClock.now)
+
+        XCTAssertEqual(
+            pasted,
+            """
+            Investigate:
+            PASS
+            line 1
+            log link
+            done
+            """
+        )
+        XCTAssertFalse(pasted.unicodeScalars.contains { $0.value == 0x1B }, "Composer paste cleanup must not leave raw ESC bytes in the prompt.")
+        XCTAssertLessThan(elapsed, .milliseconds(100), "Code composer terminal-paste cleanup should visibly mutate the draft text within 100ms.")
+
+        XCTAssertEqual(
+            ComposerInputCore.textAfterPastingTerminalText(existing: "   \n", rawClipboard: "\u{001B}[31mclean\u{001B}[0m"),
+            "clean",
+            "Pasting into an empty-looking composer should replace the draft instead of prepending blank lines."
+        )
+    }
+
+    func test_promptHistoryPresentationFiltersStableTargetsAndSaveStateWithin100ms() {
+        let savedId = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+        let saved = SavedPromptState(
+            id: savedId,
+            title: "Fix failing tests",
+            body: "swift test --filter WorkspaceTabsTests"
+        )
+        let history = [
+            "ship terminal reconnect polish",
+            "fix Code tab prompt history"
+        ]
+
+        let start = ContinuousClock.now
+        let presentation = ComposerInputCore.promptHistoryPresentation(
+            history: history,
+            savedPrompts: [saved],
+            query: "fix"
+        )
+        let elapsed = start.duration(to: ContinuousClock.now)
+
+        XCTAssertLessThan(elapsed, .milliseconds(100), "Prompt-history search should surface local row feedback within 100ms.")
+        XCTAssertEqual(presentation.savedRows.map(\.accessibilityIdentifier), [
+            "code.prompt-history.saved.\(savedId.uuidString.lowercased())"
+        ])
+        XCTAssertEqual(presentation.savedRows.first?.title, "Fix failing tests")
+        XCTAssertEqual(presentation.savedRows.first?.body, saved.body)
+        XCTAssertEqual(presentation.historyRows.map(\.title), ["fix Code tab prompt history"])
+        XCTAssertEqual(
+            presentation.historyRows.map(\.accessibilityIdentifier),
+            [ComposerInputCore.promptHistoryRowIdentifier(for: "fix Code tab prompt history")]
+        )
+        XCTAssertFalse(presentation.showsEmptyHistory)
+
+        let empty = ComposerInputCore.promptHistoryPresentation(
+            history: history,
+            savedPrompts: [saved],
+            query: "no matching prompt"
+        )
+        XCTAssertTrue(empty.savedRows.isEmpty)
+        XCTAssertTrue(empty.historyRows.isEmpty)
+        XCTAssertTrue(empty.showsEmptyHistory)
+        XCTAssertFalse(ComposerInputCore.canSavePromptText(" \n\t "))
+        XCTAssertTrue(ComposerInputCore.canSavePromptText("save this prompt"))
+    }
+
+    func test_workspaceDraftModelPickerSelectionSurfacesConfigurationWithin100ms() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceDraftModelPickerLatency")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let source = try await registry.create(
+            repoKey: "/repo",
+            repoDisplayName: "repo",
+            agent: .claude,
+            model: "claude-sonnet-4-6",
+            goal: "source",
+            worktreePath: "/repo/.claude/worktrees/kolkata",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let key = try XCTUnwrap(WorkspaceKey.of(source))
+        let defaults = ComposerStore.ChipDefaults(
+            agent: .claude,
+            modelId: "claude-sonnet-4-6",
+            effort: .high,
+            mode: .worktree,
+            planMode: false
+        )
+
+        var drafts: [WorkspaceDraftTab] = []
+        for _ in 0..<50 {
+            drafts.append(try XCTUnwrap(model.openDraftWorkspaceTab(from: source, defaults: defaults)))
+        }
+        let untouched = try XCTUnwrap(drafts.first)
+
+        var worstSelection = Duration.zero
+        for draft in drafts.dropFirst() {
+            let start = ContinuousClock.now
+            model.selectDraftWorkspaceTab(draft)
+            model.updateDraftWorkspaceTabConfiguration(
+                id: draft.id,
+                agent: .gemini,
+                modelId: "gemini-3.5-flash-thinking",
+                effort: nil
+            )
+            let elapsed = start.duration(to: ContinuousClock.now)
+            worstSelection = max(worstSelection, elapsed)
+
+            let selected = try XCTUnwrap(model.draftWorkspaceTab)
+            XCTAssertEqual(selected.id, draft.id)
+            XCTAssertEqual(selected.agent, .gemini)
+            XCTAssertEqual(selected.modelId, "gemini-3.5-flash-thinking")
+            XCTAssertNil(selected.effort)
+        }
+
+        let remaining = model.workspaceDraftTabs(in: key)
+        let untouchedAfterPickerSelections = try XCTUnwrap(remaining.first { $0.id == untouched.id })
+        XCTAssertEqual(untouchedAfterPickerSelections.agent, .claude)
+        XCTAssertEqual(untouchedAfterPickerSelections.modelId, "claude-sonnet-4-6")
+        XCTAssertEqual(untouchedAfterPickerSelections.effort, .high)
+
+        XCTContext.runActivity(named: "Code tab draft model-picker feedback latency") { activity in
+            activity.add(XCTAttachment(string: """
+            draftCount=50
+            pickerSelections=49
+            selectedModel=gemini-3.5-flash-thinking
+            worstSelection=\(worstSelection)
+            budget=100ms per rendered picker selection feedback
+            """))
+        }
+        XCTAssertLessThan(
+            worstSelection,
+            .milliseconds(100),
+            "Picking a model on a draft tab must update the selected draft's visible provider/model state within 100ms."
+        )
+    }
+
     func test_registryPersistsInheritedContextSources() async throws {
         let (registry, directory) = try Self.makeIsolatedRegistry("WorkspaceTabsRegistry")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
         let registryURL = directory.appendingPathComponent("sessions.json")
         let sourceId = UUID()
         let session = try await registry.create(
@@ -87,7 +811,10 @@ final class WorkspaceTabsTests: XCTestCase {
 
     func test_registryRuntimeCwdCanRepresentGeminiAndOpencodeSameWorkspaceSessions() async throws {
         let (registry, directory) = try Self.makeIsolatedRegistry("WorkspaceTabsRuntimeCwd")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
         let paths = SessionsModel.existingWorkspaceRecordPaths(
             repoPath: "/repo",
             workspacePath: "/repo/.claude/worktrees/kolkata",
@@ -129,9 +856,58 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertFalse(opencode.ownsWorktree)
     }
 
+    func test_sameWorkspaceModelSessionTabsAreNotCappedAtTwo() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceSiblingSessionTabsUnbounded")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        let worktree = repo.appendingPathComponent(".claude/worktrees/kolkata", isDirectory: true)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+
+        let fixtures: [(AgentKind, String)] = [
+            (.claude, "claude-sonnet-4-6"),
+            (.codex, "gpt-5.5"),
+            (.gemini, "gemini-3.5-flash-thinking"),
+            (.cursor, "cursor-default"),
+            (.opencode, "opencode-default"),
+            (.grok, "grok-build")
+        ]
+        var sessions: [AgentSession] = []
+        for (agent, modelId) in fixtures {
+            sessions.append(try await registry.create(
+                repoKey: repo.path,
+                repoDisplayName: "repo",
+                agent: agent,
+                model: modelId,
+                goal: "\(agent.rawValue) tab",
+                worktreePath: worktree.path,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                planMode: false,
+                mode: .worktree
+            ))
+        }
+
+        let key = try XCTUnwrap(WorkspaceKey.of(sessions[0]))
+        let siblingTabs = WorkspaceKey.siblings(of: key, in: model.registry.sessions)
+        XCTAssertEqual(siblingTabs.count, fixtures.count, "The Code top-tab source must include every model session in the worktree, not just two.")
+        XCTAssertEqual(Set(siblingTabs.map(\.id)), Set(sessions.map(\.id)))
+
+        for session in sessions {
+            model.openSession(session)
+            XCTAssertEqual(model.activeWorkspaceKey, key)
+        }
+        XCTAssertEqual(WorkspaceKey.siblings(of: key, in: model.registry.sessions).count, fixtures.count)
+    }
+
     func test_openWorkspaceTerminalTabUsesExistingSessionWithoutCreatingWorktree() async throws {
         let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalTabs")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
         let source = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
@@ -155,34 +931,147 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.selectedWorkspaceTerminalTab?.workspaceKey, WorkspaceKey.of(source))
     }
 
-    func test_openWorkspaceTerminalTabRejectsHarnessSessionsWithoutTerminalSupport() async throws {
-        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalUnsupportedHarness")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+    func test_openOrCreateWorkspaceTerminalTabSurfacesPendingTabWithin100ms() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalResponsiveShell")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
         let source = try await registry.create(
-            repoKey: "/repo",
+            repoKey: repo.path,
             repoDisplayName: "repo",
             agent: .codex,
             model: "gpt",
             goal: "source",
-            worktreePath: "/repo/.claude/worktrees/kolkata",
+            worktreePath: repo.path,
             tmuxWindowId: nil,
             tmuxPaneId: nil,
             planMode: false,
             mode: .worktree
         )
 
-        model.openWorkspaceTerminalTab(from: source)
+        let start = ContinuousClock.now
+        await model.openOrCreateWorkspaceTerminalTab(from: source)
+        let elapsed = start.duration(to: ContinuousClock.now)
 
-        XCTAssertFalse(model.canOpenWorkspaceTerminalTab(from: source))
+        XCTAssertLessThan(elapsed, .milliseconds(100))
+        let visibleTab = try XCTUnwrap(model.selectedWorkspaceTerminalTab)
+        XCTAssertEqual(visibleTab.sessionId, source.id)
+        XCTAssertEqual(visibleTab.workspaceKey, WorkspaceKey.of(source))
+        XCTAssertTrue(visibleTab.isPendingDirectShell || visibleTab.paneRefId != nil)
+        if visibleTab.isPendingDirectShell {
+            XCTAssertNil(visibleTab.paneRefId)
+            XCTAssertEqual(visibleTab.pendingTitle, "Shell")
+        }
+
+        let promoted = await waitUntil {
+            model.selectedWorkspaceTerminalTab?.paneRefId != nil
+        }
+        XCTAssertTrue(promoted)
+
+        if let tab = model.selectedWorkspaceTerminalTab {
+            await model.closeWorkspaceTerminalTab(tab)
+        }
+    }
+
+    func test_openOrCreateWorkspaceTerminalTabAppendsBeyondSevenWithoutPendingReuse() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalTabsUnbounded")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        let source = try await registry.create(
+            repoKey: repo.path,
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt",
+            goal: "source",
+            worktreePath: repo.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let key = try XCTUnwrap(WorkspaceKey.of(source))
+
+        let start = ContinuousClock.now
+        for _ in 0..<8 {
+            await model.openOrCreateWorkspaceTerminalTab(from: source)
+        }
+        let elapsed = start.duration(to: ContinuousClock.now)
+
+        let immediateTabs = model.workspaceTerminalTabs(in: key)
+        XCTAssertEqual(immediateTabs.count, 8, "Each terminal-tab request should append a visible pending tab; the old path reused the one pending tab.")
+        XCTAssertEqual(Set(immediateTabs.map(\.id)).count, 8)
+        XCTAssertEqual(model.selectedWorkspaceTerminalTab?.id, immediateTabs.last?.id)
+        XCTAssertLessThan(elapsed, .milliseconds(250), "Opening several terminal tabs should only stage visible pending tabs, not wait for shell startup.")
+
+        let promoted = await waitUntil(10) {
+            let tabs = model.workspaceTerminalTabs(in: key)
+            return tabs.count == 8 && tabs.allSatisfy { !$0.isPendingDirectShell && $0.paneRefId != nil }
+        }
+        XCTAssertTrue(promoted, "All pending terminal tabs should promote to direct shell panes.")
+
+        for tab in model.workspaceTerminalTabs(in: key) {
+            await model.closeWorkspaceTerminalTab(tab)
+        }
+    }
+
+    func test_openWorkspaceTerminalTabAllowsHarnessSessionDirectWorktreeShell() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalHarnessDirectShell")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        let source = try await registry.create(
+            repoKey: repo.path,
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt",
+            goal: "source",
+            worktreePath: repo.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+
+        await model.openOrCreateWorkspaceTerminalTab(from: source)
+
+        XCTAssertEqual(source.runtimeBinding?.capabilities.supportsTerminal, false)
+        XCTAssertTrue(model.canOpenWorkspaceTerminalTab(from: source))
         XCTAssertEqual(model.registry.sessions.count, 1)
-        XCTAssertNil(model.openSessionId)
-        XCTAssertNil(model.selectedWorkspaceTerminalTab)
-        XCTAssertEqual(model.workspaceTerminalTabs(in: WorkspaceKey.of(source)!).count, 0)
+        XCTAssertEqual(model.openSessionId, source.id)
+        XCTAssertEqual(model.selectedWorkspaceTerminalTab?.sessionId, source.id)
+        let promoted = await waitUntil {
+            model.selectedWorkspaceTerminalTab?.paneRefId != nil
+        }
+        XCTAssertTrue(promoted)
+        let paneRefId = try XCTUnwrap(model.selectedWorkspaceTerminalTab?.paneRefId)
+        let pane = try XCTUnwrap(registry.session(id: source.id)?.terminalPanes.first { $0.id == paneRefId })
+        XCTAssertEqual(pane.title, "Shell")
+        XCTAssertFalse(pane.isPrimary)
+        let host = await TerminalPtyRegistry.shared.host(id: pane.paneId)
+        XCTAssertNotNil(host)
+        XCTAssertEqual(model.workspaceTerminalTabs(in: WorkspaceKey.of(source)!).count, 1)
+
+        if let tab = model.selectedWorkspaceTerminalTab {
+            await model.closeWorkspaceTerminalTab(tab)
+        }
     }
 
     func test_openWorkspaceTerminalTabRejectsLegacyPaneBackedSessions() async throws {
         let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalLegacyPane")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
         let source = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
@@ -206,7 +1095,10 @@ final class WorkspaceTabsTests: XCTestCase {
 
     func test_workspaceDocumentTabsOpenSelectDedupeAndCloseToOriginChat() async throws {
         let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceDocumentTabs")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
         let repo = directory.appendingPathComponent("repo", isDirectory: true)
         let docs = repo.appendingPathComponent("docs", isDirectory: true)
         try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
@@ -256,7 +1148,10 @@ final class WorkspaceTabsTests: XCTestCase {
 
     func test_prepareNewSessionClearsWorkspaceTabSelections() async throws {
         let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceSwitcherClearsTabs")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
         let repo = directory.appendingPathComponent("repo", isDirectory: true)
         try FileManager.default.createDirectory(at: repo.appendingPathComponent("docs", isDirectory: true), withIntermediateDirectories: true)
         let source = try await registry.create(
@@ -320,7 +1215,10 @@ final class WorkspaceTabsTests: XCTestCase {
 
     func test_workspaceTerminalTabsAreScopedAndIgnoreMissingPaneRefs() async throws {
         let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalScope")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
         let first = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
@@ -462,7 +1360,10 @@ final class WorkspaceTabsTests: XCTestCase {
     /// same cleared selection) so the two posters cannot drift.
     func test_spawnSameWorkspaceChatTabMatchesOpenDraftWorkspaceTab() async throws {
         let (model, registry, directory) = try Self.makeIsolatedModel("Spawn185Path")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
         let source = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
@@ -491,8 +1392,11 @@ final class WorkspaceTabsTests: XCTestCase {
 
     /// Unknown parent id returns nil + no side effect.
     func test_spawnSameWorkspaceChatTabIsNoOpForUnknownParentId() async throws {
-        let (model, _, directory) = try Self.makeIsolatedModel("SpawnNoop")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let (model, registry, directory) = try Self.makeIsolatedModel("SpawnNoop")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
         let before = model.draftWorkspaceTab
         let result = model.spawnSameWorkspaceChatTab(parentId: UUID())
         XCTAssertNil(result)

@@ -272,7 +272,7 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
         }
         if let token = ctx["token"] as? String {
             let payload: String? = token.isEmpty ? nil : token
-            logger.info("rx token len=\(token.count, privacy: .public)")
+            logger.info("rx token received")
             DispatchQueue.main.async { self.didReceiveToken.send(payload) }
         }
         if let usageData = ctx["usage"] as? Data {

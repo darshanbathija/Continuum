@@ -36,6 +36,10 @@ struct ModelEffortChip: View {
     /// "Provider" menu chip was removed as redundant). Nil → caller doesn't
     /// track agent (agent change ignored, e.g. mid-session).
     var onSelectAgent: ((AgentKind) -> Void)? = nil
+    /// Rich picker selection with the provider included. Bound optimistic
+    /// sessions use this to update the pending launch config before the daemon
+    /// starts; live-session model swaps still flow through binding onChange.
+    var onSelectModelConfiguration: ((AgentKind, String, ReasoningEffort?) -> Void)? = nil
 
     @State private var showingPopover = false
     @State private var isHovered = false
@@ -108,11 +112,11 @@ struct ModelEffortChip: View {
                     // Align the session's agent to the picked vendor (the rail
                     // is now the only provider switcher in Code), then set the
                     // specific model + effort the user chose.
-                    onSelectAgent?(vendor.backingProvider)
+                    let selectedAgent = vendor.backingProvider
                     selectedModelId = modelId
-                    if let effort {
-                        selectedEffort = effort
-                    }
+                    selectedEffort = effort
+                    onSelectAgent?(selectedAgent)
+                    onSelectModelConfiguration?(selectedAgent, modelId, effort)
                 }
             )
         }
@@ -135,7 +139,7 @@ struct ModelEffortChip: View {
 
     private func cycleEffort(direction: Int) {
         guard modelSupportsEffort else { return }
-        let values: [ReasoningEffort] = [.low, .medium, .high, .xhigh, .max]
+        let values = ReasoningEffort.allCases
         let currentIndex = selectedEffort.flatMap { values.firstIndex(of: $0) } ?? values.firstIndex(of: .medium) ?? 0
         let next = (currentIndex + direction + values.count) % values.count
         selectedEffort = values[next]
@@ -157,6 +161,19 @@ struct ContextUsageChip: View {
 
     @State private var showingPopover = false
     @State private var isHovered = false
+
+    struct RingDescriptor: Equatable {
+        let fraction: Double
+        let percentText: String
+    }
+
+    static func ringDescriptor(for info: UsageStatusInfo) -> RingDescriptor {
+        guard let limit = info.contextLimitTokens, limit > 0 else {
+            return RingDescriptor(fraction: 0, percentText: "0%")
+        }
+        let fraction = min(1.0, max(0, Double(info.contextUsedTokens) / Double(limit)))
+        return RingDescriptor(fraction: fraction, percentText: "\(Int(fraction * 100))%")
+    }
 
     var body: some View {
         Button(action: { showingPopover.toggle() }) {
@@ -187,8 +204,7 @@ struct ContextUsageChip: View {
     }
 
     private var percentText: String {
-        let pct = Int(contextFraction * 100)
-        return "\(pct)%"
+        Self.ringDescriptor(for: info).percentText
     }
 
     @ViewBuilder
@@ -210,8 +226,7 @@ struct ContextUsageChip: View {
         // (legacy assistant turns with no `usage` payload yet) we render
         // an empty ring rather than borrowing the plan caps — the popover
         // is the right place to see plan progress.
-        guard let limit = info.contextLimitTokens, limit > 0 else { return 0 }
-        return min(1.0, CGFloat(info.contextUsedTokens) / CGFloat(limit))
+        CGFloat(Self.ringDescriptor(for: info).fraction)
     }
 
     private func ringColor(_ fraction: CGFloat) -> Color {
@@ -363,84 +378,163 @@ struct ModelEffortPopover: View {
 struct ContextUsagePopover: View {
     let info: UsageStatusInfo
 
+    struct RowDescriptor: Equatable, Identifiable {
+        enum Kind: Equatable {
+            case progress(tint: Tint)
+            case cost
+            case header
+            case note
+        }
+
+        enum Tint: Equatable {
+            case accent
+            case warn
+            case danger
+        }
+
+        let id: String
+        let kind: Kind
+        let label: String
+        let value: String?
+        let fraction: Double?
+    }
+
+    static func rowDescriptors(for info: UsageStatusInfo) -> [RowDescriptor] {
+        var rows: [RowDescriptor] = []
+        if let limit = info.contextLimitTokens, limit > 0 {
+            rows.append(RowDescriptor(
+                id: "code.context-usage.row.context",
+                kind: .progress(tint: .accent),
+                label: "Context window",
+                value: contextValueText(used: info.contextUsedTokens, limit: limit),
+                fraction: min(1.0, max(0, Double(info.contextUsedTokens) / Double(limit)))
+            ))
+        }
+
+        rows.append(RowDescriptor(
+            id: "code.context-usage.row.cost",
+            kind: .cost,
+            label: "Session cost",
+            value: costText(for: info),
+            fraction: nil
+        ))
+
+        if info.cursorQuota != nil || info.sessionPct != nil || info.weeklyPct != nil {
+            rows.append(RowDescriptor(
+                id: "code.context-usage.row.plan-header",
+                kind: .header,
+                label: "Plan usage",
+                value: nil,
+                fraction: nil
+            ))
+        }
+
+        if let quota = info.cursorQuota {
+            if let included = quota.includedUsageLabel, !included.isEmpty {
+                rows.append(RowDescriptor(
+                    id: "code.context-usage.row.cursor-included",
+                    kind: .note,
+                    label: included,
+                    value: nil,
+                    fraction: nil
+                ))
+            }
+            if let extra = quota.extraUsageLabel, !extra.isEmpty {
+                rows.append(RowDescriptor(
+                    id: "code.context-usage.row.cursor-extra",
+                    kind: .note,
+                    label: "Extra usage: \(extra)",
+                    value: nil,
+                    fraction: nil
+                ))
+            }
+            rows.append(planProgressRow(
+                id: "code.context-usage.row.cursor-total",
+                label: "Monthly total",
+                pct: quota.totalPct,
+                resetMins: quota.resetMins
+            ))
+            if let pct = quota.autoPct {
+                rows.append(planProgressRow(
+                    id: "code.context-usage.row.cursor-auto",
+                    label: "Auto",
+                    pct: pct,
+                    resetMins: quota.resetMins
+                ))
+            }
+            if let pct = quota.apiPct {
+                rows.append(planProgressRow(
+                    id: "code.context-usage.row.cursor-api",
+                    label: "API",
+                    pct: pct,
+                    resetMins: quota.resetMins
+                ))
+            }
+        } else if let pct = info.sessionPct {
+            rows.append(planProgressRow(
+                id: "code.context-usage.row.session",
+                label: "5-hour limit",
+                pct: pct,
+                resetMins: info.sessionResetMins
+            ))
+        }
+
+        if let pct = info.weeklyPct {
+            rows.append(planProgressRow(
+                id: "code.context-usage.row.weekly",
+                label: "Weekly · all models",
+                pct: pct,
+                resetMins: info.weeklyResetMins
+            ))
+        }
+
+        return rows
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let limit = info.contextLimitTokens, limit > 0 {
-                progressRow(
-                    label: "Context window",
-                    value: contextValueText(used: info.contextUsedTokens, limit: limit),
-                    fraction: min(1.0, Double(info.contextUsedTokens) / Double(limit)),
-                    tint: SessionsV2Theme.accent
-                )
-            }
-            HStack {
-                Text("Session cost")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(costText)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-            }
-            if info.cursorQuota != nil || info.sessionPct != nil || info.weeklyPct != nil {
-                Divider()
-                Text("Plan usage")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            if let quota = info.cursorQuota {
-                if let included = quota.includedUsageLabel, !included.isEmpty {
-                    Text(included)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                if let extra = quota.extraUsageLabel, !extra.isEmpty {
-                    Text("Extra usage: \(extra)")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                progressRow(
-                    label: "Monthly total",
-                    value: planValueText(pct: quota.totalPct, resetMins: quota.resetMins),
-                    fraction: Double(quota.totalPct) / 100.0,
-                    tint: planTint(pct: quota.totalPct)
-                )
-                if let pct = quota.autoPct {
-                    progressRow(
-                        label: "Auto",
-                        value: planValueText(pct: pct, resetMins: quota.resetMins),
-                        fraction: Double(pct) / 100.0,
-                        tint: planTint(pct: pct)
-                    )
-                }
-                if let pct = quota.apiPct {
-                    progressRow(
-                        label: "API",
-                        value: planValueText(pct: pct, resetMins: quota.resetMins),
-                        fraction: Double(pct) / 100.0,
-                        tint: planTint(pct: pct)
-                    )
-                }
-            } else if let pct = info.sessionPct {
-                progressRow(
-                    label: "5-hour limit",
-                    value: planValueText(pct: pct, resetMins: info.sessionResetMins),
-                    fraction: Double(pct) / 100.0,
-                    tint: planTint(pct: pct)
-                )
-            }
-            if let pct = info.weeklyPct {
-                progressRow(
-                    label: "Weekly · all models",
-                    value: planValueText(pct: pct, resetMins: info.weeklyResetMins),
-                    fraction: Double(pct) / 100.0,
-                    tint: planTint(pct: pct)
-                )
+            ForEach(Self.rowDescriptors(for: info)) { row in
+                rowView(row)
             }
         }
         .padding(14)
         .frame(width: 320)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("code.context-usage.popover")
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: RowDescriptor) -> some View {
+        switch row.kind {
+        case .progress(let tint):
+            progressRow(label: row.label, value: row.value ?? "", fraction: row.fraction ?? 0, tint: color(for: tint))
+                .accessibilityIdentifier(row.id)
+        case .cost:
+            HStack {
+                Text(row.label)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(row.value ?? "")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+            }
+            .accessibilityIdentifier(row.id)
+        case .header:
+            VStack(alignment: .leading, spacing: 14) {
+                Divider()
+                Text(row.label)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityIdentifier(row.id)
+        case .note:
+            Text(row.label)
+                .font(.system(size: 11, weight: row.id == "code.context-usage.row.cursor-included" ? .medium : .regular))
+                .foregroundStyle(.secondary)
+                .lineLimit(row.id == "code.context-usage.row.cursor-included" ? 1 : nil)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(row.id)
+        }
     }
 
     @ViewBuilder
@@ -458,19 +552,29 @@ struct ContextUsagePopover: View {
         }
     }
 
-    private func contextValueText(used: Int, limit: Int) -> String {
+    private static func planProgressRow(id: String, label: String, pct: Int, resetMins: Int?) -> RowDescriptor {
+        RowDescriptor(
+            id: id,
+            kind: .progress(tint: planTint(pct: pct)),
+            label: label,
+            value: planValueText(pct: pct, resetMins: resetMins),
+            fraction: min(1.0, max(0, Double(pct) / 100.0))
+        )
+    }
+
+    private static func contextValueText(used: Int, limit: Int) -> String {
         let pct = Int((Double(used) / Double(limit)) * 100)
         return "\(formatTokens(used)) / \(formatTokens(limit)) (\(pct)%)"
     }
 
-    private func planValueText(pct: Int, resetMins: Int?) -> String {
+    private static func planValueText(pct: Int, resetMins: Int?) -> String {
         if let m = resetMins {
             return "\(pct)% · resets \(formatResetMins(m))"
         }
         return "\(pct)%"
     }
 
-    private func formatTokens(_ n: Int) -> String {
+    private static func formatTokens(_ n: Int) -> String {
         if n >= 1_000_000 {
             let m = Double(n) / 1_000_000
             return String(format: "%.1fM", m)
@@ -482,7 +586,7 @@ struct ContextUsagePopover: View {
         return "\(n)"
     }
 
-    private func formatResetMins(_ mins: Int) -> String {
+    private static func formatResetMins(_ mins: Int) -> String {
         if mins <= 0 { return "now" }
         let days = mins / (60 * 24)
         if days >= 1 { return "\(days)d" }
@@ -491,13 +595,21 @@ struct ContextUsagePopover: View {
         return "\(mins)m"
     }
 
-    private func planTint(pct: Int) -> Color {
-        if pct >= 95 { return SessionsV2Theme.danger }
-        if pct >= 75 { return SessionsV2Theme.warn }
-        return SessionsV2Theme.accent
+    private static func planTint(pct: Int) -> RowDescriptor.Tint {
+        if pct >= 95 { return .danger }
+        if pct >= 75 { return .warn }
+        return .accent
     }
 
-    private var costText: String {
+    private func color(for tint: RowDescriptor.Tint) -> Color {
+        switch tint {
+        case .accent: return SessionsV2Theme.accent
+        case .warn: return SessionsV2Theme.warn
+        case .danger: return SessionsV2Theme.danger
+        }
+    }
+
+    private static func costText(for info: UsageStatusInfo) -> String {
         let n = info.costDollar as NSDecimalNumber
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency

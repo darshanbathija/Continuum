@@ -35,7 +35,7 @@ struct EffortDial: View {
         .opacity(supportsEffort ? 1.0 : 0.5)
         .disabled(!supportsEffort)
         .help(supportsEffort
-              ? "Reasoning effort — Opt+E cycles up, Shift+Opt+E down"
+              ? "Reasoning effort — Cmd+Opt+E cycles up, Cmd+Opt+Shift+E down"
               : "This model doesn't take an effort level (e.g. Haiku)")
         .accessibilityElement(children: .contain)
         .accessibilityLabel(supportsEffort ? "Effort dial" : "Effort dial unavailable for the selected model")

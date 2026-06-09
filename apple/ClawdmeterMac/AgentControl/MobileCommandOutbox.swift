@@ -85,9 +85,19 @@ public actor MobileCommandOutbox {
     /// a quiet client can't pin a stale receipt forever.
     public let ttl: TimeInterval
 
-    public init(capacity: Int = 256, ttl: TimeInterval = 24 * 3600) {
+    /// Production daemon restarts replay the persisted audit log so
+    /// mobile retries remain idempotent across process lifetimes. Tests
+    /// can disable this to avoid reading the user's real audit state.
+    private let replaysAuditLogOnStart: Bool
+
+    public init(
+        capacity: Int = 256,
+        ttl: TimeInterval = 24 * 3600,
+        replaysAuditLogOnStart: Bool = true
+    ) {
         self.capacity = capacity
         self.ttl = ttl
+        self.replaysAuditLogOnStart = replaysAuditLogOnStart
     }
 
     // MARK: - Lookup
@@ -245,6 +255,10 @@ public actor MobileCommandOutbox {
     /// degrades to "we don't know what the response said, but the
     /// server claims it processed."
     public func replayFromAuditLog(_ log: AuditLog = .shared) async {
+        guard replaysAuditLogOnStart else {
+            outboxLogger.info("Mobile command audit replay deferred under test/no-spend gate")
+            return
+        }
         let lines = await log.recentEntries(kind: "mobile-commands", limit: capacity)
         var seeded = 0
         for line in lines {

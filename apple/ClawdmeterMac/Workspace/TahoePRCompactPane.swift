@@ -9,20 +9,162 @@ struct TahoePRCompactPane: View {
     let onBeforeMerge: (() async -> Bool)?
     @State private var localActionError: String?
 
+    struct ActionDescriptor: Equatable {
+        let title: String
+        let accessibilityIdentifier: String
+        let isEnabled: Bool
+
+        init(title: String, accessibilityIdentifier: String, isEnabled: Bool = true) {
+            self.title = title
+            self.accessibilityIdentifier = accessibilityIdentifier
+            self.isEnabled = isEnabled
+        }
+    }
+
+    struct EmptyActionDescriptors: Equatable {
+        static let rootAccessibilityIdentifier = "code.pr.empty"
+        static let manualURLAccessibilityIdentifier = "code.pr.manual-url"
+
+        let load: ActionDescriptor
+        let create: ActionDescriptor?
+        let draft: ActionDescriptor?
+    }
+
+    struct StatusRowDescriptor: Equatable {
+        let key: String
+        let title: String
+        let status: String
+        let passed: Bool
+        var accessibilityIdentifier: String { "code.pr.status.\(key)" }
+    }
+
+    struct CheckRowDescriptor: Equatable {
+        static let rowAccessibilityIdentifier = "code.pr.check.row"
+
+        let name: String
+        let state: String
+        let url: String?
+        let open: ActionDescriptor?
+        let copyName: ActionDescriptor
+        let rerun: ActionDescriptor?
+    }
+
+    struct ActionMenuDescriptors: Equatable {
+        static let menuAccessibilityIdentifier = "code.pr.actions"
+
+        let openGitHub: ActionDescriptor
+        let openChecks: ActionDescriptor
+        let openDeployments: ActionDescriptor
+        let copyURL: ActionDescriptor
+        let copyNumber: ActionDescriptor
+        let rerunFailedChecks: ActionDescriptor
+        let askAgentToFixChecks: ActionDescriptor
+    }
+
+    struct ReviewActionDescriptors: Equatable {
+        let approve: ActionDescriptor
+        let requestChanges: ActionDescriptor
+        let merge: ActionDescriptor
+    }
+
+    static func emptyActionDescriptors(canUseDaemonActions: Bool) -> EmptyActionDescriptors {
+        EmptyActionDescriptors(
+            load: ActionDescriptor(title: "Load", accessibilityIdentifier: "code.pr.load"),
+            create: canUseDaemonActions
+                ? ActionDescriptor(title: "Create PR", accessibilityIdentifier: "code.pr.create")
+                : nil,
+            draft: canUseDaemonActions
+                ? ActionDescriptor(title: "Draft PR", accessibilityIdentifier: "code.pr.draft")
+                : nil
+        )
+    }
+
+    static func statusRowDescriptor(
+        key: String,
+        title: String,
+        status: String,
+        passed: Bool
+    ) -> StatusRowDescriptor {
+        StatusRowDescriptor(key: key, title: title, status: status, passed: passed)
+    }
+
+    static func checkRowDescriptor(_ check: PRCheckMirror) -> CheckRowDescriptor {
+        let runID = runID(from: check.url)
+        return CheckRowDescriptor(
+            name: check.name,
+            state: check.state.rawValue,
+            url: check.url,
+            open: check.url.flatMap { URL(string: $0) }.map { _ in
+                ActionDescriptor(title: "Open check", accessibilityIdentifier: "code.pr.check.open")
+            },
+            copyName: ActionDescriptor(title: "Copy check name", accessibilityIdentifier: "code.pr.check.copy-name"),
+            rerun: runID.map { _ in
+                ActionDescriptor(title: "Rerun this check", accessibilityIdentifier: "code.pr.check.rerun")
+            }
+        )
+    }
+
+    static func actionMenuDescriptors(for state: PRCoordinator.Snapshot) -> ActionMenuDescriptors {
+        ActionMenuDescriptors(
+            openGitHub: ActionDescriptor(title: "Open on GitHub", accessibilityIdentifier: "code.pr.open-github"),
+            openChecks: ActionDescriptor(title: "Open checks", accessibilityIdentifier: "code.pr.open-checks"),
+            openDeployments: ActionDescriptor(title: "Open deployments", accessibilityIdentifier: "code.pr.open-deployments"),
+            copyURL: ActionDescriptor(title: "Copy URL", accessibilityIdentifier: "code.pr.copy-url"),
+            copyNumber: ActionDescriptor(title: "Copy Number", accessibilityIdentifier: "code.pr.copy-number"),
+            rerunFailedChecks: ActionDescriptor(
+                title: "Rerun failed checks",
+                accessibilityIdentifier: "code.pr.rerun-failed-checks",
+                isEnabled: PRCoordinator.repoSlug(from: state.url) != nil && !failedCheckRunIDs(in: state).isEmpty
+            ),
+            askAgentToFixChecks: ActionDescriptor(
+                title: "Ask agent to fix checks",
+                accessibilityIdentifier: "code.pr.ask-agent-fix-checks"
+            )
+        )
+    }
+
+    static func reviewActionDescriptors(
+        for state: PRCoordinator.Snapshot,
+        canUseDaemonActions: Bool,
+        todoGatePassed: Bool
+    ) -> ReviewActionDescriptors? {
+        guard state.state == "OPEN", canUseDaemonActions else { return nil }
+        let mergeEnabled = PRCoordinator.canMerge(snapshot: state, canUseDaemonActions: canUseDaemonActions) && todoGatePassed
+        return ReviewActionDescriptors(
+            approve: ActionDescriptor(title: "Approve", accessibilityIdentifier: "code.pr.approve"),
+            requestChanges: ActionDescriptor(title: "Request changes", accessibilityIdentifier: "code.pr.request-changes"),
+            merge: ActionDescriptor(
+                title: mergeEnabled ? "Merge" : "Merge blocked",
+                accessibilityIdentifier: "code.pr.merge",
+                isEnabled: mergeEnabled
+            )
+        )
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 if let state = coordinator.snapshot {
+                    let actionMenu = Self.actionMenuDescriptors(for: state)
+                    let reviewActions = Self.reviewActionDescriptors(
+                        for: state,
+                        canUseDaemonActions: coordinator.canUseDaemonActions,
+                        todoGatePassed: todoGatePassed
+                    )
                     Text(state.title)
                         .font(TahoeFont.body(13, weight: .bold))
                         .foregroundStyle(t.fg)
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("code.pr.title")
                     Text("\(state.url.host() ?? "github.com") · #\(state.number) · \(state.state.lowercased())")
                         .font(TahoeFont.mono(11.5))
                         .foregroundStyle(t.fg3)
+                        .accessibilityIdentifier("code.pr.subtitle")
                         .contextMenu {
                             Button("Copy PR URL") { copy(state.url.absoluteString) }
+                                .accessibilityIdentifier(actionMenu.copyURL.accessibilityIdentifier)
                             Button("Copy PR Number") { copy("#\(state.number)") }
+                                .accessibilityIdentifier(actionMenu.copyNumber.accessibilityIdentifier)
                         }
 
                     TahoeGlass(radius: 6, tone: .chip) {
@@ -31,10 +173,30 @@ struct TahoePRCompactPane: View {
                                 .font(TahoeFont.body(11, weight: .semibold))
                                 .foregroundStyle(t.fg3)
                                 .padding(.bottom, 6)
-                            prStatusRow("review", state.reviewState ?? "pending", state.reviewState == "APPROVED")
-                            prStatusRow("ci", state.checksRollup ?? "unknown", state.checksRollup == "success")
-                            prStatusRow("changes", "+\(state.additions) -\(state.deletions)", true)
-                            prStatusRow("todos", todoGateLabel, todoGatePassed)
+                            prStatusRow(Self.statusRowDescriptor(
+                                key: "review",
+                                title: "review",
+                                status: state.reviewState ?? "pending",
+                                passed: state.reviewState == "APPROVED"
+                            ))
+                            prStatusRow(Self.statusRowDescriptor(
+                                key: "ci",
+                                title: "ci",
+                                status: state.checksRollup ?? "unknown",
+                                passed: state.checksRollup == "success"
+                            ))
+                            prStatusRow(Self.statusRowDescriptor(
+                                key: "changes",
+                                title: "changes",
+                                status: "+\(state.additions) -\(state.deletions)",
+                                passed: true
+                            ))
+                            prStatusRow(Self.statusRowDescriptor(
+                                key: "todos",
+                                title: "todos",
+                                status: todoGateLabel,
+                                passed: todoGatePassed
+                            ))
                             if !state.checks.isEmpty {
                                 TahoeHair().padding(.vertical, 6)
                                 ForEach(state.checks) { check in
@@ -46,14 +208,21 @@ struct TahoePRCompactPane: View {
                     }
 
                     Menu {
-                        Button("Open on GitHub") { NSWorkspace.shared.open(state.url) }
-                        Button("Open checks") { openChecks(state) }
-                        Button("Open deployments") { openDeployments(state) }
-                        Button("Copy URL") { copy(state.url.absoluteString) }
-                        Button("Copy Number") { copy("#\(state.number)") }
-                        Button("Rerun failed checks") { Task { await rerunFailedChecks(state) } }
-                            .disabled(PRCoordinator.repoSlug(from: state.url) == nil || failedCheckRunIDs(state).isEmpty)
-                        Button("Ask agent to fix checks") { enqueueFixChecksPrompt(state) }
+                        Button(actionMenu.openGitHub.title) { NSWorkspace.shared.open(state.url) }
+                            .accessibilityIdentifier(actionMenu.openGitHub.accessibilityIdentifier)
+                        Button(actionMenu.openChecks.title) { openChecks(state) }
+                            .accessibilityIdentifier(actionMenu.openChecks.accessibilityIdentifier)
+                        Button(actionMenu.openDeployments.title) { openDeployments(state) }
+                            .accessibilityIdentifier(actionMenu.openDeployments.accessibilityIdentifier)
+                        Button(actionMenu.copyURL.title) { copy(state.url.absoluteString) }
+                            .accessibilityIdentifier(actionMenu.copyURL.accessibilityIdentifier)
+                        Button(actionMenu.copyNumber.title) { copy("#\(state.number)") }
+                            .accessibilityIdentifier(actionMenu.copyNumber.accessibilityIdentifier)
+                        Button(actionMenu.rerunFailedChecks.title) { Task { await rerunFailedChecks(state) } }
+                            .disabled(!actionMenu.rerunFailedChecks.isEnabled)
+                            .accessibilityIdentifier(actionMenu.rerunFailedChecks.accessibilityIdentifier)
+                        Button(actionMenu.askAgentToFixChecks.title) { enqueueFixChecksPrompt(state) }
+                            .accessibilityIdentifier(actionMenu.askAgentToFixChecks.accessibilityIdentifier)
                     } label: {
                         HStack(spacing: 6) {
                             TahoeIcon("pull", size: 12)
@@ -72,51 +241,66 @@ struct TahoePRCompactPane: View {
                         in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                     )
                     .foregroundStyle(.white)
+                    .accessibilityIdentifier(ActionMenuDescriptors.menuAccessibilityIdentifier)
 
-                    if state.state == "OPEN", coordinator.canUseDaemonActions {
+                    if let reviewActions {
                         HStack(spacing: 8) {
                             TahoeGhostButton(size: .m, action: { Task { await coordinator.approve() } }) {
-                                Text("Approve")
+                                Text(reviewActions.approve.title)
                             }
+                            .accessibilityIdentifier(reviewActions.approve.accessibilityIdentifier)
                             TahoeGhostButton(size: .m, action: { enqueueReviewRequestPrompt(state) }) {
-                                Text("Request changes")
+                                Text(reviewActions.requestChanges.title)
                             }
+                            .accessibilityIdentifier(reviewActions.requestChanges.accessibilityIdentifier)
                             TahoeGhostButton(size: .m, action: { Task { await merge(state) } }) {
-                                Text(canMerge(state) ? "Merge" : "Merge blocked")
+                                Text(reviewActions.merge.title)
                             }
-                            .disabled(!canMerge(state))
+                            .disabled(!reviewActions.merge.isEnabled)
                             .help(todoGatePassed ? "Merge this PR" : "Open TODOs must be completed before merge")
+                            .accessibilityIdentifier(reviewActions.merge.accessibilityIdentifier)
                         }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("code.pr.review-actions")
                     }
                 } else {
+                    let emptyActions = Self.emptyActionDescriptors(canUseDaemonActions: coordinator.canUseDaemonActions)
                     TahoeEmptyReviewState(icon: "pull", title: "No PR detected", body: "Paste a PR URL or let the agent create one.")
                     TextField("https://github.com/owner/repo/pull/123", text: $coordinator.manualURL)
                         .textFieldStyle(.roundedBorder)
                         .font(TahoeFont.mono(11.5))
                         .accessibilityLabel("Pull request URL")
+                        .accessibilityIdentifier(EmptyActionDescriptors.manualURLAccessibilityIdentifier)
                     HStack(spacing: 8) {
                         TahoeGhostButton(size: .m, action: { coordinator.loadFromManualURL() }) {
-                            Text("Load")
+                            Text(emptyActions.load.title)
                         }
-                        if coordinator.canUseDaemonActions {
+                        .accessibilityIdentifier(emptyActions.load.accessibilityIdentifier)
+                        if let create = emptyActions.create, let draft = emptyActions.draft {
                             TahoeGhostButton(size: .m, action: { Task { await coordinator.createPR() } }) {
                                 TahoeIcon("pull", size: 11)
-                                Text("Create PR")
+                                Text(create.title)
                             }
+                            .accessibilityIdentifier(create.accessibilityIdentifier)
                             TahoeGhostButton(size: .m, action: { enqueueDraftPRPrompt() }) {
                                 TahoeIcon("doc", size: 11)
-                                Text("Draft PR")
+                                Text(draft.title)
                             }
+                            .accessibilityIdentifier(draft.accessibilityIdentifier)
                         }
                     }
+                    .accessibilityIdentifier(EmptyActionDescriptors.rootAccessibilityIdentifier)
                 }
                 if coordinator.isRefreshing || coordinator.isMutating {
-                    ProgressView().controlSize(.small)
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityIdentifier("code.pr.progress")
                 }
                 if let err = coordinator.lastError ?? localActionError {
                     Text(err)
                         .font(TahoeFont.body(11))
                         .foregroundStyle(.red)
+                        .accessibilityIdentifier("code.pr.error")
                 }
             }
             .padding(16)
@@ -126,38 +310,40 @@ struct TahoePRCompactPane: View {
         .onDisappear { coordinator.stopWatching() }
     }
 
-    private func prStatusRow(_ name: String, _ status: String, _ passed: Bool) -> some View {
+    private func prStatusRow(_ descriptor: StatusRowDescriptor) -> some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(passed ? SessionsV2Theme.success : SessionsV2Theme.warn)
+                .fill(descriptor.passed ? SessionsV2Theme.success : SessionsV2Theme.warn)
                 .frame(width: 14, height: 14)
                 .overlay {
-                    if passed {
+                    if descriptor.passed {
                         TahoeIcon("check", size: 8, weight: .bold).foregroundStyle(.white)
                     }
                 }
-            Text(name)
+            Text(descriptor.title)
                 .font(TahoeFont.body(12))
                 .foregroundStyle(t.fg)
             Spacer()
-            Text(status)
+            Text(descriptor.status)
                 .font(TahoeFont.mono(11))
                 .foregroundStyle(t.fg3)
         }
         .padding(.vertical, 6)
+        .accessibilityIdentifier(descriptor.accessibilityIdentifier)
     }
 
     private func prCheckRow(_ check: PRCheckMirror) -> some View {
-        HStack(spacing: 8) {
+        let descriptor = Self.checkRowDescriptor(check)
+        return HStack(spacing: 8) {
             Circle()
                 .fill(check.state == .success ? Color.green : (check.state == .failure ? Color.red : Color.yellow))
                 .frame(width: 9, height: 9)
             VStack(alignment: .leading, spacing: 1) {
-                Text(check.name)
+                Text(descriptor.name)
                     .font(TahoeFont.body(11.5, weight: .semibold))
                     .foregroundStyle(t.fg)
                     .lineLimit(1)
-                if let url = check.url {
+                if let url = descriptor.url {
                     Text(url)
                         .font(TahoeFont.mono(9.5))
                         .foregroundStyle(t.fg4)
@@ -166,18 +352,22 @@ struct TahoePRCompactPane: View {
                 }
             }
             Spacer()
-            Text(check.state.rawValue)
+            Text(descriptor.state)
                 .font(TahoeFont.mono(10.5))
                 .foregroundStyle(t.fg3)
         }
         .padding(.vertical, 5)
+        .accessibilityIdentifier(CheckRowDescriptor.rowAccessibilityIdentifier)
         .contextMenu {
-            if let raw = check.url, let url = URL(string: raw) {
-                Button("Open check") { NSWorkspace.shared.open(url) }
+            if let open = descriptor.open, let raw = descriptor.url, let url = URL(string: raw) {
+                Button(open.title) { NSWorkspace.shared.open(url) }
+                    .accessibilityIdentifier(open.accessibilityIdentifier)
             }
-            Button("Copy check name") { copy(check.name) }
-            if let runID = runID(from: check.url) {
-                Button("Rerun this check") { Task { await rerunCheck(runID: runID, state: coordinator.snapshot) } }
+            Button(descriptor.copyName.title) { copy(descriptor.name) }
+                .accessibilityIdentifier(descriptor.copyName.accessibilityIdentifier)
+            if let rerun = descriptor.rerun, let runID = Self.runID(from: descriptor.url) {
+                Button(rerun.title) { Task { await rerunCheck(runID: runID, state: coordinator.snapshot) } }
+                    .accessibilityIdentifier(rerun.accessibilityIdentifier)
             }
         }
     }
@@ -231,7 +421,7 @@ struct TahoePRCompactPane: View {
 
     @MainActor
     private func rerunFailedChecks(_ state: PRCoordinator.Snapshot) async {
-        for runID in failedCheckRunIDs(state) {
+        for runID in Self.failedCheckRunIDs(in: state) {
             await rerunCheck(runID: runID, state: state)
         }
         coordinator.refreshNow()
@@ -264,13 +454,13 @@ struct TahoePRCompactPane: View {
         }.value
     }
 
-    private func failedCheckRunIDs(_ state: PRCoordinator.Snapshot) -> [String] {
+    static func failedCheckRunIDs(in state: PRCoordinator.Snapshot) -> [String] {
         state.checks
             .filter { $0.state == .failure }
             .compactMap { runID(from: $0.url) }
     }
 
-    private func runID(from rawURL: String?) -> String? {
+    static func runID(from rawURL: String?) -> String? {
         guard let rawURL, let range = rawURL.range(of: #"/actions/runs/([0-9]+)"#, options: .regularExpression) else { return nil }
         let match = String(rawURL[range])
         return match.split(separator: "/").last.map(String.init)

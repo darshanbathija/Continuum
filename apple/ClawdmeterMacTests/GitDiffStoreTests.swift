@@ -123,6 +123,78 @@ final class GitDiffStoreTests: XCTestCase {
         XCTAssertEqual(tracked.map(\.changeState), [.staged])
     }
 
+    func test_stageAndUnstageHunkUseCorrectGitDomains() async throws {
+        try "changed\n".write(to: repoURL.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        let store = GitDiffStore(repoCwd: repoURL.path)
+        await store.reloadNowForTesting()
+        let unstaged = try XCTUnwrap(store.files.first {
+            $0.path == "tracked.txt" && $0.changeState == .unstaged
+        })
+        let unstagedHunk = try XCTUnwrap(unstaged.hunks.first)
+
+        await store.stage(unstagedHunk)
+
+        let cached = try await runGit(["diff", "--cached", "--name-only"]).stdoutString
+        let worktree = try await runGit(["diff", "--name-only"]).stdoutString
+        XCTAssertEqual(cached.trimmingCharacters(in: .whitespacesAndNewlines), "tracked.txt")
+        XCTAssertTrue(worktree.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+        await store.reloadNowForTesting()
+        let staged = try XCTUnwrap(store.files.first {
+            $0.path == "tracked.txt" && $0.changeState == .staged
+        })
+        let stagedHunk = try XCTUnwrap(staged.hunks.first)
+
+        await store.revert(stagedHunk)
+
+        let cachedAfterUnstage = try await runGit(["diff", "--cached", "--name-only"]).stdoutString
+        let worktreeAfterUnstage = try await runGit(["diff", "--name-only"]).stdoutString
+        XCTAssertTrue(cachedAfterUnstage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertEqual(worktreeAfterUnstage.trimmingCharacters(in: .whitespacesAndNewlines), "tracked.txt")
+    }
+
+    func test_gitDiffPaneActionDescriptorsExposeStableTargets() {
+        let unstagedFile = GitDiffPane.fileActionDescriptors(for: .unstaged)
+        XCTAssertEqual(GitDiffPane.FileActionDescriptors.rowAccessibilityIdentifier, "code.diff.git.file.row")
+        XCTAssertEqual(GitDiffPane.FileActionDescriptors.toggleAccessibilityIdentifier, "code.diff.git.file.toggle")
+        XCTAssertEqual(unstagedFile.stage?.accessibilityIdentifier, "code.diff.git.file.stage")
+        XCTAssertEqual(unstagedFile.revert?.accessibilityIdentifier, "code.diff.git.file.revert")
+        XCTAssertNil(unstagedFile.unstage)
+        XCTAssertNil(unstagedFile.trash)
+
+        let stagedFile = GitDiffPane.fileActionDescriptors(for: .staged)
+        XCTAssertEqual(stagedFile.unstage?.title, "Unstage")
+        XCTAssertEqual(stagedFile.unstage?.accessibilityIdentifier, "code.diff.git.file.unstage")
+
+        let untrackedFile = GitDiffPane.fileActionDescriptors(for: .untracked)
+        XCTAssertEqual(untrackedFile.stage?.accessibilityIdentifier, "code.diff.git.file.stage")
+        XCTAssertEqual(untrackedFile.trash?.accessibilityIdentifier, "code.diff.git.file.trash")
+
+        let unstagedHunk = GitDiffPane.hunkActionDescriptors(for: .unstaged)
+        XCTAssertEqual(GitDiffPane.HunkActionDescriptors.rowAccessibilityIdentifier, "code.diff.git.hunk.row")
+        XCTAssertEqual(unstagedHunk.stage?.accessibilityIdentifier, "code.diff.git.hunk.stage")
+        XCTAssertEqual(unstagedHunk.revert?.accessibilityIdentifier, "code.diff.git.hunk.revert")
+
+        let stagedHunk = GitDiffPane.hunkActionDescriptors(for: .staged)
+        XCTAssertEqual(stagedHunk.unstage?.accessibilityIdentifier, "code.diff.git.hunk.unstage")
+
+        let emptyMessage = GitDiffPane.commitSheetDescriptor(message: "  ", isCommitting: false)
+        XCTAssertEqual(GitDiffPane.CommitSheetDescriptor.openAccessibilityIdentifier, "code.diff.git.commit.open")
+        XCTAssertEqual(GitDiffPane.CommitSheetDescriptor.sheetAccessibilityIdentifier, "code.diff.git.commit.sheet")
+        XCTAssertEqual(GitDiffPane.CommitSheetDescriptor.messageAccessibilityIdentifier, "code.diff.git.commit.message")
+        XCTAssertEqual(GitDiffPane.CommitSheetDescriptor.cancelAccessibilityIdentifier, "code.diff.git.commit.cancel")
+        XCTAssertFalse(emptyMessage.submit.isEnabled)
+
+        let ready = GitDiffPane.commitSheetDescriptor(message: "ship diff controls", isCommitting: false)
+        XCTAssertEqual(ready.submit.title, "Commit")
+        XCTAssertEqual(ready.submit.accessibilityIdentifier, "code.diff.git.commit.submit")
+        XCTAssertTrue(ready.submit.isEnabled)
+
+        let committing = GitDiffPane.commitSheetDescriptor(message: "ship diff controls", isCommitting: true)
+        XCTAssertEqual(committing.submit.title, "Committing...")
+        XCTAssertFalse(committing.submit.isEnabled)
+    }
+
     func test_gitWatchDirectoryResolvesWorktreeGitFile() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitDiffStoreWorktree-\(UUID().uuidString)", isDirectory: true)

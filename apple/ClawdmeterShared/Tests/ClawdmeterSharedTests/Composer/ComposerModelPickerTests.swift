@@ -14,6 +14,7 @@
 import XCTest
 @testable import ClawdmeterShared
 
+@MainActor
 final class ComposerModelPickerTests: XCTestCase {
 
     // MARK: - Fixtures

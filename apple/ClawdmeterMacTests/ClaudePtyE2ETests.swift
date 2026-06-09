@@ -25,6 +25,12 @@ final class ClaudePtyE2ETests: XCTestCase {
         tempDir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("clawdmeter-pty-e2e-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        ChatCwdManager.setChatSessionsRootOverrideForTesting(
+            tempDir.appendingPathComponent("chat-sessions", isDirectory: true)
+        )
+        ChatCwdManager.setClaudeConfigURLOverrideForTesting(
+            tempDir.appendingPathComponent("claude.json")
+        )
 
         // Fake `claude`: prints a ready marker, echoes each input line, exits on QUIT.
         stubPath = tempDir.appendingPathComponent("claude").path
@@ -61,7 +67,7 @@ final class ClaudePtyE2ETests: XCTestCase {
                 storeURL: tempDir.appendingPathComponent("workspaces.json"),
                 sessionsURL: sessionsURL
             ),
-            mobileCommandOutbox: MobileCommandOutbox(),
+            mobileCommandOutbox: MobileCommandOutbox(replaysAuditLogOnStart: false),
             listenPortRange: portBase...(portBase + 20),
             writesServerMetadata: false
         )
@@ -73,6 +79,11 @@ final class ClaudePtyE2ETests: XCTestCase {
         // Tear down any live host for cleanliness across the shared registry.
         for s in registry?.sessions ?? [] { await ClaudePtyRegistry.shared.suspend(s.id) }
         server?.stop()
+        server = nil
+        await registry?.closeEventStoreForTesting()
+        registry = nil
+        ChatCwdManager.setChatSessionsRootOverrideForTesting(nil)
+        ChatCwdManager.setClaudeConfigURLOverrideForTesting(nil)
         if let savedBinaryOverride { UserDefaults.standard.set(savedBinaryOverride, forKey: "clawdmeter.binaries.claude") }
         else { UserDefaults.standard.removeObject(forKey: "clawdmeter.binaries.claude") }
         if let tempDir { try? FileManager.default.removeItem(at: tempDir) }

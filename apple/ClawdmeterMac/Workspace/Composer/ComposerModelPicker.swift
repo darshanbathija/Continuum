@@ -143,6 +143,18 @@ public struct ComposerModelPicker: View {
         .onAppear {
             searchFocused = true
             focusedRowIndex = currentlySelectedRowIndex()
+            NotificationCenter.default.post(
+                name: .composerModelPickerActiveChanged,
+                object: nil,
+                userInfo: ["isActive": true]
+            )
+        }
+        .onDisappear {
+            NotificationCenter.default.post(
+                name: .composerModelPickerActiveChanged,
+                object: nil,
+                userInfo: ["isActive": false]
+            )
         }
         .onChange(of: searchQuery) {
             focusedRowIndex = visibleEntries.isEmpty ? nil : 0
@@ -206,6 +218,9 @@ public struct ComposerModelPicker: View {
         }
         .buttonStyle(PressableButtonStyle())
         .help(entry.tooltip)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(entry.tooltip)
+        .accessibilityIdentifier("code.composer.model-picker.rail.\(accessibilityKey(for: entry.key))")
     }
 
     @ViewBuilder
@@ -248,6 +263,7 @@ public struct ComposerModelPicker: View {
                 .focused($searchFocused)
                 .font(TahoeFont.body(12.5))
                 .foregroundStyle(t.fg)
+                .accessibilityIdentifier("code.composer.model-picker.search")
                 .onSubmit { confirmFocusedSelection() }
                 // Arrow-key navigation has to live ON the focused TextField:
                 // `.onKeyPress` only fires on the focused view, and the search
@@ -261,6 +277,19 @@ public struct ComposerModelPicker: View {
                     moveFocus(by: -1)
                     return .handled
                 }
+                .onKeyPress(characters: CharacterSet(charactersIn: "123456789"), phases: .down) { press in
+                    guard press.modifiers == .command,
+                          searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                          let character = press.characters.first,
+                          let digit = Int(String(character))
+                    else {
+                        return .ignored
+                    }
+                    let index = digit - 1
+                    guard visibleEntries.indices.contains(index) else { return .ignored }
+                    select(entry: visibleEntries[index])
+                    return .handled
+                }
             if !searchQuery.isEmpty {
                 Button {
                     searchQuery = ""
@@ -271,6 +300,7 @@ public struct ComposerModelPicker: View {
                 }
                 .buttonStyle(PressableButtonStyle())
                 .help("Clear search")
+                .accessibilityIdentifier("code.composer.model-picker.search.clear")
             }
         }
         .padding(.horizontal, 10)
@@ -314,58 +344,65 @@ public struct ComposerModelPicker: View {
             ? Character("\(index + 1)") : nil
         let isFocused = (focusedRowIndex == index)
 
-        Button {
-            select(entry: entry)
-        } label: {
-            HStack(spacing: 10) {
-                Button {
-                    defaultsStore.toggleFavoriteModel(entry.model.id, for: entry.vendor)
-                } label: {
-                    Image(systemName: isFav ? "star.fill" : "star")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(isFav ? t.accent : t.fg4)
-                }
-                .buttonStyle(PressableButtonStyle())
-                .help(isFav ? "Unstar" : "Star")
+        HStack(spacing: 10) {
+            Button {
+                defaultsStore.toggleFavoriteModel(entry.model.id, for: entry.vendor)
+            } label: {
+                Image(systemName: isFav ? "star.fill" : "star")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(isFav ? t.accent : t.fg4)
+            }
+            .buttonStyle(PressableButtonStyle())
+            .help(isFav ? "Unstar" : "Star")
+            .accessibilityLabel("\(isFav ? "Unstar" : "Star") \(entry.model.displayName)")
+            .accessibilityIdentifier("code.composer.model-picker.favorite.\(entry.vendor.rawValue).\(accessibilityToken(entry.model.id))")
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.model.displayName)
-                        .font(TahoeFont.body(12.5, weight: .semibold))
-                        .foregroundStyle(t.fg)
-                        .lineLimit(1)
-                    HStack(spacing: 5) {
-                        TahoeProviderGlyph(provider: entry.vendor.backingProvider.tahoeProvider, size: 12)
-                        Text(entry.vendor.displayName)
-                            .font(TahoeFont.body(10.5))
-                            .foregroundStyle(t.fg4)
+            Button {
+                select(entry: entry)
+            } label: {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.model.displayName)
+                            .font(TahoeFont.body(12.5, weight: .semibold))
+                            .foregroundStyle(t.fg)
+                            .lineLimit(1)
+                        HStack(spacing: 5) {
+                            TahoeProviderGlyph(provider: entry.vendor.backingProvider.tahoeProvider, size: 12)
+                            Text(entry.vendor.displayName)
+                                .font(TahoeFont.body(10.5))
+                                .foregroundStyle(t.fg4)
+                        }
+                    }
+
+                    Spacer(minLength: 8)
+
+                    if let shortcut {
+                        shortcutBadge(digit: shortcut)
                     }
                 }
-
-                Spacer(minLength: 8)
-
-                if let shortcut {
-                    shortcutBadge(digit: shortcut)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? Color.white.opacity(0.10) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(
-                        isFocused ? t.accent.opacity(0.55)
-                        : (isSelected ? t.accent.opacity(0.30) : Color.clear),
-                        lineWidth: isFocused ? 1.0 : 0.5
-                    )
-            )
-            .contentShape(Rectangle())
+            .buttonStyle(PressableButtonStyle())
+            .keyboardShortcut(shortcut.map { KeyboardShortcut(KeyEquivalent($0), modifiers: .command) })
+            .accessibilityLabel("\(entry.vendor.displayName) \(entry.model.displayName)")
+            .accessibilityIdentifier("code.composer.model-picker.row.\(entry.vendor.rawValue).\(accessibilityToken(entry.model.id))")
         }
-        .buttonStyle(PressableButtonStyle())
-        .keyboardShortcut(shortcut.map { KeyboardShortcut(KeyEquivalent($0), modifiers: .command) })
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? Color.white.opacity(0.10) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(
+                    isFocused ? t.accent.opacity(0.55)
+                    : (isSelected ? t.accent.opacity(0.30) : Color.clear),
+                    lineWidth: isFocused ? 1.0 : 0.5
+                )
+        )
     }
 
     @ViewBuilder
@@ -546,12 +583,18 @@ public struct ComposerModelPicker: View {
             .frame(height: 26)
             .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.white.opacity(0.04)))
             .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(t.hairline, lineWidth: 0.5))
+            .accessibilityLabel("Effort")
+            .accessibilityValue(current?.displayLabel ?? "Default")
+            .accessibilityIdentifier("code.composer.model-picker.effort.\(vendor.rawValue)")
         } else {
             bottomChip {
                 Text("Auto")
                     .font(TahoeFont.body(11))
                     .foregroundStyle(t.fg4)
             }
+            .accessibilityLabel("Effort unavailable")
+            .accessibilityValue("Auto")
+            .accessibilityIdentifier("code.composer.model-picker.effort.auto")
         }
     }
 
@@ -758,6 +801,24 @@ public struct ComposerModelPicker: View {
                 .entries(for: vendor, catalog: catalog, query: trimmed)
                 .isEmpty
         }
+    }
+
+    private func accessibilityKey(for key: RailKey) -> String {
+        switch key {
+        case .favorites:
+            return "favorites"
+        case .vendor(let vendor):
+            return vendor.rawValue
+        }
+    }
+
+    private func accessibilityToken(_ raw: String) -> String {
+        let scalars = raw.unicodeScalars.map { scalar -> Character in
+            CharacterSet.alphanumerics.contains(scalar) ? Character(String(scalar).lowercased()) : "-"
+        }
+        return String(scalars)
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .joined(separator: "-")
     }
 }
 

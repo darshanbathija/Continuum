@@ -57,6 +57,7 @@ struct SidebarPane: View {
     @State private var sidebarViewportHeight: CGFloat = 0
     @State private var sidebarContentHeight: CGFloat = 0
     @State private var hoveredSessionId: UUID?
+    @State private var hoveredWorktreePath: String?
     @State private var hoveredRecentPath: String?
     @State private var colorTagTarget: AgentSession?
     @State private var colorTagInput: String = ""
@@ -88,10 +89,17 @@ struct SidebarPane: View {
         VStack(spacing: 0) {
             searchField
             sidebarHeader
+            statusBuckets
             TahoeHairline()
             content
         }
         .background(Color.clear)
+        .onAppear {
+            syncArchivedVisibility(for: statusFilter)
+        }
+        .onChange(of: statusRaw) { _, _ in
+            syncArchivedVisibility(for: statusFilter)
+        }
         // v0.5.4 / v0.5.9 rename sheet. Explicit bool + presenting:
         // payload is the SwiftUI pattern that reliably presents — the
         // earlier Binding(get:set:) form silently no-op'd because the
@@ -174,6 +182,12 @@ struct SidebarPane: View {
         }
         .sheet(item: $comparisonPair) { pair in
             SessionComparisonSheet(pair: pair, model: model)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .renameOpenSession)) { _ in
+            guard let session = model.openSession else { return }
+            renameTarget = session
+            renameInput = session.customName ?? presentationStore.snapshot.titleOverrides[session.id] ?? ""
+            showingRenameAlert = true
         }
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now in
             // Skip cosmetic freshness ticks while the window is inactive —
@@ -273,6 +287,7 @@ struct SidebarPane: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Add project")
+        .accessibilityIdentifier("code.sidebar.add-project")
     }
 
     private func presentRepoOnboardingError(_ error: Error) {
@@ -299,7 +314,7 @@ struct SidebarPane: View {
         Menu {
             Section("Status") {
                 ForEach(SessionStatusFilter.allCases, id: \.self) { option in
-                    Button(action: { statusRaw = option.rawValue }) {
+                    Button(action: { setStatusFilter(option) }) {
                         Label(option.displayName, systemImage: statusFilter == option ? "checkmark" : "")
                     }
                 }
@@ -328,7 +343,7 @@ struct SidebarPane: View {
             if isCustomised {
                 Divider()
                 Button("Reset filters") {
-                    statusRaw = SessionStatusFilter.all.rawValue
+                    setStatusFilter(.all)
                     groupingRaw = SessionGrouping.status.rawValue
                     sortingRaw = SessionSorting.recency.rawValue
                 }
@@ -343,6 +358,7 @@ struct SidebarPane: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Group, sort, and filter sessions")
+        .accessibilityIdentifier("code.sidebar.filter")
     }
 
     private var searchField: some View {
@@ -353,6 +369,7 @@ struct SidebarPane: View {
                 .textFieldStyle(.plain)
                 .font(TahoeFont.body(12.5))
                 .focused($searchFocused)
+                .accessibilityIdentifier("code.sidebar.search")
             if !model.searchQuery.isEmpty {
                 Button(action: { model.searchQuery = "" }) {
                     Image(systemName: "xmark.circle.fill")
@@ -360,6 +377,7 @@ struct SidebarPane: View {
                         .foregroundStyle(t.fg3)
                 }
                 .buttonStyle(PressableButtonStyle())
+                .accessibilityIdentifier("code.sidebar.search.clear")
             }
             Text("⌘K")
                 .font(TahoeFont.body(10.5, weight: .semibold))
@@ -418,9 +436,22 @@ struct SidebarPane: View {
     }
 
     private func toggleStatusFilter(_ filter: SessionStatusFilter) {
-        statusRaw = statusFilter == filter ? SessionStatusFilter.all.rawValue : filter.rawValue
+        let next = SidebarStatusBucketState.nextFilter(current: statusFilter, tapped: filter)
+        setStatusFilter(next)
         if grouping != .status {
             groupingRaw = SessionGrouping.status.rawValue
+        }
+    }
+
+    private func setStatusFilter(_ filter: SessionStatusFilter) {
+        statusRaw = filter.rawValue
+        syncArchivedVisibility(for: filter)
+    }
+
+    private func syncArchivedVisibility(for filter: SessionStatusFilter) {
+        let shouldShowArchived = SidebarStatusBucketState.showsArchived(for: filter)
+        if model.showArchived != shouldShowArchived {
+            model.showArchived = shouldShowArchived
         }
     }
 
@@ -449,6 +480,7 @@ struct SidebarPane: View {
             )
         }
         .buttonStyle(PressableButtonStyle())
+        .accessibilityIdentifier("code.sidebar.bucket.\(title.lowercased())")
     }
 
     private func statusCount(_ filter: SessionStatusFilter) -> Int {
@@ -818,55 +850,102 @@ struct SidebarPane: View {
     /// as tabs there (sorted by age). No third sidebar tier.
     @ViewBuilder
     private func worktreeRow(_ wt: WorktreeGroup) -> some View {
-        let isOpen = wt.sessions.contains { $0.id == model.openSessionId }
+        let activeWorkspaceKey = model.activeWorkspaceKey
+        let isOpen = activeWorkspaceKey.map { key in
+            wt.sessions.contains { WorkspaceKey.of($0) == key }
+        } ?? false
+        let isHovered = hoveredWorktreePath == wt.path
         let provisioning = wt.sessions.contains { model.isProvisioning($0.id) }
         let isActive = wt.sessions.contains { $0.status == .running }
-        Button {
-            // openSession() keeps any in-progress draft alive (don't clear it).
-            if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
-                model.openSession(primary)
+        ZStack(alignment: .trailing) {
+            Button {
+                // openSession() keeps any in-progress draft alive (don't clear it).
+                if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
+                    model.openSession(primary)
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(wt.branch)
+                            .font(TahoeFont.body(12.5, weight: .medium))
+                            .foregroundStyle(t.fg)
+                            .lineLimit(1).truncationMode(.middle)
+                        Text(worktreeSubtitle(wt))
+                            .font(TahoeFont.body(9.5))
+                            .foregroundStyle(t.fg4)
+                            .lineLimit(1).truncationMode(.tail)
+                    }
+                    Spacer(minLength: 4)
+                    if isActive {
+                        StatusPulseDot(color: .green, isLive: true)
+                            .help("AI session running in this worktree")
+                    } else if provisioning {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.6)
+                            .frame(width: 14, height: 14)
+                            .help("Setting up this worktree")
+                    }
+                    if wt.sessions.count > 1 {
+                        Text("\(wt.sessions.count)")
+                            .font(TahoeFont.body(9.5, weight: .semibold))
+                            .foregroundStyle(t.fg3)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(t.hair2, in: Capsule())
+                            .help("\(wt.sessions.count) models on this branch — open to switch via tabs")
+                    }
+                    if isOpen {
+                        Text("Selected worktree")
+                            .font(.system(size: 1))
+                            .frame(width: 1, height: 1)
+                            .opacity(0.001)
+                            .accessibilityIdentifier("code.worktree.row.selected")
+                    }
+                }
+                .padding(.leading, 48)
+                .padding(.trailing, 8)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    isOpen
+                        ? t.accent.opacity(0.12)
+                        : (isHovered ? t.hair2.opacity(colorScheme == .dark ? 1.0 : 1.35) : Color.clear),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(isOpen ? t.accentAlpha(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
+                )
+                .contentShape(Rectangle())
             }
-        } label: {
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(wt.branch)
-                        .font(TahoeFont.body(12.5, weight: .medium))
-                        .foregroundStyle(t.fg)
-                        .lineLimit(1).truncationMode(.middle)
-                    Text(worktreeSubtitle(wt))
-                        .font(TahoeFont.body(9.5))
-                        .foregroundStyle(t.fg4)
-                        .lineLimit(1).truncationMode(.tail)
-                }
-                Spacer(minLength: 4)
-                if isActive {
-                    StatusPulseDot(color: .green, isLive: true)
-                        .help("AI session running in this worktree")
-                } else if provisioning {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.6)
-                        .frame(width: 14, height: 14)
-                        .help("Setting up this worktree")
-                }
-                if wt.sessions.count > 1 {
-                    Text("\(wt.sessions.count)")
-                        .font(TahoeFont.body(9.5, weight: .semibold))
-                        .foregroundStyle(t.fg3)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(t.hair2, in: Capsule())
-                        .help("\(wt.sessions.count) models on this branch — open to switch via tabs")
-                }
+            .buttonStyle(PressableButtonStyle())
+            .accessibilityIdentifier("code.worktree.row")
+            .accessibilityValue(isOpen ? "selected" : "not selected")
+
+            if isHovered || isOpen {
+                SessionHoverActions(
+                    onArchive: {
+                        let sessions = wt.sessions
+                        let ids = sessions.map(\.id)
+                        Task { @MainActor in
+                            try? await model.registry.archive(ids: ids)
+                        }
+                        if let primary = sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
+                            postArchiveUndoToast(for: primary)
+                        }
+                    }
+                )
+                .padding(.trailing, 18)
+                .zIndex(1)
             }
-            .padding(.leading, 48)
-            .padding(.trailing, 8)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isOpen ? t.accent.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .contentShape(Rectangle())
         }
-        .buttonStyle(PressableButtonStyle())
-        .accessibilityIdentifier("code.worktree.row")
+        .onHover { inside in
+            if inside {
+                hoveredWorktreePath = wt.path
+            } else if hoveredWorktreePath == wt.path {
+                hoveredWorktreePath = nil
+            }
+        }
         .padding(.horizontal, 10)
     }
 
@@ -883,11 +962,42 @@ struct SidebarPane: View {
 
     // MARK: - Workspace management (gear / context menu)
 
-    /// The persisted workspace record backing a sidebar repo, matched by
-    /// canonical root (`repo.key` is `RepoIdentity.normalize(repoRoot)`).
+    /// The persisted workspace record backing a sidebar workspace section.
+    /// Sections can be built from either a workspace record, a live session, or
+    /// both, so compare the raw repo key plus symlink-resolved/canonical forms.
     /// Nil for external / unmanaged repos.
-    private func managedWorkspace(for repo: AgentRepo) -> CodeWorkspaceRecord? {
-        model.workspaceStore.all().first { RepoIdentity.normalize($0.repoRoot) == repo.key }
+    private func managedWorkspace(for section: SidebarWorkspaceSection) -> CodeWorkspaceRecord? {
+        var candidates: Set<String> = []
+        func addCandidate(_ raw: String?) {
+            guard let raw else { return }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            let canonical = WorkspaceKey.canonicalPath(trimmed)
+            candidates.insert(trimmed)
+            candidates.insert(canonical)
+            candidates.insert(RepoIdentity.normalize(trimmed))
+            candidates.insert(RepoIdentity.normalize(canonical))
+        }
+
+        addCandidate(section.repo.key)
+        addCandidate(section.workspaceKey.repoKey)
+        addCandidate(section.workspaceKey.workspacePath)
+        addCandidate(section.workspacePath)
+        section.sessions.forEach { session in
+            addCandidate(session.repoKey)
+            addCandidate(session.runtimeCwd)
+            addCandidate(session.worktreePath)
+        }
+
+        return model.workspaceStore.all().first { workspace in
+            var workspaceKeys: Set<String> = []
+            let canonical = WorkspaceKey.canonicalPath(workspace.repoRoot)
+            workspaceKeys.insert(workspace.repoRoot)
+            workspaceKeys.insert(canonical)
+            workspaceKeys.insert(RepoIdentity.normalize(workspace.repoRoot))
+            workspaceKeys.insert(RepoIdentity.normalize(canonical))
+            return !workspaceKeys.isDisjoint(with: candidates)
+        }
     }
 
     /// Open the app's Settings window (Env Variables + every other setting
@@ -899,41 +1009,47 @@ struct SidebarPane: View {
 
     @ViewBuilder
     private func workspaceMenuItems(_ section: SidebarWorkspaceSection) -> some View {
+        let workspace = managedWorkspace(for: section)
         Button { model.quickSpawnInRepo(section.repo.key) } label: {
             Label("New session here", systemImage: "plus")
         }
+        .accessibilityIdentifier("code.repo.settings.new-session")
         if !section.sessions.isEmpty {
             Button {
                 let ids = section.sessions.map(\.id)
-                Task { for id in ids { try? await model.registry.archive(id: id) } }
+                Task { try? await model.registry.archive(ids: ids) }
             } label: {
                 Label("Archive all sessions (\(section.sessions.count))", systemImage: "archivebox")
             }
+            .accessibilityIdentifier("code.repo.settings.archive-all")
         }
         // Archive the WHOLE repo in one go: archive every session across all its
         // worktrees AND drop it from the Managed list, so the row disappears
         // entirely (sessions stay recoverable under the Archived filter).
         Button(role: .destructive) {
             let ids = section.sessions.map(\.id)
-            let workspaceId = managedWorkspace(for: section.repo)?.id
+            let workspaceId = workspace?.id
             Task {
-                for id in ids { try? await model.registry.archive(id: id) }
+                try? await model.registry.archive(ids: ids)
                 if let workspaceId { _ = model.workspaceStore.delete(id: workspaceId) }
             }
         } label: {
             Label("Archive entire repo", systemImage: "archivebox.fill")
         }
+        .accessibilityIdentifier("code.repo.settings.archive-repo")
         Divider()
         Button { openSettingsWindow() } label: {
             Label("Settings & Env Variables…", systemImage: "gearshape")
         }
-        if let ws = managedWorkspace(for: section.repo) {
+        .accessibilityIdentifier("code.repo.settings.open-settings")
+        if let ws = workspace {
             Divider()
             Button(role: .destructive) {
                 _ = model.workspaceStore.delete(id: ws.id)
             } label: {
                 Label("Remove “\(section.repo.displayName)” from list", systemImage: "trash")
             }
+            .accessibilityIdentifier("code.repo.settings.remove")
         }
     }
 
@@ -953,6 +1069,7 @@ struct SidebarPane: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Workspace settings — archive, env variables, remove")
+        .accessibilityIdentifier("code.repo.settings")
     }
 
     private func externalRepoSection(_ section: SidebarExternalRepoSection) -> some View {
@@ -1172,6 +1289,7 @@ struct SidebarPane: View {
                 )
             }
             .buttonStyle(PressableButtonStyle())
+            .accessibilityIdentifier("code.repo.toggle")
         }
     }
 
@@ -1462,6 +1580,7 @@ struct SidebarPane: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(PressableButtonStyle())
+            .accessibilityIdentifier("code.repo.toggle")
 
             Spacer()
 
@@ -1495,6 +1614,7 @@ struct SidebarPane: View {
             }
             .buttonStyle(PressableButtonStyle())
             .help("New workspace — Codex · gpt-5.5 · max effort · plan mode (option-click to customize)")
+            .accessibilityIdentifier("code.repo.new-session")
             // Option/Alt-click escape hatch: power users who want to
             // pick a different agent/model/effort/path get the full
             // sheet by holding Option while clicking the "+".
@@ -1647,21 +1767,6 @@ struct SidebarPane: View {
                     }
                 }
                 Spacer()
-                if isHovered {
-                    SessionHoverActions(
-                        onArchive: {
-                            // F2-wire: registry mutation is now async
-                            // throws. SwiftUI button closures are sync,
-                            // so wrap in Task. Best-effort — failures
-                            // surface as a missed archive (the row
-                            // stays in the sidebar; user can retry).
-                            Task { @MainActor in
-                                try? await model.registry.archive(id: session.id)
-                            }
-                            postArchiveUndoToast(for: session)
-                        }
-                    )
-                }
                 if isUnread {
                     Circle()
                         .fill(t.accent)
@@ -1732,6 +1837,13 @@ struct SidebarPane: View {
             )
             .padding(.horizontal, 6)
             .contentShape(Rectangle())
+            .onHover { inside in
+                if inside {
+                    hoveredSessionId = session.id
+                } else if hoveredSessionId == session.id {
+                    hoveredSessionId = nil
+                }
+            }
         }
         .buttonStyle(PressableButtonStyle())
         .accessibilityIdentifier("code.session.row")
@@ -1740,6 +1852,22 @@ struct SidebarPane: View {
                 hoveredSessionId = session.id
             } else if hoveredSessionId == session.id {
                 hoveredSessionId = nil
+            }
+        }
+        .overlay(alignment: .trailing) {
+            if isHovered || isOpen {
+                SessionHoverActions(
+                    onArchive: {
+                        // F2-wire: registry mutation is now async throws.
+                        // SwiftUI button closures are sync, so wrap in Task.
+                        // Best-effort: failures leave the row in place.
+                        Task { @MainActor in
+                            try? await model.registry.archive(id: session.id)
+                        }
+                        postArchiveUndoToast(for: session)
+                    }
+                )
+                .padding(.trailing, 16)
             }
         }
         .opacity(session.archivedAt != nil ? 0.6 : 1.0)

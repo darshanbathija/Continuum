@@ -34,6 +34,38 @@ final class SessionChatStorePendingTests: XCTestCase {
         XCTAssertEqual(store.pendingMessage?.state, .sending)
     }
 
+    func test_injectPending_surfacesVisibleSendFeedbackWithin100ms() {
+        let store = SessionChatStore(sessionId: UUID(), sdkOnly: true)
+        var worst = Duration.zero
+
+        for index in 0..<100 {
+            let start = ContinuousClock.now
+            let pending = store.injectPending(
+                text: "send latency probe \(index)",
+                attachmentRefs: ["probe-\(index).txt"]
+            )
+            let elapsed = start.duration(to: ContinuousClock.now)
+            worst = max(worst, elapsed)
+
+            XCTAssertEqual(store.pendingMessage?.id, pending.id)
+            XCTAssertEqual(store.pendingMessage?.state, .sending)
+            store.clearPending()
+        }
+
+        XCTContext.runActivity(named: "Code composer pending-feedback latency") { activity in
+            activity.add(XCTAttachment(string: """
+            sends=100
+            worstInjectPending=\(worst)
+            budget=100ms per send-click visible pending bubble
+            """))
+        }
+        XCTAssertLessThan(
+            worst,
+            .milliseconds(100),
+            "Clicking send must synchronously surface pending-message feedback within 100ms."
+        )
+    }
+
     /// D24 rejection acceptance: a daemon-rejected send flips the slot
     /// to `.failed` but leaves the bubble visible with an error chip.
     /// The user must explicitly retry or dismiss.

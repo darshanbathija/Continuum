@@ -477,12 +477,14 @@ struct InAppBrowser: View {
             }
             .disabled(!controller.canGoBack)
             .buttonStyle(.borderless)
+            .accessibilityIdentifier("code.browser.back")
 
             Button(action: { controller.goForward() }) {
                 Image(systemName: "chevron.right").font(.system(size: 11))
             }
             .disabled(!controller.canGoForward)
             .buttonStyle(.borderless)
+            .accessibilityIdentifier("code.browser.forward")
 
             Button(action: {
                 if controller.isLoading { controller.stopLoading() }
@@ -492,6 +494,7 @@ struct InAppBrowser: View {
                     .font(.system(size: 11))
             }
             .buttonStyle(.borderless)
+            .accessibilityIdentifier(controller.isLoading ? "code.browser.stop-loading" : "code.browser.reload")
 
             TextField("URL", text: $controller.urlText)
                 .textFieldStyle(.roundedBorder)
@@ -508,6 +511,7 @@ struct InAppBrowser: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Open detected run URL")
+                .accessibilityIdentifier("code.browser.detected-url")
             }
 
             Button(action: controller.loadCurrentURL) {
@@ -516,6 +520,7 @@ struct InAppBrowser: View {
             }
             .buttonStyle(.borderless)
             .help("Load URL")
+            .accessibilityIdentifier("code.browser.load-url")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -531,6 +536,7 @@ struct InAppBrowser: View {
                     .font(.system(size: 11, design: .monospaced))
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { startRun() }
+                    .accessibilityIdentifier("code.browser.run-command")
                 Button(action: startRun) {
                     Image(systemName: "play.fill")
                         .font(.system(size: 10, weight: .semibold))
@@ -538,6 +544,7 @@ struct InAppBrowser: View {
                 .buttonStyle(.borderless)
                 .disabled(!canStartRun)
                 .help("Start run profile")
+                .accessibilityIdentifier("code.browser.run-start")
                 Button(action: { controller.runProfile.stopRun(); workbenchState.recordRunProfile(controller.runProfile.stateSnapshot) }) {
                     Image(systemName: "stop.fill")
                         .font(.system(size: 10, weight: .semibold))
@@ -545,6 +552,7 @@ struct InAppBrowser: View {
                 .buttonStyle(.borderless)
                 .disabled(controller.runProfile.status != .running && controller.runProfile.status != .starting)
                 .help("Stop run profile")
+                .accessibilityIdentifier("code.browser.run-stop")
                 Button(action: {
                     let result = resolveRunEnvironment()
                     guard result.ok else {
@@ -556,10 +564,13 @@ struct InAppBrowser: View {
                 }) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 10, weight: .semibold))
+                        .accessibilityHidden(true)
                 }
                 .buttonStyle(.borderless)
                 .disabled(controller.runProfile.runCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .help("Restart run profile")
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Restart run profile")
                 .accessibilityIdentifier("code.browser.restart")
                 Button(action: { controller.showingRunOutput.toggle() }) {
                     Image(systemName: controller.showingRunOutput ? "terminal.fill" : "terminal")
@@ -567,6 +578,7 @@ struct InAppBrowser: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Show run output")
+                .accessibilityIdentifier("code.browser.run-output-toggle")
             }
             runStatusRow
             if controller.showingRunOutput {

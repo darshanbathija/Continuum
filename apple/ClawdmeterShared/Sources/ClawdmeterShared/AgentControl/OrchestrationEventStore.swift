@@ -246,6 +246,17 @@ public actor OrchestrationEventStore {
         if let db = db { sqlite3_close(db) }
     }
 
+    public func close() throws {
+        guard let db else { return }
+        try? exec("PRAGMA wal_checkpoint(TRUNCATE);")
+        let code = sqlite3_close(db)
+        guard code == SQLITE_OK else {
+            let msg = String(cString: sqlite3_errmsg(db))
+            throw OrchestrationEventStoreError.writeFailed("sqlite3_close(\(code)): \(msg)")
+        }
+        self.db = nil
+    }
+
     // MARK: - Open + recovery (static helpers used by init)
 
     private static func openAt(_ url: URL) throws -> OpaquePointer {

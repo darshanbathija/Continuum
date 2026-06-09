@@ -53,6 +53,16 @@ struct SidebarProjection {
     }
 }
 
+enum SidebarStatusBucketState {
+    static func nextFilter(current: SessionStatusFilter, tapped: SessionStatusFilter) -> SessionStatusFilter {
+        current == tapped ? .all : tapped
+    }
+
+    static func showsArchived(for filter: SessionStatusFilter) -> Bool {
+        filter == .archived
+    }
+}
+
 struct SidebarWorkspaceSection: Identifiable, Hashable {
     let workspaceKey: WorkspaceKey
     let repo: AgentRepo
@@ -195,7 +205,7 @@ enum SidebarProjectionBuilder {
         let pinSorted = pinSorted(archiveFiltered, pinnedSessionIds: pinnedSessionIds)
         let firstPartySessions = searchFilteredSessions.filter {
             isFirstPartyCodeSession($0)
-                && passesCodeStatus($0, statusFilter: statusFilter, reviewSessionIds: reviewIds, now: now)
+                && passesCodeStatus($0, statusFilter: statusFilter, showArchived: showArchived, reviewSessionIds: reviewIds, now: now)
         }
         let canonicalRepos = SessionSidebarGrouper.canonicalizeRepos(repos)
         let workspaceSections = buildWorkspaceSections(
@@ -340,7 +350,7 @@ enum SidebarProjectionBuilder {
             return session.archivedAt != nil
         }
         if session.archivedAt != nil {
-            return false
+            return showArchived
         }
         return true
     }
@@ -348,10 +358,11 @@ enum SidebarProjectionBuilder {
     private static func passesCodeStatus(
         _ session: AgentSession,
         statusFilter: SessionStatusFilter,
+        showArchived: Bool,
         reviewSessionIds: Set<UUID>,
         now: Date
     ) -> Bool {
-        guard passesArchiveGate(session, statusFilter: statusFilter, showArchived: false) else {
+        guard passesArchiveGate(session, statusFilter: statusFilter, showArchived: showArchived) else {
             return false
         }
         switch statusFilter {

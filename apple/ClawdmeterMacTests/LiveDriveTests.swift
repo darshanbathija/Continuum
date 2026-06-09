@@ -45,6 +45,9 @@ final class LiveDriveTests: XCTestCase {
     override func tearDown() async throws {
         for s in stores { s.stop() }
         stores.removeAll()
+        OpencodeSSEAdapter.shared.chatStoreAccessor = nil
+        OpencodeSSEAdapter.shared.stop()
+        OpencodeProcessManager.shared.stop()
     }
 
     // Poll a predicate until true or timeout.
@@ -58,7 +61,11 @@ final class LiveDriveTests: XCTestCase {
     }
 
     private func makeStore() -> SessionChatStore {
-        let s = SessionChatStore(sessionId: UUID(), sdkOnly: true)
+        makeStore(sessionId: UUID())
+    }
+
+    private func makeStore(sessionId: UUID) -> SessionChatStore {
+        let s = SessionChatStore(sessionId: sessionId, sdkOnly: true)
         s.start()
         stores.append(s)
         return s
@@ -148,6 +155,112 @@ final class LiveDriveTests: XCTestCase {
         XCTAssertTrue(gotReply, "[\(provider)] expected a non-empty assistant reply; got: \(body)")
         XCTAssertTrue(turnDone, "[\(provider)] turn never reached a terminal state")
         print("✅ LIVE \(provider) replied: \(body.prefix(120))")
+    }
+
+    // MARK: - OpenCode / OpenRouter (opencode serve HTTP + SSE)
+
+    func testOpenCodeLiveDrive() async throws {
+        guard OpencodeProcessManager.shared.locateBinary() != nil else {
+            throw XCTSkip("opencode not on PATH or bundled runtime")
+        }
+        guard await OpencodeProcessManager.shared.ensureRunning() != nil else {
+            throw XCTSkip("opencode serve unavailable: \(OpencodeProcessManager.shared.lastError ?? "\(OpencodeProcessManager.shared.state)")")
+        }
+        await OpencodeProcessManager.shared.refreshAuthStatus()
+        guard let authStatus = OpencodeProcessManager.shared.authStatus,
+              !authStatus.isEmpty else {
+            throw XCTSkip("opencode has no configured auth providers")
+        }
+
+        let sessionId = UUID()
+        let store = makeStore(sessionId: sessionId)
+        OpencodeSSEAdapter.shared.chatStoreAccessor = { id in
+            id == sessionId ? store : nil
+        }
+        OpencodeSSEAdapter.shared.start()
+
+        let opencodeSessionId = try await createOpenCodeSession(title: "Continuum live smoke", directory: cwd)
+        OpencodeSSEAdapter.shared.register(
+            clawdmeterID: sessionId,
+            opencodeID: opencodeSessionId,
+            repo: cwd
+        )
+
+        let expectedToken = "CONTINUUM_OPENCODE_LIVE_OK_\(UUID().uuidString.replacingOccurrences(of: "-", with: "_"))"
+        try await postOpenCodePrompt(
+            sessionId: opencodeSessionId,
+            prompt: "Reply with the token \(expectedToken) and no other text.",
+            directory: cwd
+        )
+
+        let gotReply = await waitUntil {
+            store.messages.contains { $0.kind == .assistantText && $0.body.contains(expectedToken) }
+        }
+        let body = store.messages.last { $0.kind == .assistantText }?.body ?? "<none>"
+        let turnDone = await waitUntil(30) {
+            let state = store.snapshot.currentTurnState
+            return state == .completed || state == .interrupted
+        }
+
+        if !gotReply, isProviderQuotaOrPlanMessage(body) {
+            throw XCTSkip("[OpenCode] provider quota/plan unavailable: \(body.prefix(120))")
+        }
+        XCTAssertTrue(gotReply, "[OpenCode] expected token reply through opencode serve SSE; got: \(body)")
+        XCTAssertTrue(turnDone, "[OpenCode] turn never reached a terminal state")
+        print("LIVE OpenCode replied: \(body.prefix(120))")
+    }
+
+    private func createOpenCodeSession(title: String, directory: String) async throws -> String {
+        guard var request = OpencodeProcessManager.shared.makeAuthorizedRequest(
+            path: "/session",
+            directory: directory
+        ) else {
+            throw XCTSkip("opencode serve is not running")
+        }
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["title": title])
+        let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            XCTFail("OpenCode session create returned a non-HTTP response")
+            return ""
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            XCTFail("OpenCode session create failed HTTP \(http.statusCode): \(String(data: data, encoding: .utf8) ?? "<binary>")")
+            return ""
+        }
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = object["id"] as? String,
+              !id.isEmpty else {
+            XCTFail("OpenCode session create response did not include id: \(String(data: data, encoding: .utf8) ?? "<binary>")")
+            return ""
+        }
+        return id
+    }
+
+    private func postOpenCodePrompt(sessionId: String, prompt: String, directory: String) async throws {
+        guard var request = OpencodeProcessManager.shared.makeAuthorizedRequest(
+            path: "/session/\(sessionId)/message",
+            directory: directory
+        ) else {
+            throw XCTSkip("opencode serve is not running")
+        }
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "parts": [
+                ["type": "text", "text": prompt]
+            ]
+        ])
+        let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            XCTFail("OpenCode prompt POST returned a non-HTTP response")
+            return
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            XCTFail("OpenCode prompt POST failed HTTP \(http.statusCode): \(String(data: data, encoding: .utf8) ?? "<binary>")")
+            return
+        }
     }
 
     // MARK: - Grok (headless one-shot driver)

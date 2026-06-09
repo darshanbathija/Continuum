@@ -108,7 +108,7 @@ public actor TailscaleWhois {
                 timeout: 5
             )
             guard result.exitStatus == 0 else {
-                whoisLogger.debug("whois \(ip, privacy: .public) exit=\(result.exitStatus): \(result.stderrString, privacy: .public)")
+                whoisLogger.debug("whois \(ip, privacy: .public) exit=\(result.exitStatus, privacy: .public) stderrBytes=\(result.stderr.count, privacy: .public)")
                 return nil
             }
             return Self.parseLoginName(from: result.stdout)

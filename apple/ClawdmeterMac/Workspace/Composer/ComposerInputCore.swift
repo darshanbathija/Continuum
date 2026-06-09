@@ -38,6 +38,10 @@ struct ComposerInputCore: View {
     /// Bound sessions trigger a respawn via SessionConfigChanger;
     /// empty-state composers just record the choice for the next spawn.
     var onChangePermissionMode: ((PermissionMode) -> Void)?
+    /// Called when the rich model picker chooses a provider + model together.
+    /// Pending optimistic sessions use this as launch configuration; regular
+    /// live-session swaps still use the model/effort bindings below.
+    var onSelectModelConfiguration: ((AgentKind, String, ReasoningEffort?) -> Void)?
     /// Resolved permission mode for the chip. For bound sessions this
     /// comes from `PermissionModeStore.currentMode(for:)`. For empty
     /// state it's `store.permissionMode`.
@@ -56,6 +60,181 @@ struct ComposerInputCore: View {
     /// (+ · access · model+effort · send) for the centered empty-state.
     /// The in-session composer keeps the full chrome (defaults false).
     var minimalChrome: Bool = false
+
+    struct PrimaryActionDescriptor: Equatable {
+        enum Kind: Equatable {
+            case send
+            case stop
+        }
+
+        let kind: Kind
+        let isEnabled: Bool
+        let accessibilityLabel: String
+        let accessibilityIdentifier: String
+        let visibleTitle: String?
+    }
+
+    struct PendingActionDescriptor: Equatable {
+        enum Kind: Equatable {
+            case retry
+            case dismiss
+        }
+
+        let kind: Kind
+        let visibleTitle: String?
+        let accessibilityIdentifier: String
+    }
+
+    struct PromptHistoryRowDescriptor: Equatable, Identifiable {
+        enum Kind: Equatable {
+            case saved(UUID)
+            case history
+        }
+
+        let kind: Kind
+        let title: String
+        let body: String
+        let accessibilityIdentifier: String
+
+        var id: String { accessibilityIdentifier }
+    }
+
+    struct PromptHistoryPresentation: Equatable {
+        let savedRows: [PromptHistoryRowDescriptor]
+        let historyRows: [PromptHistoryRowDescriptor]
+        let showsEmptyHistory: Bool
+    }
+
+    static func primaryActionDescriptor(
+        isReadOnly: Bool,
+        sessionIsRunning: Bool,
+        hasInterruptHandler: Bool,
+        canSendNow: Bool
+    ) -> PrimaryActionDescriptor {
+        if !isReadOnly, sessionIsRunning, hasInterruptHandler {
+            return PrimaryActionDescriptor(
+                kind: .stop,
+                isEnabled: true,
+                accessibilityLabel: "Stop",
+                accessibilityIdentifier: "code.composer.stop",
+                visibleTitle: nil
+            )
+        }
+        return PrimaryActionDescriptor(
+            kind: .send,
+            isEnabled: canSendNow,
+            accessibilityLabel: "Send",
+            accessibilityIdentifier: "code.composer.send",
+            visibleTitle: nil
+        )
+    }
+
+    static func shouldShowQueueFollowUpButton(
+        isReadOnly: Bool,
+        sessionIsRunning: Bool,
+        hasQueueHandler: Bool
+    ) -> Bool {
+        !isReadOnly && sessionIsRunning && hasQueueHandler
+    }
+
+    static func pendingActionDescriptors(
+        for state: OptimisticPendingMessage.State
+    ) -> [PendingActionDescriptor] {
+        switch state {
+        case .sending:
+            return []
+        case .queuedOffline:
+            return [
+                PendingActionDescriptor(
+                    kind: .retry,
+                    visibleTitle: "Retry now",
+                    accessibilityIdentifier: "composer.pending.retry"
+                ),
+                PendingActionDescriptor(
+                    kind: .dismiss,
+                    visibleTitle: nil,
+                    accessibilityIdentifier: "composer.pending.dismiss"
+                )
+            ]
+        case .failed:
+            return [
+                PendingActionDescriptor(
+                    kind: .retry,
+                    visibleTitle: "Retry",
+                    accessibilityIdentifier: "composer.pending.retry"
+                ),
+                PendingActionDescriptor(
+                    kind: .dismiss,
+                    visibleTitle: nil,
+                    accessibilityIdentifier: "composer.pending.dismiss"
+                )
+            ]
+        }
+    }
+
+    static func textAfterPastingTerminalText(existing: String, rawClipboard: String) -> String {
+        let stripped = ClawdmeterTextUtilities.stripANSI(rawClipboard)
+        guard !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return stripped
+        }
+        var next = existing
+        if !next.hasSuffix("\n") {
+            next += "\n"
+        }
+        next += stripped
+        return next
+    }
+
+    static func canSavePromptText(_ text: String) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    static func promptHistoryRowIdentifier(for body: String) -> String {
+        "code.prompt-history.row.\(ClawdmeterTextUtilities.stableContentHash(body))"
+    }
+
+    static func savedPromptRowIdentifier(for id: UUID) -> String {
+        "code.prompt-history.saved.\(id.uuidString.lowercased())"
+    }
+
+    static func promptHistoryPresentation(
+        history: [String],
+        savedPrompts: [SavedPromptState],
+        query: String
+    ) -> PromptHistoryPresentation {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let saved = savedPrompts
+            .filter { prompt in
+                needle.isEmpty
+                    || prompt.title.lowercased().contains(needle)
+                    || prompt.body.lowercased().contains(needle)
+            }
+            .map { prompt in
+                PromptHistoryRowDescriptor(
+                    kind: .saved(prompt.id),
+                    title: prompt.title,
+                    body: prompt.body,
+                    accessibilityIdentifier: savedPromptRowIdentifier(for: prompt.id)
+                )
+            }
+        let rows = history
+            .filter { prompt in
+                needle.isEmpty || prompt.lowercased().contains(needle)
+            }
+            .map { prompt in
+                PromptHistoryRowDescriptor(
+                    kind: .history,
+                    title: ClawdmeterTextUtilities.collapsedWhitespacePreview(prompt, limit: 72),
+                    body: prompt,
+                    accessibilityIdentifier: promptHistoryRowIdentifier(for: prompt)
+                )
+            }
+        return PromptHistoryPresentation(
+            savedRows: saved,
+            historyRows: rows,
+            showsEmptyHistory: rows.isEmpty
+        )
+    }
 
     @StateObject private var dictation = SpeechDictation()
     @ObservedObject private var skillCatalog = SkillCatalog.shared
@@ -102,9 +281,9 @@ struct ComposerInputCore: View {
 
     var body: some View {
         // Claude-Code-style stack: input box on top, attachments chip strip,
-        // then a single compact bottom bar with all controls + the usage
-        // chip on the right. The palette / mention popovers float flush ABOVE
-        // the composer — attached as an overlay OUTSIDE TahoeGlass (see below),
+        // then a single compact bottom bar with all controls + the icon-only
+        // send/stop action pinned to the right. The palette / mention popovers
+        // float flush ABOVE the composer — attached as an overlay OUTSIDE TahoeGlass (see below),
         // because the glass `.clipShape` was clipping them when they lived
         // inside it.
         TahoeGlass(radius: 8, tone: .raised) {
@@ -161,6 +340,7 @@ struct ComposerInputCore: View {
                         lineWidth: 1)
                 .shadow(color: t.accentAlpha(sessionIsRunning ? (reduceMotion ? 0.28 : (rimPulse ? 0.34 : 0.12)) : 0),
                         radius: 11)
+                .allowsHitTesting(false)
         )
         .onChange(of: sessionIsRunning) { _, running in
             if running, let anim = SessionsV2Theme.composerRimPulse(reduceMotion: reduceMotion) {
@@ -251,6 +431,17 @@ struct ComposerInputCore: View {
         .onReceive(NotificationCenter.default.publisher(for: .composerToggleDictation)) { _ in
             toggleDictation()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .composerAttach)) { _ in
+            isShowingFileImporter = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .composerSetPermissionMode)) { note in
+            guard case .emptyState = store.modeKind else { return }
+            guard let mode = Self.permissionMode(fromShortcutRaw: note.userInfo?["mode"], availableModes: availablePermissionModes) else {
+                return
+            }
+            onChangePermissionMode?(mode)
+        }
+        .background(permissionModeShortcutHost)
         .sheet(isPresented: $showingPromptHistory) {
             PromptHistorySheet(
                 history: presentationStore.snapshot.promptHistory,
@@ -349,9 +540,7 @@ struct ComposerInputCore: View {
     // MARK: - Chip row (mode-dependent)
 
     /// Compact bottom bar — Claude-Code-style single line under the input.
-    /// Left cluster: per-turn tools (autopilot, attach, mic, mode, plan).
-    /// Right cluster: model + effort + usage in a single unified chip that
-    /// opens a Claude-Code-style "Models / Effort / Usage" popover.
+    /// Left cluster: per-turn tools. Right cluster: usage + icon-only action.
     @ViewBuilder
     private var chipRow: some View {
         HStack(spacing: 8) {
@@ -374,6 +563,12 @@ struct ComposerInputCore: View {
                     if newAgent == .cursor, store.permissionMode == .plan {
                         onChangePermissionMode?(.ask)
                     }
+                },
+                onSelectModelConfiguration: { newAgent, modelId, effort in
+                    if onSelectModelConfiguration != nil {
+                        store.agent = newAgent
+                    }
+                    onSelectModelConfiguration?(newAgent, modelId, effort)
                 }
             )
             .layoutPriority(2)
@@ -400,6 +595,7 @@ struct ComposerInputCore: View {
             stripANSIPasteButton
             expandEditorButton
             micButton
+            queueFollowUpButton
 
             switch store.modeKind {
             case .bound:
@@ -422,6 +618,7 @@ struct ComposerInputCore: View {
             Spacer(minLength: 6)
 
             ContextUsageChip(info: resolvedInfo)
+            sendOrStopButton
         }
     }
 
@@ -455,9 +652,35 @@ struct ComposerInputCore: View {
                     if newAgent == .cursor, store.permissionMode == .plan {
                         onChangePermissionMode?(.ask)
                     }
+                },
+                onSelectModelConfiguration: { newAgent, modelId, effort in
+                    if onSelectModelConfiguration != nil {
+                        store.agent = newAgent
+                    }
+                    onSelectModelConfiguration?(newAgent, modelId, effort)
                 }
             )
             sendOrStopButton
+        }
+    }
+
+    @ViewBuilder
+    private var permissionModeShortcutHost: some View {
+        if !isReadOnly, onChangePermissionMode != nil {
+            ZStack {
+                ForEach(availablePermissionModes, id: \.self) { mode in
+                    Button("") {
+                        onChangePermissionMode?(mode)
+                    }
+                    .keyboardShortcut(
+                        KeyEquivalent(PermissionModeChip.shortcutDigit(for: mode)),
+                        modifiers: [.command, .shift]
+                    )
+                    .opacity(0)
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+                }
+            }
         }
     }
 
@@ -515,10 +738,24 @@ struct ComposerInputCore: View {
     /// (Claude) / `--dangerously-bypass-approvals-and-sandbox` (Codex)
     /// / `--approval-mode yolo` (Gemini).
     private var availablePermissionModes: [PermissionMode] {
-        if agentForModelPicker == .cursor {
+        Self.availablePermissionModes(for: agentForModelPicker)
+    }
+
+    static func availablePermissionModes(for agent: AgentKind) -> [PermissionMode] {
+        if agent == .cursor {
             return [.ask, .acceptEdits, .bypass]
         }
         return [.ask, .acceptEdits, .plan, .bypass]
+    }
+
+    static func permissionMode(fromShortcutRaw raw: Any?, availableModes: [PermissionMode]) -> PermissionMode? {
+        guard let raw = raw as? String,
+              let mode = PermissionMode(rawValue: raw),
+              availableModes.contains(mode)
+        else {
+            return nil
+        }
+        return mode
     }
 
     private var enabledModelPickerVendors: [ChatVendor] {
@@ -557,6 +794,7 @@ struct ComposerInputCore: View {
         .keyboardShortcut(.upArrow, modifiers: [.option])
         .help("Prompt history (⌥↑)")
         .accessibilityLabel("Open prompt history")
+        .accessibilityIdentifier("code.composer.history")
     }
 
     private var savedPromptsMenu: some View {
@@ -566,6 +804,7 @@ struct ComposerInputCore: View {
             } else {
                 ForEach(presentationStore.snapshot.savedPrompts) { prompt in
                     Button(prompt.title) { store.text = prompt.body }
+                        .accessibilityIdentifier(Self.savedPromptRowIdentifier(for: prompt.id))
                 }
             }
             Divider()
@@ -574,6 +813,7 @@ struct ComposerInputCore: View {
                 showingExpandedEditor = true
             }
             .disabled(store.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityIdentifier("code.composer.saved-prompts.save-current")
         } label: {
             Image(systemName: "bookmark")
                 .font(.system(size: 13, weight: .semibold))
@@ -584,6 +824,7 @@ struct ComposerInputCore: View {
         .fixedSize()
         .help("Saved prompts")
         .accessibilityLabel("Saved prompts")
+        .accessibilityIdentifier("code.composer.saved-prompts")
     }
 
     private var stripANSIPasteButton: some View {
@@ -595,6 +836,7 @@ struct ComposerInputCore: View {
         .buttonStyle(PressableButtonStyle())
         .help("Paste terminal text without ANSI color codes")
         .accessibilityLabel("Paste stripped terminal text")
+        .accessibilityIdentifier("code.composer.paste-ansi")
     }
 
     private var expandEditorButton: some View {
@@ -606,6 +848,7 @@ struct ComposerInputCore: View {
         .buttonStyle(PressableButtonStyle())
         .help("Open expanded editor")
         .accessibilityLabel("Open expanded composer editor")
+        .accessibilityIdentifier("code.composer.expand")
     }
 
     private var micButton: some View {
@@ -618,6 +861,7 @@ struct ComposerInputCore: View {
         .buttonStyle(PressableButtonStyle())
         .keyboardShortcut("m", modifiers: [.control])
         .help(dictationTooltip)
+        .accessibilityIdentifier("code.composer.dictation")
     }
 
     private var attachmentChipsRow: some View {
@@ -656,6 +900,7 @@ struct ComposerInputCore: View {
                     .padding(.vertical, 2)
                     .frame(maxWidth: .infinity, minHeight: 52, alignment: .topLeading)
                     .lineLimit(2...18)
+                    .accessibilityIdentifier("code.composer.input")
             }
             .background(Color.clear, in: RoundedRectangle(cornerRadius: 6))
             .overlay(
@@ -669,85 +914,77 @@ struct ComposerInputCore: View {
                 handleDrop(providers: providers)
                 return true
             }
-
-            if !minimalChrome {
-                sendOrStopButton
-            }
         }
     }
 
     @ViewBuilder
     private var sendOrStopButton: some View {
-        if !isReadOnly, sessionIsRunning, let onInterrupt {
-            HStack(spacing: 8) {
-                if onQueue != nil {
-                    Button(action: queueCurrentDraft) {
-                        Image(systemName: store.isSending ? "tray.and.arrow.down" : "tray.and.arrow.down.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(store.canSend && !store.isSending ? t.accent : t.fg3)
-                            .frame(width: 28, height: 28)
-                            .background(t.hair2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .buttonStyle(PressableButtonStyle())
-                    .keyboardShortcut(.return, modifiers: [.option])
-                    .disabled(!store.canSend || store.isSending)
-                    .help("Queue follow-up (⌥↩)")
+        let action = Self.primaryActionDescriptor(
+            isReadOnly: isReadOnly,
+            sessionIsRunning: sessionIsRunning,
+            hasInterruptHandler: onInterrupt != nil,
+            canSendNow: canSendNow
+        )
+        if action.kind == .stop, let onInterrupt {
+            Button(action: onInterrupt) {
+                ZStack {
+                    Circle()
+                        .fill(t.dark ? Color.white.opacity(0.90) : Color.black.opacity(0.86))
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(t.dark ? Color.black : Color.white)
                 }
-                Button(action: onInterrupt) {
-                    HStack(spacing: 8) {
-                        ZStack {
-                            Circle()
-                                .fill(t.dark ? Color.white.opacity(0.92) : Color.black.opacity(0.88))
-                            Image(systemName: "stop.fill")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(t.dark ? Color.black : Color.white)
-                        }
-                        .frame(width: 26, height: 26)
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 5) {
-                                Text(liveCostLabel)
-                                    .font(TahoeFont.mono(12.5, weight: .bold))
-                                Text("● live")
-                                    .font(TahoeFont.body(10.5, weight: .semibold))
-                                    .foregroundStyle(t.accent)
-                            }
-                            Text("tap to stop")
-                                .font(TahoeFont.body(10))
-                                .foregroundStyle(t.fg3)
-                        }
-                    }
-                    .padding(.leading, 4)
-                    .padding(.trailing, 10)
-                    .frame(height: 34)
-                    .background(
-                        LinearGradient(colors: [t.accentAlpha(0.18), t.accentAlpha(0.10)], startPoint: .leading, endPoint: .trailing),
-                        in: Capsule(style: .continuous)
-                    )
-                    .overlay(Capsule(style: .continuous).stroke(t.accentAlpha(0.40), lineWidth: 0.75))
-                    .foregroundStyle(t.fg)
-                }
-                .buttonStyle(PressableButtonStyle())
-                .keyboardShortcut(".", modifiers: [.command])
-                .help("Stop the running prompt (⌘.)")
+                .frame(width: 34, height: 34)
+                .shadow(color: t.accentDeep.color(opacity: 0.18), radius: 5, x: 0, y: 3)
             }
+            .buttonStyle(PressableButtonStyle())
+            .keyboardShortcut(".", modifiers: [.command])
+            .help("Stop the running prompt (⌘.)")
+            .accessibilityLabel(action.accessibilityLabel)
+            .accessibilityIdentifier(action.accessibilityIdentifier)
         } else {
             Button(action: sendCurrentDraft) {
                 TahoeIcon("arrowU", size: 15, weight: .bold)
-                    .foregroundStyle(canSendNow ? .white : t.fg4)
+                    .foregroundStyle(action.isEnabled ? .white : t.fg4)
                     .frame(width: 34, height: 34)
                     .background(
                         Circle()
-                            .fill(canSendNow
+                            .fill(action.isEnabled
                                   ? LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom)
                                   : LinearGradient(colors: [t.hair2, t.hair2], startPoint: .top, endPoint: .bottom))
                     )
-                    .shadow(color: canSendNow ? t.accentDeep.color(opacity: 0.30) : .clear, radius: 6, x: 0, y: 4)
+                    .shadow(color: action.isEnabled ? t.accentDeep.color(opacity: 0.30) : .clear, radius: 6, x: 0, y: 4)
                     .symbolEffect(.pulse, isActive: store.isSending)
             }
             .buttonStyle(PressableButtonStyle())
             .keyboardShortcut(.return, modifiers: [.command])
-            .disabled(!canSendNow)
+            .disabled(!action.isEnabled)
             .help(planApprovalMode ? "Approve or refine the plan above" : "Send (⌘↩)")
+            .accessibilityLabel(action.accessibilityLabel)
+            .accessibilityIdentifier(action.accessibilityIdentifier)
+        }
+    }
+
+    @ViewBuilder
+    private var queueFollowUpButton: some View {
+        if Self.shouldShowQueueFollowUpButton(
+            isReadOnly: isReadOnly,
+            sessionIsRunning: sessionIsRunning,
+            hasQueueHandler: onQueue != nil
+        ) {
+            Button(action: queueCurrentDraft) {
+                Image(systemName: store.isSending ? "tray.and.arrow.down" : "tray.and.arrow.down.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(store.canSend && !store.isSending ? t.accent : t.fg3)
+                    .frame(width: 28, height: 28)
+                    .background(t.hair2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .buttonStyle(PressableButtonStyle())
+            .keyboardShortcut(.return, modifiers: [.option])
+            .disabled(!store.canSend || store.isSending)
+            .help("Queue follow-up (⌥↩)")
+            .accessibilityLabel("Queue follow-up")
+            .accessibilityIdentifier("code.composer.queue-follow-up")
         }
     }
 
@@ -845,11 +1082,6 @@ struct ComposerInputCore: View {
         chatStore.injectPending(text: trimmed, attachmentRefs: attachmentRefs)
     }
 
-    private var liveCostLabel: String {
-        guard let cost = usageStatus?.costDollar else { return "$0.000" }
-        return String(format: "$%.3f", NSDecimalNumber(decimal: cost).doubleValue)
-    }
-
     // MARK: - Voice + import + drop + paste handlers
 
     private var draftPersistenceKey: String {
@@ -888,13 +1120,7 @@ struct ComposerInputCore: View {
             store.endSend(error: .daemonError(message: "Clipboard has no text to paste."))
             return
         }
-        let stripped = ClawdmeterTextUtilities.stripANSI(raw)
-        if store.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            store.text = stripped
-        } else {
-            if !store.text.hasSuffix("\n") { store.text += "\n" }
-            store.text += stripped
-        }
+        store.text = Self.textAfterPastingTerminalText(existing: store.text, rawClipboard: raw)
     }
 
     private func toggleDictation() {
@@ -1009,18 +1235,12 @@ private struct PromptHistorySheet: View {
     @State private var query = ""
     @Environment(\.tahoe) private var t
 
-    private var filteredHistory: [String] {
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return history }
-        return history.filter { $0.lowercased().contains(needle) }
-    }
-
-    private var filteredSavedPrompts: [SavedPromptState] {
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return savedPrompts }
-        return savedPrompts.filter {
-            $0.title.lowercased().contains(needle) || $0.body.lowercased().contains(needle)
-        }
+    private var presentation: ComposerInputCore.PromptHistoryPresentation {
+        ComposerInputCore.promptHistoryPresentation(
+            history: history,
+            savedPrompts: savedPrompts,
+            query: query
+        )
     }
 
     var body: some View {
@@ -1028,69 +1248,82 @@ private struct PromptHistorySheet: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(t.fg3)
+                    .accessibilityIdentifier("code.prompt-history.sheet")
                 TextField("Search prompts", text: $query)
                     .textFieldStyle(.plain)
+                    .accessibilityIdentifier("code.prompt-history.search")
                 Button("Done", action: onDismiss)
                     .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("code.prompt-history.done")
             }
             .padding(12)
             Divider()
-            List {
-                if !filteredSavedPrompts.isEmpty {
-                    Section("Saved") {
-                        ForEach(filteredSavedPrompts) { prompt in
-                            promptRow(
-                                title: prompt.title,
-                                body: prompt.body,
-                                action: { onUse(prompt.body) },
-                                delete: { onDeleteSaved(prompt.id) }
-                            )
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if !presentation.savedRows.isEmpty {
+                        sectionHeader("Saved")
+                        ForEach(presentation.savedRows) { row in
+                            promptRow(row)
                         }
                     }
-                }
-                Section("History") {
-                    if filteredHistory.isEmpty {
+                    sectionHeader("History")
+                    if presentation.showsEmptyHistory {
                         Text("No prompt history")
+                            .font(TahoeFont.body(12))
                             .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("code.prompt-history.empty")
                     } else {
-                        ForEach(filteredHistory, id: \.self) { prompt in
-                            promptRow(
-                                title: ClawdmeterTextUtilities.collapsedWhitespacePreview(prompt, limit: 72),
-                                body: prompt,
-                                action: { onUse(prompt) },
-                                delete: nil
-                            )
+                        ForEach(presentation.historyRows) { row in
+                            promptRow(row)
                         }
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             }
-            .listStyle(.sidebar)
         }
         .frame(minWidth: 560, minHeight: 440)
     }
 
-    private func promptRow(title: String, body: String, action: @escaping () -> Void, delete: (() -> Void)?) -> some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(TahoeFont.body(12, weight: .semibold))
-                    .lineLimit(1)
-                Text(ClawdmeterTextUtilities.collapsedWhitespacePreview(body, limit: 120))
-                    .font(TahoeFont.body(10.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            .padding(.vertical, 3)
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(TahoeFont.body(11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+    }
+
+    private func promptRow(_ row: ComposerInputCore.PromptHistoryRowDescriptor) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(row.title)
+                .font(TahoeFont.body(12, weight: .semibold))
+                .lineLimit(1)
+            Text(ClawdmeterTextUtilities.collapsedWhitespacePreview(row.body, limit: 120))
+                .font(TahoeFont.body(10.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
         }
-        .buttonStyle(PressableButtonStyle())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onUse(row.body)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(row.title) \(row.body)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier(row.accessibilityIdentifier)
         .contextMenu {
-            Button("Use Prompt", action: action)
+            Button("Use Prompt") { onUse(row.body) }
             Button("Copy Prompt") {
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(body, forType: .string)
+                NSPasteboard.general.setString(row.body, forType: .string)
             }
-            if let delete {
-                Button("Delete Saved Prompt", role: .destructive, action: delete)
+            if case .saved(let id) = row.kind {
+                Button("Delete Saved Prompt", role: .destructive) {
+                    onDeleteSaved(id)
+                }
             }
         }
     }
@@ -1108,21 +1341,28 @@ private struct ExpandedComposerEditor: View {
             HStack {
                 Label("Expanded composer", systemImage: "square.and.pencil")
                     .font(TahoeFont.body(14, weight: .semibold))
+                    .accessibilityIdentifier("code.composer.expanded-editor")
                 Spacer()
                 Button("Done", action: onClose)
                     .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("code.composer.expanded.done")
             }
-            TextEditor(text: $text)
+            TextField("Prompt body", text: $text, axis: .vertical)
+                .textFieldStyle(.plain)
                 .font(TahoeFont.body(13))
                 .focused($editorFocused)
-                .frame(minHeight: 260)
+                .lineLimit(12...40)
+                .frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading)
                 .padding(8)
                 .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityIdentifier("code.composer.expanded.input")
             HStack(spacing: 8) {
                 TextField("Saved prompt title", text: $title)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("code.composer.expanded.title")
                 Button("Save Prompt", action: onSavePrompt)
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!ComposerInputCore.canSavePromptText(text))
+                    .accessibilityIdentifier("code.composer.expanded.save-prompt")
             }
         }
         .padding(18)
@@ -1219,6 +1459,7 @@ private struct PendingMessageStrip: View {
 
     @ViewBuilder
     private func statusRow(_ pending: SessionChatStore.PendingMessage) -> some View {
+        let pendingActions = ComposerInputCore.pendingActionDescriptors(for: pending.state)
         HStack(spacing: 8) {
             switch pending.state {
             case .sending:
@@ -1238,19 +1479,25 @@ private struct PendingMessageStrip: View {
                         .font(TahoeFont.body(10.5, weight: .semibold))
                         .foregroundStyle(SessionsV2Theme.warn)
                 }
-                Button("Retry now") { onRetry() }
-                    .buttonStyle(PressableButtonStyle())
-                    .font(TahoeFont.body(10.5, weight: .semibold))
-                    .foregroundStyle(t.accent)
-                Button {
-                    onDismiss()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(t.fg4)
+                if let retry = pendingActions.first(where: { $0.kind == .retry }) {
+                    Button(retry.visibleTitle ?? "Retry now") { onRetry() }
+                        .buttonStyle(PressableButtonStyle())
+                        .font(TahoeFont.body(10.5, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                        .accessibilityIdentifier(retry.accessibilityIdentifier)
                 }
-                .buttonStyle(PressableButtonStyle())
-                .help("Discard pending message")
+                if let dismiss = pendingActions.first(where: { $0.kind == .dismiss }) {
+                    Button {
+                        onDismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(t.fg4)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .help("Discard pending message")
+                    .accessibilityIdentifier(dismiss.accessibilityIdentifier)
+                }
             case .failed:
                 HStack(spacing: 5) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -1261,21 +1508,25 @@ private struct PendingMessageStrip: View {
                         .foregroundStyle(SessionsV2Theme.danger)
                         .lineLimit(2)
                 }
-                Button("Retry") { onRetry() }
-                    .buttonStyle(PressableButtonStyle())
-                    .font(TahoeFont.body(10.5, weight: .semibold))
-                    .foregroundStyle(t.accent)
-                    .accessibilityIdentifier("composer.pending.retry")
-                Button {
-                    onDismiss()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(t.fg4)
+                if let retry = pendingActions.first(where: { $0.kind == .retry }) {
+                    Button(retry.visibleTitle ?? "Retry") { onRetry() }
+                        .buttonStyle(PressableButtonStyle())
+                        .font(TahoeFont.body(10.5, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                        .accessibilityIdentifier(retry.accessibilityIdentifier)
                 }
-                .buttonStyle(PressableButtonStyle())
-                .help("Discard pending message")
-                .accessibilityIdentifier("composer.pending.dismiss")
+                if let dismiss = pendingActions.first(where: { $0.kind == .dismiss }) {
+                    Button {
+                        onDismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(t.fg4)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .help("Discard pending message")
+                    .accessibilityIdentifier(dismiss.accessibilityIdentifier)
+                }
             }
         }
         .frame(maxWidth: 520, alignment: .trailing)

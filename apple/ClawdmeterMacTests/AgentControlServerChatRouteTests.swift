@@ -6,9 +6,54 @@ import ClawdmeterShared
 
 @MainActor
 final class AgentControlServerChatRouteTests: XCTestCase {
+    private struct SavedProviderDefault {
+        let defaults: UserDefaults
+        let key: String
+        let value: Any?
+    }
+
     private var tempDir: URL!
     private var server: AgentControlServer!
     private var registry: AgentSessionRegistry!
+    private var chatRegistry: DaemonChatStoreRegistry!
+    private var savedProviderDefaults: [SavedProviderDefault] = []
+
+    private actor FirstTurnHarnessDriver: AgentDriver {
+        nonisolated let events: AsyncStream<HarnessEvent>
+        private nonisolated let continuation: AsyncStream<HarnessEvent>.Continuation
+        private(set) var prompts: [String] = []
+        private(set) var starts: [(model: String?, effort: String?, cwd: String, alwaysApprove: Bool)] = []
+        private(set) var cancelCount = 0
+        private(set) var closed = false
+
+        init() {
+            var streamContinuation: AsyncStream<HarnessEvent>.Continuation!
+            events = AsyncStream(bufferingPolicy: .unbounded) { streamContinuation = $0 }
+            continuation = streamContinuation
+        }
+
+        func start(model: String?, effort: String?, cwd: String, alwaysApprove: Bool) async throws -> String {
+            starts.append((model: model, effort: effort, cwd: cwd, alwaysApprove: alwaysApprove))
+            return "first-turn-fake"
+        }
+
+        func prompt(_ text: String) async {
+            prompts.append(text)
+        }
+
+        func snapshotPrompts() -> [String] { prompts }
+        func snapshotStarts() -> [(model: String?, effort: String?, cwd: String, alwaysApprove: Bool)] { starts }
+        func snapshotCancelCount() -> Int { cancelCount }
+        func isClosed() -> Bool { closed }
+
+        func cancel() async { cancelCount += 1 }
+        func respondToPermission(requestId: RpcId, optionId: String?) async {}
+
+        func close() async {
+            closed = true
+            continuation.finish()
+        }
+    }
 
     override func setUp() async throws {
         try await super.setUp()
@@ -16,6 +61,13 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         tempDir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("clawdmeter-chat-route-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        savedProviderDefaults = saveProviderDefaults()
+        ChatCwdManager.setChatSessionsRootOverrideForTesting(
+            tempDir.appendingPathComponent("chat-sessions", isDirectory: true)
+        )
+        ChatCwdManager.setClaudeConfigURLOverrideForTesting(
+            tempDir.appendingPathComponent("claude.json")
+        )
 
         let sessionsURL = tempDir.appendingPathComponent("sessions.json")
         registry = AgentSessionRegistry(storeURL: sessionsURL)
@@ -25,7 +77,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
             geminiTmpRoot: tempDir.appendingPathComponent("gemini-tmp", isDirectory: true),
             resolveClaudeURL: { _ in nil }
         )
-        let chatRegistry = DaemonChatStoreRegistry(resolveURL: { _, _ in nil })
+        chatRegistry = DaemonChatStoreRegistry(resolveURL: { _, _ in nil })
         let workspaceStore = WorkspaceStore(
             storeURL: tempDir.appendingPathComponent("workspaces.json"),
             sessionsURL: sessionsURL
@@ -39,7 +91,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
             chatStoreRegistry: chatRegistry,
             chatFileResolver: resolver,
             workspaceStore: workspaceStore,
-            mobileCommandOutbox: MobileCommandOutbox(),
+            mobileCommandOutbox: MobileCommandOutbox(replaysAuditLogOnStart: false),
             listenPortRange: portBase...(portBase + 20),
             writesServerMetadata: false
         )
@@ -55,7 +107,15 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         await OpenRouterModelProbe.shared.invalidate()
 
         server?.stop()
+        server = nil
+        chatRegistry = nil
+        await registry?.closeEventStoreForTesting()
+        registry = nil
+        ChatCwdManager.setChatSessionsRootOverrideForTesting(nil)
+        ChatCwdManager.setClaudeConfigURLOverrideForTesting(nil)
         OpencodeProcessManager.shared.stop()
+        restoreProviderDefaults(savedProviderDefaults)
+        savedProviderDefaults = []
 
         if let tempDir {
             try? FileManager.default.removeItem(at: tempDir)
@@ -120,6 +180,77 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         let clientSnapshot = await client.fetchLifecycle(sessionId: session.id)
         XCTAssertEqual(clientSnapshot?.sessionId, session.id)
         XCTAssertEqual(clientSnapshot?.phase, .awaitingApproval)
+    }
+
+    func test_approvePlanRouteForClaudeCodeMarksPlanApprovedAndRuns() async throws {
+        let stub = tempDir.appendingPathComponent("claude-approve-plan-stub")
+        let script = """
+        #!/bin/sh
+        echo "Approved run active"
+        while true; do sleep 1; done
+        """
+        try script.write(to: stub, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+
+        let overrideKey = "clawdmeter.binaries.claude"
+        let savedOverride = UserDefaults.standard.object(forKey: overrideKey)
+        UserDefaults.standard.set(stub.path, forKey: overrideKey)
+        defer {
+            if let savedOverride {
+                UserDefaults.standard.set(savedOverride, forKey: overrideKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: overrideKey)
+            }
+        }
+
+        let session = try await registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: "Plan Route Test",
+            agent: .claude,
+            model: "claude-sonnet-4-6",
+            goal: "Approve rendered plan",
+            worktreePath: tempDir.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: true,
+            mode: .worktree
+        )
+        addTeardownBlock {
+            await ClaudePtyRegistry.shared.suspend(session.id)
+        }
+        try await registry.updateStatus(id: session.id, status: .planning)
+        try await registry.setPlanText(
+            id: session.id,
+            planText: """
+            1. Inspect the Code-tab plan pane approval route
+            2. Restart Claude Code in run mode
+            """
+        )
+
+        XCTAssertEqual(SessionCommandRouter.resolve(server.routeContext(for: session)), .claudePty)
+
+        let response = try await requestRaw(
+            path: "/sessions/\(session.id.uuidString)/approve-plan",
+            method: "POST"
+        )
+
+        XCTAssertEqual(response.status, 200, bodySnippet(response.data))
+        let current = try XCTUnwrap(registry.session(id: session.id))
+        XCTAssertEqual(current.status, .running)
+        XCTAssertNil(current.planText)
+        XCTAssertEqual(
+            current.approvedPlanText,
+            """
+            1. Inspect the Code-tab plan pane approval route
+            2. Restart Claude Code in run mode
+            """
+        )
+        XCTAssertNotNil(current.planProgress, "Approving a parsed plan should seed visible 0/N progress immediately.")
+        let host = await ClaudePtyRegistry.shared.host(for: session.id)
+        XCTAssertNotNil(
+            host,
+            "Approving from the Code plan pane route should respawn the Claude Code PTY in run mode."
+        )
     }
 
     func test_sendWithoutOriginBlocksBeforeProviderRoute() async throws {
@@ -310,7 +441,48 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         XCTAssertEqual(delete.status, 200, bodySnippet(delete.data))
     }
 
-    func test_terminalAddOnHarnessSessionReturnsUnsupported() async throws {
+    func test_addDirectTerminalPaneRouteAllowsMoreThanSevenQuickTabs() async throws {
+        let session = try await registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: "Terminal Unbounded",
+            agent: .opencode,
+            model: "opencode-default",
+            goal: "Many terminal panes",
+            worktreePath: tempDir.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        var panes: [TerminalPaneRef] = []
+
+        for index in 1...8 {
+            let add = try await postJSON(
+                "/sessions/\(session.id.uuidString)/terminals",
+                ["title": "Pane \(index)"],
+                timeout: 12
+            )
+            XCTAssertEqual(add.status, 200, "pane \(index): \(bodySnippet(add.data))")
+            let pane = try decode(TerminalPaneRef.self, from: add.data)
+            XCTAssertFalse(pane.isPrimary)
+            XCTAssertEqual(pane.title, "Pane \(index)")
+            addTeardownBlock { [weak self, sessionId = session.id, paneId = pane.id] in
+                guard let self else { return }
+                _ = try? await self.requestRaw(
+                    path: "/sessions/\(sessionId.uuidString)/terminals/\(paneId.uuidString)",
+                    method: "DELETE"
+                )
+            }
+            panes.append(pane)
+        }
+
+        let list = try await requestRaw(path: "/sessions/\(session.id.uuidString)/terminals", method: "GET")
+        XCTAssertEqual(list.status, 200, bodySnippet(list.data))
+        let listed = try decode([TerminalPaneRef].self, from: list.data)
+        XCTAssertEqual(listed.count, 8)
+    }
+
+    func test_terminalAddOnHarnessSessionCreatesDirectWorktreePane() async throws {
         let session = try await registry.create(
             repoKey: tempDir.path,
             repoDisplayName: "Harness Terminal",
@@ -328,11 +500,80 @@ final class AgentControlServerChatRouteTests: XCTestCase {
 
         let add = try await postJSON(
             "/sessions/\(session.id.uuidString)/terminals",
-            ["title": "Blocked"]
+            ["title": "Logs"]
         )
 
-        XCTAssertEqual(add.status, 409, bodySnippet(add.data))
-        XCTAssertEqual(try XCTUnwrap(jsonObject(add.data))["error"] as? String, "terminal_not_supported")
+        XCTAssertEqual(add.status, 200, bodySnippet(add.data))
+        let pane = try decode(TerminalPaneRef.self, from: add.data)
+        XCTAssertEqual(pane.title, "Logs")
+        XCTAssertFalse(pane.isPrimary)
+        let host = await TerminalPtyRegistry.shared.host(id: pane.paneId)
+        XCTAssertNotNil(host)
+
+        let delete = try await requestRaw(
+            path: "/sessions/\(session.id.uuidString)/terminals/\(pane.id.uuidString)",
+            method: "DELETE"
+        )
+        XCTAssertEqual(delete.status, 200, bodySnippet(delete.data))
+    }
+
+    func test_terminalWebSocketForClaudeCodeOpensDirectShellPane() async throws {
+        let stub = tempDir.appendingPathComponent("claude-terminal-route-stub")
+        let script = """
+        #!/bin/sh
+        echo "Control active"
+        while true; do sleep 1; done
+        """
+        try script.write(to: stub, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+
+        let overrideKey = "clawdmeter.binaries.claude"
+        let savedOverride = UserDefaults.standard.object(forKey: overrideKey)
+        UserDefaults.standard.set(stub.path, forKey: overrideKey)
+        defer {
+            if let savedOverride {
+                UserDefaults.standard.set(savedOverride, forKey: overrideKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: overrideKey)
+            }
+        }
+
+        let session = try await registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: "Claude Terminal",
+            agent: .claude,
+            model: "claude-sonnet-4-5",
+            goal: "Terminal route",
+            worktreePath: tempDir.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        addTeardownBlock {
+            await ClaudePtyRegistry.shared.suspend(session.id)
+        }
+        XCTAssertEqual(SessionCommandRouter.resolve(server.routeContext(for: session)), .claudePty)
+
+        let ws = try await openTerminalWebSocket(sessionId: session.id)
+        defer { ws.cancel(with: .goingAway, reason: nil) }
+
+        let firstFrame = try await receiveWebSocketData(ws)
+        XCTAssertEqual(firstFrame.first, TerminalFrameTag.output.rawValue)
+        XCTAssertTrue(String(decoding: firstFrame.dropFirst(), as: UTF8.self).contains("\u{1B}[2J"))
+
+        let panes = try XCTUnwrap(registry.session(id: session.id)?.terminalPanes)
+        let primary = try XCTUnwrap(panes.first { $0.isPrimary })
+        XCTAssertEqual(primary.title, "Shell")
+        let directHost = await TerminalPtyRegistry.shared.host(id: primary.paneId)
+        let claudeHost = await ClaudePtyRegistry.shared.host(for: session.id)
+        XCTAssertNotNil(directHost)
+        XCTAssertNil(
+            claudeHost,
+            "The Code Terminal WS should open a direct shell pane, not attach the Claude command PTY."
+        )
+
+        await TerminalPtyRegistry.shared.kill(id: primary.paneId)
     }
 
     func test_staleManagedSessionsReturn503ForSendAndInterrupt() async throws {
@@ -379,6 +620,293 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         }
     }
 
+    func test_firstTurnSendOriginRoutesThroughDaemonForEverySharedHarnessProvider() async throws {
+        let cases: [(agent: AgentKind, display: String, model: String, effort: String?)] = [
+            (.codex, "Codex", "gpt-5.5", "high"),
+            (.gemini, "Gemini", "gemini-3.5-flash-thinking", nil),
+            (.cursor, "Cursor", CursorModelCatalog.autoModelId, nil),
+            (.grok, "Grok", "grok-build", "high")
+        ]
+
+        for fixture in cases {
+            let session = try await registry.create(
+                repoKey: tempDir.path,
+                repoDisplayName: "First Turn \(fixture.display)",
+                agent: fixture.agent,
+                model: fixture.model,
+                goal: "First turn route",
+                worktreePath: tempDir.path,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                planMode: false,
+                mode: .worktree
+            )
+            addTeardownBlock { [weak self, id = session.id] in
+                await self?.server?.teardownHarnessSession(id)
+            }
+
+            let store = try XCTUnwrap(chatRegistry.snapshotStore(for: session))
+            let driver = FirstTurnHarnessDriver()
+            let bridge = AcpHarnessBridge(
+                sessionId: session.id,
+                store: store,
+                model: fixture.model,
+                agentDisplayName: fixture.display,
+                driver: driver,
+                child: nil,
+                connection: nil
+            )
+            try await bridge.start(
+                binary: nil,
+                arguments: [],
+                cwd: tempDir.path,
+                env: [:],
+                effort: fixture.effort,
+                alwaysApprove: false
+            )
+            server.registerHarnessBridgeForTesting(bridge, for: session.id)
+
+            let prompt = "first prompt for \(fixture.agent.rawValue)"
+            let response = try await postJSON(
+                "/sessions/\(session.id.uuidString)/send",
+                SendPromptRequest(
+                    text: prompt,
+                    asFollowUp: false,
+                    idempotencyKey: "first-turn-\(fixture.agent.rawValue)-\(UUID().uuidString)",
+                    origin: .userComposerFirstTurn
+                )
+            )
+
+            XCTAssertEqual(response.status, 200, "\(fixture.agent.rawValue): \(bodySnippet(response.data))")
+            let prompts = await driver.snapshotPrompts()
+            XCTAssertEqual(prompts, [prompt], "\(fixture.agent.rawValue) first-turn send must reach the live harness")
+            let starts = await driver.snapshotStarts()
+            XCTAssertEqual(starts.count, 1)
+            XCTAssertEqual(starts.first?.model, fixture.model)
+            XCTAssertEqual(starts.first?.effort, fixture.effort)
+            XCTAssertEqual(starts.first?.cwd, tempDir.path)
+            XCTAssertEqual(starts.first?.alwaysApprove, false)
+
+            let projected = await waitUntil {
+                store.snapshot.currentTurnState == .streaming
+                    && store.messages.contains { $0.kind == .userText && $0.body == prompt }
+            }
+            XCTAssertTrue(projected, "\(fixture.agent.rawValue) first-turn send must echo the user row and enter streaming state")
+
+            await server.teardownHarnessSession(session.id)
+            let closed = await driver.isClosed()
+            XCTAssertTrue(closed, "\(fixture.agent.rawValue) test bridge must be torn down")
+        }
+    }
+
+    func test_scheduledUserFollowUpOriginRoutesThroughDaemonForEverySharedHarnessProvider() async throws {
+        let cases: [(agent: AgentKind, display: String, model: String, effort: String?)] = [
+            (.codex, "Codex", "gpt-5.5", "high"),
+            (.gemini, "Gemini", "gemini-3.5-flash-thinking", nil),
+            (.cursor, "Cursor", CursorModelCatalog.autoModelId, nil),
+            (.grok, "Grok", "grok-build", "high")
+        ]
+
+        for fixture in cases {
+            let (session, store, driver) = try await makeLiveHarnessSession(
+                agent: fixture.agent,
+                display: fixture.display,
+                model: fixture.model,
+                effort: fixture.effort,
+                goal: "Scheduled follow-up route"
+            )
+
+            let prompt = "scheduled follow-up for \(fixture.agent.rawValue)"
+            let result = await server.deliverScheduledFollowUp(
+                session: session,
+                followUp: ScheduledFollowUp(
+                    fireAt: Date().addingTimeInterval(-1),
+                    prompt: prompt,
+                    origin: .scheduledUserFollowUp,
+                    deliveryPolicy: .autonomousAfterRestart
+                )
+            )
+
+            XCTAssertEqual(result, .delivered, "\(fixture.agent.rawValue) scheduled follow-up should be accepted by the live harness route.")
+            let prompts = await driver.snapshotPrompts()
+            XCTAssertEqual(prompts, [prompt], "\(fixture.agent.rawValue) scheduled follow-up must reach the selected harness provider.")
+            let projected = await waitUntil {
+                store.snapshot.currentTurnState == .streaming
+                    && store.messages.contains { $0.kind == .userText && $0.body == prompt }
+            }
+            XCTAssertTrue(projected, "\(fixture.agent.rawValue) scheduled follow-up must render the user row and enter streaming state.")
+
+            await server.teardownHarnessSession(session.id)
+            let closed = await driver.isClosed()
+            XCTAssertTrue(closed, "\(fixture.agent.rawValue) scheduled follow-up test bridge must be torn down.")
+        }
+    }
+
+    func test_scheduledFollowUpLegacyOriginIsBlockedBeforeProviderDelivery() async throws {
+        let (session, store, driver) = try await makeLiveHarnessSession(
+            agent: .codex,
+            display: "Codex",
+            model: "gpt-5.5",
+            effort: "high",
+            goal: "Blocked scheduled follow-up"
+        )
+
+        let result = await server.deliverScheduledFollowUp(
+            session: session,
+            followUp: ScheduledFollowUp(
+                fireAt: Date().addingTimeInterval(-1),
+                prompt: "hi",
+                origin: .legacyClient,
+                deliveryPolicy: .autonomousAfterRestart
+            )
+        )
+
+        XCTAssertEqual(result, .retired(reason: "synthetic_prompt_requires_user_origin"))
+        let prompts = await driver.snapshotPrompts()
+        XCTAssertTrue(prompts.isEmpty, "Legacy scheduled prompts must be blocked before reaching a provider harness.")
+        XCTAssertEqual(store.snapshot.currentTurnState, .idle)
+    }
+
+    func test_scheduledFollowUpStaleManagedSessionDoesNotFallbackToLegacyPromptPath() async throws {
+        let cases: [(AgentKind, String?, SessionRuntimeKind)] = [
+            (.cursor, CursorModelCatalog.autoModelId, .acpCursor),
+            (.codex, "gpt-5.5", .codexCLI),
+            (.gemini, "gemini-3.5-flash-thinking", .unknown),
+            (.grok, "grok-build", .acpGrok),
+        ]
+
+        for (agent, model, expectedRuntime) in cases {
+            let session = try await registry.create(
+                repoKey: tempDir.path,
+                repoDisplayName: "Stale Scheduled \(agent.rawValue)",
+                agent: agent,
+                model: model,
+                goal: "Stale scheduled follow-up",
+                worktreePath: tempDir.path,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                planMode: false,
+                mode: .worktree
+            )
+            XCTAssertEqual(session.runtimeBinding?.runtimeKind, expectedRuntime)
+
+            let result = await server.deliverScheduledFollowUp(
+                session: session,
+                followUp: ScheduledFollowUp(
+                    fireAt: Date().addingTimeInterval(-1),
+                    prompt: "scheduled stale prompt",
+                    origin: .scheduledUserFollowUp,
+                    deliveryPolicy: .autonomousAfterRestart
+                )
+            )
+
+            XCTAssertEqual(
+                result,
+                .unavailable(reason: "acp_session_not_live"),
+                "\(agent.rawValue) stale scheduled follow-up should wait for a live bridge, not fall back to a legacy prompt path."
+            )
+        }
+    }
+
+    func test_interruptRoutesToLiveHarnessCancelForEverySharedHarnessProvider() async throws {
+        let cases: [(agent: AgentKind, display: String, model: String, effort: String?)] = [
+            (.codex, "Codex", "gpt-5.5", "high"),
+            (.gemini, "Gemini", "gemini-3.5-flash-thinking", nil),
+            (.cursor, "Cursor", CursorModelCatalog.autoModelId, nil),
+            (.grok, "Grok", "grok-build", "high")
+        ]
+
+        for fixture in cases {
+            let session = try await registry.create(
+                repoKey: tempDir.path,
+                repoDisplayName: "Stop \(fixture.display)",
+                agent: fixture.agent,
+                model: fixture.model,
+                goal: "Stop route",
+                worktreePath: tempDir.path,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                planMode: false,
+                mode: .worktree
+            )
+            addTeardownBlock { [weak self, id = session.id] in
+                await self?.server?.teardownHarnessSession(id)
+            }
+
+            let store = try XCTUnwrap(chatRegistry.snapshotStore(for: session))
+            let driver = FirstTurnHarnessDriver()
+            let bridge = AcpHarnessBridge(
+                sessionId: session.id,
+                store: store,
+                model: fixture.model,
+                agentDisplayName: fixture.display,
+                driver: driver,
+                child: nil,
+                connection: nil
+            )
+            try await bridge.start(
+                binary: nil,
+                arguments: [],
+                cwd: tempDir.path,
+                env: [:],
+                effort: fixture.effort,
+                alwaysApprove: false
+            )
+            server.registerHarnessBridgeForTesting(bridge, for: session.id)
+            store.setCurrentTurnState(.streaming)
+
+            let interrupt = try await postJSON(
+                "/sessions/\(session.id.uuidString)/interrupt",
+                InterruptRequest(idempotencyKey: "interrupt-\(fixture.agent.rawValue)-\(UUID().uuidString)")
+            )
+
+            XCTAssertEqual(interrupt.status, 200, "\(fixture.agent.rawValue): \(bodySnippet(interrupt.data))")
+            let cancelCount = await driver.snapshotCancelCount()
+            XCTAssertEqual(cancelCount, 1, "\(fixture.agent.rawValue) Stop must call the live harness driver cancel path.")
+            let restored = await waitUntil {
+                store.snapshot.currentTurnState == .interrupted
+            }
+            XCTAssertTrue(restored, "\(fixture.agent.rawValue) Stop must restore the composer Send/Stop state immediately.")
+
+            await server.teardownHarnessSession(session.id)
+            let closed = await driver.isClosed()
+            XCTAssertTrue(closed, "\(fixture.agent.rawValue) stop test bridge must be torn down")
+        }
+    }
+
+    func test_opencodeInterruptReturnsProviderSpecificUnsupportedAndRestoresTurnState() async throws {
+        let session = try await registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: "OpenCode",
+            agent: .opencode,
+            model: "opencode-default",
+            goal: "OpenCode interrupt",
+            worktreePath: tempDir.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        XCTAssertEqual(session.runtimeBinding?.runtimeKind, .opencodeServer)
+
+        let store = try XCTUnwrap(chatRegistry.snapshotStore(for: session))
+        store.setCurrentTurnState(.streaming)
+
+        let interrupt = try await requestRaw(
+            path: "/sessions/\(session.id.uuidString)/interrupt",
+            method: "POST"
+        )
+        XCTAssertEqual(interrupt.status, 501, bodySnippet(interrupt.data))
+        let body = try XCTUnwrap(jsonObject(interrupt.data))
+        XCTAssertEqual(body["error"] as? String, "opencode_interrupt_not_supported")
+        XCTAssertTrue((body["detail"] as? String)?.contains("per-turn interrupt") == true)
+
+        let restored = await waitUntil {
+            store.snapshot.currentTurnState == .interrupted
+        }
+        XCTAssertTrue(restored, "OpenCode Stop must restore local Send/Stop state even when upstream cancel is unsupported.")
+    }
+
     func test_registryReplacingPrimaryTerminalPaneDoesNotDuplicatePrimary() async throws {
         let session = try await registry.create(
             repoKey: tempDir.path,
@@ -409,6 +937,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     }
 
     func test_usageRouteIncludesCursorMonthlyQuota() async throws {
+        enableProviderForTest("cursor")
         let expected = UsageData(
             sessionPct: 48,
             sessionResetMins: 10_000,
@@ -521,6 +1050,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     }
 
     func test_frontierRouteAppliesOpenRouterAvailabilityGate() async throws {
+        enableProviderForTest("opencode")
         await ChatProviderProbe.shared.setAuthOverride(
             providerKey: "opencode",
             authenticated: false,
@@ -611,6 +1141,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     }
 
     func test_cursorRoute_returns503WhenProbeMarksUnavailable() async throws {
+        enableProviderForTest("cursor")
         await ChatProviderProbe.shared.setAuthOverride(
             providerKey: "cursor",
             authenticated: false,
@@ -666,6 +1197,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     }
 
     func test_openRouterRoute_returns503WhenProbeMarksUnavailable() async throws {
+        enableProviderForTest("opencode")
         await ChatProviderProbe.shared.setAuthOverride(
             providerKey: "opencode",
             authenticated: false,
@@ -971,6 +1503,53 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         )
     }
 
+    private func makeLiveHarnessSession(
+        agent: AgentKind,
+        display: String,
+        model: String,
+        effort: String?,
+        goal: String
+    ) async throws -> (AgentSession, SessionChatStore, FirstTurnHarnessDriver) {
+        let session = try await registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: goal,
+            agent: agent,
+            model: model,
+            goal: goal,
+            worktreePath: tempDir.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        addTeardownBlock { [weak self, id = session.id] in
+            await self?.server?.teardownHarnessSession(id)
+        }
+
+        let store = try XCTUnwrap(chatRegistry.snapshotStore(for: session))
+        let driver = FirstTurnHarnessDriver()
+        let bridge = AcpHarnessBridge(
+            sessionId: session.id,
+            store: store,
+            model: model,
+            agentDisplayName: display,
+            driver: driver,
+            child: nil,
+            connection: nil
+        )
+        try await bridge.start(
+            binary: nil,
+            arguments: [],
+            cwd: tempDir.path,
+            env: [:],
+            effort: effort,
+            alwaysApprove: false
+        )
+        server.registerHarnessBridgeForTesting(bridge, for: session.id)
+
+        return (session, store, driver)
+    }
+
     private func postJSON<T: Encodable>(
         _ path: String,
         _ body: T,
@@ -1019,6 +1598,62 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         throw lastError ?? URLError(.cannotConnectToHost)
     }
 
+    private func openTerminalWebSocket(sessionId: UUID, paneId: String? = nil) async throws -> URLSessionWebSocketTask {
+        let port = try XCTUnwrap(server.boundWsPort)
+        let url = try XCTUnwrap(URL(string: "ws://127.0.0.1:\(port)/"))
+        let task = URLSession.shared.webSocketTask(with: url)
+        task.resume()
+        var envelope: [String: Any] = [
+            "op": "terminal",
+            "token": server.localLoopbackToken,
+            "sessionId": sessionId.uuidString,
+        ]
+        if let paneId {
+            envelope["paneId"] = paneId
+        }
+        let data = try JSONSerialization.data(withJSONObject: envelope)
+        try await task.send(.data(data))
+        return task
+    }
+
+    private func receiveWebSocketData(
+        _ task: URLSessionWebSocketTask,
+        timeout: TimeInterval = 4
+    ) async throws -> Data {
+        try await withThrowingTaskGroup(of: Data.self) { group in
+            group.addTask {
+                let message = try await task.receive()
+                switch message {
+                case .data(let data):
+                    return data
+                case .string(let text):
+                    return Data(text.utf8)
+                @unknown default:
+                    throw URLError(.badServerResponse)
+                }
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                throw URLError(.timedOut)
+            }
+            let value = try await group.next()!
+            group.cancelAll()
+            return value
+        }
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 3,
+        predicate: @MainActor @escaping () -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if predicate() { return true }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return predicate()
+    }
+
     private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -1027,6 +1662,41 @@ final class AgentControlServerChatRouteTests: XCTestCase {
 
     private func jsonObject(_ data: Data) throws -> [String: Any]? {
         try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private func providerDefaultStores() -> [UserDefaults] {
+        var stores = [UserDefaults.standard]
+        stores.append(contentsOf: UsageStore.appGroups.compactMap { UserDefaults(suiteName: $0) })
+        return stores
+    }
+
+    private func saveProviderDefaults(
+        _ ids: [String] = ProviderRegistry.allProviderIDs
+    ) -> [SavedProviderDefault] {
+        providerDefaultStores().flatMap { defaults in
+            ids.map { id in
+                let key = ProviderEnablement.key(for: id)
+                return SavedProviderDefault(
+                    defaults: defaults,
+                    key: key,
+                    value: defaults.object(forKey: key)
+                )
+            }
+        }
+    }
+
+    private func restoreProviderDefaults(_ saved: [SavedProviderDefault]) {
+        for item in saved {
+            if let value = item.value {
+                item.defaults.set(value, forKey: item.key)
+            } else {
+                item.defaults.removeObject(forKey: item.key)
+            }
+        }
+    }
+
+    private func enableProviderForTest(_ id: String) {
+        ProviderEnablement.setEnabled(id, true)
     }
 
     private func requireProviderProbe(_ provider: AgentKind) async throws -> ChatProviderEntry {

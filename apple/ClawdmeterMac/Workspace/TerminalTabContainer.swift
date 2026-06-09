@@ -12,6 +12,7 @@ struct TerminalTabContainer: View {
     /// nil = primary pane. Non-nil = a TerminalPaneRef.id from session.terminalPanes.
     @State private var selectedSecondaryId: UUID? = nil
     @State private var sawOutput = false
+    @State private var connectionState: TerminalConnectionState = .connecting
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,6 +21,8 @@ struct TerminalTabContainer: View {
             terminal
         }
         .background(t.surfaceSolid)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("code.terminal.surface")
         .onChange(of: session.terminalPanes) { _, _ in
             if selectedSecondaryPane == nil {
                 selectedSecondaryId = nil
@@ -27,6 +30,7 @@ struct TerminalTabContainer: View {
         }
         .onChange(of: selectedSecondaryId) { _, _ in
             sawOutput = false
+            connectionState = .connecting
         }
     }
 
@@ -38,11 +42,8 @@ struct TerminalTabContainer: View {
             }
             Button(action: {
                 Task {
-                    if let _ = await model.addTerminalPane(sessionId: session.id) {
-                        // Switch to the new tab — pick the last added.
-                        if let last = model.registry.session(id: session.id)?.terminalPanes.last(where: { !$0.isPrimary }) {
-                            selectedSecondaryId = last.id
-                        }
+                    if let pane = await model.addTerminalPane(sessionId: session.id) {
+                        selectedSecondaryId = pane.id
                     }
                 }
             }) {
@@ -54,6 +55,7 @@ struct TerminalTabContainer: View {
             }
             .buttonStyle(PressableButtonStyle())
             .help("New terminal pane")
+            .accessibilityIdentifier("code.terminal.new-pane")
             Spacer()
         }
         .padding(.horizontal, 10)
@@ -96,6 +98,7 @@ struct TerminalTabContainer: View {
                 )
             }
             .buttonStyle(PressableButtonStyle())
+            .accessibilityIdentifier(isPrimary ? "code.terminal.tab.primary" : "code.terminal.tab.secondary")
             if let paneRef, !paneRef.isPrimary {
                 Button(action: {
                     Task {
@@ -111,6 +114,7 @@ struct TerminalTabContainer: View {
                 }
                 .buttonStyle(PressableButtonStyle())
                 .help("Close pane")
+                .accessibilityIdentifier("code.terminal.tab.close")
             }
         }
     }
@@ -129,15 +133,19 @@ struct TerminalTabContainer: View {
                 wsPort: wsPort,
                 token: token,
                 paneId: targetPaneId,
-                onFirstOutput: { sawOutput = true }
+                onFirstOutput: { sawOutput = true },
+                onConnectionStateChange: { connectionState = $0 }
             )
             .id(targetPaneId ?? "primary-\(session.id.uuidString)")
-            if !sawOutput {
+            if !sawOutput || connectionState.isAttentionState {
                 terminalPendingOverlay
             }
         }
         .overlay(alignment: .topLeading) {
-            terminalStatusBadge
+            ZStack(alignment: .topLeading) {
+                terminalStatusBadge
+                terminalStatusAccessibilityMarker
+            }
         }
     }
 
@@ -154,7 +162,7 @@ struct TerminalTabContainer: View {
                 .frame(width: 44, height: 44)
 
                 VStack(spacing: 4) {
-                    Text("Connecting to raw terminal")
+                    Text(connectionState.pendingTitle)
                         .font(TahoeFont.body(13, weight: .semibold))
                         .foregroundStyle(t.fg)
                     Text("Opening \(activePaneTitle) in \(terminalCwdLabel).")
@@ -168,7 +176,7 @@ struct TerminalTabContainer: View {
                     ProgressView()
                         .controlSize(.small)
                         .tint(t.accent)
-                    Text("Waiting for visible shell output")
+                    Text(connectionState.pendingStatusText)
                         .font(TahoeFont.body(10.5, weight: .medium))
                         .foregroundStyle(t.fg3)
                 }
@@ -181,9 +189,9 @@ struct TerminalTabContainer: View {
     private var terminalStatusBadge: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(sawOutput ? Color.green.opacity(0.85) : t.accent)
+                .fill(statusIndicatorColor)
                 .frame(width: 7, height: 7)
-            Text(sawOutput ? "Terminal connected" : "Terminal starting")
+            Text(connectionState.statusText(hasVisibleOutput: sawOutput))
                 .font(TahoeFont.body(10.5, weight: .semibold))
                 .foregroundStyle(t.fg)
             TahoeHair(vertical: true).frame(height: 12)
@@ -205,6 +213,30 @@ struct TerminalTabContainer: View {
         )
         .padding(10)
         .help("\(activePaneTitle)\n\(session.effectiveCwd)")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(connectionState.statusText(hasVisibleOutput: sawOutput))
+        .accessibilityIdentifier("code.terminal.status")
+    }
+
+    private var terminalStatusAccessibilityMarker: some View {
+        Text(connectionState.statusText(hasVisibleOutput: sawOutput))
+            .font(.system(size: 1))
+            .frame(width: 1, height: 1)
+            .opacity(0.001)
+            .accessibilityIdentifier("code.terminal.status.state")
+    }
+
+    private var statusIndicatorColor: Color {
+        switch connectionState {
+        case .connected where sawOutput:
+            return Color.green.opacity(0.85)
+        case .reconnecting:
+            return Color.orange.opacity(0.9)
+        case .failed, .disconnected:
+            return Color.red.opacity(0.82)
+        default:
+            return t.accent
+        }
     }
 
     private var activePaneTitle: String {

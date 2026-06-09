@@ -248,6 +248,16 @@ public final class AgentControlClient: ObservableObject {
         return codeTabVerificationPRs[sessionId]
     }
 
+    private static func codeTabUITestPRSessionId(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> UUID? {
+        guard environment["CLAWDMETER_UI_TESTING"] == "1",
+              let raw = environment["CLAWDMETER_TEST_CODE_PR_SESSION_ID"],
+              let id = UUID(uuidString: raw)
+        else { return nil }
+        return id
+    }
+
     private static func codeTabVerificationLongChatItemCount(arguments: [String] = ProcessInfo.processInfo.arguments) -> Int? {
         let prefix = "--ios-code-demo-long-chat="
         for argument in arguments where argument.hasPrefix(prefix) {
@@ -473,8 +483,22 @@ public final class AgentControlClient: ObservableObject {
             additions: 182,
             deletions: 47,
             changedFiles: 4,
-            reviewDecision: "approved",
-            checksRollup: "success"
+            reviewDecision: "APPROVED",
+            checksRollup: "success",
+            checks: [
+                PRCheckMirror(
+                    name: "Build",
+                    state: .success,
+                    url: "https://github.com/defx/defx-frontend/actions/runs/987654321"
+                ),
+                PRCheckMirror(
+                    name: "UI smoke",
+                    state: .success,
+                    url: "https://github.com/defx/defx-frontend/actions/runs/987654322"
+                ),
+            ],
+            mergeability: .mergeable,
+            lastCheckedAt: Date(timeIntervalSince1970: 1_780_000_000)
         )
     }
     #endif
@@ -647,6 +671,7 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
+    @MainActor
     private func sendChecked(_ request: URLRequest) async throws -> Data {
         lastHTTPStatusCode = nil
         let (data, response) = try await runRequest(request)
@@ -2005,6 +2030,9 @@ public final class AgentControlClient: ObservableObject {
         #if DEBUG
         if let fixture = codeTabVerificationPRStatus(sessionId: sessionId) {
             return .found(fixture)
+        }
+        if Self.codeTabUITestPRSessionId() == sessionId {
+            return .found(Self.makeCodeTabVerificationPR())
         }
         #endif
         guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/pr") else {

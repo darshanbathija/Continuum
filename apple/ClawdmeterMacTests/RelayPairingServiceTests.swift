@@ -142,9 +142,128 @@ final class RelayPairingServiceTests: XCTestCase {
         )
     }
 
-    private static let creationProof = RelaySessionCreationProof(
+    nonisolated private static let creationProof = RelaySessionCreationProof(
         issuedAtSeconds: 1_700_000_000,
         nonce: "creation_nonce_123",
         signature: "signature-placeholder"
     )
+}
+
+final class CredentialLoggingRedactionTests: XCTestCase {
+
+    func testProviderAndRelaySourcesDoNotLogTokenDerivedMaterial() throws {
+        let sourceFiles = [
+            "ClawdmeterShared/Sources/ClawdmeterShared/Sources/AnthropicSource.swift",
+            "ClawdmeterShared/Sources/ClawdmeterShared/Sources/WatchTokenBridge.swift",
+            "ClawdmeterMac/AppRuntime.swift",
+            "ClawdmeterMac/AgentControl/MacAPNSPusher.swift",
+            "ClawdmeterMac/AgentControl/APNSGatewayClient.swift",
+            "ClawdmeterMac/AgentControl/APNSPushDeviceTokenStore.swift"
+        ]
+        let forbiddenSnippets = [
+            "token len=",
+            "token prefix=",
+            "fp=\\(",
+            "token.count, privacy: .public",
+            "token.prefix(8)",
+            "deviceToken.prefix"
+        ]
+
+        let appleRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        for relativePath in sourceFiles {
+            let url = appleRoot.appendingPathComponent(relativePath)
+            let contents = try String(contentsOf: url, encoding: .utf8)
+            for snippet in forbiddenSnippets {
+                XCTAssertFalse(
+                    contents.contains(snippet),
+                    "\(relativePath) must not log credential-derived material matching \(snippet)"
+                )
+            }
+        }
+    }
+
+    func testProviderAndCodeSourcesDoNotExposePromptOrResponseBodiesInPublicDiagnostics() throws {
+        let sourceFiles = [
+            "ClawdmeterShared/Sources/ClawdmeterShared/Sources/AnthropicSource.swift",
+            "ClawdmeterShared/Sources/ClawdmeterShared/Sources/AntigravitySource.swift",
+            "ClawdmeterShared/Sources/ClawdmeterShared/Sources/CodexSource.swift",
+            "ClawdmeterShared/Sources/ClawdmeterShared/Sources/CursorSource.swift",
+            "ClawdmeterMac/AgentControl/RelayPairingService.swift",
+            "ClawdmeterMac/AgentControl/SidecarAskCoordinator.swift",
+            "ClawdmeterMac/AgentControl/TailscaleWhois.swift",
+            "ClawdmeterMac/Workspace/GitDiffPane.swift"
+        ]
+        let forbiddenSnippets = [
+            "body preview",
+            "first 200B",
+            "String(data: data.prefix",
+            "question=\\(question",
+            "question, privacy: .public",
+            "stderrString, privacy: .public",
+            "stdoutString, privacy: .public",
+            "trailerText.prefix",
+            "preview, privacy: .public"
+        ]
+
+        let appleRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        for relativePath in sourceFiles {
+            let url = appleRoot.appendingPathComponent(relativePath)
+            let contents = try String(contentsOf: url, encoding: .utf8)
+            for snippet in forbiddenSnippets {
+                XCTAssertFalse(
+                    contents.contains(snippet),
+                    "\(relativePath) must not expose prompt or provider response bodies via \(snippet)"
+                )
+            }
+        }
+    }
+
+    func testAppRuntimeDefersProviderSideEffectsUnderNoSpendXCTest() throws {
+        let appleRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let url = appleRoot.appendingPathComponent("ClawdmeterMac/AppRuntime.swift")
+        let contents = try String(contentsOf: url, encoding: .utf8)
+
+        XCTAssertTrue(
+            contents.contains("deferProviderSideEffectsForTesting"),
+            "AppRuntime must centralize provider launch side-effect gating."
+        )
+        XCTAssertTrue(
+            contents.contains("XCTestConfigurationFilePath")
+                && contents.contains("CLAWDMETER_LIVE_VERIFY")
+                && contents.contains("CLAWDMETER_ALLOW_PROVIDER_SPEND")
+                && contents.contains(".continuum-live-verify"),
+            "Ordinary XCTest must defer provider pollers/warmers unless live-provider spend is explicitly opted in."
+        )
+        XCTAssertTrue(
+            contents.contains("guard !Self.deferProviderSideEffectsForTesting else"),
+            "Provider model/probe warmers must return before touching network or provider credentials under no-spend XCTest."
+        )
+        XCTAssertTrue(
+            contents.contains("Provider pollers deferred under test/no-spend gate"),
+            "Usage pollers must be visibly skipped under the same no-spend XCTest gate."
+        )
+        XCTAssertTrue(
+            contents.contains("Claude auto-import deferred under test/no-spend gate"),
+            "Claude Code token auto-import must not read third-party keychain state during ordinary XCTest."
+        )
+        XCTAssertTrue(
+            contents.contains("testingAppSupportOverride")
+                && contents.contains("ClawdmeterMacTests-\\(ProcessInfo.processInfo.processIdentifier)")
+                && contents.contains("CLAWDMETER_TEST_APP_SUPPORT_DIR"),
+            "Ordinary XCTest must isolate session/workspace/repo-env stores away from the user's real Application Support data."
+        )
+        XCTAssertTrue(
+            contents.contains("mobileCommandOutboxForAppBootstrap")
+                && contents.contains("MobileCommandOutbox(replaysAuditLogOnStart: false)"),
+            "Ordinary XCTest must not replay the user's real mobile command audit log during AppRuntime bootstrap."
+        )
+    }
 }

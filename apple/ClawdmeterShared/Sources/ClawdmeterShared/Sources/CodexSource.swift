@@ -240,7 +240,7 @@ public final class CodexSource: AISource {
     /// weekly side-by-side regardless of bucket grouping.
     private func parseLiveUsagePayload(_ data: Data) -> UsageData? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            logger.warning("Codex live usage: top-level JSON is not an object — first 200B: \(String(data: data.prefix(200), encoding: .utf8) ?? "<binary>", privacy: .public)")
+            logger.warning("Codex live usage: top-level JSON is not an object; body bytes=\(data.count, privacy: .public)")
             return nil
         }
 

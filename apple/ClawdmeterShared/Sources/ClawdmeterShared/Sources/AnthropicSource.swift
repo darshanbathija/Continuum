@@ -81,14 +81,7 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
             logger.warning("AnthropicSource.poll: no token")
             throw AISourceError.unauthenticated
         }
-        // Fingerprint = first 14 chars (the well-known `sk-ant-oat01-` prefix
-        // plus the next char) + last 4. Safe to log because that's not enough
-        // to reconstruct the token, but enough to confirm Mac and iOS are
-        // sending the same string.
-        let fp = token.count > 18
-            ? "\(token.prefix(14))…\(token.suffix(4))"
-            : "(short:\(token.count))"
-        logger.info("AnthropicSource.poll: token len=\(token.count) fp=\(fp, privacy: .public), trying /api/oauth/usage")
+        logger.info("AnthropicSource.poll: authenticated; trying /api/oauth/usage")
         defer { logger.info("AnthropicSource.poll: HTTPS leg done") }
         return try await pollOAuthUsage(token: token)
     }
@@ -158,8 +151,7 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
             envelope = try decoder.decode(OAuthUsageEnvelope.self, from: data)
         } catch {
             logger.error("AnthropicSource.parseOAuthUsageBody: JSON decode failed: \(error.localizedDescription, privacy: .public)")
-            let preview = String(data: data.prefix(400), encoding: .utf8) ?? "<binary>"
-            logger.info("AnthropicSource.parseOAuthUsageBody: body preview: \(preview, privacy: .public)")
+            logger.info("AnthropicSource.parseOAuthUsageBody: decode body bytes=\(data.count, privacy: .public)")
             throw AISourceError.malformedResponse(detail: "Could not decode /api/oauth/usage body")
         }
 

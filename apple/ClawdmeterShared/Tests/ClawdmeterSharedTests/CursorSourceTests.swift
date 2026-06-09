@@ -251,8 +251,10 @@ final class CursorSourceTests: XCTestCase {
             guard case AISourceError.dataSourceContractViolation(let detail) = error else {
                 return XCTFail("Expected dataSourceContractViolation, got \(error)")
             }
-            XCTAssertTrue(detail.contains("grpc-status: 7"),
-                          "Detail should echo the trailer text — got: \(detail)")
+            XCTAssertTrue(detail.contains("trailer bytes=16"),
+                          "Detail should report redacted trailer size — got: \(detail)")
+            XCTAssertFalse(detail.contains("grpc-status: 7"),
+                           "Detail must not echo trailer text — got: \(detail)")
         }
     }
 

@@ -262,16 +262,15 @@ public final class AntigravitySource: AISource, @unchecked Sendable {
             if let usage = parseRetrieveUserQuotaResponse(data) {
                 return usage
             }
-            let preview = String(data: data.prefix(500), encoding: .utf8) ?? "<binary>"
-            logger.warning("Gemini retrieveUserQuota parse miss; body preview: \(preview, privacy: .public)")
+            logger.warning("Gemini retrieveUserQuota parse miss; body bytes=\(data.count, privacy: .public)")
             return try cachedFallbackOrThrow(reason: "parse-miss")
         case 400, 403:
             // 400 INVALID_ARGUMENT typically means "missing project"; 403
             // PERMISSION_DENIED for an unfamiliar project also routes here.
             // Hint to the outer caller to discover via loadCodeAssist.
-            let preview = String(data: data.prefix(300), encoding: .utf8) ?? ""
-            logger.info("Gemini retrieveUserQuota \(http.statusCode) — body: \(preview, privacy: .public)")
-            if preview.lowercased().contains("project") {
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            logger.info("Gemini retrieveUserQuota \(http.statusCode); body bytes=\(data.count, privacy: .public)")
+            if bodyText.lowercased().contains("project") {
                 throw AISourceError.dataSourceContractViolation(
                     detail: "retrieveUserQuota needs-project (status \(http.statusCode))"
                 )

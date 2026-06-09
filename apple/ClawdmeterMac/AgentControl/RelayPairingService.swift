@@ -107,8 +107,7 @@ public struct RelayPairingCreationGrantClient {
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            let body = String(data: data.prefix(512), encoding: .utf8) ?? ""
-            throw RelayPairingCreationGrantError.badStatus(status, body)
+            throw RelayPairingCreationGrantError.badStatus(status, "body bytes=\(data.count)")
         }
         return try JSONDecoder().decode(RelayPairingCreationGrant.self, from: data)
     }

@@ -212,7 +212,9 @@ struct SessionWorkspaceView: View {
                             model: model,
                             workbenchState: workbenchState,
                             presentationStore: presentationStore,
-                            browserController: browserController(for: session),
+                            browserControllerProvider: {
+                                browserController(for: session)
+                            },
                             selectedTab: selectedRightPaneBinding,
                             onClose: {
                                 animateWorkspaceChange(.easeOut(duration: 0.18)) {
@@ -339,7 +341,8 @@ struct SessionWorkspaceView: View {
             Task { await launcher.refreshProviderAvailability() }
         }
         .background(KeyboardShortcuts(
-            model: model
+            model: model,
+            workbenchState: workbenchState
         ))
     }
 
@@ -394,17 +397,20 @@ struct SessionWorkspaceView: View {
     /// Both posters reach the same `openDraftWorkspaceTab` API on the model so
     /// the two paths cannot drift.
     private func openNewWorkspaceChatTab() {
-        guard let session = model.openSession else { return }
-        model.openDraftWorkspaceTab(
-            from: session,
-            defaults: ComposerStore.ChipDefaults(
-                agent: session.agent,
-                modelId: session.model,
-                effort: session.effort,
-                mode: session.mode,
-                planMode: false
+        if let session = model.openSession {
+            model.openDraftWorkspaceTab(
+                from: session,
+                defaults: ComposerStore.ChipDefaults(
+                    agent: session.agent,
+                    modelId: session.model,
+                    effort: session.effort,
+                    mode: session.mode,
+                    planMode: false
+                )
             )
-        )
+        } else if let draft = model.draftWorkspaceTab {
+            model.openDraftWorkspaceTab(from: draft)
+        }
     }
 
     /// Shared helper for the terminal-tab posters — `clawdmeterOpenWorkspaceTerminalTab`
@@ -412,14 +418,8 @@ struct SessionWorkspaceView: View {
     /// fallback that hops onto a sibling session when the foreground tab is a
     /// chat draft with no terminal of its own.
     private func openNewWorkspaceTerminalTab() {
-        if let session = model.openSession {
-            guard model.canOpenWorkspaceTerminalTab(from: session) else { return }
-            Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
-        } else if let draft = model.draftWorkspaceTab,
-                  let sibling = WorkspaceKey.siblings(of: draft.workspaceKey, in: model.registry.sessions)
-                    .first(where: { model.canOpenWorkspaceTerminalTab(from: $0) }) {
-            Task { await model.openOrCreateWorkspaceTerminalTab(from: sibling) }
-        }
+        guard let source = model.sourceForNewWorkspaceTerminalTab() else { return }
+        Task { await model.openOrCreateWorkspaceTerminalTab(from: source) }
     }
 
     /// Hidden buttons that own Option+Cmd+1..9 + Cmd+Shift+F + Cmd+;
@@ -430,6 +430,8 @@ struct SessionWorkspaceView: View {
     /// View menu reserves Cmd+1..5 for top-level tab switching.
     private struct KeyboardShortcuts: View {
         @ObservedObject var model: SessionsModel
+        @ObservedObject var workbenchState: WorkbenchState
+
         var body: some View {
             ZStack {
                 ForEach(1...9, id: \.self) { index in
@@ -453,6 +455,8 @@ struct SessionWorkspaceView: View {
                                 planMode: false
                             )
                         )
+                    } else if let draft = model.draftWorkspaceTab {
+                        model.openDraftWorkspaceTab(from: draft)
                     }
                 }
                 .keyboardShortcut("t", modifiers: [.command])
@@ -460,12 +464,26 @@ struct SessionWorkspaceView: View {
                 .frame(width: 0, height: 0)
 
                 Button("") {
-                    if let session = model.openSession,
-                       model.canOpenWorkspaceTerminalTab(from: session) {
-                        Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
-                    }
+                    guard let source = model.sourceForNewWorkspaceTerminalTab() else { return }
+                    Task { await model.openOrCreateWorkspaceTerminalTab(from: source) }
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
+                .opacity(0)
+                .frame(width: 0, height: 0)
+
+                Button("") {
+                    guard model.openSession != nil else { return }
+                    workbenchState.selectRightPane(.terminal)
+                    workbenchState.setReviewPaneVisible(true)
+                }
+                .keyboardShortcut("`", modifiers: [.control])
+                .opacity(0)
+                .frame(width: 0, height: 0)
+
+                Button("") {
+                    NotificationCenter.default.post(name: .renameOpenSession, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
                 .opacity(0)
                 .frame(width: 0, height: 0)
             }
@@ -486,14 +504,17 @@ struct SessionWorkspaceView: View {
                 workspaceKey: draft.workspaceKey,
                 activeSession: nil,
                 activeSessionId: nil,
-                draftTab: draft,
+                draftTabs: model.workspaceDraftTabs(in: draft.workspaceKey),
+                activeDraftTabId: draft.id,
                 terminalTabs: model.workspaceTerminalTabs(in: draft.workspaceKey),
                 activeTerminalTabId: nil,
                 documentTabs: model.workspaceDocumentTabs(in: draft.workspaceKey),
                 activeDocumentTabId: model.selectedWorkspaceDocumentTab?.id,
                 terminalAvailable: WorkspaceKey.siblings(of: draft.workspaceKey, in: model.registry.sessions)
                     .contains(where: { model.canOpenWorkspaceTerminalTab(from: $0) }),
-                onNewChat: {},
+                onNewChat: {
+                    model.openDraftWorkspaceTab(from: draft)
+                },
                 onNewTerminal: {
                     if let first = WorkspaceKey.siblings(of: draft.workspaceKey, in: model.registry.sessions)
                         .first(where: { model.canOpenWorkspaceTerminalTab(from: $0) }) {
@@ -511,6 +532,7 @@ struct SessionWorkspaceView: View {
                 presentationStore: presentationStore,
                 workspaceDraft: draft
             )
+            .id(draft.id)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -522,7 +544,8 @@ struct SessionWorkspaceView: View {
                 workspaceKey: tab.workspaceKey,
                 activeSession: session,
                 activeSessionId: session.id,
-                draftTab: model.draftWorkspaceTab,
+                draftTabs: model.workspaceDraftTabs(in: tab.workspaceKey),
+                activeDraftTabId: model.draftWorkspaceTab?.id,
                 terminalTabs: model.workspaceTerminalTabs(in: tab.workspaceKey),
                 activeTerminalTabId: tab.id,
                 documentTabs: model.workspaceDocumentTabs(in: tab.workspaceKey),
@@ -576,7 +599,8 @@ struct SessionWorkspaceView: View {
                 workspaceKey: tab.workspaceKey,
                 activeSession: session,
                 activeSessionId: session.id,
-                draftTab: model.draftWorkspaceTab,
+                draftTabs: model.workspaceDraftTabs(in: tab.workspaceKey),
+                activeDraftTabId: model.draftWorkspaceTab?.id,
                 terminalTabs: model.workspaceTerminalTabs(in: tab.workspaceKey),
                 activeTerminalTabId: model.selectedWorkspaceTerminalTab?.id,
                 documentTabs: model.workspaceDocumentTabs(in: tab.workspaceKey),

@@ -13,11 +13,41 @@ import ClawdmeterShared
 /// existing `session.worktreePath ?? session.repoKey` dispatch (now
 /// `session.effectiveCwd`) resolves to it without daemon-wide changes.
 public enum ChatCwdManager {
+    private static let overrideLock = NSLock()
+    private static var chatSessionsRootOverride: URL?
+    private static var claudeConfigURLOverride: URL?
+
+    private static func configuredChatSessionsRootOverride() -> URL? {
+        overrideLock.lock()
+        defer { overrideLock.unlock() }
+        return chatSessionsRootOverride
+    }
+
+    private static func configuredClaudeConfigURLOverride() -> URL? {
+        overrideLock.lock()
+        defer { overrideLock.unlock() }
+        return claudeConfigURLOverride
+    }
+
+    public static func setChatSessionsRootOverrideForTesting(_ url: URL?) {
+        overrideLock.lock()
+        chatSessionsRootOverride = url
+        overrideLock.unlock()
+    }
+
+    public static func setClaudeConfigURLOverrideForTesting(_ url: URL?) {
+        overrideLock.lock()
+        claudeConfigURLOverride = url
+        overrideLock.unlock()
+    }
 
     /// Root directory under Application Support where per-session chat
     /// cwds live. Created lazily by `ensure(for:)`. Tests override via
-    /// `chatSessionsRoot(overriddenBy:)`.
+    /// `setChatSessionsRootOverrideForTesting(_:)`.
     public static var chatSessionsRoot: URL {
+        if let override = configuredChatSessionsRootOverride() {
+            return override
+        }
         // Mac sandbox / non-sandbox both honor
         // `applicationSupportDirectory` (the system creates the
         // bundle-id subdir automatically when sandboxed).
@@ -76,8 +106,8 @@ public enum ChatCwdManager {
     /// so we can't clobber another writer's keys with stale data. We also skip
     /// the write entirely when the dir is already trusted (the common case).
     public static func markTrustedForClaude(path: String) {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude.json")
+        let url = configuredClaudeConfigURLOverride()
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json")
         let fd = open(url.path, O_RDWR | O_CREAT, 0o600)
         guard fd >= 0 else { return }
         defer { close(fd) }

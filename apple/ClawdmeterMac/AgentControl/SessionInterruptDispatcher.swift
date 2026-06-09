@@ -62,7 +62,7 @@ public final class SessionInterruptDispatcher {
     /// status code (200 / 404 / 500).
     @discardableResult
     public func interrupt(sessionId: UUID) async -> InterruptResult {
-        guard let registry, let session = registry.session(id: sessionId) else {
+        guard let registry, registry.session(id: sessionId) != nil else {
             interruptLogger.warning("interrupt: session not found \(sessionId.uuidString, privacy: .public)")
             return .sessionNotFound
         }

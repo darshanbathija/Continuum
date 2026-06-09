@@ -24,14 +24,17 @@ struct FollowUpSchedulerSheet: View {
         return VStack(alignment: .leading, spacing: 14) {
             Text("Schedule follow-up")
                 .font(.system(size: 16, weight: .semibold))
+                .accessibilityIdentifier("code.follow-up-sheet.title")
             Text("Sends the prompt as a fresh message into this session at the chosen time.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             DatePicker("Fire at", selection: $fireAt, in: Date()...)
                 .datePickerStyle(.field)
+                .accessibilityIdentifier("code.follow-up-sheet.fire-at")
             TextField("Prompt", text: $prompt, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(2...6)
+                .accessibilityIdentifier("code.follow-up-sheet.prompt")
             if !session.scheduledFollowUps.isEmpty {
                 Divider()
                 Text("Pending")
@@ -85,6 +88,7 @@ struct FollowUpSchedulerSheet: View {
                 Spacer()
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("code.follow-up-sheet.done")
                 Button("Schedule") {
                     let up = ScheduledFollowUp(
                         fireAt: fireAt,
@@ -106,9 +110,12 @@ struct FollowUpSchedulerSheet: View {
                 .buttonStyle(.borderedProminent)
                 .tint(SessionsV2Theme.accent)
                 .disabled(prompt.trimmingCharacters(in: .whitespaces).isEmpty)
+                .accessibilityIdentifier("code.follow-up-sheet.schedule")
             }
         }
         .padding(20)
         .frame(minWidth: 440)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("code.follow-up-sheet")
     }
 }
