@@ -240,7 +240,7 @@ public struct MacSettingsView: View {
     @ViewBuilder
     private var providerSettings: some View {
         SettingsCard(title: "Providers", sub: nil) {
-            ProviderPreferenceRows(client: runtime?.loopbackClient, runtime: runtime)
+            SettingsProviderRowsWithDeviceStatus(runtime: runtime)
         }
 
         // One-time Full Disk Access opt-in. Continuum reads other tools' usage
@@ -1234,10 +1234,41 @@ private struct AccentPicker: View {
 
 // MARK: - Providers
 
+/// Settings → Providers wrapper that runs device discovery once per
+/// appearance so the same status badges/messages from onboarding show here
+/// (design-doc "Future" item). Status-only: no setup actions in Settings.
+struct SettingsProviderRowsWithDeviceStatus: View {
+    var runtime: AppRuntime?
+    @State private var deviceStatuses: [String: ProviderDeviceStatus] = [:]
+
+    var body: some View {
+        ProviderPreferenceRows(
+            client: runtime?.loopbackClient,
+            runtime: runtime,
+            showDeviceStatus: !deviceStatuses.isEmpty,
+            deviceStatuses: deviceStatuses
+        )
+        .task {
+            let result = await ProviderDeviceDiscovery.discover()
+            deviceStatuses = Dictionary(
+                uniqueKeysWithValues: result.statuses.map { ($0.providerId, $0) }
+            )
+        }
+    }
+}
+
 struct ProviderPreferenceRows: View {
     @Environment(\.tahoe) private var t
     let client: AgentControlClient?
     var runtime: AppRuntime?
+    var showDeviceStatus: Bool = false
+    var deviceStatuses: [String: ProviderDeviceStatus] = [:]
+    var onSetupAction: ((String, ProviderDeviceSetupAction) -> Void)? = nil
+    /// When non-nil, toggles read/write this staged set instead of mutating
+    /// `ProviderEnablement` live. Onboarding stages selections so abandoning
+    /// the sheet (Esc) leaves no persisted state or running pollers behind;
+    /// the caller applies the set once on Continue.
+    var stagedEnabledProviderIDs: Binding<Set<String>>? = nil
     var onEnabledProvidersChanged: (([String]) -> Void)? = nil
     @StateObject private var localStore = ProviderDefaultsStore()
     @State private var snapshot: ProviderDefaultsSnapshot = .empty
@@ -1252,6 +1283,9 @@ struct ProviderPreferenceRows: View {
                     isEnabled: enabledBinding(for: vendor),
                     snapshot: snapshot,
                     catalog: catalog,
+                    showDeviceStatus: showDeviceStatus,
+                    deviceStatus: deviceStatuses[providerEnablementId(for: vendor)],
+                    onSetupAction: onSetupAction,
                     onSelectModel: { entry in update(vendor: vendor, model: entry.id) },
                     onOpenModelMenu: { Task { await refreshCatalogIfAllowed(for: vendor) } }
                 )
@@ -1279,6 +1313,12 @@ struct ProviderPreferenceRows: View {
     }
 
     private func refreshEnabledState() {
+        // Staged mode: the binding is the source of truth; live enablement
+        // changes (e.g. another window) must not clobber the staged picks.
+        if let staged = stagedEnabledProviderIDs {
+            onEnabledProvidersChanged?(Array(staged.wrappedValue))
+            return
+        }
         enabledByProviderId = Dictionary(
             uniqueKeysWithValues: ChatV2Store.defaultChatVendorOrder.map { vendor in
                 let id = providerEnablementId(for: vendor)
@@ -1290,6 +1330,19 @@ struct ProviderPreferenceRows: View {
 
     private func enabledBinding(for vendor: ChatVendor) -> Binding<Bool> {
         let id = providerEnablementId(for: vendor)
+        if let staged = stagedEnabledProviderIDs {
+            return Binding(
+                get: { staged.wrappedValue.contains(id) },
+                set: { newValue in
+                    if newValue {
+                        staged.wrappedValue.insert(id)
+                    } else {
+                        staged.wrappedValue.remove(id)
+                    }
+                    onEnabledProvidersChanged?(Array(staged.wrappedValue))
+                }
+            )
+        }
         return Binding(
             get: { enabledByProviderId[id] ?? ProviderEnablement.isEnabled(id) },
             set: { newValue in
@@ -1419,6 +1472,9 @@ private struct ProviderPreferenceRow: View {
     @Binding var isEnabled: Bool
     let snapshot: ProviderDefaultsSnapshot
     let catalog: ModelCatalog
+    var showDeviceStatus: Bool = false
+    var deviceStatus: ProviderDeviceStatus?
+    var onSetupAction: ((String, ProviderDeviceSetupAction) -> Void)? = nil
     let onSelectModel: (ModelCatalogEntry) -> Void
     let onOpenModelMenu: () -> Void
 
@@ -1436,20 +1492,56 @@ private struct ProviderPreferenceRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 28)
-            Text(vendor.displayName)
-                .font(TahoeFont.body(13.5, weight: .semibold))
-                .foregroundStyle(t.fg)
-            Spacer(minLength: 12)
-            TahoeToggleView(on: $isEnabled)
-                .help(isEnabled ? "Turn \(vendor.displayName) off" : "Turn \(vendor.displayName) on")
-                .accessibilityIdentifier("settings.provider.\(providerId).enabled")
-            modelMenu
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text(vendor.displayName)
+                            .font(TahoeFont.body(13.5, weight: .semibold))
+                            .foregroundStyle(t.fg)
+                        if showDeviceStatus, let deviceStatus {
+                            ProviderDeviceStatusBadge(status: deviceStatus.status)
+                        }
+                    }
+                    if showDeviceStatus, let message = deviceStatus?.message {
+                        Text(message)
+                            .font(TahoeFont.body(11.5))
+                            .foregroundStyle(t.fg3)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 12)
+                TahoeToggleView(on: $isEnabled)
+                    .help(isEnabled ? "Turn \(vendor.displayName) off" : "Turn \(vendor.displayName) on")
+                    .accessibilityIdentifier("settings.provider.\(providerId).enabled")
+                modelMenu
+            }
+            if showDeviceStatus, let deviceStatus, shouldShowSetupActions(deviceStatus) {
+                HStack(spacing: 8) {
+                    ForEach(deviceStatus.setupActions) { action in
+                        Button {
+                            onSetupAction?(providerId, action)
+                        } label: {
+                            Text(action.label)
+                                .font(TahoeFont.body(11, weight: .semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityIdentifier("onboarding.provider.\(providerId).action.\(action.id)")
+                    }
+                }
+                .padding(.leading, 40)
+            }
         }
         .frame(minHeight: 36)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.provider.\(providerId)")
+    }
+
+    private func shouldShowSetupActions(_ status: ProviderDeviceStatus) -> Bool {
+        guard onSetupAction != nil else { return false }
+        return !status.isReady && !status.setupActions.isEmpty
     }
 
     private var modelMenu: some View {
@@ -1489,6 +1581,50 @@ private struct ProviderPreferenceRow: View {
         .menuStyle(.borderlessButton)
         .simultaneousGesture(TapGesture().onEnded { onOpenModelMenu() })
         .accessibilityIdentifier("settings.provider.\(providerId).model")
+    }
+}
+
+// MARK: - Provider device status (onboarding)
+
+struct ProviderDeviceStatusBadge: View {
+    @Environment(\.tahoe) private var t
+
+    let status: ProviderDeviceAuthStatus
+
+    var body: some View {
+        Text(label)
+            .font(TahoeFont.body(10, weight: .bold))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(background, in: Capsule(style: .continuous))
+    }
+
+    private var label: String {
+        switch status {
+        case .authenticated: return "Ready"
+        case .installed: return "Installed"
+        case .unauthenticated: return "Needs sign-in"
+        case .notInstalled: return "Not installed"
+        }
+    }
+
+    private var foreground: Color {
+        switch status {
+        case .authenticated: return .green
+        case .installed: return t.accent
+        case .unauthenticated: return .orange
+        case .notInstalled: return t.fg3
+        }
+    }
+
+    private var background: Color {
+        switch status {
+        case .authenticated: return Color.green.opacity(0.14)
+        case .installed: return t.accentAlpha(0.12)
+        case .unauthenticated: return Color.orange.opacity(0.14)
+        case .notInstalled: return t.glassTintHi.opacity(0.5)
+        }
     }
 }
 
