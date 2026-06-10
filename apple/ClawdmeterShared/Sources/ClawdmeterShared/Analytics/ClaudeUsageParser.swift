@@ -44,14 +44,18 @@ public enum ClaudeUsageParser {
 
         // Timestamp — Claude logs ISO 8601 at the top level.
         let timestamp: Date = {
-            if let raw = root["timestamp"] as? String,
-               let parsed = Self.isoFormatter.date(from: raw) {
-                return parsed
-            }
-            // Fallback: try fractional-seconds parse, then now.
-            if let raw = root["timestamp"] as? String,
-               let parsed = Self.isoFractional.date(from: raw) {
-                return parsed
+            // Lock-free fast path first — ICU formatters contend under the
+            // loader's concurrent file parse (v0.31.17 energy bug).
+            if let raw = root["timestamp"] as? String {
+                if let parsed = ISO8601Fast.parse(raw) {
+                    return parsed
+                }
+                if let parsed = Self.isoFormatter.date(from: raw) {
+                    return parsed
+                }
+                if let parsed = Self.isoFractional.date(from: raw) {
+                    return parsed
+                }
             }
             return Date()
         }()

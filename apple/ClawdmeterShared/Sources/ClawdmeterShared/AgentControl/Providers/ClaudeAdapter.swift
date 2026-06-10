@@ -506,6 +506,10 @@ public enum ClaudeAdapter {
 
     private static func parseTimestamp(_ raw: Any?) -> Date? {
         guard let s = raw as? String else { return nil }
+        // Hot path: lock-free parse. The ICU-backed formatters serialize
+        // every call behind global mutexes, which pegged all cores during
+        // cold analytics reparses (v0.31.17 energy bug).
+        if let d = ISO8601Fast.parse(s) { return d }
         if let d = isoFormatter.date(from: s) { return d }
         if let d = isoFractional.date(from: s) { return d }
         return nil
