@@ -1562,7 +1562,15 @@ public final class AgentControlServer {
             return
         }
         let liveCatalog = await providerEnabledModelCatalog()
-        guard !req.model.isEmpty, liveCatalog.entry(forId: req.model) != nil else {
+        guard !req.model.isEmpty, let modelEntry = liveCatalog.entry(forId: req.model) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        // Cross-provider model swaps strand a running session — it can't switch
+        // the underlying CLI to a different provider's runtime (the "Connecting
+        // to Claude…" strand, PR #291). The Mac picker avoids this by opening a
+        // sibling tab; enforce it wire-level so iOS (and any client whose picker
+        // isn't agent-scoped) is protected too, not just the Mac UI.
+        guard modelEntry.provider == session.agent else {
             sendResponse(.badRequest, on: connection); return
         }
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
