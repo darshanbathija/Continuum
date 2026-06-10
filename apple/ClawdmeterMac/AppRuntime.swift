@@ -912,11 +912,11 @@ final class AppRuntime: ObservableObject {
             // the loader's root closures read the list per refresh.
             usageHistoryStore.forceRefresh()
         }
-        let redactedHome = instance.homePathOverride == nil
+        let redactedRoot = instance.configRoot == nil
             ? "nil"
             : ProviderInstanceLogRedaction.homeToken(for: instance)
         runtimeLogger.info(
-            "AppRuntime.addInstance wireId=\(instance.wireId, privacy: .public) home=\(redactedHome, privacy: .public) persist=\(persist)"
+            "AppRuntime.addInstance wireId=\(instance.wireId, privacy: .public) configRoot=\(redactedRoot, privacy: .public) persist=\(persist)"
         )
         return true
     }
@@ -975,10 +975,10 @@ final class AppRuntime: ObservableObject {
             // silently polls the wrong account.
             let tokenProvider: CodexTokenProvider
             var sessionsDir: URL?
-            if let root = instance.homePathOverride, !root.isEmpty {
+            if let root = instance.configRoot, !root.isEmpty {
                 let rootURL = URL(fileURLWithPath: root)
                 tokenProvider = CodexTokenProvider(
-                    authPath: rootURL.appendingPathComponent("auth.json")
+                    authPath: CodexAuthProbe.authFileURL(configRoot: rootURL)
                 )
                 sessionsDir = rootURL.appendingPathComponent("sessions", isDirectory: true)
             } else {

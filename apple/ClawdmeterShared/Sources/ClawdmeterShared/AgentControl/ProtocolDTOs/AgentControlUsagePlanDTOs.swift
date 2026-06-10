@@ -130,13 +130,12 @@ public struct UsageEnvelope: Codable, Sendable {
     public func secondaryInstanceUsage() -> [SecondaryInstanceUsage] {
         guard let usage else { return [] }
         return usage.compactMap { (key, value) -> SecondaryInstanceUsage? in
-            guard let slash = key.firstIndex(of: "/") else { return nil }
-            let name = String(key[key.index(after: slash)...])
-            guard name != ProviderInstanceId.primaryName, !name.isEmpty else { return nil }
+            guard ProviderInstanceId.isSecondaryWireId(key),
+                  let parsed = ProviderInstanceId.parseWireId(key) else { return nil }
             return SecondaryInstanceUsage(
                 wireId: key,
-                kind: String(key[..<slash]),
-                name: name,
+                kind: parsed.kind,
+                name: parsed.name,
                 usage: value
             )
         }

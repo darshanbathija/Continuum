@@ -245,4 +245,41 @@ final class ProviderInstanceIdTests: XCTestCase {
         XCTAssertEqual(decoded.homePathOverride, "/Users/x/.claude-personal")
         XCTAssertNil(decoded.keychainAccessGroupOverride)
     }
+
+    // MARK: - Multi-account hardening (path-traversal names + wireId parsing)
+
+    /// Security: the name becomes a path component of the instance config
+    /// root, and `removeInstance(deleteConfigRoot:)` recursively deletes
+    /// it. Relative-path names ("..", ".") would resolve OUTSIDE
+    /// `Instances/<kind>/` and wipe sibling accounts.
+    func testIsValidNameRejectsPathTraversalAndUnsafeNames() {
+        for bad in ["..", ".", ".hidden", "a/b", "a\\b", "a b", "a\nb", ""] {
+            let instance = ProviderInstanceId(kind: .claude, name: bad, homePathOverride: "/tmp/x")
+            XCTAssertFalse(instance.isValidName, "name \(bad.debugDescription) must be rejected")
+        }
+        for good in ["work", "personal", "team-2", "pro_max", "__primary__"] {
+            // __primary__ is valid only without overrides (masquerade rule).
+            let instance = ProviderInstanceId(kind: .claude, name: good)
+            XCTAssertTrue(instance.isValidName, "name \(good.debugDescription) must be accepted")
+        }
+    }
+
+    func testRegistryRejectsTraversalNames() async {
+        let registry = ProviderInstanceRegistry()
+        let evil = ProviderInstanceId(kind: .claude, name: "..", homePathOverride: "/tmp/evil")
+        let inserted = await registry.upsert(evil)
+        XCTAssertNil(inserted)
+    }
+
+    func testParseWireId() {
+        XCTAssertNil(ProviderInstanceId.parseWireId("claude"))
+        XCTAssertNil(ProviderInstanceId.parseWireId("claude/"))
+        let parsed = ProviderInstanceId.parseWireId("claude/work")
+        XCTAssertEqual(parsed?.kind, "claude")
+        XCTAssertEqual(parsed?.name, "work")
+        XCTAssertFalse(ProviderInstanceId.isSecondaryWireId("claude"))
+        XCTAssertFalse(ProviderInstanceId.isSecondaryWireId("claude/"))
+        XCTAssertFalse(ProviderInstanceId.isSecondaryWireId("claude/__primary__"))
+        XCTAssertTrue(ProviderInstanceId.isSecondaryWireId("claude/work"))
+    }
 }

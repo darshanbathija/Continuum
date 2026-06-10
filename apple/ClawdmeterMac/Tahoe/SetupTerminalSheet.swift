@@ -11,18 +11,14 @@ struct SetupTerminalSession: Identifiable {
 }
 
 /// Sheet chrome around `DirectPtyTerminalView` for setup commands
-/// (`codex login`, `claude setup-token`, CLI installs). Extracted from
-/// the onboarding sheet so the multi-account add-account flow reuses
-/// the identical surface.
-///
-/// `killOnDisappear: false` lets a caller that observes the host's
-/// output (token capture) own the kill instead — closing the sheet
-/// early must not tear the PTY out from under the observer's final
-/// reads.
+/// (`codex login`, CLI installs). Extracted from the onboarding sheet
+/// (PR #301) into its own file; onboarding is the only consumer today —
+/// the multi-account add-account flow embeds `DirectPtyTerminalView` in
+/// its own stepped sheet because it also hosts the paste-token fallback
+/// and completion state.
 struct SetupTerminalSheet: View {
     @Environment(\.tahoe) private var t
     let terminal: SetupTerminalSession
-    var killOnDisappear: Bool = true
     let onClose: () -> Void
 
     var body: some View {
@@ -46,9 +42,7 @@ struct SetupTerminalSheet: View {
         }
         .frame(minWidth: 640, minHeight: 420)
         .onDisappear {
-            if killOnDisappear {
-                Task { await terminal.host.kill() }
-            }
+            Task { await terminal.host.kill() }
         }
     }
 }

@@ -36,19 +36,17 @@ extension AppRuntime {
     var tahoeSecondaryColumns: [SecondaryTahoeColumn] {
         allAppModelsByWireId
             .compactMap { (wireId, model) -> SecondaryTahoeColumn? in
-                guard let slash = wireId.firstIndex(of: "/") else { return nil }
-                let kind = String(wireId[..<slash])
-                let name = String(wireId[wireId.index(after: slash)...])
-                guard name != ProviderInstanceId.primaryName else { return nil }
+                guard ProviderInstanceId.isSecondaryWireId(wireId),
+                      let parsed = ProviderInstanceId.parseWireId(wireId) else { return nil }
                 let provider: TahoeProvider
-                switch kind {
+                switch parsed.kind {
                 case "claude": provider = .claude
                 case "codex":  provider = .codex
                 default: return nil
                 }
-                guard ProviderEnablement.isEnabled(kind) else { return nil }
+                guard ProviderEnablement.isEnabled(parsed.kind) else { return nil }
                 return SecondaryTahoeColumn(
-                    wireId: wireId, accountName: name, provider: provider, model: model
+                    wireId: wireId, accountName: parsed.name, provider: provider, model: model
                 )
             }
             .sorted { $0.wireId < $1.wireId }

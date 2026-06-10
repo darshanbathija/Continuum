@@ -109,14 +109,20 @@ final class ProviderInstanceWireTests: XCTestCase {
             "PATH": "/usr/bin",
             // Hostile inherited token that MUST be scrubbed…
             "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-INHERITED-HOSTILE",
+            // …and a sibling hostile var NOT in secrets: this one only
+            // disappears if the scrub actually ran (the secret overwrite
+            // alone can't explain its absence).
+            "CLAUDE_SESSION_TOKEN": "hostile-session",
         ]
         let env = ProviderInstanceEnvironment.buildEnv(
             for: instance,
             parentEnv: parent,
             secrets: ["CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-instance-work"]
         )
-        // …and replaced by the instance's own credential.
+        // Replaced by the instance's own credential…
         XCTAssertEqual(env["CLAUDE_CODE_OAUTH_TOKEN"], "sk-ant-oat01-instance-work")
+        // …and the scrub itself provably ran.
+        XCTAssertNil(env["CLAUDE_SESSION_TOKEN"])
     }
 
     func test_buildEnv_scrubsEveryProviderNamespacedPrefix() {
@@ -574,7 +580,7 @@ final class ProviderInstanceWireTests: XCTestCase {
 
     // MARK: - Wire v28 instance list
 
-    func test_providerInstanceDTO_mapping() {
+    func test_providerInstanceDTO_mapping() throws {
         let primary = ProviderInstanceDTO(instance: .primary(kind: .claude))
         XCTAssertTrue(primary.isPrimary)
         XCTAssertEqual(primary.displayName, "Default")
@@ -585,8 +591,10 @@ final class ProviderInstanceWireTests: XCTestCase {
         )
         XCTAssertFalse(work.isPrimary)
         XCTAssertEqual(work.displayName, "work")
-        // The config root must never cross the wire.
-        let encoded = String(data: (try? JSONEncoder().encode(work)) ?? Data(), encoding: .utf8) ?? ""
+        // The config root must never cross the wire. XCTUnwrap (not ??)
+        // so an encode failure FAILS the test instead of vacuously
+        // passing the contains-check against "".
+        let encoded = try XCTUnwrap(String(data: JSONEncoder().encode(work), encoding: .utf8))
         XCTAssertFalse(encoded.contains("/secret/path"))
     }
 

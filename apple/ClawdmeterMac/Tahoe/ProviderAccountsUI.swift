@@ -384,6 +384,16 @@ final class AddProviderAccountModel: ObservableObject {
         if kind == .claude {
             ClaudeConfigSeeder.seed(at: configRoot)
         }
+        if kind == .codex {
+            // Re-add after a keep-data removal: a leftover auth.json under
+            // this root would satisfy the completion probe IMMEDIATELY —
+            // silently connecting the OLD ChatGPT account before the fresh
+            // `codex login` even starts. Clear it so completion can only
+            // come from the login the user is about to do.
+            try? FileManager.default.removeItem(
+                at: CodexAuthProbe.authFileURL(configRoot: configRoot)
+            )
+        }
 
         let command = kind == .claude ? "claude setup-token" : "codex login"
         let env = ProviderInstanceEnvironment.buildEnv(for: instance)

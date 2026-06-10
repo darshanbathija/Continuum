@@ -8,13 +8,17 @@ private let instanceSpawnLogger = Logger(subsystem: "com.clawdmeter.mac", catego
 /// to the spawn-env pieces (config-dir var + per-instance secrets).
 ///
 /// Wired once by `AppRuntime` at boot (`attach`). Unattached (tests,
-/// pre-boot) every session resolves to the primary instance — identical
-/// to pre-multi-account behavior.
+/// pre-boot), nil/primary pins resolve to the primary instance; any
+/// SECONDARY pin fails closed (`.unknown`) — there is no registry to
+/// vouch for it.
 ///
-/// **Unknown wireIds fail closed.** A session pinned to an account the
-/// registry no longer carries (user removed it in Settings) must NOT
-/// silently fall back to the primary — that would bill a different
-/// subscription than the user picked. Callers surface a clean error.
+/// **Unknown or non-isolatable pins fail closed.** A session pinned to
+/// an account the registry no longer carries (user removed it in
+/// Settings), OR to an instance that can't actually be config-isolated
+/// (no config-dir var for its kind, or an empty config root — possible
+/// only via a hand-edited provider-instances.json), must NOT silently
+/// fall back to the primary — that would bill a different subscription
+/// than the user picked. Callers surface a clean error.
 enum InstanceSpawnEnv {
 
     private static let lock = NSLock()
@@ -23,6 +27,33 @@ enum InstanceSpawnEnv {
     static func attach(_ registry: ProviderInstanceRegistry) {
         lock.lock(); defer { lock.unlock() }
         _registry = registry
+    }
+
+    /// Test hook: restore the unattached default so suites that attach a
+    /// registry don't leak it into later test classes (the resolver is
+    /// process-global). Production never detaches.
+    static func detachForTesting() {
+        lock.lock(); defer { lock.unlock() }
+        _registry = nil
+        _claudeTokenLookup = nil
+    }
+
+    /// Claude-secondary token lookup. Defaults to the per-instance
+    /// Keychain partition; tests inject a stub so the resolver's
+    /// token-required gate is exercisable without a real Keychain.
+    private static var _claudeTokenLookup: ((ProviderInstanceId) -> String?)?
+
+    static func setClaudeTokenLookupForTesting(_ lookup: @escaping (ProviderInstanceId) -> String?) {
+        lock.lock(); defer { lock.unlock() }
+        _claudeTokenLookup = lookup
+    }
+
+    private static func claudeToken(for instance: ProviderInstanceId) -> String? {
+        lock.lock()
+        let lookup = _claudeTokenLookup
+        lock.unlock()
+        if let lookup { return lookup(instance) }
+        return PastedAnthropicTokenProvider.forInstance(instance).currentAccessToken
     }
 
     static var registry: ProviderInstanceRegistry? {
@@ -48,7 +79,29 @@ enum InstanceSpawnEnv {
               instance.kind == agent else {
             return .unknown(wireId: wireId)
         }
-        return .resolved(instance, secrets: secrets(for: instance))
+        // A secondary that can't be config-isolated would silently spawn
+        // against the PRIMARY account's real config (scrub runs, but no
+        // isolation var gets set). Refuse instead — only reachable via a
+        // hand-edited store, but the failure mode is wrong-account
+        // billing under a "work" label.
+        guard let root = instance.configRoot, !root.isEmpty,
+              ProviderInstanceEnvironment.configDirVariable(for: instance.kind) != nil else {
+            return .unknown(wireId: wireId)
+        }
+        let secrets = secrets(for: instance)
+        // Claude secondaries MUST carry their token. CLAUDE_CONFIG_DIR
+        // relocates config files, but Claude Code's Keychain item is
+        // per-OS-user — a token-less spawn under an empty config dir
+        // falls back to the PRIMARY's Keychain login and silently bills
+        // the default subscription under a "work" label. Fail closed
+        // (re-authenticate in Settings) instead.
+        if instance.kind == .claude, secrets["CLAUDE_CODE_OAUTH_TOKEN"] == nil {
+            instanceSpawnLogger.error(
+                "resolve: \(wireId, privacy: .public) has no stored token — refusing spawn (re-authenticate in Settings)"
+            )
+            return .unknown(wireId: wireId)
+        }
+        return .resolved(instance, secrets: secrets)
     }
 
     static func resolve(for session: AgentSession) async -> Resolution {
@@ -73,8 +126,7 @@ enum InstanceSpawnEnv {
         guard !instance.isPrimary else { return [:] }
         switch instance.kind {
         case .claude:
-            if let token = PastedAnthropicTokenProvider.forInstance(instance).currentAccessToken,
-               !token.isEmpty {
+            if let token = claudeToken(for: instance), !token.isEmpty {
                 return ["CLAUDE_CODE_OAUTH_TOKEN": token]
             }
             return [:]

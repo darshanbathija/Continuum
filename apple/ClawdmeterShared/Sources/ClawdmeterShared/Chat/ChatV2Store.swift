@@ -194,8 +194,7 @@ public final class ChatV2Store: ObservableObject {
     }
 
     public func selectAccount(_ wireId: String?, for vendor: ChatVendor) {
-        if let wireId, !wireId.isEmpty,
-           !wireId.hasSuffix("/" + ProviderInstanceId.primaryName) {
+        if let wireId, ProviderInstanceId.isSecondaryWireId(wireId) {
             selectedAccountByVendor[vendor] = wireId
         } else {
             selectedAccountByVendor.removeValue(forKey: vendor)
@@ -226,10 +225,7 @@ public final class ChatV2Store: ObservableObject {
         }
         defaults.set(vendorsToPersist.map(\.rawValue), forKey: Self.defaultsPrefix + "vendors")
         defaults.set(Self.encodeMap(selectedModelByVendor), forKey: Self.defaultsPrefix + "modelByVendor")
-        defaults.set(
-            Dictionary(uniqueKeysWithValues: selectedAccountByVendor.map { ($0.key.rawValue, $0.value) }),
-            forKey: Self.defaultsPrefix + "accountByVendor"
-        )
+        defaults.set(Self.encodeMap(selectedAccountByVendor), forKey: Self.defaultsPrefix + "accountByVendor")
         defaults.set(Self.encodeMap(selectedEffortByVendor.mapValues { $0.rawValue }),
                      forKey: Self.defaultsPrefix + "effortByVendor")
         defaults.set(mode.rawValue, forKey: Self.defaultsPrefix + "mode")

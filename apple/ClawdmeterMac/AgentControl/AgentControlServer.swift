@@ -4638,11 +4638,10 @@ public final class AgentControlServer {
         // pre-v28 clients simply ignore the unknown keys.
         if let modelsByWireId = allModelsByWireId?() {
             for (wireId, model) in modelsByWireId {
-                guard wireId.contains("/"),
-                      !wireId.hasSuffix("/\(ProviderInstanceId.primaryName)"),
+                guard ProviderInstanceId.isSecondaryWireId(wireId),
+                      let parsed = ProviderInstanceId.parseWireId(wireId),
                       let usage = model.usage else { continue }
-                let kind = String(wireId.prefix(while: { $0 != "/" }))
-                guard ProviderRegistry.isVisible(id: kind, capability: .liveUsage) else { continue }
+                guard ProviderRegistry.isVisible(id: parsed.kind, capability: .liveUsage) else { continue }
                 dict[wireId] = usage
             }
         }
@@ -5236,7 +5235,7 @@ public final class AgentControlServer {
             sendResponse(HTTPResponse(
                 status: 422, reason: "Unprocessable Entity",
                 contentType: "application/json",
-                body: Data(#"{"error":"provider_instance_unknown","cta":"Pick a different account — this one was removed on the Mac."}"#.utf8)
+                body: Data(#"{"error":"provider_instance_unknown","cta":"This account isn’t available on the Mac right now — re-authenticate it in Settings, or retry in a moment if the Mac just started."}"#.utf8)
             ), on: connection)
             return
         }
@@ -5863,7 +5862,7 @@ public final class AgentControlServer {
             sendResponse(HTTPResponse(
                 status: 422, reason: "Unprocessable Entity",
                 contentType: "application/json",
-                body: Data(#"{"error":"provider_instance_unknown","cta":"Pick a different account — this one was removed on the Mac."}"#.utf8)
+                body: Data(#"{"error":"provider_instance_unknown","cta":"This account isn’t available on the Mac right now — re-authenticate it in Settings, or retry in a moment if the Mac just started."}"#.utf8)
             ), on: connection)
             return
         }

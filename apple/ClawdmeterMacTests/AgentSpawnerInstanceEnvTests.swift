@@ -17,6 +17,13 @@ import ClawdmeterShared
 @MainActor
 final class AgentSpawnerInstanceEnvTests: XCTestCase {
 
+    override func tearDown() {
+        // The resolver is process-global; restore the unattached default
+        // so later test classes don't inherit this suite's registry.
+        InstanceSpawnEnv.detachForTesting()
+        super.tearDown()
+    }
+
     func testPrimaryNoSecretsIsByteIdenticalToLegacyEnv() {
         let legacy = AgentSpawner.claudePtyEnv(extra: ["FOO": "bar"])
         let viaInstance = AgentSpawner.claudePtyEnv(
@@ -73,6 +80,7 @@ final class AgentSpawnerInstanceEnvTests: XCTestCase {
         let work = ProviderInstanceId(kind: .claude, name: "work", homePathOverride: "/tmp/w")
         await registry.upsert(work)
         InstanceSpawnEnv.attach(registry)
+        InstanceSpawnEnv.setClaudeTokenLookupForTesting { _ in "sk-ant-oat01-test" }
 
         let nilOk = await InstanceSpawnEnv.isSpawnable(wireId: nil, agent: .claude)
         XCTAssertTrue(nilOk)
@@ -91,11 +99,64 @@ final class AgentSpawnerInstanceEnvTests: XCTestCase {
         let registry = ProviderInstanceRegistry()
         await registry.upsert(ProviderInstanceId(kind: .claude, name: "work", homePathOverride: "/tmp/w"))
         InstanceSpawnEnv.attach(registry)
+        InstanceSpawnEnv.setClaudeTokenLookupForTesting { _ in "sk-ant-oat01-test" }
 
         // A claude-registered wireId pinned onto a codex session is a
         // client bug — refuse rather than spawn codex with claude's env.
         let crossKind = await InstanceSpawnEnv.isSpawnable(wireId: "claude/work", agent: .codex)
         XCTAssertFalse(crossKind)
+    }
+
+    /// A registered secondary that CANNOT be config-isolated (empty
+    /// config root, or a kind with no config-dir var) must fail closed —
+    /// the scrub-without-isolation fallthrough would spawn against the
+    /// PRIMARY account's real config under a "work" label. Only
+    /// reachable via a hand-edited provider-instances.json.
+    func testResolverFailsClosedOnNonIsolatableSecondaries() async {
+        let registry = ProviderInstanceRegistry()
+        // Empty config root (record round-trip of configRoot "").
+        await registry.upsert(ProviderInstanceId(kind: .claude, name: "rootless"))
+        // Kind with no config-dir var.
+        await registry.upsert(ProviderInstanceId(kind: .gemini, name: "work", homePathOverride: "/tmp/g"))
+        InstanceSpawnEnv.attach(registry)
+        InstanceSpawnEnv.setClaudeTokenLookupForTesting { _ in "sk-ant-oat01-test" }
+
+        let rootless = await InstanceSpawnEnv.isSpawnable(wireId: "claude/rootless", agent: .claude)
+        XCTAssertFalse(rootless, "secondary with no config root must refuse, not spawn against primary config")
+        let unisolatable = await InstanceSpawnEnv.isSpawnable(wireId: "gemini/work", agent: .gemini)
+        XCTAssertFalse(unisolatable, "kinds without a config-dir var can't host secondaries")
+    }
+
+    /// Red-team fix: a Claude secondary whose Keychain token is missing
+    /// (expired, cleared, never captured) must fail closed. A token-less
+    /// spawn under CLAUDE_CONFIG_DIR falls back to the PRIMARY's per-user
+    /// Keychain login — the wrong subscription billed under a "work" label.
+    func testResolverFailsClosedWhenClaudeSecondaryHasNoToken() async {
+        let registry = ProviderInstanceRegistry()
+        let work = ProviderInstanceId(kind: .claude, name: "work", homePathOverride: "/tmp/w")
+        await registry.upsert(work)
+        InstanceSpawnEnv.attach(registry)
+        InstanceSpawnEnv.setClaudeTokenLookupForTesting { _ in nil }
+
+        let spawnable = await InstanceSpawnEnv.isSpawnable(wireId: "claude/work", agent: .claude)
+        XCTAssertFalse(spawnable, "token-less claude secondary must refuse, not bill the primary")
+
+        // With a token it resolves and carries the credential.
+        InstanceSpawnEnv.setClaudeTokenLookupForTesting { _ in "sk-ant-oat01-work" }
+        guard case .resolved(_, let secrets) = await InstanceSpawnEnv.resolve(wireId: "claude/work", agent: .claude) else {
+            return XCTFail("token-bearing secondary must resolve")
+        }
+        XCTAssertEqual(secrets["CLAUDE_CODE_OAUTH_TOKEN"], "sk-ant-oat01-work")
+    }
+
+    /// Unattached resolver (tests, pre-boot): nil/primary pins resolve;
+    /// secondary pins fail closed — no registry can vouch for them.
+    func testUnattachedResolverFailsClosedOnSecondaries() async {
+        InstanceSpawnEnv.detachForTesting()
+        let nilOk = await InstanceSpawnEnv.isSpawnable(wireId: nil, agent: .claude)
+        XCTAssertTrue(nilOk)
+        let secondary = await InstanceSpawnEnv.isSpawnable(wireId: "claude/work", agent: .claude)
+        XCTAssertFalse(secondary)
     }
 
     func testHarnessEnvOverlaysCodexHomeAndPassesPrimaryThrough() async {

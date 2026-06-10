@@ -9,6 +9,11 @@ import Foundation
 /// Keychain partition (`PastedAnthropicTokenProvider.forInstance`);
 /// Codex auth lives at `<configRoot>/auth.json`, written by the Codex
 /// CLI itself during `codex login`.
+///
+/// `keychainAccessGroupOverride` is intentionally NOT persisted —
+/// multi-account v1 never sets it (partitioning rides on the service-
+/// name suffix within the shared access group). A feature that starts
+/// setting it must add it here or lose the partition on boot replay.
 public struct ProviderInstanceRecord: Codable, Sendable, Equatable {
     public let kind: AgentKind
     public let name: String
@@ -70,8 +75,9 @@ public final class ProviderInstanceStore: @unchecked Sendable {
 
     /// Deterministic per-instance config root:
     /// `<baseDir>/Instances/<kind>/<name>/`. `name` has already passed
-    /// `ProviderInstanceId.isValidName` (no `/`, non-empty) so the path
-    /// cannot escape the base.
+    /// `ProviderInstanceId.isValidName` (non-empty; no `/`, `\`, NUL, or
+    /// whitespace; no leading `.` — which rejects the `..` relative-path
+    /// escape) so the path cannot resolve outside the base.
     public static func configRoot(baseDir: URL, kind: AgentKind, name: String) -> URL {
         baseDir
             .appendingPathComponent("Instances", isDirectory: true)

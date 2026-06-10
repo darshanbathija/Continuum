@@ -407,6 +407,37 @@ private struct ProportionBar: View {
 
 // MARK: - Provider column
 
+/// "resets in 12m" / "usage limit" — shared between the primary and
+/// secondary gauge columns so the em-dash sentinel comparison lives in
+/// exactly one place.
+private func quotaSublabel(for row: TahoeLiveRow) -> String {
+    row.sessionResetIn == "\u{2014}" ? "usage limit" : "resets in \(row.sessionResetIn)"
+}
+
+/// The "Weekly · all models" meter block — shared between the primary
+/// and secondary gauge columns (they must not drift).
+private struct WeeklyMeterRow: View {
+    @Environment(\.tahoe) private var t
+    let row: TahoeLiveRow
+    let provider: TahoeProvider
+    var barHeight: CGFloat = 6
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Weekly · all models")
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg2)
+                Spacer()
+                Text("\(Int(row.weeklyPercent))% · \(row.weeklyResetIn)")
+                    .font(TahoeFont.mono(11.5))
+                    .foregroundStyle(t.fg3)
+            }
+            TahoePillBar(percent: row.weeklyPercent, provider: provider, height: barHeight)
+        }
+    }
+}
+
 /// Multi-account gauge column. Same instrument shape as ProviderColumn
 /// with an account-tagged header; menu-bar + auto-revive controls are
 /// primary-only (secondaries have no status item).
@@ -443,22 +474,11 @@ private struct SecondaryProviderColumn: View {
                 }
                 TahoeQuotaBar(provider: column.provider, percent: row.sessionPercent, size: 220,
                               label: "session",
-                              sublabel: row.sessionResetIn == "\u{2014}" ? "usage limit" : "resets in \(row.sessionResetIn)")
+                              sublabel: quotaSublabel(for: row))
                 .padding(.top, 28)
                 .padding(.bottom, 28)
                 if row.hasWeekly {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Weekly · all models")
-                                .font(TahoeFont.body(11.5))
-                                .foregroundStyle(t.fg2)
-                            Spacer()
-                            Text("\(Int(row.weeklyPercent))% · \(row.weeklyResetIn)")
-                                .font(TahoeFont.mono(11.5))
-                                .foregroundStyle(t.fg3)
-                        }
-                        TahoePillBar(percent: row.weeklyPercent, provider: column.provider, height: 6)
-                    }
+                    WeeklyMeterRow(row: row, provider: column.provider)
                 }
                 Spacer(minLength: 12)
             }
@@ -515,8 +535,8 @@ private struct ProviderColumn: View {
         }
     }
 
-    private var quotaSublabel: String {
-        row.sessionResetIn == "\u{2014}" ? "usage limit" : "resets in \(row.sessionResetIn)"
+    private var quotaSublabelText: String {
+        quotaSublabel(for: row)
     }
 
     var body: some View {
@@ -538,7 +558,7 @@ private struct ProviderColumn: View {
 
                 // QuotaBar
                 TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 220,
-                              label: quotaLabel, sublabel: quotaSublabel)
+                              label: quotaLabel, sublabel: quotaSublabelText)
                 .padding(.top, 28)
                 .padding(.bottom, provider == .cursor ? 18 : 28)
 
@@ -549,18 +569,7 @@ private struct ProviderColumn: View {
 
                 // Weekly row — hidden when provider has no weekly window.
                 if row.hasWeekly {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Weekly · all models")
-                                .font(TahoeFont.body(11.5))
-                                .foregroundStyle(t.fg2)
-                            Spacer()
-                            Text("\(Int(row.weeklyPercent))% · \(row.weeklyResetIn)")
-                                .font(TahoeFont.mono(11.5))
-                                .foregroundStyle(t.fg3)
-                        }
-                        TahoePillBar(percent: row.weeklyPercent, provider: provider, height: 6)
-                    }
+                    WeeklyMeterRow(row: row, provider: provider)
                 }
 
                 Spacer(minLength: 12)
