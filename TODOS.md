@@ -842,3 +842,25 @@ scenarios, or pre-existing system properties and deferred here.
 - [ ] Tree-sitter/SwiftSyntax as a Phase 3 blocker.
 - [ ] Replacing `SessionWorkspaceView` with a new workbench shell.
 - [ ] Shipping PR/check/run UI that is not backed by real local or daemon state.
+
+## v0.32.0 follow-ups — Multi-account subscriptions (2026-06-11)
+
+Deferred from the multi-account v1 plan (`darshanbathija/multi-account-subscriptions`):
+
+- [ ] Same-provider multi-account broadcast — race Claude work vs personal
+      side-by-side. `FrontierModelSlot` gains `providerInstanceId`; per-slot
+      account picker in the broadcast composer.
+- [ ] Per-account historical analytics breakdown — tag `UsageRecord` with the
+      instance, bump the analytics cache schema, add an account segment to the
+      Usage charts. v1 aggregates all accounts into one total.
+- [ ] First-run onboarding (PR #301 sheet) offering "Add another account" inline.
+- [ ] Multi-account for Gemini/Antigravity, Cursor, Grok, OpenCode — each needs
+      its own config-dir isolation story (`ProviderInstanceEnvironment.configDirVariable`
+      returns nil for these kinds today, and the resolver fails closed).
+- [ ] Menu-bar gauges for secondary accounts (extra NSStatusItems + per-account
+      visibility prefs).
+- [ ] Boot-replay ordering: persisted instances re-register in a post-init Task;
+      a paired iOS request in that window gets a retryable 422. Replay before the
+      daemon listener starts (or add a "still booting" error variant).
+- [ ] `claude setup-token` token expiry (~1 yr): surface the re-authenticate state
+      proactively on poller 401 (Settings dot exists; add a notification nudge).

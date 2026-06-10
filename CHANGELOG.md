@@ -4,6 +4,68 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.32.0 build 227] - 2026-06-11 - Multi-account Claude + Codex subscriptions across Settings, Chat, Code, and Usage (`darshanbathija/multi-account-subscriptions`)
+
+### Added
+
+- **Multiple Claude and Codex subscriptions.** Settings → Providers →
+  Claude/Codex rows gain an Accounts list with **Add account…**: Claude
+  signs in a second subscription via `claude setup-token` in an embedded
+  terminal (the printed `sk-ant-oat01` token is captured from PTY output
+  into a per-account Keychain partition; a paste-token field covers CLI
+  output drift — `claude /login` is never used for secondaries because
+  Claude Code's Keychain item is shared per OS user). Codex runs
+  `codex login` under `CODEX_HOME=<account root>` and completes on a
+  parse-valid `auth.json`. Accounts persist in `provider-instances.json`
+  and replay on launch; Remove offers keep-data or delete-data.
+- **Account pickers in Chat and Code (Mac + iOS, wire v28).** When a
+  provider has 2+ accounts, the Mac chat provider row, the Mac code
+  empty-state composer, the iOS model-selector sheet, and the iOS
+  new-session sheet show an account menu. The pick is pinned on the
+  session (`providerInstanceId`) and every spawn/respawn/config-swap/
+  scheduled follow-up stays on that account. New
+  `GET /provider-instances` endpoint (path-free DTOs) behind
+  `providerInstanceListMinimum = 28`; older Macs degrade to
+  primary-only with no picker.
+- **Per-account live gauges.** Mac Usage renders a second gauge row
+  (one rail-meter column per signed-in account, header tagged with the
+  account slug); iOS Live shows an OTHER ACCOUNTS card under the active
+  provider's hero gauge, fed by per-instance `usage[<wireId>]` keys in
+  the `/usage` envelope.
+- **Aggregated analytics across accounts.** `UsageHistoryLoader` ingests
+  every account's `$CLAUDE_CONFIG_DIR/projects` / `$CODEX_HOME/sessions`
+  tree into the existing totals; adding an account pulls its history in
+  on the next refresh without a relaunch.
+
+### Changed
+
+- **Per-account spawn isolation is config-dir based, not HOME-based.**
+  `ProviderInstanceEnvironment.buildEnv` sets `CLAUDE_CONFIG_DIR` /
+  `CODEX_HOME` (plus `CLAUDE_CODE_OAUTH_TOKEN` for Claude secondaries)
+  and leaves `HOME` untouched — a full HOME swap broke git/ssh/gh in
+  worktrees. The primary account's spawn env is byte-identical to
+  pre-multi-account behavior (golden test).
+- **Wrong-account billing fails closed everywhere.** A session pinned to
+  a removed account, a non-isolatable instance (hand-edited store), or a
+  Claude secondary with a missing/expired token refuses to spawn with a
+  clear re-authenticate error — never a silent fallback to the primary
+  subscription. Account names that could escape the per-account data dir
+  (`..`, dotfiles, separators) are rejected at validation.
+- Fixed a latent F3-wire gap where a secondary Codex gauge would have
+  polled the primary's `auth.json`/rollouts: per-instance
+  `CodexTokenProvider(authPath:)` + `CodexSource(sessionsDir:)`.
+- Bumps `MARKETING_VERSION` 0.31.18 → 0.32.0, `CURRENT_PROJECT_VERSION`
+  226 → 227, wire 27 → 28.
+
+### Tests
+
+- 1468 ClawdmeterShared (+26: instance store, login scanners/probes,
+  env matrix, wire v28 DTOs, multi-root analytics, ChatV2 account pins,
+  traversal-name hardening) and new Mac `AgentSpawnerInstanceEnvTests`
+  (11: golden primary env, credential bleed, fail-closed resolver
+  matrix incl. the token-required gate). Mac / iOS / Watch schemes
+  build clean.
+
 ## [0.31.18 build 226] - 2026-06-11 - Fix: analytics cold reparse pegged 3 CPU cores for hours (`darshanbathija/fix-excess-power-drain`)
 
 ### Fixed
