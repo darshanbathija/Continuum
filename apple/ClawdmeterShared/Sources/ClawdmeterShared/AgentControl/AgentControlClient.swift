@@ -1702,7 +1702,8 @@ public final class AgentControlClient: ObservableObject {
         effort: ReasoningEffort? = nil,
         chatVendor: ChatVendor? = nil,
         billingProvider: String? = nil,
-        deepResearch: Bool = false
+        deepResearch: Bool = false,
+        providerInstanceId: String? = nil
     ) async -> AgentSession? {
         let req = CreateChatSessionRequest(
             provider: provider,
@@ -1711,7 +1712,8 @@ public final class AgentControlClient: ObservableObject {
             codexChatBackend: codexBackend,
             chatVendor: chatVendor,
             billingProvider: billingProvider,
-            deepResearch: deepResearch
+            deepResearch: deepResearch,
+            providerInstanceId: providerInstanceId
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -1758,6 +1760,24 @@ public final class AgentControlClient: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             return try decoder.decode(ChatProvidersResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Multi-account (wire v28): `GET /provider-instances` — the
+    /// configured-account list behind the Chat/Code account pickers.
+    /// Callers gate on `supportsProviderInstanceList` first; nil also
+    /// covers older Macs (404) so the picker just stays hidden.
+    public func fetchProviderInstances() async -> ProviderInstanceListResponse? {
+        guard AgentControlWireVersion.supportsProviderInstanceList(serverWireVersion: serverWireVersion) else {
+            return nil
+        }
+        guard let request = makeRequest(path: "/provider-instances", method: "GET") else { return nil }
+        do {
+            let data = try await sendChecked(request)
+            return try JSONDecoder().decode(ProviderInstanceListResponse.self, from: data)
         } catch {
             self.lastError = error.localizedDescription
             return nil

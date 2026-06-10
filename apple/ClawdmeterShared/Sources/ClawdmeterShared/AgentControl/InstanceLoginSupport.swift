@@ -78,6 +78,7 @@ public struct ClaudeSetupTokenScanner: Sendable {
     }
 }
 
+#if os(macOS)
 /// Validates that a Codex instance's `codex login` actually produced a
 /// usable credential file. `auth.json` can exist mid-write (the CLI
 /// creates then fills it), so presence alone is not completion — the
@@ -102,3 +103,4 @@ public enum CodexAuthProbe {
         return false
     }
 }
+#endif

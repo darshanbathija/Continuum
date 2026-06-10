@@ -110,6 +110,11 @@ public final class AgentControlServer {
     private weak var cursorModel: AppModel?
     private weak var grokModel: AppModel?
     private weak var usageHistory: UsageHistoryStore?
+    /// Multi-account (wire v28): every per-instance `AppModel` keyed by
+    /// `ProviderInstanceId.wireId`. Closure (not a captured dict) so the
+    /// `/usage` envelope sees accounts added after attach. nil-tolerant
+    /// like the per-kind refs above.
+    private var allModelsByWireId: (() -> [String: AppModel])?
 
     private var listener: NWListener?
     private var wsListener: NWListener?
@@ -319,6 +324,15 @@ public final class AgentControlServer {
         self.cursorModel = cursor
         self.grokModel = grok
         self.usageHistory = history
+    }
+
+    /// Multi-account (wire v28): closure yielding every per-instance
+    /// `AppModel` keyed by wireId, for the `/usage` envelope's secondary
+    /// account keys. Separate from `attachUsageSources` because
+    /// AppRuntime can only form the self-capturing closure after its
+    /// init completes.
+    public func attachInstanceModelsProvider(_ provider: @escaping () -> [String: AppModel]) {
+        self.allModelsByWireId = provider
     }
 
     // v0.27.0: attachDesignBridge(...) + the design-bridge port/token
@@ -1418,6 +1432,11 @@ public final class AgentControlServer {
         }
         t.register(method: "GET", pattern: "/chat-providers") { [weak self] _, conn, _ in
             await self?.handleGetChatProviders(connection: conn)
+        }
+        // Multi-account (wire v28): configured-account list for the
+        // Chat/Code account pickers.
+        t.register(method: "GET", pattern: "/provider-instances") { [weak self] _, conn, _ in
+            await self?.handleGetProviderInstances(connection: conn)
         }
         t.register(method: "POST", pattern: "/chat-providers/refresh") { [weak self] _, conn, _ in
             await self?.handleRefreshChatProviders(connection: conn)
@@ -4612,6 +4631,21 @@ public final class AgentControlServer {
            let cursor = cursorModel?.usage { dict["cursor"] = cursor }
         if ProviderRegistry.isVisible(id: "grok", capability: .liveUsage),
            let grok = grokModel?.usage { dict["grok"] = grok }
+        // Multi-account (wire v28): per-instance keys for SECONDARY
+        // accounts (`claude/work`, `codex/pro`). Primary data stays
+        // under the legacy kind keys above; the client-side
+        // `usageData(for:)` fallback ladder bridges both shapes, and
+        // pre-v28 clients simply ignore the unknown keys.
+        if let modelsByWireId = allModelsByWireId?() {
+            for (wireId, model) in modelsByWireId {
+                guard wireId.contains("/"),
+                      !wireId.hasSuffix("/\(ProviderInstanceId.primaryName)"),
+                      let usage = model.usage else { continue }
+                let kind = String(wireId.prefix(while: { $0 != "/" }))
+                guard ProviderRegistry.isVisible(id: kind, capability: .liveUsage) else { continue }
+                dict[wireId] = usage
+            }
+        }
         let payload = UsageEnvelope(
             claude: ProviderRegistry.isVisible(id: "claude", capability: .liveUsage) ? claudeModel?.usage : nil,
             codex: ProviderRegistry.isVisible(id: "codex", capability: .liveUsage) ? codexModel?.usage : nil,
@@ -4622,6 +4656,29 @@ public final class AgentControlServer {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let body = try? encoder.encode(payload) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// Multi-account (wire v28): the configured-account list behind the
+    /// Chat/Code account pickers. Path-free DTOs — configRoots never
+    /// cross the wire. Unattached resolver (tests, cold boot) returns
+    /// just-the-primaries via a throwaway registry, so the picker shows
+    /// only Default rows rather than erroring.
+    private func handleGetProviderInstances(connection: NWConnection) async {
+        let registry = InstanceSpawnEnv.registry ?? ProviderInstanceRegistry()
+        let all = await registry.allInstances()
+        // Only kinds that can actually be config-isolated are listed —
+        // a "gemini/__primary__" row in an account picker is noise.
+        let listable = all.filter {
+            ProviderInstanceEnvironment.configDirVariable(for: $0.kind) != nil
+        }
+        let payload = ProviderInstanceListResponse(
+            instances: listable.map(ProviderInstanceDTO.init(instance:))
+        )
+        if let body = try? JSONEncoder().encode(payload) {
             sendResponse(.ok(contentType: "application/json", body: body), on: connection)
         } else {
             sendResponse(.internalError, on: connection)

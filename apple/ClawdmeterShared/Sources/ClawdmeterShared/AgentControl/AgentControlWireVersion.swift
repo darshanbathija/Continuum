@@ -17,7 +17,7 @@ public enum AgentControlWireVersion {
     /// Current wire version. Bump when adding a new WS op, REST endpoint, or
     /// DTO that older peers must explicitly gate. Historical bump notes live
     /// in docs/protocol-wire-version-history.md.
-    public static let current: Int = 27
+    public static let current: Int = 28
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -155,6 +155,14 @@ public enum AgentControlWireVersion {
     /// scrubbing) never strands a too-old client in a half-configured
     /// multi-instance state.
     public static let providerInstanceMinimum: Int = 20
+
+    /// Minimum wire version that exposes `GET /provider-instances` (the
+    /// configured-account list behind the Chat/Code account pickers) and
+    /// honors `providerInstanceId` on `POST /chat-sessions`. Multi-account
+    /// v1 (2026-06-11). iOS hides the account picker entirely when the
+    /// paired Mac is below this — sessions fall back to today's
+    /// primary-only behavior.
+    public static let providerInstanceListMinimum: Int = 28
 
     /// Minimum wire version that supports the chat shell/detail split on
     /// `chat-subscribe` (A10, 2026-05-27). When the client subscribes with
@@ -400,6 +408,14 @@ public enum AgentControlWireVersion {
     public static func supportsProviderInstance(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= providerInstanceMinimum
+    }
+
+    /// Whether the paired Mac exposes `GET /provider-instances` + chat
+    /// account pinning. Gates the iOS/Mac account pickers (multi-account
+    /// v1). Older Macs degrade to primary-only silently.
+    public static func supportsProviderInstanceList(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= providerInstanceListMinimum
     }
 
     /// Whether the paired Mac supports the chat shell/detail split on the

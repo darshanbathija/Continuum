@@ -1992,6 +1992,7 @@ public final class SessionsModel: ObservableObject {
         mode: SessionMode,
         model: String?,
         effort: ReasoningEffort?,
+        providerInstanceId: String? = nil,
         existingWorkspacePath: String?,
         sessionId: UUID?
     ) async throws -> AgentSession {
@@ -2011,6 +2012,7 @@ public final class SessionsModel: ObservableObject {
             goal: goal,
             useWorktree: mode == .worktree,
             effort: effort,
+            providerInstanceId: providerInstanceId,
             existingWorkspacePath: existingWorkspacePath,
             sessionId: sessionId
         )
@@ -2038,6 +2040,9 @@ public final class SessionsModel: ObservableObject {
         // actually reach the spawned CLI. Caller is responsible for the
         // trust-gate UX (AutopilotState.trustRepo) before passing true.
         autopilot: Bool = false,
+        // Multi-account (wire v28): pin the spawn to a configured account
+        // (`ProviderInstanceId.wireId`). nil = primary.
+        providerInstanceId: String? = nil,
         pinnedJSONLURL: URL? = nil,
         // v0.8.1 agy-migration: full first-prompt text for agentapi
         // spawn. Direct PTY sessions receive the prompt via the post-spawn
@@ -2077,7 +2082,8 @@ public final class SessionsModel: ObservableObject {
         _ = initialMessage
         return try await spawnHarnessSessionViaDaemon(
             repoPath: repoPath, agent: agent, planMode: planMode, goal: goal, mode: mode,
-            model: model, effort: effort, existingWorkspacePath: nil, sessionId: nil
+            model: model, effort: effort, providerInstanceId: providerInstanceId,
+            existingWorkspacePath: nil, sessionId: nil
         )
     }
 
@@ -2096,6 +2102,7 @@ public final class SessionsModel: ObservableObject {
         effort: ReasoningEffort? = nil,
         acceptEdits: Bool = false,
         autopilot: Bool = false,
+        providerInstanceId: String? = nil,
         initialMessage: String? = nil,
         inheritedContextSourceIds: [UUID] = []
     ) async throws -> AgentSession {
@@ -2140,7 +2147,8 @@ public final class SessionsModel: ObservableObject {
             }
             let session = try await spawnHarnessSessionViaDaemon(
                 repoPath: repoPath, agent: agent, planMode: planMode, goal: goal, mode: mode,
-                model: model, effort: effort, existingWorkspacePath: workspacePath, sessionId: nil
+                model: model, effort: effort, providerInstanceId: providerInstanceId,
+                existingWorkspacePath: workspacePath, sessionId: nil
             )
             try await registry.setInheritedContextSources(sessionId: session.id, sourceIds: inheritedContextSourceIds)
             return registry.session(id: session.id) ?? session

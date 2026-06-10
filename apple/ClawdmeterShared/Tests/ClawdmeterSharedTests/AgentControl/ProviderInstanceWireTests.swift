@@ -571,4 +571,40 @@ final class ProviderInstanceWireTests: XCTestCase {
         let decoded = try JSONDecoder().decode(CreateChatSessionRequest.self, from: data)
         XCTAssertEqual(decoded.providerInstanceId, "claude/work")
     }
+
+    // MARK: - Wire v28 instance list
+
+    func test_providerInstanceDTO_mapping() {
+        let primary = ProviderInstanceDTO(instance: .primary(kind: .claude))
+        XCTAssertTrue(primary.isPrimary)
+        XCTAssertEqual(primary.displayName, "Default")
+        XCTAssertEqual(primary.wireId, "claude/__primary__")
+
+        let work = ProviderInstanceDTO(
+            instance: ProviderInstanceId(kind: .claude, name: "work", homePathOverride: "/secret/path")
+        )
+        XCTAssertFalse(work.isPrimary)
+        XCTAssertEqual(work.displayName, "work")
+        // The config root must never cross the wire.
+        let encoded = String(data: (try? JSONEncoder().encode(work)) ?? Data(), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("/secret/path"))
+    }
+
+    func test_providerInstanceListResponse_filtersByKind() {
+        let response = ProviderInstanceListResponse(instances: [
+            ProviderInstanceDTO(instance: .primary(kind: .claude)),
+            ProviderInstanceDTO(instance: ProviderInstanceId(kind: .claude, name: "work")),
+            ProviderInstanceDTO(instance: .primary(kind: .codex)),
+        ])
+        XCTAssertEqual(response.instances(for: .claude).count, 2)
+        XCTAssertEqual(response.instances(for: .codex).count, 1)
+    }
+
+    func test_capabilityGate_supportsProviderInstanceList() {
+        XCTAssertFalse(AgentControlWireVersion.supportsProviderInstanceList(serverWireVersion: 27))
+        XCTAssertFalse(AgentControlWireVersion.supportsProviderInstanceList(serverWireVersion: nil))
+        XCTAssertTrue(AgentControlWireVersion.supportsProviderInstanceList(serverWireVersion: 28))
+        XCTAssertEqual(AgentControlWireVersion.providerInstanceListMinimum, 28)
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 28)
+    }
 }

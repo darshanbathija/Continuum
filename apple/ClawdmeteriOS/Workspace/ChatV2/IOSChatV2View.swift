@@ -39,6 +39,7 @@ private struct ChatBody: View {
     @ObservedObject var outbox: MobileCommandOutbox
     @Binding var openTarget: ChatOpenTarget?
     @Binding var historyPresented: Bool
+    @State private var providerInstances: ProviderInstanceListResponse?
     @State private var providerMatrix: ChatProvidersResponse?
 
     var body: some View {
@@ -60,7 +61,8 @@ private struct ChatBody: View {
                     openTarget: $openTarget,
                     client: client,
                     outbox: outbox,
-                    providerMatrix: providerMatrix
+                    providerMatrix: providerMatrix,
+                    providerInstances: providerInstances
                 )
                 .padding(.horizontal, 14)
                 .padding(.bottom, 8)
@@ -84,6 +86,19 @@ private struct ChatBody: View {
             providerMatrix = matrix
             chatStore.applyEnabledVendorScope(ChatV2Store.enabledChatVendors(from: matrix?.enabledProviderIDs))
             chatStore.applyProviderDefaults(client.providerDefaults, catalog: client.modelCatalog)
+            // Multi-account (wire v28): account list for the model
+            // selector; also drops pins to accounts removed on the Mac
+            // so a sticky pick can't 422 every create.
+            providerInstances = await client.fetchProviderInstances()
+            if let instances = providerInstances {
+                for vendor in ChatVendor.allCases {
+                    let available = instances.instances(for: vendor.backingProvider)
+                    if let pinned = chatStore.selectedAccountByVendor[vendor],
+                       !available.contains(where: { $0.wireId == pinned }) {
+                        chatStore.selectAccount(nil, for: vendor)
+                    }
+                }
+            }
         }
         .onChange(of: client.providerDefaults) { _, defaults in
             chatStore.applyProviderDefaults(defaults, catalog: client.modelCatalog)
@@ -733,6 +748,8 @@ private struct Composer: View {
     @ObservedObject var client: AgentControlClient
     @ObservedObject var outbox: MobileCommandOutbox
     let providerMatrix: ChatProvidersResponse?
+    /// Multi-account (wire v28): nil on older Macs — account picker hidden.
+    let providerInstances: ProviderInstanceListResponse?
     @State private var fileImporterPresented = false
     @State private var modelPickerPresented = false
     @State private var modelPickerVendor: ChatVendor = .chatgpt
@@ -792,7 +809,8 @@ private struct Composer: View {
                 initialVendor: modelPickerVendor,
                 store: store,
                 client: client,
-                providerMatrix: providerMatrix
+                providerMatrix: providerMatrix,
+                providerInstances: providerInstances
             )
         }
     }
@@ -1007,7 +1025,11 @@ private struct Composer: View {
                         effort: store.effort(for: vendor, catalog: client.modelCatalog),
                         chatVendor: vendor,
                         billingProvider: vendor.billingProvider,
-                        deepResearch: store.deepResearch
+                        deepResearch: store.deepResearch,
+                        providerInstanceId: store.accountWireId(
+                            for: vendor,
+                            available: providerInstances?.instances(for: vendor.backingProvider)
+                        )
                     ) else {
                         return client.lastError ?? "Couldn't create chat."
                     }
@@ -1155,17 +1177,20 @@ private struct IOSChatModelSelectorSheet: View {
     @ObservedObject var store: ChatV2Store
     @ObservedObject var client: AgentControlClient
     @State private var providerMatrix: ChatProvidersResponse?
+    private let providerInstances: ProviderInstanceListResponse?
 
     init(
         initialVendor: ChatVendor,
         store: ChatV2Store,
         client: AgentControlClient,
-        providerMatrix: ChatProvidersResponse?
+        providerMatrix: ChatProvidersResponse?,
+        providerInstances: ProviderInstanceListResponse? = nil
     ) {
         self._selectedVendor = State(initialValue: initialVendor)
         self.store = store
         self.client = client
         self._providerMatrix = State(initialValue: providerMatrix)
+        self.providerInstances = providerInstances
     }
 
     var body: some View {
@@ -1175,6 +1200,7 @@ private struct IOSChatModelSelectorSheet: View {
                 selectionSection
                 modelSection
                 effortSection
+                accountSection
             }
             .navigationTitle("Model selector")
             .navigationBarTitleDisplayMode(.inline)
@@ -1315,6 +1341,39 @@ private struct IOSChatModelSelectorSheet: View {
                                     Image(systemName: "checkmark")
                                         .foregroundStyle(t.accent)
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Multi-account: which configured account runs the chat. Rendered
+    /// only when the selected vendor's backing kind has ≥2 accounts on
+    /// the paired Mac (wire ≥ 28).
+    @ViewBuilder
+    private var accountSection: some View {
+        if let accounts = providerInstances?.instances(for: selectedVendor.backingProvider),
+           accounts.count >= 2 {
+            let currentWireId = store.accountWireId(for: selectedVendor, available: accounts)
+            Section("Account - \(selectedVendor.displayName)") {
+                ForEach(accounts) { account in
+                    Button {
+                        store.selectAccount(account.isPrimary ? nil : account.wireId, for: selectedVendor)
+                    } label: {
+                        HStack {
+                            Text(account.displayName)
+                                .font(account.isPrimary ? TahoeFont.body(13) : TahoeFont.mono(12.5))
+                                .foregroundStyle(t.fg)
+                            Spacer()
+                            let isCurrent = account.isPrimary
+                                ? currentWireId == nil
+                                : account.wireId == currentWireId
+                            if isCurrent {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(t.accent)
                             }
                         }
                     }

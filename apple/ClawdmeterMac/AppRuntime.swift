@@ -558,6 +558,14 @@ final class AppRuntime: ObservableObject {
 
         bootstrapProviderRuntimes()
 
+        // Multi-account: secondary accounts' gauges over the wire. Set
+        // AFTER init completes — an escaping self-capture inside init
+        // trips definitive-initialization. Weak: the server outliving
+        // the runtime just drops the per-instance keys.
+        agentControlServer.attachInstanceModelsProvider { [weak self] in
+            self?.allAppModelsByWireId ?? [:]
+        }
+
         // Multi-account boot replay: reconstitute persisted non-primary
         // instances (registry upsert + per-instance AppModel) without
         // re-persisting. Async because the registry is an actor; the
