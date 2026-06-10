@@ -386,6 +386,20 @@ public final class SessionChatStore {
         Task { [staging] in await staging.setCurrentTurnState(state) }
     }
 
+    /// True when a `type:"user"` JSONL frame is the interactive-Claude ESC
+    /// abort marker ("[Request interrupted by user]") rather than a genuine new
+    /// user prompt. The text may arrive as a bare string or inside `text`
+    /// content blocks (the abort frame can ride alongside a tool_result block).
+    nonisolated static func isInterruptMarkerUserLine(_ json: [String: Any]) -> Bool {
+        guard let message = json["message"] as? [String: Any] else { return false }
+        func hasMarker(_ s: String) -> Bool { s.contains("Request interrupted") }
+        if let content = message["content"] as? String { return hasMarker(content) }
+        if let blocks = message["content"] as? [[String: Any]] {
+            return blocks.contains { ($0["text"] as? String).map(hasMarker) ?? false }
+        }
+        return false
+    }
+
     // MARK: - A13 optimistic pending message API
 
     /// A13 — inject an optimistic pending message slot so the composer
@@ -816,6 +830,14 @@ public final class SessionChatStore {
                     // assistant pauses mid-turn for a tool call and
                     // continues after the tool result.
                     let stopReason = (json["message"] as? [String: Any])?["stop_reason"] as? String
+                    // Interactive Claude appends the ESC abort as a `type:"user"`
+                    // frame whose text is "[Request interrupted by user]". Compute
+                    // this synchronously (json isn't Sendable) so the user-line
+                    // branch can treat it as a turn END (.interrupted), not the
+                    // start of a new turn — otherwise an aborted turn flips the
+                    // "thinking…" indicator back ON with no terminal line to ever
+                    // clear it (Stop would visibly flicker, then stick streaming).
+                    let isInterruptMarker = type == "user" && Self.isInterruptMarkerUserLine(json)
                     Task { @MainActor [weak self] in
                         guard let self else { return }
                         guard self.parseGeneration == generation else { return }
@@ -830,7 +852,7 @@ public final class SessionChatStore {
                                 self.setCurrentTurnState(.streaming)
                             }
                         case "user":
-                            self.setCurrentTurnState(.streaming)
+                            self.setCurrentTurnState(isInterruptMarker ? .interrupted : .streaming)
                         default:
                             break
                         }

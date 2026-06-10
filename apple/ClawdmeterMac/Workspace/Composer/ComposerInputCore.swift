@@ -589,11 +589,7 @@ struct ComposerInputCore: View {
                 )
                 .layoutPriority(1)
             }
-            attachButton
-            historyButton
-            savedPromptsMenu
-            stripANSIPasteButton
-            expandEditorButton
+            composerToolsMenu
             micButton
             queueFollowUpButton
 
@@ -762,93 +758,77 @@ struct ComposerInputCore: View {
         ProviderEnablement.enabledChatVendors()
     }
 
-    private var attachButton: some View {
-        Button(action: { isShowingFileImporter = true }) {
-            Image(systemName: "paperclip")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-        }
-        .buttonStyle(PressableButtonStyle())
-        .help("Attach a file (drag-drop, paste, or click)")
-        // The matching identifier for `code.composer.model-effort` /
-        // `permission-mode` / `context-usage` — added in PR #185 with the
-        // UI test that pins ⌘U → attach. The identifier itself was
-        // missing in #185's merge, so `testCodeTabComposerControlsExposeShortcutTargets`
-        // failed on this line.
-        .accessibilityIdentifier("code.composer.attach")
-    }
-
     // codeContextChip was deleted in v0.30: PermissionModeChip now does
     // both jobs (click = plan↔code flip via `Menu(primaryAction:)`,
     // long-press = full ask/accept/plan/bypass picker). Two chips for
     // overlapping behavior was the wrong call. Type `@` to open the
     // mention picker (the chip's old "attach code context" entry point).
 
-    private var historyButton: some View {
-        Button(action: { showingPromptHistory = true }) {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-        }
-        .buttonStyle(PressableButtonStyle())
-        .keyboardShortcut(.upArrow, modifiers: [.option])
-        .help("Prompt history (⌥↑)")
-        .accessibilityLabel("Open prompt history")
-        .accessibilityIdentifier("code.composer.history")
-    }
-
-    private var savedPromptsMenu: some View {
+    /// Claude-Desktop-style "+" overflow menu. Consolidates the former
+    /// attach / history / saved-prompts / strip-ANSI / expand icon cluster
+    /// into one bottom-left button, so the footer reads as `+  mic  …  send`.
+    /// Each row keeps its old action + accessibilityIdentifier (UI tests pin
+    /// them); ⌥↑ stays on the history row so the shortcut still works. ⌘U
+    /// attach arrives via the `.composerAttach` notification, independent of
+    /// any button, so it's unaffected. Mic stays a standalone button beside
+    /// the "+" (matching the Claude-Desktop +/mic layout).
+    private var composerToolsMenu: some View {
         Menu {
-            if presentationStore.snapshot.savedPrompts.isEmpty {
-                Text("No saved prompts")
-            } else {
-                ForEach(presentationStore.snapshot.savedPrompts) { prompt in
-                    Button(prompt.title) { store.text = prompt.body }
-                        .accessibilityIdentifier(Self.savedPromptRowIdentifier(for: prompt.id))
+            Button { isShowingFileImporter = true } label: {
+                Label("Attach File…", systemImage: "paperclip")
+            }
+            .accessibilityIdentifier("code.composer.attach")
+
+            Button { showingPromptHistory = true } label: {
+                Label("Prompt History", systemImage: "clock.arrow.circlepath")
+            }
+            .keyboardShortcut(.upArrow, modifiers: [.option])
+            .accessibilityIdentifier("code.composer.history")
+
+            Menu {
+                if presentationStore.snapshot.savedPrompts.isEmpty {
+                    Text("No saved prompts")
+                } else {
+                    ForEach(presentationStore.snapshot.savedPrompts) { prompt in
+                        Button(prompt.title) { store.text = prompt.body }
+                            .accessibilityIdentifier(Self.savedPromptRowIdentifier(for: prompt.id))
+                    }
                 }
+                Divider()
+                Button("Save Current Prompt…") {
+                    savePromptTitle = ClawdmeterTextUtilities.collapsedWhitespacePreview(store.text, limit: 48)
+                    showingExpandedEditor = true
+                }
+                .disabled(store.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("code.composer.saved-prompts.save-current")
+            } label: {
+                Label("Saved Prompts", systemImage: "bookmark")
             }
+            .accessibilityIdentifier("code.composer.saved-prompts")
+
             Divider()
-            Button("Save Current Prompt…") {
-                savePromptTitle = ClawdmeterTextUtilities.collapsedWhitespacePreview(store.text, limit: 48)
-                showingExpandedEditor = true
+
+            Button { pasteStrippingANSI() } label: {
+                Label("Paste Without ANSI Codes", systemImage: "wand.and.stars")
             }
-            .disabled(store.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityIdentifier("code.composer.saved-prompts.save-current")
+            .accessibilityIdentifier("code.composer.paste-ansi")
+
+            Button { showingExpandedEditor = true } label: {
+                Label("Expand Editor", systemImage: "arrow.up.left.and.arrow.down.right")
+            }
+            .accessibilityIdentifier("code.composer.expand")
         } label: {
-            Image(systemName: "bookmark")
-                .font(.system(size: 13, weight: .semibold))
+            Image(systemName: "plus")
+                .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.secondary)
+                .frame(width: 26, height: 26)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Saved prompts")
-        .accessibilityLabel("Saved prompts")
-        .accessibilityIdentifier("code.composer.saved-prompts")
-    }
-
-    private var stripANSIPasteButton: some View {
-        Button(action: pasteStrippingANSI) {
-            Image(systemName: "wand.and.stars")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-        }
-        .buttonStyle(PressableButtonStyle())
-        .help("Paste terminal text without ANSI color codes")
-        .accessibilityLabel("Paste stripped terminal text")
-        .accessibilityIdentifier("code.composer.paste-ansi")
-    }
-
-    private var expandEditorButton: some View {
-        Button(action: { showingExpandedEditor = true }) {
-            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-        }
-        .buttonStyle(PressableButtonStyle())
-        .help("Open expanded editor")
-        .accessibilityLabel("Open expanded composer editor")
-        .accessibilityIdentifier("code.composer.expand")
+        .help("Attach, history, saved prompts, and more")
+        .accessibilityLabel("Composer tools")
+        .accessibilityIdentifier("code.composer.tools-menu")
     }
 
     private var micButton: some View {
@@ -890,17 +870,43 @@ struct ComposerInputCore: View {
         .frame(maxHeight: 36)
     }
 
+    /// The multi-line composer field. Extracted from `inputRow` so the Swift
+    /// type-checker resolves each expression in reasonable time (the inline
+    /// chain + onKeyPress closure tripped the "unable to type-check" limit).
+    private var composerTextField: some View {
+        TextField(textFieldPlaceholder, text: $store.text, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(TahoeFont.body(14))
+            .padding(.horizontal, 0)
+            .padding(.vertical, 2)
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .topLeading)
+            .lineLimit(2...18)
+            .accessibilityIdentifier("code.composer.input")
+            .onKeyPress(.return, phases: .down) { handleReturnKey($0) }
+    }
+
+    /// Enter sends; Shift+Return inserts a newline. Fall through (.ignored) when
+    /// a completion popover owns Return, mid-IME-composition (commit the CJK
+    /// candidate to the field instead of sending), or when Shift is held (the
+    /// field inserts a newline at the cursor).
+    private func handleReturnKey(_ press: KeyPress) -> KeyPress.Result {
+        if showingPalette || showingMentions { return .ignored }
+        // IME guard: when the focused field editor has marked (mid-composition)
+        // text, let Return commit the CJK candidate instead of sending.
+        if (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true { return .ignored }
+        if press.modifiers.contains(.shift) { return .ignored }
+        // ⌘↩ (send button) and ⌥↩ (queue follow-up) are AppKit key-equivalents
+        // resolved before this handler; never re-interpret a modified Return as
+        // a bare send (belt-and-suspenders against a double-send).
+        if press.modifiers.contains(.command) || press.modifiers.contains(.option) { return .ignored }
+        requestProgrammaticSend()
+        return .handled
+    }
+
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
             ZStack(alignment: .topLeading) {
-                TextField(textFieldPlaceholder, text: $store.text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(TahoeFont.body(14))
-                    .padding(.horizontal, 0)
-                    .padding(.vertical, 2)
-                    .frame(maxWidth: .infinity, minHeight: 52, alignment: .topLeading)
-                    .lineLimit(2...18)
-                    .accessibilityIdentifier("code.composer.input")
+                composerTextField
             }
             .background(Color.clear, in: RoundedRectangle(cornerRadius: 6))
             .overlay(
@@ -959,7 +965,7 @@ struct ComposerInputCore: View {
             .buttonStyle(PressableButtonStyle())
             .keyboardShortcut(.return, modifiers: [.command])
             .disabled(!action.isEnabled)
-            .help(planApprovalMode ? "Approve or refine the plan above" : "Send (⌘↩)")
+            .help(planApprovalMode ? "Approve or refine the plan above" : "Send (↩ · ⇧↩ for newline)")
             .accessibilityLabel(action.accessibilityLabel)
             .accessibilityIdentifier(action.accessibilityIdentifier)
         }
@@ -1146,9 +1152,9 @@ struct ComposerInputCore: View {
         switch store.modeKind {
         case .bound:
             if sessionIsRunning && onQueue != nil {
-                return "Queue a follow-up while this turn runs   (⌥↩)"
+                return "Queue a follow-up while this turn runs   (↩)"
             }
-            return "Continue the session here   (⌘↩ to send)"
+            return "Continue the session here   (↩ to send · ⇧↩ for newline)"
         case .emptyState:
             return "Do anything"
         }
