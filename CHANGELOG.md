@@ -4,6 +4,25 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.12 build 220] - 2026-06-10 - Code-tab live verification: OpenCode live SSE fixed, Cursor account wiring, Fable 5 models + pricing (`fix/code-tab-live-verification-pass`)
+
+### Added
+
+- **Claude Fable 5 in the Chat and Code model pickers.** `claude-fable-5-1m` ("Fable 5 (1M)") and `claude-fable-5` join the bundled Claude catalog latest-first (Fable 5 1M is the new catalog default). The spawner's existing `-1m` → `[1m]` translation covers the long-context CLI form.
+- **Fable 5 pricing in Usage.** Launch rates ($10/M input, $50/M output, $12.50/M 5m cache write, $20/M 1h write, $1/M cache read; flat across the 1M window) added to `pricing.json` AND `pricing-overrides.json` — the overrides file is what survives the PricingUpdater daily runtime cache, which otherwise shadowed the bundled snapshot and priced all Fable usage at $0. Both the bare id and the literal `claude-fable-5[1m]` JSONL model string resolve via prefix matching (unit-pinned). Analytics cache bumped v17 → v18 so previously-$0 cached Fable days re-parse and re-price.
+
+### Fixed
+
+- **OpenCode live replies never rendered — four stacked transport/protocol bugs.** The first authorized live-spend run proved the SSE consume loop had never delivered a live event: the adapter only spoke the retired `message.added` vocabulary (opencode ≥1.16 streams `message.updated`/`message.part.*`/`session.idle`); `/event` is directory-scoped in 1.16 so the single unscoped stream saw nothing; URLSession's default gzip `Accept-Encoding` made the streaming decompressor buffer events forever; and `AsyncBytes.lines` swallows the blank-line SSE frame terminators the parser dispatched on. Fixed with full 1.16 turn projection (role-gated part buffers, completion-time tokens/model, idle safety net), one scoped event stream per session directory (LRU cap + envelope-id dedupe), `Accept-Encoding: identity`, and dispatch-on-complete-JSON. `testOpenCodeLiveDrive` now passes live in 6s.
+- **Center-header controls lost their accessibility identifiers** (density, More-actions, checkpoint flows): a container-level `code.center.header` identifier stomped every child id. Fixed with accessibility containment; 7 UI tests restored.
+- **Repo-settings "New session here" silently became an instant quick-spawn** after the workspace-key canonicalization fix removed its accidental launcher fallback. The gear-menu row is now explicitly wired to the launcher; instant quick-spawn stays on the adjacent `+`.
+
+### Verified
+
+- All six Code providers now have **live end-to-end passes**: Codex, Gemini/Antigravity, Grok, OpenCode (after the fixes), Cursor (after aligning the `cursor-agent` CLI login with the upgraded IDE account — the CLI and IDE keep independent sessions, and the quota chip reads the IDE token while spawns bill the CLI account), plus daemon-route smokes including the live Claude worktree spawn.
+- Full `CodeTabHoverShortcutUITests` class (40 tests) green; ClawdmeterShared 1424/0; evidence in `docs/CODE_TAB_AUDIT.md` and `docs/CODE_TAB_PROVIDER_MATRIX.md`.
+- Bumps `CURRENT_PROJECT_VERSION` 219 → 220.
+
 ## [0.31.11 build 219] - 2026-06-08 - App Store privacy consent gate (5.1.1(i)/5.1.2(i)) + export-compliance (`fix/appstore-privacy-consent`)
 
 ### Fixed
