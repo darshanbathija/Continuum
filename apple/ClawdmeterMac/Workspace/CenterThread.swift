@@ -1222,6 +1222,14 @@ struct CenterThread: View {
     }
 
     private func performInterrupt() async {
+        // Optimistically clear the streaming/"thinking…" indicator on the
+        // UI-side store. For direct-PTY Claude Code sessions the UI observes a
+        // SEPARATE SessionChatStore from the daemon's — the daemon's
+        // handleInterrupt only flips .interrupted on its own store, and an ESC
+        // abort writes no terminal JSONL line, so the UI store would otherwise
+        // stay .streaming forever. Idempotent + a harmless no-op for
+        // shared-store (.chat / live-harness) sessions the daemon already flips.
+        model.chatStore(for: session)?.setCurrentTurnState(.interrupted)
         guard let runtime = AppDelegate.runtime,
               let port = runtime.agentControlServer.boundPort
         else {

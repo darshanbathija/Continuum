@@ -104,18 +104,35 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             row.click()
         }
 
-        XCTAssertTrue(element("code.composer.attach").waitForExistence(timeout: 10), "Composer attachment control should be addressable for Command-U.")
         XCTAssertTrue(element("code.composer.model-effort").waitForExistence(timeout: 10), "Model/effort selector should expose a stable hover/shortcut target.")
         XCTAssertTrue(element("code.composer.permission-mode").waitForExistence(timeout: 10), "Plan/permission selector should expose a stable hover/shortcut target.")
         XCTAssertTrue(element("code.composer.context-usage").waitForExistence(timeout: 10), "Context display should expose a stable hover/shortcut target.")
-        XCTAssertTrue(element("code.composer.history").waitForExistence(timeout: 10), "Prompt history should expose a stable Code composer target.")
-        XCTAssertTrue(element("code.composer.saved-prompts").waitForExistence(timeout: 10), "Saved prompts should expose a stable Code composer target.")
-        XCTAssertTrue(element("code.composer.paste-ansi").waitForExistence(timeout: 10), "ANSI-stripping paste should expose a stable Code composer target.")
-        XCTAssertTrue(element("code.composer.expand").waitForExistence(timeout: 10), "Expanded composer should expose a stable Code composer target.")
         XCTAssertTrue(element("code.composer.dictation").waitForExistence(timeout: 10), "Dictation should expose a stable Code composer target.")
         XCTAssertTrue(element("code.composer.send").waitForExistence(timeout: 10), "Send should be an icon-only bottom-right action with a stable target.")
         XCTAssertTrue(element("code.workspace.new-tab").waitForExistence(timeout: 10), "Workspace tab strip should expose the new-tab menu.")
 
+        // attach / history / saved-prompts / paste-ansi / expand now live behind
+        // the composer "+" tools menu (Claude-Desktop style). Open it and assert
+        // each row is still addressable by its stable identifier.
+        openComposerToolsMenu()
+        for (id, title) in [
+            ("code.composer.attach", "Attach File…"),
+            ("code.composer.history", "Prompt History"),
+            ("code.composer.saved-prompts", "Saved Prompts"),
+            ("code.composer.paste-ansi", "Paste Without ANSI Codes"),
+            ("code.composer.expand", "Expand Editor"),
+        ] {
+            // Hedge identifier + title — SwiftUI Menu-item identifier exposure
+            // in XCUITest is timing/version-sensitive (file convention).
+            XCTAssertTrue(
+                waitForAny([element(id), app.menuItems[title]], timeout: 5),
+                "Composer tools menu should expose \(id)."
+            )
+        }
+        app.typeKey(.escape, modifierFlags: [])
+
+        // ⌘U attach still works — it's driven by the menu command notification,
+        // not the (now-relocated) attach button.
         app.typeKey("u", modifierFlags: .command)
         app.typeKey(.escape, modifierFlags: [])
     }
@@ -147,6 +164,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
         row.click()
 
+        openComposerToolsMenu()
         element("code.composer.history").click()
         XCTAssertTrue(element("code.prompt-history.sheet").waitForExistence(timeout: 5), "Prompt history should open a rendered sheet.")
 
@@ -164,6 +182,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
 
         XCTAssertTrue(waitForComposerInput(containing: Self.seededHistoryPrompt, timeout: 5), "Clicking a history row should insert it into the Code composer.")
 
+        openComposerToolsMenu()
         element("code.composer.history").click()
         let savedRow = element("code.prompt-history.saved.\(Self.seededSavedPromptId)")
         XCTAssertTrue(savedRow.waitForExistence(timeout: 5), "Prompt history should render seeded saved-prompt rows with stable IDs.")
@@ -198,6 +217,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         input.click()
         app.typeText("Draft body from expanded editor")
 
+        openComposerToolsMenu()
         element("code.composer.expand").click()
         XCTAssertTrue(element("code.composer.expanded-editor").waitForExistence(timeout: 5), "Expanded editor should open as a rendered sheet.")
 
@@ -246,7 +266,10 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         app.typeText("Temporary overwritten text")
         XCTAssertTrue(waitForComposerInput(containing: "Temporary overwritten text", timeout: 5), "The composer should accept replacement text before menu reuse.")
 
-        element("code.composer.saved-prompts").click()
+        openComposerToolsMenu()
+        element("code.composer.saved-prompts").click()   // opens the Saved Prompts submenu
+        XCTAssertTrue(app.menuItems["Saved UI Prompt"].waitForExistence(timeout: 5),
+                      "Saved Prompts submenu should open and expose the saved row.")
         clickMenuItem(identifier: "unused.saved.ui.prompt", title: "Saved UI Prompt")
         XCTAssertTrue(
             waitForComposerInput(containing: "Draft body from expanded editor with saved prompt details", timeout: 5),
@@ -1703,6 +1726,17 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(filter.waitForExistence(timeout: 10), "Code sidebar filter menu should be addressable.", file: file, line: line)
         filter.click()
         clickMenuItem(identifier: "code.sidebar.filter.status.archived", title: "Archived", file: file, line: line)
+    }
+
+    /// Open the composer "+" tools menu (attach / history / saved-prompts /
+    /// paste-ansi / expand now live behind it, Claude-Desktop style).
+    private func openComposerToolsMenu(
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let menu = element("code.composer.tools-menu")
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "Composer should expose the + tools menu.", file: file, line: line)
+        menu.click()
     }
 
     private func openCenterHeaderMoreActions(
