@@ -357,7 +357,9 @@ struct MacRootView: View {
         .overlay(alignment: .top) {
             handoffToastOverlay
         }
-        .overlay(alignment: .top) {
+        // Notification bubbles live in the bottom-right corner — out of the
+        // content's way instead of front-and-center over the transcript.
+        .overlay(alignment: .bottomTrailing) {
             transientToastOverlay
         }
         .overlay {
@@ -479,8 +481,9 @@ struct MacRootView: View {
             .padding(.vertical, 8)
             .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(ContinuumTokens.surface2))
             .overlay(RoundedRectangle(cornerRadius: 999, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
-            .padding(.top, 96)
-            .transition(.move(edge: .top).combined(with: .opacity))
+            .padding(.trailing, 20)
+            .padding(.bottom, 24)
+            .transition(.move(edge: .trailing).combined(with: .opacity))
             .accessibilityElement(children: .contain)
         }
     }
