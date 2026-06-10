@@ -21,6 +21,12 @@ public struct CreateChatSessionRequest: Codable, Sendable {
     /// current deep-research settings. Defaults to false on older clients
     /// (decodeIfPresent).
     public let deepResearch: Bool
+    /// Multi-account (wire v28): `ProviderInstanceId.wireId` pinning the
+    /// chat to a configured account (e.g. `claude/work`). nil resolves to
+    /// the primary instance — clients on wire < 28 omit the field and
+    /// keep today's behavior. Unknown wireIds are rejected at create
+    /// (422), never silently re-billed to the primary.
+    public let providerInstanceId: String?
 
     public init(
         provider: AgentKind,
@@ -29,7 +35,8 @@ public struct CreateChatSessionRequest: Codable, Sendable {
         codexChatBackend: CodexChatBackend? = nil,
         chatVendor: ChatVendor? = nil,
         billingProvider: String? = nil,
-        deepResearch: Bool = false
+        deepResearch: Bool = false,
+        providerInstanceId: String? = nil
     ) {
         self.provider = provider
         self.model = model
@@ -38,10 +45,11 @@ public struct CreateChatSessionRequest: Codable, Sendable {
         self.chatVendor = chatVendor
         self.billingProvider = billingProvider
         self.deepResearch = deepResearch
+        self.providerInstanceId = providerInstanceId
     }
 
     private enum CodingKeys: String, CodingKey {
-        case provider, model, effort, codexChatBackend, chatVendor, billingProvider, deepResearch
+        case provider, model, effort, codexChatBackend, chatVendor, billingProvider, deepResearch, providerInstanceId
     }
 
     public init(from decoder: Decoder) throws {
@@ -56,6 +64,7 @@ public struct CreateChatSessionRequest: Codable, Sendable {
         self.chatVendor = (try? c.decodeIfPresent(ChatVendor.self, forKey: .chatVendor)) ?? nil
         self.billingProvider = try c.decodeIfPresent(String.self, forKey: .billingProvider)
         self.deepResearch = try c.decodeIfPresent(Bool.self, forKey: .deepResearch) ?? false
+        self.providerInstanceId = try c.decodeIfPresent(String.self, forKey: .providerInstanceId)
     }
 }
 

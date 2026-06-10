@@ -195,11 +195,17 @@ public final class SessionScheduler {
         let cwd = session.effectiveCwd
         let host: ClaudePtyHost?
         if !argv.isEmpty {
-            let env = AgentSpawner.claudePtyEnv()
-            host = try? await ClaudePtyRegistry.shared.resumeOrSpawn(
-                id: session.id,
-                plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env) }
-            )
+            // Multi-account: scheduled follow-ups deliver on the session's
+            // pinned account. nil env = the account was removed; fall back
+            // to a live host only (never respawn under the wrong account).
+            if let env = await InstanceSpawnEnv.claudeEnv(for: session) {
+                host = try? await ClaudePtyRegistry.shared.resumeOrSpawn(
+                    id: session.id,
+                    plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env) }
+                )
+            } else {
+                host = await ClaudePtyRegistry.shared.host(for: session.id)
+            }
         } else {
             host = await ClaudePtyRegistry.shared.host(for: session.id)
         }

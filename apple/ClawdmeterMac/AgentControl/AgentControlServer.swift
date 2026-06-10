@@ -1739,14 +1739,21 @@ public final class AgentControlServer {
     /// login PATH (launchd's GUI PATH is thin, so node/rg/hooks vanish) plus the
     /// managed repo env. Sanitized last so the subscription-billing rail still
     /// holds.
-    func claudeSpawnPlan(for session: AgentSession) -> ClaudePtyRegistry.SpawnPlan? {
+    ///
+    /// Multi-account: async because the session's pinned account resolves
+    /// through the instance registry (actor). nil when claude is off PATH
+    /// OR the pinned account is no longer registered — never a silent
+    /// fall-back to the primary subscription.
+    func claudeSpawnPlan(for session: AgentSession) async -> ClaudePtyRegistry.SpawnPlan? {
         let argv = AgentSpawner.argv(for: session)
         guard !argv.isEmpty else { return nil }
         let cwd = session.effectiveCwd
         // Managed repo env (.env.local + repo env set), best-effort — conflicts
         // are surfaced separately by the create path before we reach spawn.
         let repoEnv = (try? resolveRepoEnv(session: session, cwd: cwd))?.environment
-        let env = AgentSpawner.claudePtyEnv(extra: repoEnv)
+        guard let env = await InstanceSpawnEnv.claudeEnv(for: session, extra: repoEnv) else {
+            return nil
+        }
         return ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env)
     }
 
@@ -1765,7 +1772,7 @@ public final class AgentControlServer {
     /// session. Returns nil if no spawn plan (claude not on PATH).
     func claudePtyHost(for session: AgentSession) async -> ClaudePtyHost? {
         await ensureClaudePtyWiring()
-        let plan = claudeSpawnPlan(for: session)
+        let plan = await claudeSpawnPlan(for: session)
         let sid = session.id
         return try? await claudePtyRegistry.resumeOrSpawn(id: sid, plan: { plan })
     }
@@ -4231,6 +4238,23 @@ public final class AgentControlServer {
         // need them) plus the repo-env overrides layered on top.
         var childEnv = ProcessInfo.processInfo.environment
         for (k, v) in (resolvedEnv?.environment ?? [:]) { childEnv[k] = v }
+        // Multi-account: a pinned Codex account points the app-server at
+        // its CODEX_HOME (auth.json + rollouts under the instance root).
+        guard let instanceEnv = await InstanceSpawnEnv.harnessEnv(
+            base: childEnv, wireId: req.providerInstanceId, agent: req.agent
+        ) else {
+            await cleanupUnregisteredWorktree(
+                repoRoot: req.repoKey, worktreePath: worktreePath,
+                provisioning: provisioning, provisionalSessionId: provisionalSessionId,
+                context: "acp provider instance resolve")
+            sendResponse(HTTPResponse(
+                status: 422, reason: "Unprocessable Entity",
+                contentType: "application/json",
+                body: Data(#"{"error":"provider_instance_unknown"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        childEnv = instanceEnv
 
         // Step 1: write-ahead the Clawdmeter session. The
         // runtime kind is inferred as `.acpGrok` from `agent: .grok`.
@@ -4284,6 +4308,7 @@ public final class AgentControlServer {
                     ownsWorktree: worktreePath != nil,
                     envSetId: resolvedEnv?.set?.id,
                     envSetName: resolvedEnv?.set?.name,
+                    providerInstanceId: req.providerInstanceId,
                     id: provisionalSessionId ?? UUID()
                 )
             } catch {
@@ -5147,6 +5172,18 @@ public final class AgentControlServer {
             return
         }
 
+        // Multi-account: reject pins to accounts the registry doesn't
+        // carry BEFORE creating anything — a session persisted with a
+        // dead pin could never spawn (fail-closed, no primary fallback).
+        guard await InstanceSpawnEnv.isSpawnable(wireId: req.providerInstanceId, agent: req.agent) else {
+            sendResponse(HTTPResponse(
+                status: 422, reason: "Unprocessable Entity",
+                contentType: "application/json",
+                body: Data(#"{"error":"provider_instance_unknown","cta":"Pick a different account — this one was removed on the Mac."}"#.utf8)
+            ), on: connection)
+            return
+        }
+
         if req.agent == .cursor {
             guard !req.planMode else {
                 sendResponse(HTTPResponse(
@@ -5457,10 +5494,11 @@ public final class AgentControlServer {
                 ownsWorktree: worktreePath != nil,
                 envSetId: resolvedEnv?.set?.id,
                 envSetName: resolvedEnv?.set?.name,
+                providerInstanceId: req.providerInstanceId,
                 id: provisionalSessionId ?? UUID()
             )
             await ensureClaudePtyWiring()
-            let plan = claudeSpawnPlan(for: session)
+            let plan = await claudeSpawnPlan(for: session)
             do {
                 let host = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { plan })
                 warmupClaudePtyHost(host)
@@ -5762,6 +5800,16 @@ public final class AgentControlServer {
             sendProviderDisabled(provider: req.provider, reason: reason, on: connection)
             return
         }
+        // Multi-account: fail-closed on unknown account pins (no silent
+        // primary fallback — that would bill a different subscription).
+        guard await InstanceSpawnEnv.isSpawnable(wireId: req.providerInstanceId, agent: req.provider) else {
+            sendResponse(HTTPResponse(
+                status: 422, reason: "Unprocessable Entity",
+                contentType: "application/json",
+                body: Data(#"{"error":"provider_instance_unknown","cta":"Pick a different account — this one was removed on the Mac."}"#.utf8)
+            ), on: connection)
+            return
+        }
         // Harness is the DEFAULT Chat drive path for non-Claude providers now:
         // a chat session created here gets a live AcpHarnessBridge, and the
         // send/interrupt/permission handlers already route to that bridge
@@ -5822,7 +5870,8 @@ public final class AgentControlServer {
                 effort: req.effort,
                 deepResearch: req.deepResearch,
                 chatVendor: metadata.vendor,
-                billingProvider: metadata.billingProvider
+                billingProvider: metadata.billingProvider,
+                providerInstanceId: req.providerInstanceId
             )
         } catch {
             serverLogger.error("createChat write-ahead failed: \(error.localizedDescription, privacy: .public)")
@@ -5977,7 +6026,8 @@ public final class AgentControlServer {
         billingProvider: String?,
         frontierGroupId: UUID? = nil,
         frontierChildIndex: Int? = nil,
-        deferBridgeStart: Bool = false
+        deferBridgeStart: Bool = false,
+        providerInstanceId: String? = nil
     ) async throws -> AgentSession {
         // Step 1: write-ahead the chat session. codexChatBackend stays nil
         // because Codex chat is now driven by the app-server harness.
@@ -5993,7 +6043,8 @@ public final class AgentControlServer {
                 frontierChildIndex: frontierChildIndex,
                 deepResearch: deepResearch ?? false,
                 chatVendor: chatVendor,
-                billingProvider: billingProvider
+                billingProvider: billingProvider,
+                providerInstanceId: providerInstanceId
             )
         } catch {
             throw HarnessChatSpawnError.createFailed(error.localizedDescription)
@@ -6093,8 +6144,19 @@ public final class AgentControlServer {
             throw HarnessChatSpawnError.unsupportedProvider
         }
         // Step 5: start the bridge. Chat inherits the daemon env (PATH/HOME) and
-        // runs in the sandbox cwd.
-        let childEnv = ProcessInfo.processInfo.environment
+        // runs in the sandbox cwd. Multi-account: a pinned Codex account
+        // overlays CODEX_HOME so app-server reads the instance's auth.json.
+        guard let childEnv = await InstanceSpawnEnv.harnessEnv(
+            base: ProcessInfo.processInfo.environment,
+            wireId: providerInstanceId,
+            agent: provider
+        ) else {
+            await bridge.teardown()
+            chatStoreRegistry.release(sessionId: session.id)
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            throw HarnessChatSpawnError.startFailed("provider account is no longer registered")
+        }
 
         // FAST-PATH (Solo Chat create): the session record, sandbox cwd, and
         // pinned store all exist now — everything the UI needs to render the
@@ -6188,7 +6250,8 @@ public final class AgentControlServer {
                 provider: req.provider, model: req.model, effort: req.effort,
                 deepResearch: req.deepResearch, chatVendor: metadata.vendor,
                 billingProvider: metadata.billingProvider,
-                deferBridgeStart: true
+                deferBridgeStart: true,
+                providerInstanceId: req.providerInstanceId
             )
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -7000,7 +7063,11 @@ public final class AgentControlServer {
             }
             do {
                 await ensureClaudePtyWiring()
-                let env = AgentSpawner.claudePtyEnv()
+                guard let env = await InstanceSpawnEnv.claudeEnv(for: updated) else {
+                    try? await registry.delete(id: session.id)
+                    try? ChatCwdManager.remove(for: session.id)
+                    throw SpawnFailure.message("provider_instance_unknown")
+                }
                 let plan = ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: chatCwd, env: env)
                 _ = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { plan })
                 try? await registry.updateRuntime(
@@ -7612,7 +7679,13 @@ public final class AgentControlServer {
         }
         let cwd = session.effectiveCwd
         let repoEnv = (try? resolveRepoEnv(session: session, cwd: cwd))?.environment
-        let env = AgentSpawner.claudePtyEnv(extra: repoEnv)
+        // Multi-account: the post-approve respawn stays on the session's
+        // pinned account (fail closed if it was removed mid-plan).
+        guard let env = await InstanceSpawnEnv.claudeEnv(for: session, extra: repoEnv) else {
+            serverLogger.error("approve-plan: pinned provider instance unregistered for \(uuid.uuidString, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+            return
+        }
         await claudePtyRegistry.suspend(uuid)
         let approveSpawn = ClaudePtyRegistry.SpawnPlan(argv: replacementArgv, cwd: cwd, env: env)
         guard (try? await claudePtyRegistry.resumeOrSpawn(id: uuid, plan: { approveSpawn })) != nil else {

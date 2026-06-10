@@ -226,6 +226,10 @@ final class AppRuntime: ObservableObject {
         // `keychainAccessGroupOverride`) plug into the same map via
         // `addInstance(_:)`.
         self.providerInstanceRegistry = ProviderInstanceRegistry()
+        // Multi-account: every spawn path (daemon handlers, config
+        // swaps, scheduled follow-ups) resolves a session's pinned
+        // account through this process-wide access point.
+        InstanceSpawnEnv.attach(self.providerInstanceRegistry)
         self.modelsByInstanceWireId = [
             ProviderInstanceId.primary(kind: .claude).wireId: self.claudeModel,
             ProviderInstanceId.primary(kind: .codex).wireId:  self.codexModel,

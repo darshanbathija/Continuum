@@ -22,10 +22,27 @@ public enum AgentSpawner {
     /// repo env (only the daemon's repo-env resolver can compute it; callers
     /// without one pass nil). Sanitized LAST so the subscription-billing rail
     /// (no `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`) always holds.
-    public static func claudePtyEnv(extra: [String: String]? = nil) -> [String: String] {
+    ///
+    /// Multi-account: a non-primary `instance` layers config-dir isolation
+    /// (`CLAUDE_CONFIG_DIR`) + per-instance `secrets`
+    /// (`CLAUDE_CODE_OAUTH_TOKEN`) between the PATH merge and the final
+    /// sanitize. The token survives sanitize by design — it's the
+    /// subscription OAuth rail, not an API credential. Primary instance +
+    /// no secrets is a passthrough, so pre-multi-account spawns are
+    /// byte-identical.
+    public static func claudePtyEnv(
+        extra: [String: String]? = nil,
+        instance: ProviderInstanceId? = nil,
+        secrets: [String: String] = [:]
+    ) -> [String: String] {
         var base = ProcessInfo.processInfo.environment
         if let extra { for (k, v) in extra { base[k] = v } }
         base = SpawnPathResolver.merged(into: base)
+        if let instance {
+            base = ProviderInstanceEnvironment.buildEnv(
+                for: instance, parentEnv: base, secrets: secrets
+            )
+        }
         return ClaudeSpawnEnv.sanitized(base: base)
     }
 

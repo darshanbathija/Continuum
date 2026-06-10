@@ -299,6 +299,7 @@ public final class AgentSessionRegistry: ObservableObject {
         ownsWorktree: Bool = false,
         envSetId: UUID? = nil,
         envSetName: String? = nil,
+        providerInstanceId: String? = nil,
         id: UUID = UUID()
     ) async throws -> AgentSession {
         let now = Date()
@@ -328,6 +329,7 @@ public final class AgentSessionRegistry: ObservableObject {
             ),
             effort: effort,
             abPairSessionId: abPairSessionId,
+            providerInstanceId: providerInstanceId,
             inheritedContextSourceIds: inheritedContextSourceIds,
             ownsWorktree: ownsWorktree,
             envSetId: envSetId,
@@ -360,7 +362,8 @@ public final class AgentSessionRegistry: ObservableObject {
         frontierChildIndex: Int? = nil,
         deepResearch: Bool = false,
         chatVendor: ChatVendor? = nil,
-        billingProvider: String? = nil
+        billingProvider: String? = nil,
+        providerInstanceId: String? = nil
     ) async throws -> AgentSession {
         let id = UUID()
         let now = Date()
@@ -403,7 +406,8 @@ public final class AgentSessionRegistry: ObservableObject {
             frontierGroupId: frontierGroupId,
             frontierChildIndex: frontierChildIndex,
             codexChatBackend: codexChatBackend,
-            deepResearch: deepResearch
+            deepResearch: deepResearch,
+            providerInstanceId: providerInstanceId
         )
         // Write-ahead: see comment on `create(...)`. Chat sessions take
         // the same receipt path so replay reconstructs both `code` and

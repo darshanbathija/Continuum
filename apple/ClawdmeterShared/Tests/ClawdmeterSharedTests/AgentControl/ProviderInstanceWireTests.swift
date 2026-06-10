@@ -552,4 +552,23 @@ final class ProviderInstanceWireTests: XCTestCase {
             "<HOME for codex/work>"
         )
     }
+
+    // MARK: - Chat DTO (wire v28 providerInstanceId)
+
+    /// A wire-v27 client's CreateChatSessionRequest (no providerInstanceId)
+    /// must decode with the field nil; a v28 payload round-trips it.
+    func test_createChatSessionRequest_instancePinRoundTripAndLenientDecode() throws {
+        let v27 = #"{"provider": "claude", "model": "claude-opus-4-8"}"#.data(using: .utf8)!
+        let old = try JSONDecoder().decode(CreateChatSessionRequest.self, from: v27)
+        XCTAssertNil(old.providerInstanceId)
+
+        let pinned = CreateChatSessionRequest(
+            provider: .claude,
+            model: "claude-opus-4-8",
+            providerInstanceId: "claude/work"
+        )
+        let data = try JSONEncoder().encode(pinned)
+        let decoded = try JSONDecoder().decode(CreateChatSessionRequest.self, from: data)
+        XCTAssertEqual(decoded.providerInstanceId, "claude/work")
+    }
 }
