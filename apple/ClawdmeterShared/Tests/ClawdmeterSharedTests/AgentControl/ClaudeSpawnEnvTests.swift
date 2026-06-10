@@ -54,4 +54,21 @@ final class ClaudeSpawnEnvTests: XCTestCase {
         XCTAssertEqual(out["CLAUDE_CONFIG_DIR"], "/tmp/instance-root")
         XCTAssertNil(out["ANTHROPIC_API_KEY"])
     }
+
+    func testCustomEndpointAllowsAuthTokenButNotAmbientApiKey() throws {
+        let env = try ClaudeSpawnEnv.sanitizedWithCustomProvider(
+            base: ["ANTHROPIC_API_KEY": "ambient"],
+            customProviderOverrides: [
+                "ANTHROPIC_BASE_URL": "https://gateway.example",
+                "ANTHROPIC_AUTH_TOKEN": "custom",
+            ]
+        )
+        XCTAssertNil(env["ANTHROPIC_API_KEY"])
+        XCTAssertEqual(env["ANTHROPIC_AUTH_TOKEN"], "custom")
+        XCTAssertFalse(ClaudeSpawnEnv.leaksAPICredential(env))
+        XCTAssertTrue(ClaudeSpawnEnv.leaksAPICredential([
+            "ANTHROPIC_BASE_URL": "https://gateway.example",
+            "ANTHROPIC_API_KEY": "still-bad",
+        ]))
+    }
 }

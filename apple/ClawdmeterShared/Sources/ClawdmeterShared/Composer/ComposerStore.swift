@@ -384,6 +384,7 @@ public final class ComposerStore: ObservableObject {
     /// having to be ported to the new enum.
     @Published public var permissionMode: PermissionMode = .ask
     @Published public var agent: AgentKind = .claude
+    @Published public var customProviderId: String?
     @Published public var repoKey: String?
     @Published public var inheritedContextSourceIds: Set<UUID> = []
     @Published public private(set) var browserComments: [BrowserCommentContext] = []
@@ -558,6 +559,7 @@ public final class ComposerStore: ObservableObject {
     public func resetChipsForAgent(_ agent: AgentKind, catalog: ModelCatalog = .bundled) {
         let defaults = ChipDefaults.for(agent: agent, catalog: catalog)
         self.agent = agent
+        self.customProviderId = nil
         self.modelId = defaults.modelId
         self.effort = defaults.effort
     }

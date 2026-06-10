@@ -878,6 +878,11 @@ public final class AgentControlClient: ObservableObject {
         AgentControlWireVersion.supportsAntigravityPlan(serverWireVersion: serverWireVersion)
     }
 
+    /// v28: user-configured custom providers in catalog + spawn routes.
+    public var supportsCustomProviders: Bool {
+        AgentControlWireVersion.supportsCustomProviders(serverWireVersion: serverWireVersion)
+    }
+
     // MARK: - Desktop event sync
 
     /// Relay event-stream watchdog. If the relay `events` subscription
@@ -1703,7 +1708,8 @@ public final class AgentControlClient: ObservableObject {
         chatVendor: ChatVendor? = nil,
         billingProvider: String? = nil,
         deepResearch: Bool = false,
-        providerInstanceId: String? = nil
+        providerInstanceId: String? = nil,
+        customProviderId: String? = nil
     ) async -> AgentSession? {
         let req = CreateChatSessionRequest(
             provider: provider,
@@ -1713,7 +1719,8 @@ public final class AgentControlClient: ObservableObject {
             chatVendor: chatVendor,
             billingProvider: billingProvider,
             deepResearch: deepResearch,
-            providerInstanceId: providerInstanceId
+            providerInstanceId: providerInstanceId,
+            customProviderId: customProviderId
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

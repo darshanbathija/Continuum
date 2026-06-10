@@ -5,6 +5,7 @@ struct EmptyStateFirstSendPlan: Equatable, Sendable {
     let repoPath: String
     let existingWorkspacePath: String?
     let agent: AgentKind
+    let customProviderId: String?
     let planMode: Bool
     let goal: String?
     let mode: SessionMode
@@ -20,6 +21,7 @@ struct EmptyStateFirstSendPlan: Equatable, Sendable {
         repoKey: String,
         workspaceDraft: WorkspaceDraftTab?,
         agent: AgentKind,
+        customProviderId: String? = nil,
         model: String?,
         effort: ReasoningEffort?,
         storeMode: SessionMode,
@@ -32,6 +34,7 @@ struct EmptyStateFirstSendPlan: Equatable, Sendable {
             repoPath: workspaceDraft?.workspaceKey.repoKey ?? repoKey,
             existingWorkspacePath: workspaceDraft?.workspaceKey.workspacePath,
             agent: agent,
+            customProviderId: customProviderId,
             planMode: permissionMode == .plan,
             goal: goal,
             mode: workspaceDraft?.mode ?? storeMode,
@@ -398,6 +401,7 @@ struct EmptyStateCenteredComposer: View {
                 repoKey: repoKey,
                 workspaceDraft: workspaceDraft,
                 agent: store.agent,
+                customProviderId: store.customProviderId,
                 model: store.modelId,
                 effort: store.effort,
                 storeMode: store.mode,
@@ -450,7 +454,8 @@ struct EmptyStateCenteredComposer: View {
                     autopilot: firstSendPlan.autopilot,
                     providerInstanceId: selectedAccountWireId,
                     initialMessage: initialBody.isEmpty ? nil : initialBody,
-                    inheritedContextSourceIds: firstSendPlan.inheritedContextSourceIds
+                    inheritedContextSourceIds: firstSendPlan.inheritedContextSourceIds,
+                    customProviderId: firstSendPlan.customProviderId
                 )
             } else {
                 session = try await model.spawnSession(
@@ -464,7 +469,8 @@ struct EmptyStateCenteredComposer: View {
                     acceptEdits: firstSendPlan.acceptEdits,
                     autopilot: firstSendPlan.autopilot,
                     providerInstanceId: selectedAccountWireId,
-                    initialMessage: initialBody.isEmpty ? nil : initialBody
+                    initialMessage: initialBody.isEmpty ? nil : initialBody,
+                    customProviderId: firstSendPlan.customProviderId
                 )
             }
             spawnedSession = session

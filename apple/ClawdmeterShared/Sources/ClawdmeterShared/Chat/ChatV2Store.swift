@@ -106,14 +106,24 @@ public struct ChatVendorSelection: Codable, Hashable, Sendable, Identifiable {
 /// first-send dispatch helper.
 @MainActor
 public final class ChatV2Store: ObservableObject {
-    @Published public var selectedVendors: [ChatVendor]
+    @Published public var selectedChoices: [ProviderChoice]
     @Published public var selectedModelByVendor: [ChatVendor: String]
     @Published public var selectedEffortByVendor: [ChatVendor: ReasoningEffort]
+    @Published public var selectedModelByChoice: [ProviderChoice: String]
+    @Published public var selectedEffortByChoice: [ProviderChoice: ReasoningEffort]
+
+    /// Read-only bridge for legacy call sites that only understand built-ins.
+    public var selectedVendors: [ChatVendor] {
+        selectedChoices.compactMap(\.chatVendor)
+    }
+
     /// Multi-account (wire v28): per-vendor pinned account
-    /// (`ProviderInstanceId.wireId`). Absent / unknown ⇒ the primary
-    /// account. Views validate the stored value against the fetched
-    /// `/provider-instances` list before sending so a removed account
-    /// degrades to Default instead of a create-time 422.
+    /// (`ProviderInstanceId.wireId`). Keyed by stock vendor — custom
+    /// providers carry their own credentials and have no account axis.
+    /// Absent / unknown ⇒ the primary account. Views validate the stored
+    /// value against the fetched `/provider-instances` list before
+    /// sending so a removed account degrades to Default instead of a
+    /// create-time 422.
     @Published public var selectedAccountByVendor: [ChatVendor: String]
 
     // Legacy provider-mode fields remain public for older call sites and
@@ -130,41 +140,59 @@ public final class ChatV2Store: ObservableObject {
 
     private let defaults: UserDefaults
     private let providerDefaults: ProviderDefaultsStore
-    private var enabledVendorScope: [ChatVendor]?
-    private var persistedVendorSelection: [ChatVendor]
+    private var enabledChoiceScope: [ProviderChoice]?
+    private var persistedChoiceSelection: [ProviderChoice]
     private static let defaultsPrefix = "clawdmeter.chatv2."
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let providerDefaults = ProviderDefaultsStore(defaults: defaults)
         self.providerDefaults = providerDefaults
-        // Restore prior session picks. Each individual key falls back
-        // to a sensible default; collectively this gives a working
-        // composer state on cold-launch without prompting the user
-        // for everything.
         let hasVendorSelection = defaults.object(forKey: Self.defaultsPrefix + "vendors") != nil
-        let persistedVendors = Self.restorePersistedVendors(defaults: defaults)
-        let restoredVendors = Self.restoreVendors(persistedVendors: persistedVendors)
-        self.selectedVendors = restoredVendors
-        self.persistedVendorSelection = persistedVendors
-        self.selectedModelByVendor = providerDefaults.snapshot.decodedModelMap()
-        self.selectedEffortByVendor = providerDefaults.snapshot.decodedEffortMap()
+        let persistedChoices = Self.restorePersistedChoices(defaults: defaults)
+        let restoredChoices = Self.restoreChoices(persistedChoices: persistedChoices)
+        self.selectedChoices = restoredChoices
+        self.persistedChoiceSelection = persistedChoices
+        let restoredModelByVendor = providerDefaults.snapshot.decodedModelMap()
+        let restoredEffortByVendor = providerDefaults.snapshot.decodedEffortMap()
+        var restoredModelByChoice = Self.decodeChoiceStringMap(
+            defaults.dictionary(forKey: Self.defaultsPrefix + "modelByVendor") ?? [:]
+        )
+        if restoredModelByChoice.isEmpty {
+            restoredModelByChoice = Dictionary(
+                uniqueKeysWithValues: restoredModelByVendor.map { (.builtin($0.key), $0.value) }
+            )
+        }
+        var restoredEffortByChoice = Self.decodeChoiceEffortMap(
+            defaults.dictionary(forKey: Self.defaultsPrefix + "effortByVendor") ?? [:]
+        )
+        if restoredEffortByChoice.isEmpty {
+            restoredEffortByChoice = Dictionary(
+                uniqueKeysWithValues: restoredEffortByVendor.compactMap { vendor, effort in
+                    (.builtin(vendor), effort)
+                }
+            )
+        }
+        self.selectedModelByVendor = restoredModelByVendor
+        self.selectedEffortByVendor = restoredEffortByVendor
+        self.selectedModelByChoice = restoredModelByChoice
+        self.selectedEffortByChoice = restoredEffortByChoice
         let restoredModeRaw = defaults.string(forKey: Self.defaultsPrefix + "mode") ?? ChatV2Mode.broadcast.rawValue
         self.mode = ChatV2Mode(rawValue: restoredModeRaw)
-            ?? (restoredVendors.count > 1 ? .broadcast : .solo)
-        let primaryProvider = restoredVendors.first?.backingProvider ?? .codex
+            ?? (restoredChoices.count > 1 ? .broadcast : .solo)
+        let primaryProvider = restoredChoices.first?.backingAgent(in: .bundled) ?? .codex
         let restoredProviderRaw = hasVendorSelection
             ? (defaults.string(forKey: Self.defaultsPrefix + "provider") ?? primaryProvider.rawValue)
             : primaryProvider.rawValue
         let restoredProvider = AgentKind(rawValue: restoredProviderRaw) ?? primaryProvider
         self.selectedProvider = restoredProvider
         let restoredBroadcast = hasVendorSelection
-            ? (defaults.stringArray(forKey: Self.defaultsPrefix + "broadcastProviders") ?? restoredVendors.map(\.backingProvider.rawValue))
-            : restoredVendors.map(\.backingProvider.rawValue)
+            ? (defaults.stringArray(forKey: Self.defaultsPrefix + "broadcastProviders") ?? restoredChoices.compactMap(\.chatVendor).map(\.backingProvider.rawValue))
+            : restoredChoices.compactMap(\.chatVendor).map(\.backingProvider.rawValue)
         let decodedBroadcast = Set(restoredBroadcast.compactMap(AgentKind.init(rawValue:)))
             .intersection(Self.broadcastCapableProviders)
         self.broadcastProviders = decodedBroadcast.isEmpty
-            ? Set(restoredVendors.map(\.backingProvider))
+            ? Set(restoredChoices.compactMap { $0.backingAgent(in: .bundled) })
             : decodedBroadcast
         let restoredReplyRaw = hasVendorSelection
             ? (defaults.string(forKey: Self.defaultsPrefix + "replyProvider") ?? primaryProvider.rawValue)
@@ -209,24 +237,25 @@ public final class ChatV2Store: ObservableObject {
     /// UserDefaults write per modifier — so callers don't need to
     /// debounce.
     public func persist() {
-        selectedVendors = normalizedVendorsForEnabledProviders(selectedVendors)
-        let vendorsToPersist: [ChatVendor]
-        if selectedVendors.isEmpty, !persistedVendorSelection.isEmpty {
-            vendorsToPersist = persistedVendorSelection
+        selectedChoices = normalizedChoicesForEnabledProviders(selectedChoices)
+        syncLegacyVendorMapsFromChoices()
+        let choicesToPersist: [ProviderChoice]
+        if selectedChoices.isEmpty, !persistedChoiceSelection.isEmpty {
+            choicesToPersist = persistedChoiceSelection
         } else {
-            persistedVendorSelection = selectedVendors
-            vendorsToPersist = selectedVendors
+            persistedChoiceSelection = selectedChoices
+            choicesToPersist = selectedChoices
         }
-        mode = selectedVendors.count > 1 ? .broadcast : .solo
-        selectedProvider = selectedVendors.first?.backingProvider ?? .codex
-        broadcastProviders = Set(selectedVendors.map(\.backingProvider))
+        mode = selectedChoices.count > 1 ? .broadcast : .solo
+        selectedProvider = selectedChoices.first?.backingAgent(in: .bundled) ?? .codex
+        broadcastProviders = Set(selectedChoices.compactMap { $0.backingAgent(in: .bundled) })
         if !broadcastProviders.contains(selectedReplyProvider) {
             selectedReplyProvider = selectedProvider
         }
-        defaults.set(vendorsToPersist.map(\.rawValue), forKey: Self.defaultsPrefix + "vendors")
-        defaults.set(Self.encodeMap(selectedModelByVendor), forKey: Self.defaultsPrefix + "modelByVendor")
+        defaults.set(choicesToPersist.map(\.id), forKey: Self.defaultsPrefix + "vendors")
+        defaults.set(Self.encodeMap(selectedModelByChoice), forKey: Self.defaultsPrefix + "modelByVendor")
         defaults.set(Self.encodeMap(selectedAccountByVendor), forKey: Self.defaultsPrefix + "accountByVendor")
-        defaults.set(Self.encodeMap(selectedEffortByVendor.mapValues { $0.rawValue }),
+        defaults.set(Self.encodeMap(selectedEffortByChoice.mapValues { $0.rawValue }),
                      forKey: Self.defaultsPrefix + "effortByVendor")
         defaults.set(mode.rawValue, forKey: Self.defaultsPrefix + "mode")
         defaults.set(selectedProvider.rawValue, forKey: Self.defaultsPrefix + "provider")
@@ -247,11 +276,11 @@ public final class ChatV2Store: ObservableObject {
     /// when the user hasn't picked yet. The V2 model pill reads this
     /// and renders the result.
     public var selectedModel: String? {
-        model(for: primaryVendor)
+        model(forChoice: primaryChoice)
     }
 
     public var selectedEffort: ReasoningEffort? {
-        effort(for: primaryVendor)
+        effort(forChoice: primaryChoice)
     }
 
     public static let defaultChatVendorOrder: [ChatVendor] = ProviderDescriptor.chatOrder
@@ -266,70 +295,97 @@ public final class ChatV2Store: ObservableObject {
         }
     }
 
+    public static func enabledChatChoices(from providerIDs: [String]?, catalog: ModelCatalog) -> [ProviderChoice] {
+        var choices = enabledChatVendors(from: providerIDs).map(ProviderChoice.builtin)
+        if AgentControlWireVersion.supportsCustomProviders(serverWireVersion: AgentControlWireVersion.current) {
+            choices.append(contentsOf: catalog.customProviders.filter(\.enabled).map { .custom($0.id) })
+        }
+        return choices.sorted { $0.displayName(in: catalog).localizedCaseInsensitiveCompare($1.displayName(in: catalog)) == .orderedAscending }
+    }
+
+    public var primaryChoice: ProviderChoice {
+        selectedChoices.first ?? effectiveEnabledChatChoices.first ?? .builtin(.chatgpt)
+    }
+
     public var primaryVendor: ChatVendor {
-        selectedVendors.first ?? effectiveEnabledChatVendors.first ?? .chatgpt
+        primaryChoice.chatVendor ?? effectiveEnabledChatVendors.first ?? .chatgpt
+    }
+
+    public var selectedChoiceCount: Int {
+        selectedChoices.count
     }
 
     public var selectedVendorCount: Int {
-        selectedVendors.count
+        selectedChoices.count
     }
 
     public var selectedVendorSelections: [ChatVendorSelection] {
-        selectedVendors.map { vendor in
-            ChatVendorSelection(
+        selectedChoices.compactMap { choice in
+            guard let vendor = choice.chatVendor else { return nil }
+            return ChatVendorSelection(
                 vendor: vendor,
-                modelId: model(for: vendor),
-                effort: effort(for: vendor)
+                modelId: model(forChoice: choice),
+                effort: effort(forChoice: choice)
             )
         }
     }
 
     public var broadcastProviderOrder: [AgentKind] {
-        selectedVendors.map(\.backingProvider)
+        selectedChoices.compactMap { $0.backingAgent(in: .bundled) }
     }
 
     public var broadcastReady: Bool {
-        selectedVendors.count >= 2
+        selectedChoices.count >= 2
     }
 
     public func toggleBroadcastProvider(_ provider: AgentKind) {
         guard let vendor = ChatVendor.migrated(from: provider) else { return }
-        toggleVendor(vendor)
+        toggleChoice(.builtin(vendor))
+    }
+
+    public func isChoiceSelected(_ choice: ProviderChoice) -> Bool {
+        selectedChoices.contains(choice)
     }
 
     public func isVendorSelected(_ vendor: ChatVendor) -> Bool {
-        selectedVendors.contains(vendor)
+        isChoiceSelected(.builtin(vendor))
     }
 
-    public func toggleVendor(_ vendor: ChatVendor) {
-        guard effectiveEnabledChatVendors.contains(vendor) else { return }
-        if selectedVendors.contains(vendor) {
-            guard selectedVendors.count > 1 else { return }
-            selectedVendors.removeAll { $0 == vendor }
+    public func toggleChoice(_ choice: ProviderChoice) {
+        guard effectiveEnabledChatChoices.contains(choice) else { return }
+        if selectedChoices.contains(choice) {
+            guard selectedChoices.count > 1 else { return }
+            selectedChoices.removeAll { $0 == choice }
         } else {
-            // No upper cap on compare — the broadcast answer columns scroll
-            // horizontally, so allow selecting every available provider.
-            selectedVendors.append(vendor)
+            selectedChoices.append(choice)
         }
-        selectedVendors = normalizedVendorsForEnabledProviders(selectedVendors)
+        selectedChoices = normalizedChoicesForEnabledProviders(selectedChoices)
         persist()
     }
 
-    public func applyEnabledVendorScope(_ vendors: [ChatVendor]?, persistSelection: Bool = false) {
-        enabledVendorScope = vendors.map(Self.uniqueVendors)
+    public func toggleVendor(_ vendor: ChatVendor) {
+        toggleChoice(.builtin(vendor))
+    }
+
+    public func applyEnabledChoiceScope(_ choices: [ProviderChoice]?, persistSelection: Bool = false) {
+        enabledChoiceScope = choices.map(Self.uniqueChoices)
         normalizeForEnabledProviders(persistSelection: persistSelection)
     }
 
+    public func applyEnabledVendorScope(_ vendors: [ChatVendor]?, persistSelection: Bool = false) {
+        applyEnabledChoiceScope(vendors?.map(ProviderChoice.builtin), persistSelection: persistSelection)
+    }
+
     public func normalizeForEnabledProviders(persistSelection: Bool = false) {
-        let candidates = selectedVendors.isEmpty ? persistedVendorSelection : selectedVendors
-        let normalized = normalizedVendorsForEnabledProviders(candidates)
-        guard normalized != selectedVendors else { return }
-        selectedVendors = normalized
-        mode = selectedVendors.count > 1 ? .broadcast : .solo
-        if let provider = selectedVendors.first?.backingProvider {
+        let candidates = selectedChoices.isEmpty ? persistedChoiceSelection : selectedChoices
+        let normalized = normalizedChoicesForEnabledProviders(candidates)
+        guard normalized != selectedChoices else { return }
+        selectedChoices = normalized
+        mode = selectedChoices.count > 1 ? .broadcast : .solo
+        if let provider = selectedChoices.first?.backingAgent(in: .bundled) {
             selectedProvider = provider
             selectedReplyProvider = provider
-            broadcastProviders = Set(selectedVendors.map(\.backingProvider))
+            broadcastProviders = Set(selectedChoices.compactMap { $0.backingAgent(in: .bundled) })
         } else {
             broadcastProviders = []
         }
@@ -338,23 +394,27 @@ public final class ChatV2Store: ObservableObject {
         }
     }
 
-    public func selectModel(_ modelId: String, for vendor: ChatVendor, catalog: ModelCatalog = .bundled) {
-        selectedModelByVendor[vendor] = modelId
-        if let provider = ChatVendor.migrated(from: vendor.backingProvider)?.backingProvider {
-            selectedModelByProvider[provider] = modelId
+    public func selectModel(_ modelId: String, forChoice choice: ProviderChoice, catalog: ModelCatalog = .bundled) {
+        selectedModelByChoice[choice] = modelId
+        if let vendor = choice.chatVendor {
+            selectedModelByVendor[vendor] = modelId
+            selectedModelByProvider[vendor.backingProvider] = modelId
         }
         let effectiveEffort = ProviderModelPickerSupport.normalizedEffort(
-            selectedEffortByVendor[vendor],
-            vendor: vendor,
+            selectedEffortByChoice[choice],
+            choice: choice,
             modelId: modelId,
             catalog: catalog
         )
         if effectiveEffort == nil {
-            selectedEffortByVendor.removeValue(forKey: vendor)
-            selectedEffortByProvider.removeValue(forKey: vendor.backingProvider)
+            selectedEffortByChoice.removeValue(forKey: choice)
+            if let vendor = choice.chatVendor {
+                selectedEffortByVendor.removeValue(forKey: vendor)
+                selectedEffortByProvider.removeValue(forKey: vendor.backingProvider)
+            }
         }
         providerDefaults.setDefault(
-            for: vendor,
+            forChoice: choice,
             model: modelId,
             effort: effectiveEffort,
             catalog: catalog
@@ -362,28 +422,42 @@ public final class ChatV2Store: ObservableObject {
         persist()
     }
 
-    public func selectEffort(_ effort: ReasoningEffort?, for vendor: ChatVendor, catalog: ModelCatalog = .bundled) {
+    public func selectModel(_ modelId: String, for vendor: ChatVendor, catalog: ModelCatalog = .bundled) {
+        selectModel(modelId, forChoice: .builtin(vendor), catalog: catalog)
+    }
+
+    public func selectEffort(_ effort: ReasoningEffort?, forChoice choice: ProviderChoice, catalog: ModelCatalog = .bundled) {
         let effectiveEffort = ProviderModelPickerSupport.normalizedEffort(
             effort,
-            vendor: vendor,
-            modelId: model(for: vendor, catalog: catalog),
+            choice: choice,
+            modelId: model(forChoice: choice, catalog: catalog),
             catalog: catalog
         )
         if let effectiveEffort {
-            selectedEffortByVendor[vendor] = effectiveEffort
-            selectedEffortByProvider[vendor.backingProvider] = effectiveEffort
+            selectedEffortByChoice[choice] = effectiveEffort
+            if let vendor = choice.chatVendor {
+                selectedEffortByVendor[vendor] = effectiveEffort
+                selectedEffortByProvider[vendor.backingProvider] = effectiveEffort
+            }
         } else {
-            selectedEffortByVendor.removeValue(forKey: vendor)
-            selectedEffortByProvider.removeValue(forKey: vendor.backingProvider)
+            selectedEffortByChoice.removeValue(forKey: choice)
+            if let vendor = choice.chatVendor {
+                selectedEffortByVendor.removeValue(forKey: vendor)
+                selectedEffortByProvider.removeValue(forKey: vendor.backingProvider)
+            }
         }
         providerDefaults.setDefault(
-            for: vendor,
-            model: model(for: vendor, catalog: catalog),
+            forChoice: choice,
+            model: model(forChoice: choice, catalog: catalog),
             effort: effectiveEffort,
             clearEffort: effectiveEffort == nil,
             catalog: catalog
         )
         persist()
+    }
+
+    public func selectEffort(_ effort: ReasoningEffort?, for vendor: ChatVendor, catalog: ModelCatalog = .bundled) {
+        selectEffort(effort, forChoice: .builtin(vendor), catalog: catalog)
     }
 
     public func applyProviderDefaults(_ snapshot: ProviderDefaultsSnapshot, catalog: ModelCatalog = .bundled) {
@@ -438,16 +512,7 @@ public final class ChatV2Store: ObservableObject {
     }
 
     public func model(for vendor: ChatVendor, catalog: ModelCatalog = .bundled) -> String? {
-        if let userPick = selectedModelByVendor[vendor], !userPick.isEmpty {
-            return userPick
-        }
-        if let providerDefault = providerDefaults.modelId(for: vendor, catalog: catalog) {
-            return providerDefault
-        }
-        if let legacyPick = selectedModelByProvider[vendor.backingProvider], !legacyPick.isEmpty {
-            return legacyPick
-        }
-        return vendor.defaultModelId(in: catalog)
+        model(forChoice: .builtin(vendor), catalog: catalog)
     }
 
     public func effort(for provider: AgentKind) -> ReasoningEffort? {
@@ -458,30 +523,63 @@ public final class ChatV2Store: ObservableObject {
     }
 
     public func effort(for vendor: ChatVendor, catalog: ModelCatalog = .bundled) -> ReasoningEffort? {
-        let modelId = model(for: vendor, catalog: catalog)
-        if let modelId,
-           let entry = vendor.models(in: catalog).first(where: { $0.id == modelId }),
-           !entry.supportsEffort {
-            return nil
-        }
-        return selectedEffortByVendor[vendor]
-            ?? providerDefaults.effort(for: vendor, catalog: catalog)
-            ?? selectedEffortByProvider[vendor.backingProvider]
-            ?? vendor.defaultEffort
+        effort(forChoice: .builtin(vendor), catalog: catalog)
     }
 
     public func frontierSlots(catalog: ModelCatalog = .bundled) -> [FrontierModelSlot] {
-        selectedVendors.map { vendor in
-            FrontierModelSlot(
-                provider: vendor.backingProvider,
-                model: model(for: vendor, catalog: catalog),
-                effort: effort(for: vendor, catalog: catalog),
-                codexChatBackend: nil,
-                deepResearch: deepResearch,
-                chatVendor: vendor,
-                billingProvider: vendor.billingProvider
-            )
+        selectedChoices.map { choice in
+            switch choice {
+            case .builtin(let vendor):
+                return FrontierModelSlot(
+                    provider: vendor.backingProvider,
+                    model: model(forChoice: choice, catalog: catalog),
+                    effort: effort(forChoice: choice, catalog: catalog),
+                    codexChatBackend: nil,
+                    deepResearch: deepResearch,
+                    chatVendor: vendor,
+                    billingProvider: vendor.billingProvider
+                )
+            case .custom(let providerId):
+                let agent = choice.backingAgent(in: catalog) ?? .codex
+                return FrontierModelSlot(
+                    provider: agent,
+                    model: model(forChoice: choice, catalog: catalog),
+                    effort: nil,
+                    codexChatBackend: nil,
+                    deepResearch: deepResearch,
+                    chatVendor: nil,
+                    billingProvider: providerId,
+                    customProviderId: providerId
+                )
+            }
         }
+    }
+
+    public func model(forChoice choice: ProviderChoice, catalog: ModelCatalog = .bundled) -> String? {
+        if let userPick = selectedModelByChoice[choice], !userPick.isEmpty {
+            return userPick
+        }
+        if let providerDefault = providerDefaults.snapshot.modelId(forChoice: choice, catalog: catalog) {
+            return providerDefault
+        }
+        if let vendor = choice.chatVendor,
+           let legacyPick = selectedModelByProvider[vendor.backingProvider], !legacyPick.isEmpty {
+            return legacyPick
+        }
+        return choice.defaultModelId(in: catalog)
+    }
+
+    public func effort(forChoice choice: ProviderChoice, catalog: ModelCatalog = .bundled) -> ReasoningEffort? {
+        let modelId = model(forChoice: choice, catalog: catalog)
+        if let modelId,
+           let entry = choice.models(in: catalog).first(where: { $0.id == modelId }),
+           !entry.supportsEffort {
+            return nil
+        }
+        return selectedEffortByChoice[choice]
+            ?? (choice.chatVendor.flatMap { providerDefaults.effort(for: $0, catalog: catalog) })
+            ?? (choice.chatVendor.flatMap { selectedEffortByProvider[$0.backingProvider] })
+            ?? choice.chatVendor?.defaultEffort
     }
 
     // MARK: - First-send helper (Mac + iOS)
@@ -490,13 +588,15 @@ public final class ChatV2Store: ObservableObject {
     /// through `ComposerSendController.send(via:)`. Centralizing this
     /// keeps the V2 composer view dumb — it just calls
     /// `sendCtl.send(via: store.firstSendKind())`.
-    public func firstSendKind() -> SendKind {
-        .chatCreateV2(
-            provider: primaryVendor.backingProvider,
+    public func firstSendKind(catalog: ModelCatalog = .bundled) -> SendKind {
+        let choice = primaryChoice
+        return .chatCreateV2(
+            provider: choice.backingAgent(in: catalog) ?? primaryVendor.backingProvider,
             model: selectedModel,
             effort: selectedEffort,
             deepResearch: deepResearch,
-            codexBackend: nil
+            codexBackend: nil,
+            customProviderId: choice.customProviderId
         )
     }
 
@@ -527,18 +627,138 @@ public final class ChatV2Store: ObservableObject {
         Dictionary(uniqueKeysWithValues: m.map { ($0.key.rawValue, $0.value) })
     }
 
-    private static func restorePersistedVendors(defaults: UserDefaults) -> [ChatVendor] {
-        if let raw = defaults.stringArray(forKey: Self.defaultsPrefix + "vendors") {
-            return normalizedVendors(raw.compactMap(ChatVendor.init(rawValue:)), enabledVendors: defaultChatVendorOrder)
+    private static func restorePersistedChoices(defaults: UserDefaults) -> [ProviderChoice] {
+        guard let raw = defaults.stringArray(forKey: Self.defaultsPrefix + "vendors") else { return [] }
+        let decoded = raw.compactMap(ProviderChoice.decode)
+        return mergePersistedChoices(decoded)
+    }
+
+    /// Raw persisted selection — builtins filtered to known vendors only; custom
+    /// ids kept verbatim for later scope normalization.
+    private static func mergePersistedChoices(_ decoded: [ProviderChoice]) -> [ProviderChoice] {
+        let builtins = decoded.compactMap { choice -> ProviderChoice? in
+            guard case .builtin(let vendor) = choice else { return nil }
+            return defaultChatVendorOrder.contains(vendor) ? choice : nil
         }
-        return []
+        let customs = decoded.filter { if case .custom = $0 { return true }; return false }
+        return uniqueChoices(builtins + customs)
+    }
+
+    private static func mergeRestoredChoices(_ decoded: [ProviderChoice]) -> [ProviderChoice] {
+        let builtins = decoded.filter { if case .builtin = $0 { return true }; return false }
+        let customs = decoded.filter { if case .custom = $0 { return true }; return false }
+        let filteredBuiltins = normalizedChoices(builtins, enabledChoices: defaultEnabledBuiltinChoices)
+        return uniqueChoices(filteredBuiltins + customs)
+    }
+
+    private static func restoreChoices(persistedChoices: [ProviderChoice]) -> [ProviderChoice] {
+        if !persistedChoices.isEmpty {
+            return normalizedChoicesForEnabledProviders(persistedChoices)
+        }
+        return firstEnabledChoice().map { [$0] } ?? []
+    }
+
+    public static let defaultBuiltinChoices: [ProviderChoice] = defaultChatVendorOrder.map(ProviderChoice.builtin)
+
+    private static var defaultEnabledBuiltinChoices: [ProviderChoice] {
+        ProviderEnablement.enabledChatVendors(in: defaultChatVendorOrder).map(ProviderChoice.builtin)
+    }
+
+    public static func normalizedChoices(_ choices: [ProviderChoice], enabledChoices: [ProviderChoice]) -> [ProviderChoice] {
+        let out = uniqueChoices(choices.filter { enabledChoices.contains($0) })
+        return out.isEmpty ? Array(enabledChoices.prefix(1)) : out
+    }
+
+    private static func uniqueChoices(_ choices: [ProviderChoice]) -> [ProviderChoice] {
+        var out: [ProviderChoice] = []
+        for choice in choices {
+            guard !out.contains(choice) else { continue }
+            out.append(choice)
+        }
+        return out
+    }
+
+    private func normalizedChoicesForEnabledProviders(_ choices: [ProviderChoice]) -> [ProviderChoice] {
+        let enabled = effectiveEnabledChatChoices
+        let builtins = choices.filter { if case .builtin = $0 { return true }; return false }
+        let customs = choices.filter { if case .custom = $0 { return true }; return false }
+        let enabledBuiltins = enabled.filter { if case .builtin = $0 { return true }; return false }
+        let filteredBuiltins = Self.normalizedChoices(builtins, enabledChoices: enabledBuiltins)
+        let filteredCustoms = customs.filter { enabled.contains($0) }
+        if enabledChoiceScope == nil {
+            return Self.uniqueChoices(filteredBuiltins + customs)
+        }
+        return Self.uniqueChoices(filteredBuiltins + filteredCustoms)
+    }
+
+    private var effectiveEnabledChatChoices: [ProviderChoice] {
+        if let enabledChoiceScope { return enabledChoiceScope }
+        return Self.defaultEnabledBuiltinChoices
+    }
+
+    private static func normalizedChoicesForEnabledProviders(_ choices: [ProviderChoice]) -> [ProviderChoice] {
+        let enabled = defaultEnabledBuiltinChoices
+        let builtins = choices.filter { if case .builtin = $0 { return true }; return false }
+        let customs = choices.filter { if case .custom = $0 { return true }; return false }
+        let filteredBuiltins = normalizedChoices(builtins, enabledChoices: enabled)
+        return uniqueChoices(filteredBuiltins + customs)
+    }
+
+    private static func firstEnabledChoice() -> ProviderChoice? {
+        ProviderRegistry.firstEnabledProvider(for: .chat).map { .builtin($0.chatVendor) }
+    }
+
+    private func syncLegacyVendorMapsFromChoices() {
+        selectedModelByVendor = Dictionary(
+            uniqueKeysWithValues: selectedChoices.compactMap { choice in
+                guard let vendor = choice.chatVendor,
+                      let model = selectedModelByChoice[choice] else { return nil }
+                return (vendor, model)
+            }
+        )
+        selectedEffortByVendor = Dictionary(
+            uniqueKeysWithValues: selectedChoices.compactMap { choice in
+                guard let vendor = choice.chatVendor,
+                      let effort = selectedEffortByChoice[choice] else { return nil }
+                return (vendor, effort)
+            }
+        )
+    }
+
+    private static func encodeMap(_ m: [ProviderChoice: String]) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: m.map { ($0.key.id, $0.value) })
+    }
+
+    private static func encodeMap(_ m: [ProviderChoice: ReasoningEffort]) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: m.map { ($0.key.id, $0.value.rawValue) })
+    }
+
+    private static func decodeChoiceStringMap(_ d: [String: Any]) -> [ProviderChoice: String] {
+        var out: [ProviderChoice: String] = [:]
+        for (k, v) in d {
+            guard let choice = ProviderChoice.decode(k), let str = v as? String else { continue }
+            out[choice] = str
+        }
+        return out
+    }
+
+    private static func decodeChoiceEffortMap(_ d: [String: Any]) -> [ProviderChoice: ReasoningEffort] {
+        var out: [ProviderChoice: ReasoningEffort] = [:]
+        for (k, v) in d {
+            guard let choice = ProviderChoice.decode(k),
+                  let str = v as? String,
+                  let effort = ReasoningEffort(rawValue: str) else { continue }
+            out[choice] = effort
+        }
+        return out
+    }
+
+    private static func restorePersistedVendors(defaults: UserDefaults) -> [ChatVendor] {
+        restorePersistedChoices(defaults: defaults).compactMap(\.chatVendor)
     }
 
     private static func restoreVendors(persistedVendors: [ChatVendor]) -> [ChatVendor] {
-        if !persistedVendors.isEmpty {
-            return normalizedVendorsForEnabledProviders(persistedVendors)
-        }
-        return firstEnabledVendor().map { [$0] } ?? []
+        restoreChoices(persistedChoices: persistedVendors.map(ProviderChoice.builtin)).compactMap(\.chatVendor)
     }
 
     public static func normalizedVendors(_ vendors: [ChatVendor], enabledVendors: [ChatVendor]) -> [ChatVendor] {
@@ -557,17 +777,15 @@ public final class ChatV2Store: ObservableObject {
     }
 
     private func normalizedVendorsForEnabledProviders(_ vendors: [ChatVendor]) -> [ChatVendor] {
-        Self.normalizedVendors(vendors, enabledVendors: effectiveEnabledChatVendors)
+        normalizedChoicesForEnabledProviders(vendors.map(ProviderChoice.builtin)).compactMap(\.chatVendor)
     }
 
     private var effectiveEnabledChatVendors: [ChatVendor] {
-        if let enabledVendorScope { return enabledVendorScope }
-        return ProviderEnablement.enabledChatVendors(in: Self.defaultChatVendorOrder)
+        effectiveEnabledChatChoices.compactMap(\.chatVendor)
     }
 
     private static func normalizedVendorsForEnabledProviders(_ vendors: [ChatVendor]) -> [ChatVendor] {
-        let enabled = ProviderEnablement.enabledChatVendors(in: defaultChatVendorOrder)
-        return normalizedVendors(vendors, enabledVendors: enabled)
+        normalizedChoicesForEnabledProviders(vendors.map(ProviderChoice.builtin)).compactMap(\.chatVendor)
     }
 
     private static func firstEnabledVendor() -> ChatVendor? {

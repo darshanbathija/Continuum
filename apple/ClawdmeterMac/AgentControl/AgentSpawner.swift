@@ -30,10 +30,17 @@ public enum AgentSpawner {
     /// subscription OAuth rail, not an API credential. Primary instance +
     /// no secrets is a passthrough, so pre-multi-account spawns are
     /// byte-identical.
+    ///
+    /// Custom providers (wire v29): `customProviderEnv` routes the spawn
+    /// through `sanitizedWithCustomProvider` instead — its overrides
+    /// (ANTHROPIC_BASE_URL + AUTH_TOKEN) are the credential rail, so it is
+    /// mutually exclusive with the account-instance axis (custom providers
+    /// have no account pins).
     public static func claudePtyEnv(
         extra: [String: String]? = nil,
         instance: ProviderInstanceId? = nil,
-        secrets: [String: String] = [:]
+        secrets: [String: String] = [:],
+        customProviderEnv: [String: String]? = nil
     ) -> [String: String] {
         var base = ProcessInfo.processInfo.environment
         if let extra { for (k, v) in extra { base[k] = v } }
@@ -42,6 +49,14 @@ public enum AgentSpawner {
             base = ProviderInstanceEnvironment.buildEnv(
                 for: instance, parentEnv: base, secrets: secrets
             )
+        }
+        if let customProviderEnv {
+            if let env = try? ClaudeSpawnEnv.sanitizedWithCustomProvider(
+                base: base,
+                customProviderOverrides: customProviderEnv
+            ) {
+                return env
+            }
         }
         return ClaudeSpawnEnv.sanitized(base: base)
     }
@@ -58,7 +73,9 @@ public enum AgentSpawner {
         resumeSessionId: String? = nil,
         deepResearch: Bool = false,
         strictMcp: Bool = false,
-        extraArgs: [String] = []
+        extraArgs: [String] = [],
+        rawModelPassthrough: Bool = false,
+        skipEffort: Bool = false
     ) -> [String]? {
         guard let claude = ShellRunner.locateBinary("claude") else { return nil }
         var argv = [claude]
@@ -74,9 +91,14 @@ public enum AgentSpawner {
             // Normalize the stable catalog id to the CLI form at the spawn
             // boundary (verified: `claude --model 'claude-opus-4-8[1m]'` works,
             // `claude-opus-4-8-1m` produces nothing).
-            let cliModel = model.hasSuffix("-1m")
-                ? String(model.dropLast(3)) + "[1m]"
-                : model
+            let cliModel: String
+            if rawModelPassthrough {
+                cliModel = model
+            } else {
+                cliModel = model.hasSuffix("-1m")
+                    ? String(model.dropLast(3)) + "[1m]"
+                    : model
+            }
             argv += ["--model", cliModel]
         }
         // Permission mode precedence: plan > bypass (autopilot) > acceptEdits
@@ -105,6 +127,7 @@ public enum AgentSpawner {
                 argv += ["--append-system-prompt", promptText]
             }
         } else if let effort,
+                  !skipEffort,
                   ModelCatalog.bundled.entry(forId: model ?? "")?.supportsEffort != false {
             // Only pass --effort to models that actually expose a reasoning
             // dial. Haiku 4.5 (and other supportsEffort:false models) don't —
@@ -171,6 +194,7 @@ public enum AgentSpawner {
     /// direct-PTY provider; all non-Claude sessions return empty argv so
     /// callers route them through their managed adapters.
     public static func argv(for session: AgentSession, autopilot: Bool = false) -> [String] {
+        let isCustomProvider = session.customProviderId != nil
         // Chat sessions always run in plan-mode regardless of stored
         // request flags — that's the safety wedge for v0.8.
         let planMode = session.kind == .chat ? true : (session.status == .planning)
@@ -183,7 +207,7 @@ public enum AgentSpawner {
             return claudeArgv(
                 model: session.model,
                 planMode: planMode,
-                effort: session.effort,
+                effort: isCustomProvider ? nil : session.effort,
                 autopilot: chatAutopilot,
                 // Track A: a session that already captured a CLI session id is a
                 // RESUME (idle-teardown / relaunch / crash-degraded) — pass it so
@@ -191,7 +215,9 @@ public enum AgentSpawner {
                 // session means clean start.
                 resumeSessionId: session.claudeSessionId,
                 deepResearch: session.deepResearch,
-                strictMcp: session.kind == .chat
+                strictMcp: session.kind == .chat,
+                rawModelPassthrough: isCustomProvider,
+                skipEffort: isCustomProvider
             ) ?? []
         case (.codex, _), (.gemini, _), (.cursor, _), (.opencode, _), (.grok, _):
             // Managed transports do not have direct CLI argv. Keep this empty so

@@ -44,9 +44,48 @@ public enum ClaudeSpawnEnv {
         return env
     }
 
+    public enum CustomProviderSanitizeError: Error, Equatable {
+        case missingCustomBaseURL
+    }
+
+    /// Apply custom-provider overrides after the subscription-billing scrub.
+    /// Requires a non-empty `ANTHROPIC_BASE_URL` so an auth token can never
+    /// be injected while still targeting api.anthropic.com.
+    public static func sanitizedWithCustomProvider(
+        base: [String: String] = ProcessInfo.processInfo.environment,
+        customProviderOverrides: [String: String]
+    ) throws -> [String: String] {
+        let baseURL = customProviderOverrides["ANTHROPIC_BASE_URL"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !baseURL.isEmpty else {
+            throw CustomProviderSanitizeError.missingCustomBaseURL
+        }
+        var env = sanitized(base: base)
+        for (key, value) in customProviderOverrides {
+            env[key] = value
+        }
+        return env
+    }
+
     /// True when an environment still carries a credential that would break
     /// subscription billing. Used by tests and a defensive daemon assertion.
+    ///
+    /// Custom-provider sessions intentionally carry `ANTHROPIC_AUTH_TOKEN` when
+    /// `ANTHROPIC_BASE_URL` points at a third-party gateway — only ambient
+    /// `ANTHROPIC_API_KEY` counts as a leak in that mode.
     public static func leaksAPICredential(_ env: [String: String]) -> Bool {
-        strippedKeys.contains { env[$0]?.isEmpty == false }
+        if isCustomAnthropicEndpoint(env) {
+            return env["ANTHROPIC_API_KEY"]?.isEmpty == false
+        }
+        return strippedKeys.contains { env[$0]?.isEmpty == false }
+    }
+
+    private static func isCustomAnthropicEndpoint(_ env: [String: String]) -> Bool {
+        guard let base = env["ANTHROPIC_BASE_URL"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !base.isEmpty else {
+            return false
+        }
+        return !base.lowercased().contains("api.anthropic.com")
     }
 }

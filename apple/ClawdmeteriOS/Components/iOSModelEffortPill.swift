@@ -11,22 +11,22 @@ import ClawdmeterShared
 struct iOSModelEffortPill: View {
     let agent: AgentKind
     let catalog: ModelCatalog
+    var customProviderId: String? = nil
     @Binding var selectedModelId: String?
     @Binding var selectedEffort: ReasoningEffort?
     /// Haiku and similar models advertise `supportsEffort=false`. When
     /// the active model is one of those the Effort section greys out.
     var modelSupportsEffort: Bool {
         guard let id = selectedModelId,
-              let entry = catalog.entry(forId: id)
+              let entry = catalog.entry(forId: id, customProviderId: customProviderId)
         else { return true }
         return entry.supportsEffort
     }
 
     var body: some View {
         Menu {
-            Section("Models") {
-                let models = (agent == .claude) ? catalog.claude : catalog.codex
-                ForEach(models) { entry in
+            Section(iOSModelPicker.sectionTitle(for: agent, customProviderId: customProviderId, in: catalog)) {
+                ForEach(iOSModelPicker.entries(for: agent, customProviderId: customProviderId, in: catalog)) { entry in
                     Button(action: { selectedModelId = entry.id }) {
                         Label {
                             HStack {
@@ -92,8 +92,8 @@ struct iOSModelEffortPill: View {
 
     private var summaryText: String {
         guard let id = selectedModelId,
-              let entry = catalog.entry(forId: id)
-        else { return agent == .claude ? "Pick a model" : "Pick a model" }
+              let entry = catalog.entry(forId: id, customProviderId: customProviderId)
+        else { return "Pick a model" }
         return entry.displayName
     }
 

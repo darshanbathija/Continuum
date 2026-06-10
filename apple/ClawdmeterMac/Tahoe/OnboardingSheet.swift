@@ -29,6 +29,7 @@ struct OnboardingSheet: View {
     @State private var openRouterKeyMessage: String?
     @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
     @State private var setupTerminal: SetupTerminalSession?
+    @State private var showCustomProviderEditor = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -49,6 +50,18 @@ struct OnboardingSheet: View {
             SetupTerminalSheet(terminal: terminal) {
                 setupTerminal = nil
                 Task { await refreshDiscovery() }
+            }
+        }
+        .sheet(isPresented: $showCustomProviderEditor) {
+            if let store = runtime?.customProviderStore {
+                CustomProviderEditorSheet(
+                    store: store,
+                    client: runtime?.loopbackClient,
+                    editingRecord: nil
+                ) {
+                    showCustomProviderEditor = false
+                    Task { await runtime?.loopbackClient?.refreshModelCatalog() }
+                }
             }
         }
     }
@@ -113,6 +126,20 @@ struct OnboardingSheet: View {
                     },
                     stagedEnabledProviderIDs: $stagedProviderIDs
                 )
+                TahoeHair().padding(.vertical, 10)
+                Button {
+                    showCustomProviderEditor = true
+                } label: {
+                    HStack(spacing: 6) {
+                        TahoeIcon("plus", size: 11, weight: .bold)
+                        Text("Add custom provider…")
+                            .font(TahoeFont.body(12.5, weight: .semibold))
+                    }
+                    .foregroundStyle(t.accent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("onboarding.provider.custom.add")
+                .padding(.leading, 4)
                 .padding(16)
             }
             if showOpenRouterKeyField {

@@ -243,6 +243,10 @@ public struct MacSettingsView: View {
             SettingsProviderRowsWithDeviceStatus(runtime: runtime)
         }
 
+        SettingsCard(title: "Custom providers", sub: "OpenAI- and Anthropic-compatible endpoints billed separately from built-in subscriptions.") {
+            CustomProviderSettingsSection(runtime: runtime)
+        }
+
         // One-time Full Disk Access opt-in. Continuum reads other tools' usage
         // (~/.codex, ~/.gemini, OpenCode); without access macOS re-prompts every
         // few minutes. The Release build is non-sandboxed (#230), so FDA durably

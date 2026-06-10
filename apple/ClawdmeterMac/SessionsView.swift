@@ -279,6 +279,7 @@ private struct ProvisionalLaunchConfiguration: Equatable {
     let agent: AgentKind
     let modelId: String
     let effort: ReasoningEffort?
+    let customProviderId: String?
 }
 
 struct QuickSpawnProvisionalSession: Equatable {
@@ -394,12 +395,18 @@ public final class SessionsModel: ObservableObject {
         sessionId: UUID,
         agent: AgentKind,
         modelId: String,
-        effort: ReasoningEffort?
+        effort: ReasoningEffort?,
+        customProviderId: String? = nil
     ) -> Bool {
         guard provisioningSessionIds.contains(sessionId),
               registry.session(id: sessionId) != nil
         else { return false }
-        let next = ProvisionalLaunchConfiguration(agent: agent, modelId: modelId, effort: effort)
+        let next = ProvisionalLaunchConfiguration(
+            agent: agent,
+            modelId: modelId,
+            effort: effort,
+            customProviderId: customProviderId
+        )
         if provisionalLaunchConfigurations[sessionId] != next {
             provisionalLaunchConfigurations[sessionId] = next
             registry.previewLaunchConfiguration(
@@ -411,6 +418,7 @@ public final class SessionsModel: ObservableObject {
         }
         if let store = composerStores[sessionId] {
             store.agent = agent
+            store.customProviderId = customProviderId
             store.modelId = modelId
             store.effort = effort
         }
@@ -894,14 +902,17 @@ public final class SessionsModel: ObservableObject {
         let launchAgent: AgentKind
         let launchModel: String?
         let launchEffort: ReasoningEffort?
+        let launchCustomProviderId: String?
         if let launchConfig = provisionalLaunchConfigurations[sessionId] {
             launchAgent = launchConfig.agent
             launchModel = launchConfig.modelId
             launchEffort = launchConfig.effort
+            launchCustomProviderId = launchConfig.customProviderId
         } else {
             launchAgent = launchSession?.agent ?? fallbackAgent
             launchModel = launchSession?.model ?? fallbackModel
             launchEffort = launchSession?.effort ?? fallbackEffort
+            launchCustomProviderId = launchSession?.customProviderId
         }
         return NewSessionRequest(
             repoKey: repoKey,
@@ -912,7 +923,8 @@ public final class SessionsModel: ObservableObject {
             useWorktree: true,
             effort: launchEffort,
             existingWorkspacePath: cwd,
-            sessionId: sessionId
+            sessionId: sessionId,
+            customProviderId: launchCustomProviderId
         )
     }
 
@@ -1994,7 +2006,8 @@ public final class SessionsModel: ObservableObject {
         effort: ReasoningEffort?,
         providerInstanceId: String? = nil,
         existingWorkspacePath: String?,
-        sessionId: UUID?
+        sessionId: UUID?,
+        customProviderId: String? = nil
     ) async throws -> AgentSession {
         guard let runtime = AppDelegate.runtime,
               let port = runtime.agentControlServer.boundPort else {
@@ -2014,7 +2027,8 @@ public final class SessionsModel: ObservableObject {
             effort: effort,
             providerInstanceId: providerInstanceId,
             existingWorkspacePath: existingWorkspacePath,
-            sessionId: sessionId
+            sessionId: sessionId,
+            customProviderId: customProviderId
         )
         let session = try await sender.createSession(req)
         recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
@@ -2051,7 +2065,8 @@ public final class SessionsModel: ObservableObject {
         // spawn-time. Callers (EmptyStateCenteredComposer) pass the
         // composer's rendered body; nil falls back to `goal` for paths
         // that don't have a composer (resume flows, daemon-side spawns).
-        initialMessage: String? = nil
+        initialMessage: String? = nil,
+        customProviderId: String? = nil
     ) async throws -> AgentSession {
         try assertProviderEnabled(agent)
         if resumeSessionId != nil {
@@ -2083,7 +2098,8 @@ public final class SessionsModel: ObservableObject {
         return try await spawnHarnessSessionViaDaemon(
             repoPath: repoPath, agent: agent, planMode: planMode, goal: goal, mode: mode,
             model: model, effort: effort, providerInstanceId: providerInstanceId,
-            existingWorkspacePath: nil, sessionId: nil
+            existingWorkspacePath: nil, sessionId: nil,
+            customProviderId: customProviderId
         )
     }
 
@@ -2104,7 +2120,8 @@ public final class SessionsModel: ObservableObject {
         autopilot: Bool = false,
         providerInstanceId: String? = nil,
         initialMessage: String? = nil,
-        inheritedContextSourceIds: [UUID] = []
+        inheritedContextSourceIds: [UUID] = [],
+        customProviderId: String? = nil
     ) async throws -> AgentSession {
         try assertProviderEnabled(agent)
         let paths = Self.existingWorkspaceRecordPaths(
@@ -2148,7 +2165,8 @@ public final class SessionsModel: ObservableObject {
             let session = try await spawnHarnessSessionViaDaemon(
                 repoPath: repoPath, agent: agent, planMode: planMode, goal: goal, mode: mode,
                 model: model, effort: effort, providerInstanceId: providerInstanceId,
-                existingWorkspacePath: workspacePath, sessionId: nil
+                existingWorkspacePath: workspacePath, sessionId: nil,
+                customProviderId: customProviderId
             )
             try await registry.setInheritedContextSources(sessionId: session.id, sourceIds: inheritedContextSourceIds)
             return registry.session(id: session.id) ?? session

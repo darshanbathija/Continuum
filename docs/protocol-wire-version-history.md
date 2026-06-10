@@ -172,3 +172,9 @@ keys (primaries stay on the legacy keys), surfaced via
 `UsageEnvelope.secondaryInstanceUsage()`. `providerInstanceListMinimum
 = 28` gates the Mac + iOS account pickers; clients paired to a Mac on
 wire < 28 hide the pickers entirely and keep primary-only behavior.
+v29 (2026-06): custom OpenAI/Anthropic-compatible providers. Adds
+`ModelCatalog.customProviders`, `customProviderId` on session/chat DTOs,
+`GET /custom-providers`, and `ChatProvidersResponse.customProviders`.
+Keys never cross the wire; enablement lives on each record. Gate:
+`customProvidersMinimum = 29`. (v28 = multi-account provider
+instances, merged in PR #304 — see the v28 entry above.)

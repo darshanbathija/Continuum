@@ -18,13 +18,16 @@ public final class SessionConfigChanger {
 
     private let registry: AgentSessionRegistry
     private let repoEnvResolver: RepoEnvRuntimeResolver?
+    private let customProviderStore: CustomProviderStore?
 
     public init(
         registry: AgentSessionRegistry,
-        repoEnvResolver: RepoEnvRuntimeResolver? = nil
+        repoEnvResolver: RepoEnvRuntimeResolver? = nil,
+        customProviderStore: CustomProviderStore? = nil
     ) {
         self.registry = registry
         self.repoEnvResolver = repoEnvResolver
+        self.customProviderStore = customProviderStore
     }
 
     /// Swap one or more config dimensions on a live session.
@@ -110,10 +113,19 @@ public final class SessionConfigChanger {
             return .spawnError(message: "Could not locate agent binary on PATH")
         }
         do {
-            // Multi-account: a config swap stays on the session's pinned account.
-            guard let env = await InstanceSpawnEnv.claudeEnv(for: updated, extra: resolvedRepoEnv) else {
-                try? await registry.updateStatus(id: sessionId, status: .degraded)
-                return .spawnError(message: "This session's provider account was removed — re-add it in Settings")
+            // Custom provider beats the account axis (a custom-provider
+            // session has no account pin); otherwise the config swap stays on
+            // the session's pinned account and fails closed if it's gone.
+            let customEnv = try customProviderEnv(for: updated)
+            let env: [String: String]
+            if let customEnv {
+                env = AgentSpawner.claudePtyEnv(extra: resolvedRepoEnv, customProviderEnv: customEnv)
+            } else {
+                guard let instanceEnv = await InstanceSpawnEnv.claudeEnv(for: updated, extra: resolvedRepoEnv) else {
+                    try? await registry.updateStatus(id: sessionId, status: .degraded)
+                    return .spawnError(message: "This session's provider account was removed — re-add it in Settings")
+                }
+                env = instanceEnv
             }
             _ = try await ClaudePtyRegistry.shared.resumeOrSpawn(id: sessionId, plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env) })
             try await registry.updateRuntime(id: sessionId, worktreePath: session.worktreePath,
@@ -147,10 +159,19 @@ public final class SessionConfigChanger {
         let argv = AgentSpawner.argv(for: session, autopilot: AutopilotState.shared.isEnabled(sessionId: sessionId))
         guard !argv.isEmpty else { return .spawnError(message: "Could not locate agent binary on PATH") }
         do {
-            // Multi-account: revive stays on the session's pinned account.
-            guard let env = await InstanceSpawnEnv.claudeEnv(for: session, extra: resolvedRepoEnv) else {
-                try? await registry.updateStatus(id: sessionId, status: .degraded)
-                return .spawnError(message: "This session's provider account was removed — re-add it in Settings")
+            // Custom provider beats the account axis (a custom-provider
+            // session has no account pin); otherwise the revive stays on
+            // the session's pinned account and fails closed if it's gone.
+            let customEnv = try customProviderEnv(for: session)
+            let env: [String: String]
+            if let customEnv {
+                env = AgentSpawner.claudePtyEnv(extra: resolvedRepoEnv, customProviderEnv: customEnv)
+            } else {
+                guard let instanceEnv = await InstanceSpawnEnv.claudeEnv(for: session, extra: resolvedRepoEnv) else {
+                    try? await registry.updateStatus(id: sessionId, status: .degraded)
+                    return .spawnError(message: "This session's provider account was removed — re-add it in Settings")
+                }
+                env = instanceEnv
             }
             _ = try await ClaudePtyRegistry.shared.resumeOrSpawn(id: sessionId, plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env) })
             try await registry.updateRuntime(id: sessionId, worktreePath: session.worktreePath,
@@ -164,6 +185,14 @@ public final class SessionConfigChanger {
             try? await registry.updateStatus(id: sessionId, status: .degraded)
             return .spawnError(message: error.localizedDescription)
         }
+    }
+
+    private func customProviderEnv(for session: AgentSession) throws -> [String: String]? {
+        guard let customProviderId = session.customProviderId else { return nil }
+        guard let store = customProviderStore else {
+            throw CustomProviderSpawnPlan.ResolveError.providerNotFound(customProviderId)
+        }
+        return try CustomProviderSpawnPlan.resolve(for: session, store: store)?.envOverrides
     }
 
 }

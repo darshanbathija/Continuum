@@ -300,6 +300,7 @@ public final class AgentSessionRegistry: ObservableObject {
         envSetId: UUID? = nil,
         envSetName: String? = nil,
         providerInstanceId: String? = nil,
+        customProviderId: String? = nil,
         id: UUID = UUID()
     ) async throws -> AgentSession {
         let now = Date()
@@ -325,7 +326,8 @@ public final class AgentSessionRegistry: ObservableObject {
             runtimeBinding: Self.makeRuntimeBinding(
                 agent: agent,
                 model: model,
-                codexBackend: nil
+                codexBackend: nil,
+                billingProvider: customProviderId
             ),
             effort: effort,
             abPairSessionId: abPairSessionId,
@@ -333,7 +335,8 @@ public final class AgentSessionRegistry: ObservableObject {
             inheritedContextSourceIds: inheritedContextSourceIds,
             ownsWorktree: ownsWorktree,
             envSetId: envSetId,
-            envSetName: envSetName
+            envSetName: envSetName,
+            customProviderId: customProviderId
         )
         // Write-ahead: receipt lands BEFORE in-memory mutation. If the
         // event store rejects the write, we propagate and the caller
@@ -363,7 +366,8 @@ public final class AgentSessionRegistry: ObservableObject {
         deepResearch: Bool = false,
         chatVendor: ChatVendor? = nil,
         billingProvider: String? = nil,
-        providerInstanceId: String? = nil
+        providerInstanceId: String? = nil,
+        customProviderId: String? = nil
     ) async throws -> AgentSession {
         let id = UUID()
         let now = Date()
@@ -399,7 +403,7 @@ public final class AgentSessionRegistry: ObservableObject {
                 model: model,
                 codexBackend: codexChatBackend,
                 chatVendor: chatVendor,
-                billingProvider: billingProvider
+                billingProvider: customProviderId ?? billingProvider
             ),
             effort: effort,
             kind: .chat,
@@ -407,7 +411,8 @@ public final class AgentSessionRegistry: ObservableObject {
             frontierChildIndex: frontierChildIndex,
             codexChatBackend: codexChatBackend,
             deepResearch: deepResearch,
-            providerInstanceId: providerInstanceId
+            providerInstanceId: providerInstanceId,
+            customProviderId: customProviderId
         )
         // Write-ahead: see comment on `create(...)`. Chat sessions take
         // the same receipt path so replay reconstructs both `code` and
@@ -467,6 +472,10 @@ public final class AgentSessionRegistry: ObservableObject {
 
     public func session(id: UUID) -> AgentSession? {
         sessions.first { $0.id == id }
+    }
+
+    public func sessions(customProviderId: String) -> [AgentSession] {
+        sessions.filter { $0.customProviderId == customProviderId }
     }
 
     /// Per-session monotonic event seq counter. Used by AgentEventStream.
@@ -1046,7 +1055,8 @@ public final class AgentSessionRegistry: ObservableObject {
         lastEventSeq: UInt64? = nil,
         frontierGroupId: UUID?? = nil,
         frontierChildIndex: Int?? = nil,
-        planProgress: PlanProgress?? = nil
+        planProgress: PlanProgress?? = nil,
+        customProviderId: String?? = nil
     ) -> AgentSession {
         AgentSession(
             id: s.id,
@@ -1101,7 +1111,8 @@ public final class AgentSessionRegistry: ObservableObject {
             inheritedContextSourceIds: Self.resolve(inheritedContextSourceIds, fallback: s.inheritedContextSourceIds),
             ownsWorktree: ownsWorktree ?? s.ownsWorktree,
             envSetId: Self.resolve(envSetId, fallback: s.envSetId),
-            envSetName: Self.resolve(envSetName, fallback: s.envSetName)
+            envSetName: Self.resolve(envSetName, fallback: s.envSetName),
+            customProviderId: Self.resolve(customProviderId, fallback: s.customProviderId)
         )
     }
 

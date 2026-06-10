@@ -17,7 +17,7 @@ public enum AgentControlWireVersion {
     /// Current wire version. Bump when adding a new WS op, REST endpoint, or
     /// DTO that older peers must explicitly gate. Historical bump notes live
     /// in docs/protocol-wire-version-history.md.
-    public static let current: Int = 28
+    public static let current: Int = 29
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -219,6 +219,15 @@ public enum AgentControlWireVersion {
     /// older daemon would ignore the fields and double-provision, so the Mac
     /// falls back to the tmux path below this version.
     public static let harnessSpawnMinimum: Int = 27
+
+    /// v29: minimum wire version exposing user-configured OpenAI/Anthropic-
+    /// compatible custom providers (`ModelCatalog.customProviders`,
+    /// `customProviderId` on session/chat DTOs, `GET /custom-providers`).
+    /// Older Macs decode `customProviders` as `[]` and omit custom rows.
+    /// (v28 belongs to multi-account provider instances, PR #304 — this
+    /// PR lands second, so it takes the next number; a Mac advertising
+    /// 28 has multi-account but NOT custom providers.)
+    public static let customProvidersMinimum: Int = 29
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -441,5 +450,10 @@ public enum AgentControlWireVersion {
     public static func supportsWorkspaceOnboarding(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= workspaceOnboardingMinimum
+    }
+
+    public static func supportsCustomProviders(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= customProvidersMinimum
     }
 }

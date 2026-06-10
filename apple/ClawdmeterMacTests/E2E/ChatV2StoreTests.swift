@@ -54,7 +54,7 @@ final class ChatV2StoreTests: XCTestCase {
 
     func test_persist_then_reload_restores_picks() {
         let store = ChatV2Store(defaults: defaults)
-        store.selectedVendors = [.chatgpt, .claude, .openrouter]
+        store.selectedChoices = [.builtin(.chatgpt), .builtin(.claude), .builtin(.openrouter)]
         store.selectedReplyProvider = .claude
         store.deepResearch = true
         store.selectModel("gpt-5.5-custom", for: .chatgpt)
@@ -108,7 +108,7 @@ final class ChatV2StoreTests: XCTestCase {
 
     func test_frontierSlots_carry_provider_model_effort_backend_and_deepResearch() {
         let store = ChatV2Store(defaults: defaults)
-        store.selectedVendors = [.claude, .chatgpt, .openrouter]
+        store.selectedChoices = [.builtin(.claude), .builtin(.chatgpt), .builtin(.openrouter)]
         store.deepResearch = true
         store.selectModel("claude-opus-test", for: .claude)
         store.selectModel("gpt-5.5-test", for: .chatgpt)
@@ -147,13 +147,13 @@ final class ChatV2StoreTests: XCTestCase {
 
     func test_firstSendKind_carries_provider_model_effort_deepResearch() {
         let store = ChatV2Store(defaults: defaults)
-        store.selectedVendors = [.chatgpt]
+        store.selectedChoices = [.builtin(.chatgpt)]
         store.selectModel("gpt-5.5", for: .chatgpt)
         store.selectEffort(.max, for: .chatgpt)
         store.deepResearch = true
 
         let kind = store.firstSendKind()
-        guard case let .chatCreateV2(provider, model, effort, deepResearch, codexBackend) = kind else {
+        guard case let .chatCreateV2(provider, model, effort, deepResearch, codexBackend, customProviderId) = kind else {
             XCTFail("expected .chatCreateV2, got \(kind)")
             return
         }
@@ -166,9 +166,9 @@ final class ChatV2StoreTests: XCTestCase {
 
     func test_firstSendKind_omits_codexBackend_when_not_codex() {
         let store = ChatV2Store(defaults: defaults)
-        store.selectedVendors = [.claude]
+        store.selectedChoices = [.builtin(.claude)]
         let kind = store.firstSendKind()
-        guard case let .chatCreateV2(_, _, _, _, codexBackend) = kind else {
+        guard case let .chatCreateV2(_, _, _, _, codexBackend, _) = kind else {
             XCTFail("expected .chatCreateV2")
             return
         }

@@ -338,6 +338,11 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     public let envSetId: UUID?
     public let envSetName: String?
 
+    /// v28: when set, the session routes through a user-configured custom
+    /// provider (OpenAI/Anthropic-compatible endpoint). Pinned at spawn so
+    /// respawn/revive/approve-plan keep the same billing rail.
+    public let customProviderId: String?
+
     public init(
         id: UUID,
         repoKey: String?,
@@ -382,7 +387,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         inheritedContextSourceIds: [UUID]? = nil,
         ownsWorktree: Bool = false,
         envSetId: UUID? = nil,
-        envSetName: String? = nil
+        envSetName: String? = nil,
+        customProviderId: String? = nil
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -428,6 +434,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.ownsWorktree = ownsWorktree
         self.envSetId = envSetId
         self.envSetName = envSetName
+        self.customProviderId = customProviderId
     }
 
     public init(from decoder: Decoder) throws {
@@ -514,6 +521,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         }
         self.envSetId = (try? c.decodeIfPresent(UUID.self, forKey: .envSetId)) ?? nil
         self.envSetName = (try? c.decodeIfPresent(String.self, forKey: .envSetName)) ?? nil
+        self.customProviderId = (try? c.decodeIfPresent(String.self, forKey: .customProviderId)) ?? nil
     }
 
     /// User-facing label for the session. Prefers the user-set
@@ -566,6 +574,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              ownsWorktree,
              // Repo env sets.
              envSetId, envSetName,
+             // v28 custom provider routing pin.
+             customProviderId,
              // v6 (Track A): Claude PTY CLI session id.
              claudeSessionId
     }
@@ -654,6 +664,9 @@ public struct NewSessionRequest: Codable, Sendable {
     /// this id). `nil` = daemon mints a fresh id (back-compat / iOS path).
     public let sessionId: UUID?
 
+    /// v28: route spawn through a user-configured custom provider.
+    public let customProviderId: String?
+
     public init(
         repoKey: String,
         agent: AgentKind,
@@ -666,7 +679,8 @@ public struct NewSessionRequest: Codable, Sendable {
         abPair: AgentKind? = nil,
         providerInstanceId: String? = nil,
         existingWorkspacePath: String? = nil,
-        sessionId: UUID? = nil
+        sessionId: UUID? = nil,
+        customProviderId: String? = nil
     ) {
         self.repoKey = repoKey
         self.agent = agent
@@ -680,6 +694,7 @@ public struct NewSessionRequest: Codable, Sendable {
         self.providerInstanceId = providerInstanceId
         self.existingWorkspacePath = existingWorkspacePath
         self.sessionId = sessionId
+        self.customProviderId = customProviderId
     }
 
     // Custom decoder to tolerate v2 requests missing the new fields.
@@ -705,11 +720,12 @@ public struct NewSessionRequest: Codable, Sendable {
         // clients omitting the fields deserialize cleanly (back-compat).
         self.existingWorkspacePath = try c.decodeIfPresent(String.self, forKey: .existingWorkspacePath)
         self.sessionId = try c.decodeIfPresent(UUID.self, forKey: .sessionId)
+        self.customProviderId = try c.decodeIfPresent(String.self, forKey: .customProviderId)
     }
 
     private enum CodingKeys: String, CodingKey {
         case repoKey, agent, model, planMode, goal, useWorktree, baseBranch, effort, abPair, providerInstanceId
-        case existingWorkspacePath, sessionId
+        case existingWorkspacePath, sessionId, customProviderId
     }
 }
 
@@ -724,11 +740,39 @@ public struct ChangeModelRequest: Codable, Sendable {
     /// Code V2 mobile outbox dedupe key. v16+ servers reuse the receipt
     /// for replays of the same key.
     public let idempotencyKey: String?
+    /// v28: collision-safe model lookup scope for custom providers.
+    public let customProviderId: String?
 
-    public init(model: String, effort: ReasoningEffort? = nil, idempotencyKey: String? = nil) {
+    public init(
+        model: String,
+        effort: ReasoningEffort? = nil,
+        idempotencyKey: String? = nil,
+        customProviderId: String? = nil
+    ) {
         self.model = model
         self.effort = effort
         self.idempotencyKey = idempotencyKey
+        self.customProviderId = customProviderId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.model = try c.decode(String.self, forKey: .model)
+        self.effort = try c.decodeIfPresent(ReasoningEffort.self, forKey: .effort)
+        self.idempotencyKey = try c.decodeIfPresent(String.self, forKey: .idempotencyKey)
+        self.customProviderId = try c.decodeIfPresent(String.self, forKey: .customProviderId)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(model, forKey: .model)
+        try c.encodeIfPresent(effort, forKey: .effort)
+        try c.encodeIfPresent(idempotencyKey, forKey: .idempotencyKey)
+        try c.encodeIfPresent(customProviderId, forKey: .customProviderId)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case model, effort, idempotencyKey, customProviderId
     }
 }
 

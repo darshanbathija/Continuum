@@ -718,14 +718,16 @@ struct CenterThread: View {
             onChangePermissionMode: { newMode in
                 Task { await changePermissionMode(to: newMode) }
             },
-            onSelectModelConfiguration: model.isProvisioning(session.id) ? { agent, modelId, effort in
+            onSelectModelConfiguration: model.isProvisioning(session.id) ? { choice, modelId, effort in
                 model.configureProvisionalLaunch(
                     sessionId: session.id,
-                    agent: agent,
+                    agent: choice.backingAgent(in: catalog) ?? composerStore.agent,
                     modelId: modelId,
-                    effort: effort
+                    effort: effort,
+                    customProviderId: choice.customProviderId
                 )
             } : nil,
+            customProviderIdForModelPicker: session.customProviderId,
             permissionMode: PermissionModeStore.shared.currentMode(for: session),
             onApprovePlan: {
                 Task {
@@ -760,17 +762,24 @@ struct CenterThread: View {
             // SessionConfigChanger swap so it doesn't fail with a toast.
             guard !isRepoint, !isReadOnly, let new else { return }
             if model.isProvisioning(session.id) {
-                let pendingAgent = catalog.entry(forId: new)?.provider ?? composerStore.agent
+                let pendingAgent = catalog.entry(
+                    forId: new,
+                    customProviderId: composerStore.customProviderId ?? session.customProviderId
+                )?.provider ?? composerStore.agent
                 model.configureProvisionalLaunch(
                     sessionId: session.id,
                     agent: pendingAgent,
                     modelId: new,
-                    effort: composerStore.effort
+                    effort: composerStore.effort,
+                    customProviderId: composerStore.customProviderId ?? session.customProviderId
                 )
                 return
             }
             guard !isHarnessDriven, new != session.model else { return }
-            if let entry = catalog.entry(forId: new) {
+            if let entry = catalog.entry(
+                forId: new,
+                customProviderId: session.customProviderId
+            ) {
                 if entry.provider != session.agent {
                     // A bound runtime can't change provider — model plurality
                     // lives in tabs. Restore this session's chip and open a
@@ -791,12 +800,16 @@ struct CenterThread: View {
             guard !isRepoint, !isReadOnly, let new else { return }
             if model.isProvisioning(session.id),
                let pendingModelId = composerStore.modelId ?? effectiveModelId {
-                let pendingAgent = catalog.entry(forId: pendingModelId)?.provider ?? composerStore.agent
+                let pendingAgent = catalog.entry(
+                    forId: pendingModelId,
+                    customProviderId: composerStore.customProviderId ?? session.customProviderId
+                )?.provider ?? composerStore.agent
                 model.configureProvisionalLaunch(
                     sessionId: session.id,
                     agent: pendingAgent,
                     modelId: pendingModelId,
-                    effort: new
+                    effort: new,
+                    customProviderId: composerStore.customProviderId ?? session.customProviderId
                 )
                 return
             }

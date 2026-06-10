@@ -48,6 +48,7 @@ public final class AgentControlServer {
     /// new sessions with the repo's last-used model/effort/agent so
     /// iOS new-session flow doesn't need to ship explicit defaults.
     let workspaceStore: WorkspaceStore
+    let customProviderStore: CustomProviderStore?
     private let repoEnvResolver: RepoEnvRuntimeResolver?
     /// Wire v24: vendor CLI/MCP provisioning. Optional for tests that
     /// instantiate only the session daemon surface.
@@ -260,6 +261,7 @@ public final class AgentControlServer {
         chatStoreRegistry: DaemonChatStoreRegistry? = nil,
         chatFileResolver: SessionFileResolver? = nil,
         workspaceStore: WorkspaceStore? = nil,
+        customProviderStore: CustomProviderStore? = nil,
         repoEnvResolver: RepoEnvRuntimeResolver? = nil,
         vendorProvisioningService: VendorProvisioningService? = nil,
         mobileCommandOutbox: MobileCommandOutbox? = nil,
@@ -278,6 +280,7 @@ public final class AgentControlServer {
         // load + migrate-from-sessions runs without an actor hop. Tests
         // can inject an isolated tmpdir-backed store.
         self.workspaceStore = workspaceStore ?? WorkspaceStore()
+        self.customProviderStore = customProviderStore
         self.repoEnvResolver = repoEnvResolver
         self.vendorProvisioningService = vendorProvisioningService
         self.codeRunProfiles = CodeRunProfileService(repoEnvResolver: repoEnvResolver)
@@ -1441,6 +1444,16 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/chat-providers/refresh") { [weak self] _, conn, _ in
             await self?.handleRefreshChatProviders(connection: conn)
         }
+        // v28: custom OpenAI/Anthropic-compatible provider summaries.
+        t.register(method: "GET", pattern: "/custom-providers") { [weak self] _, conn, _ in
+            await self?.handleGetCustomProviders(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/custom-providers/:id/refresh-models") { [weak self] _, conn, params in
+            await self?.handleRefreshCustomProviderModels(
+                providerId: params["id"] ?? "",
+                connection: conn
+            )
+        }
         // Frontier endpoints back the 3-provider comparison surface.
         t.register(method: "POST", pattern: "/chat-sessions/frontier") { [weak self] req, conn, _ in
             await self?.handlePostFrontier(request: req, connection: conn)
@@ -1495,6 +1508,7 @@ public final class AgentControlServer {
             return true
         }
         let filtered = catalog.filtered(toEnabledProviderIDs: readyModelProviderIDs)
+        let customProviders = customProviderStore?.enabledWireSummaries() ?? []
         return ModelCatalog(
             claude: filtered.claude,
             codex: filtered.codex,
@@ -1503,6 +1517,7 @@ public final class AgentControlServer {
             cursor: filtered.cursor,
             grok: filtered.grok,
             enabledProviderIDs: enabledIDs,
+            customProviders: customProviders,
             updatedAt: filtered.updatedAt
         )
     }
@@ -1581,7 +1596,8 @@ public final class AgentControlServer {
             return
         }
         let liveCatalog = await providerEnabledModelCatalog()
-        guard !req.model.isEmpty, let modelEntry = liveCatalog.entry(forId: req.model) else {
+        guard !req.model.isEmpty,
+              let modelEntry = liveCatalog.entry(forId: req.model, customProviderId: session.customProviderId) else {
             sendResponse(.badRequest, on: connection); return
         }
         // Cross-provider model swaps strand a running session — it can't switch
@@ -1592,11 +1608,21 @@ public final class AgentControlServer {
         guard modelEntry.provider == session.agent else {
             sendResponse(.badRequest, on: connection); return
         }
+        guard modelEntry.customProviderId == session.customProviderId else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        if let requestedCustom = req.customProviderId, requestedCustom != session.customProviderId {
+            sendResponse(.badRequest, on: connection); return
+        }
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
         let oldModel = session.model
-        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(
+            registry: registry,
+            repoEnvResolver: repoEnvResolver,
+            customProviderStore: customProviderStore
+        )
         let result = await changer.swap(
             sessionId: uuid,
             newModel: req.model,
@@ -1634,7 +1660,11 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(
+            registry: registry,
+            repoEnvResolver: repoEnvResolver,
+            customProviderStore: customProviderStore
+        )
         let result = await changer.swap(sessionId: uuid, newEffort: .some(req.effort))
         guard sendSwapFailureIfNeeded(result, on: connection) else {
             return
@@ -1671,7 +1701,11 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(
+            registry: registry,
+            repoEnvResolver: repoEnvResolver,
+            customProviderStore: customProviderStore
+        )
         let result = await changer.swap(
             sessionId: uuid,
             newPlanMode: req.planMode,
@@ -1711,7 +1745,11 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
+        let changer = SessionConfigChanger(
+            registry: registry,
+            repoEnvResolver: repoEnvResolver,
+            customProviderStore: customProviderStore
+        )
         let result = await changer.revive(sessionId: uuid)
         guard sendSwapFailureIfNeeded(result, on: connection) else {
             return
@@ -1770,10 +1808,41 @@ public final class AgentControlServer {
         // Managed repo env (.env.local + repo env set), best-effort — conflicts
         // are surfaced separately by the create path before we reach spawn.
         let repoEnv = (try? resolveRepoEnv(session: session, cwd: cwd))?.environment
-        guard let env = await InstanceSpawnEnv.claudeEnv(for: session, extra: repoEnv) else {
-            return nil
+        let env: [String: String]
+        if let customEnv = customProviderEnv(for: session) {
+            env = AgentSpawner.claudePtyEnv(extra: repoEnv, customProviderEnv: customEnv)
+        } else {
+            guard let instanceEnv = await InstanceSpawnEnv.claudeEnv(for: session, extra: repoEnv) else {
+                return nil
+            }
+            env = instanceEnv
         }
         return ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env)
+    }
+
+    private func customProviderEnv(for session: AgentSession) -> [String: String]? {
+        guard let store = customProviderStore else { return nil }
+        return try? CustomProviderSpawnPlan.resolve(for: session, store: store)?.envOverrides
+    }
+
+    private func resolveCustomSpawnPlan(
+        customProviderId: String?,
+        agent: AgentKind
+    ) throws -> CustomProviderSpawnPlan? {
+        guard let customProviderId else { return nil }
+        guard let store = customProviderStore else {
+            throw CustomProviderSpawnPlan.ResolveError.providerNotFound(customProviderId)
+        }
+        return try CustomProviderSpawnPlan.resolve(
+            customProviderId: customProviderId,
+            agent: agent,
+            store: store
+        )
+    }
+
+    private func sendCustomProviderUnavailable(_ error: Error, on connection: NWConnection) {
+        let detail = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        sendJSON(["error": "custom_provider_unavailable", "detail": detail], on: connection, status: 503)
     }
 
     /// Wire the registry's unexpected-exit callback once: a crashed Claude
@@ -4252,11 +4321,29 @@ public final class AgentControlServer {
             return
         }
 
+        let spawnPlan: CustomProviderSpawnPlan?
+        do {
+            spawnPlan = try resolveCustomSpawnPlan(customProviderId: req.customProviderId, agent: req.agent)
+        } catch {
+            await cleanupUnregisteredWorktree(
+                repoRoot: req.repoKey, worktreePath: worktreePath,
+                provisioning: provisioning, provisionalSessionId: provisionalSessionId,
+                context: "custom provider resolve"
+            )
+            sendCustomProviderUnavailable(error, on: connection)
+            return
+        }
+
         // The ACP child REPLACES its environment (Process.environment), so it
         // must carry the full inherited env (PATH/HOME — Grok and Cursor both
         // need them) plus the repo-env overrides layered on top.
         var childEnv = ProcessInfo.processInfo.environment
         for (k, v) in (resolvedEnv?.environment ?? [:]) { childEnv[k] = v }
+        for (k, v) in spawnPlan?.envOverrides ?? [:] { childEnv[k] = v }
+        var launchArguments = arguments
+        if let spawnPlan {
+            launchArguments = spawnPlan.argvExtras + launchArguments
+        }
         // Multi-account: a pinned Codex account points the app-server at
         // its CODEX_HOME (auth.json + rollouts under the instance root).
         guard let instanceEnv = await InstanceSpawnEnv.harnessEnv(
@@ -4328,6 +4415,7 @@ public final class AgentControlServer {
                     envSetId: resolvedEnv?.set?.id,
                     envSetName: resolvedEnv?.set?.name,
                     providerInstanceId: req.providerInstanceId,
+                    customProviderId: req.customProviderId,
                     id: provisionalSessionId ?? UUID()
                 )
             } catch {
@@ -4366,7 +4454,7 @@ public final class AgentControlServer {
         do {
             try await bridge.start(
                 binary: binary,
-                arguments: arguments,
+                arguments: launchArguments,
                 cwd: cwd,
                 env: childEnv,
                 effort: nil,
@@ -5534,6 +5622,21 @@ public final class AgentControlServer {
         // fall back to any pane-backed runtime.
         do {
             let resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: cwd)
+            if let customProviderId = req.customProviderId {
+                do {
+                    _ = try resolveCustomSpawnPlan(customProviderId: customProviderId, agent: req.agent)
+                } catch {
+                    await cleanupUnregisteredWorktree(
+                        repoRoot: req.repoKey,
+                        worktreePath: worktreePath,
+                        provisioning: provisioning,
+                        provisionalSessionId: provisionalSessionId,
+                        context: "custom provider resolve"
+                    )
+                    sendCustomProviderUnavailable(error, on: connection)
+                    return
+                }
+            }
             let session = try await registry.create(
                 repoKey: req.repoKey,
                 repoDisplayName: (req.repoKey as NSString).lastPathComponent,
@@ -5551,6 +5654,7 @@ public final class AgentControlServer {
                 envSetId: resolvedEnv?.set?.id,
                 envSetName: resolvedEnv?.set?.name,
                 providerInstanceId: req.providerInstanceId,
+                customProviderId: req.customProviderId,
                 id: provisionalSessionId ?? UUID()
             )
             await ensureClaudePtyWiring()
@@ -5720,13 +5824,53 @@ public final class AgentControlServer {
         provider: AgentKind,
         requestedVendor: ChatVendor?,
         requestedBillingProvider: String?,
-        requestedCodexBackend: CodexChatBackend?
+        requestedCodexBackend: CodexChatBackend?,
+        customProviderId: String? = nil
     ) throws -> ResolvedChatRuntimeMetadata {
         guard let vendor = requestedVendor ?? ChatVendor.migrated(from: provider) else {
             throw ChatRuntimeValidationError.unknownProvider(provider)
         }
         guard vendor.backingProvider == provider else {
             throw ChatRuntimeValidationError.vendorProviderMismatch(provider: provider, vendor: vendor)
+        }
+
+        if let customProviderId {
+            let trimmed = customProviderId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw ChatRuntimeValidationError.billingProviderMismatch(
+                    vendor: vendor,
+                    expected: nil,
+                    actual: customProviderId
+                )
+            }
+            guard let store = customProviderStore,
+                  let record = store.record(id: trimmed),
+                  record.isEnabled else {
+                throw ChatRuntimeValidationError.billingProviderMismatch(
+                    vendor: vendor,
+                    expected: nil,
+                    actual: trimmed
+                )
+            }
+            let expectedAgent: AgentKind = record.kind == .anthropicCompatible ? .claude : .codex
+            guard provider == expectedAgent else {
+                throw ChatRuntimeValidationError.vendorProviderMismatch(provider: provider, vendor: vendor)
+            }
+            let normalizedBilling = requestedBillingProvider?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let requestedBilling = (normalizedBilling?.isEmpty == false) ? normalizedBilling : nil
+            if let requestedBilling, requestedBilling != trimmed {
+                throw ChatRuntimeValidationError.billingProviderMismatch(
+                    vendor: vendor,
+                    expected: trimmed,
+                    actual: requestedBilling
+                )
+            }
+            return ResolvedChatRuntimeMetadata(
+                vendor: vendor,
+                billingProvider: trimmed,
+                codexBackend: nil
+            )
         }
 
         let normalizedBilling = requestedBillingProvider?
@@ -5843,7 +5987,8 @@ public final class AgentControlServer {
                 provider: req.provider,
                 requestedVendor: req.chatVendor,
                 requestedBillingProvider: req.billingProvider,
-                requestedCodexBackend: req.codexChatBackend
+                requestedCodexBackend: req.codexChatBackend,
+                customProviderId: req.customProviderId
             )
         } catch let error as ChatRuntimeValidationError {
             sendChatRuntimeValidationError(error, on: connection)
@@ -5918,6 +6063,14 @@ public final class AgentControlServer {
         // voice review P1 #6).
         let session: AgentSession
         do {
+            if let customProviderId = req.customProviderId {
+                do {
+                    _ = try resolveCustomSpawnPlan(customProviderId: customProviderId, agent: req.provider)
+                } catch {
+                    sendCustomProviderUnavailable(error, on: connection)
+                    return
+                }
+            }
             session = try await registry.createChat(
                 provider: req.provider,
                 model: req.model,
@@ -5927,7 +6080,8 @@ public final class AgentControlServer {
                 deepResearch: req.deepResearch,
                 chatVendor: metadata.vendor,
                 billingProvider: metadata.billingProvider,
-                providerInstanceId: req.providerInstanceId
+                providerInstanceId: req.providerInstanceId,
+                customProviderId: req.customProviderId
             )
         } catch {
             serverLogger.error("createChat write-ahead failed: \(error.localizedDescription, privacy: .public)")
@@ -6080,6 +6234,7 @@ public final class AgentControlServer {
         deepResearch: Bool?,
         chatVendor: ChatVendor?,
         billingProvider: String?,
+        customProviderId: String? = nil,
         frontierGroupId: UUID? = nil,
         frontierChildIndex: Int? = nil,
         deferBridgeStart: Bool = false,
@@ -6100,7 +6255,8 @@ public final class AgentControlServer {
                 deepResearch: deepResearch ?? false,
                 chatVendor: chatVendor,
                 billingProvider: billingProvider,
-                providerInstanceId: providerInstanceId
+                providerInstanceId: providerInstanceId,
+                customProviderId: customProviderId
             )
         } catch {
             throw HarnessChatSpawnError.createFailed(error.localizedDescription)
@@ -6125,15 +6281,19 @@ public final class AgentControlServer {
             try? ChatCwdManager.remove(for: session.id)
             throw HarnessChatSpawnError.storeAcquireFailed
         }
+        let spawnPlan = try resolveCustomSpawnPlan(customProviderId: customProviderId, agent: provider)
         // Step 4: build the per-provider bridge.
         let display = providerDisplayName(provider)
         let binary: String?
-        let arguments: [String]
+        var arguments: [String]
         let bridge: AcpHarnessBridge
         switch provider {
         case .codex:
             binary = ShellRunner.locateBinary("codex") ?? "codex"
             arguments = ["app-server"]
+            if let spawnPlan {
+                arguments = spawnPlan.argvExtras + arguments
+            }
             bridge = .codexAppServer(
                 sessionId: session.id, store: store,
                 model: model, agentDisplayName: display
@@ -6200,13 +6360,19 @@ public final class AgentControlServer {
             throw HarnessChatSpawnError.unsupportedProvider
         }
         // Step 5: start the bridge. Chat inherits the daemon env (PATH/HOME) and
-        // runs in the sandbox cwd. Multi-account: a pinned Codex account
-        // overlays CODEX_HOME so app-server reads the instance's auth.json.
-        guard let childEnv = await InstanceSpawnEnv.harnessEnv(
-            base: ProcessInfo.processInfo.environment,
-            wireId: providerInstanceId,
-            agent: provider
-        ) else {
+        // runs in the sandbox cwd. Custom-provider spawn plans overlay their
+        // env first; a pinned Codex account then overlays CODEX_HOME so the
+        // app-server reads the instance's auth.json (fail closed if the
+        // account was removed).
+        var childEnv = ProcessInfo.processInfo.environment
+        for (key, value) in spawnPlan?.envOverrides ?? [:] {
+            childEnv[key] = value
+        }
+        if let instanceEnv = await InstanceSpawnEnv.harnessEnv(
+            base: childEnv, wireId: providerInstanceId, agent: provider
+        ) {
+            childEnv = instanceEnv
+        } else {
             await bridge.teardown()
             chatStoreRegistry.release(sessionId: session.id)
             try? await registry.delete(id: session.id)
@@ -6306,6 +6472,7 @@ public final class AgentControlServer {
                 provider: req.provider, model: req.model, effort: req.effort,
                 deepResearch: req.deepResearch, chatVendor: metadata.vendor,
                 billingProvider: metadata.billingProvider,
+                customProviderId: req.customProviderId,
                 deferBridgeStart: true,
                 providerInstanceId: req.providerInstanceId
             )
@@ -6316,6 +6483,8 @@ public final class AgentControlServer {
             } else {
                 sendResponse(.internalError, on: connection)
             }
+        } catch let error as CustomProviderSpawnPlan.ResolveError {
+            sendCustomProviderUnavailable(error, on: connection)
         } catch HarnessChatSpawnError.noAntigravityProjects {
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable", contentType: "application/json",
@@ -6553,17 +6722,72 @@ public final class AgentControlServer {
     /// polish phase. Gemini row is hardcoded `available: false, reason:
     /// "v0.9"` until Antigravity (agy) replacement ships.
     private func handleGetChatProviders(connection: NWConnection) async {
-        // v0.9.x: delegate to the ChatProviderProbe actor. Cache +
-        // in-flight de-dup live there now; the inline binary checks
-        // are gone. Auth state reflects ChatProviderAuthObserver
-        // overrides (Claude/Codex stderr + JSONL parsers, Antigravity
-        // agentapi 401 catch) when set.
-        let resp = await ChatProviderProbe.shared.currentProviders()
+        var resp = await ChatProviderProbe.shared.currentProviders()
+        if let store = customProviderStore {
+            let customProviders = store.chatProviderEntries()
+            resp = ChatProvidersResponse(
+                providers: resp.providers,
+                enabledProviderIDs: resp.enabledProviderIDs,
+                customProviders: customProviders
+            )
+        }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let body = try? encoder.encode(resp) {
             sendResponse(.ok(contentType: "application/json", body: body), on: connection)
         } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private struct CustomProvidersListResponse: Codable, Sendable {
+        let providers: [CustomProviderWireSummary]
+    }
+
+    private func handleGetCustomProviders(connection: NWConnection) async {
+        guard let store = customProviderStore else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let summaries = store.allRecords().map { store.wireSummary(for: $0) }
+        sendCodable(CustomProvidersListResponse(providers: summaries), on: connection)
+    }
+
+    private func handleRefreshCustomProviderModels(providerId: String, connection: NWConnection) async {
+        guard let store = customProviderStore else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        guard let record = store.record(id: providerId) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        do {
+            let apiKey = try store.resolveAPIKey(for: record)
+            let probe = CustomProviderAPIProbe()
+            let result = await probe.fetchModels(
+                kind: record.kind,
+                baseURL: record.baseURL,
+                apiKey: apiKey
+            )
+            let outcome = CustomProviderTestOutcome(
+                success: result.success,
+                modelCount: result.models.count,
+                httpStatus: result.httpStatus,
+                errorDetail: result.errorDetail
+            )
+            try store.setTestOutcome(id: providerId, outcome: outcome)
+            if result.success {
+                try store.setModels(id: providerId, models: result.models)
+            }
+            if let summary = store.wireSummary(id: providerId) {
+                sendCodable(summary, on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch let error as CustomProviderStoreError {
+            sendJSON(["error": "custom_provider_unavailable", "detail": error.localizedDescription ?? "unavailable"], on: connection, status: 503)
+        } catch {
             sendResponse(.internalError, on: connection)
         }
     }
@@ -7042,7 +7266,8 @@ public final class AgentControlServer {
                 provider: slot.provider,
                 requestedVendor: slot.chatVendor,
                 requestedBillingProvider: slot.billingProvider,
-                requestedCodexBackend: slot.codexChatBackend
+                requestedCodexBackend: slot.codexChatBackend,
+                customProviderId: slot.customProviderId
             )
         } catch let error as ChatRuntimeValidationError {
             throw SpawnFailure.message(chatRuntimeValidationMessage(error))
@@ -7071,6 +7296,7 @@ public final class AgentControlServer {
                     provider: slot.provider, model: slot.model, effort: slot.effort,
                     deepResearch: slot.deepResearch, chatVendor: metadata.vendor,
                     billingProvider: metadata.billingProvider,
+                    customProviderId: slot.customProviderId,
                     frontierGroupId: groupId, frontierChildIndex: childIndex
                 )
             } catch let harnessError as HarnessChatSpawnError {
@@ -7093,7 +7319,8 @@ public final class AgentControlServer {
                 frontierChildIndex: childIndex,
                 deepResearch: slot.deepResearch,
                 chatVendor: metadata.vendor,
-                billingProvider: metadata.billingProvider
+                billingProvider: metadata.billingProvider,
+                customProviderId: slot.customProviderId
             )
             let chatCwd: String
             do {
@@ -7119,10 +7346,16 @@ public final class AgentControlServer {
             }
             do {
                 await ensureClaudePtyWiring()
-                guard let env = await InstanceSpawnEnv.claudeEnv(for: updated) else {
-                    try? await registry.delete(id: session.id)
-                    try? ChatCwdManager.remove(for: session.id)
-                    throw SpawnFailure.message("provider_instance_unknown")
+                let env: [String: String]
+                if let customEnv = customProviderEnv(for: updated) {
+                    env = AgentSpawner.claudePtyEnv(customProviderEnv: customEnv)
+                } else {
+                    guard let instanceEnv = await InstanceSpawnEnv.claudeEnv(for: updated) else {
+                        try? await registry.delete(id: session.id)
+                        try? ChatCwdManager.remove(for: session.id)
+                        throw SpawnFailure.message("provider_instance_unknown")
+                    }
+                    env = instanceEnv
                 }
                 let plan = ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: chatCwd, env: env)
                 _ = try await claudePtyRegistry.resumeOrSpawn(id: session.id, plan: { plan })
@@ -7722,12 +7955,15 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
+        let isCustomProvider = session.customProviderId != nil
         guard let replacementArgv = AgentSpawner.claudeArgv(
             model: session.model,
             planMode: false,
-            effort: session.effort,
+            effort: isCustomProvider ? nil : session.effort,
             autopilot: false,
-            strictMcp: session.kind == .chat
+            strictMcp: session.kind == .chat,
+            rawModelPassthrough: isCustomProvider,
+            skipEffort: isCustomProvider
         ) else {
             serverLogger.error("approve-plan: missing CLI binary for \(session.agent.rawValue, privacy: .public)")
             sendResponse(.internalError, on: connection)
@@ -7735,12 +7971,19 @@ public final class AgentControlServer {
         }
         let cwd = session.effectiveCwd
         let repoEnv = (try? resolveRepoEnv(session: session, cwd: cwd))?.environment
-        // Multi-account: the post-approve respawn stays on the session's
-        // pinned account (fail closed if it was removed mid-plan).
-        guard let env = await InstanceSpawnEnv.claudeEnv(for: session, extra: repoEnv) else {
-            serverLogger.error("approve-plan: pinned provider instance unregistered for \(uuid.uuidString, privacy: .public)")
-            sendResponse(.internalError, on: connection)
-            return
+        // Custom provider beats the account axis; otherwise the post-approve
+        // respawn stays on the session's pinned account (fail closed if it
+        // was removed mid-plan).
+        let env: [String: String]
+        if let customEnv = customProviderEnv(for: session) {
+            env = AgentSpawner.claudePtyEnv(extra: repoEnv, customProviderEnv: customEnv)
+        } else {
+            guard let instanceEnv = await InstanceSpawnEnv.claudeEnv(for: session, extra: repoEnv) else {
+                serverLogger.error("approve-plan: pinned provider instance unregistered for \(uuid.uuidString, privacy: .public)")
+                sendResponse(.internalError, on: connection)
+                return
+            }
+            env = instanceEnv
         }
         await claudePtyRegistry.suspend(uuid)
         let approveSpawn = ClaudePtyRegistry.SpawnPlan(argv: replacementArgv, cwd: cwd, env: env)

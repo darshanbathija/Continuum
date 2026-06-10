@@ -106,13 +106,14 @@ public final class ComposerSendController: ObservableObject {
         // through createChatSession. Used by MacChatV2View and the
         // upcoming IOSChatV2View when no conversation is open and
         // the user hits Send.
-        case .chatCreateV2(let provider, let model, let effort, let deepResearch, let codexBackend):
+        case .chatCreateV2(let provider, let model, let effort, let deepResearch, let codexBackend, let customProviderId):
             let session = await client.createChatSession(
                 provider: provider,
                 model: model,
                 codexBackend: codexBackend,
                 effort: effort,
-                deepResearch: deepResearch
+                deepResearch: deepResearch,
+                customProviderId: customProviderId
             )
             if let session {
                 let ok = await client.sendPrompt(sessionId: session.id, text: trimmed, asFollowUp: false)
@@ -205,7 +206,8 @@ public enum SendKind: Sendable {
         model: String?,
         effort: ReasoningEffort?,
         deepResearch: Bool,
-        codexBackend: CodexChatBackend?
+        codexBackend: CodexChatBackend?,
+        customProviderId: String? = nil
     )
 
     public enum ChatMode: Sendable {
