@@ -84,7 +84,7 @@ struct PairingSettingsView: View {
     // MARK: - Pair section
 
     private var relayPairSection: some View {
-        tahoeSection("Pair with iPhone", footer: "Open Clawdmeter on your iPhone and scan the QR. The code expires after 15 minutes.") {
+        tahoeSection("Pair with iPhone", footer: "Open Clawdmeter on your iPhone and scan the QR. The code is valid for 30 days; regenerate any time to rotate the keys.") {
             switch pairingService.phase {
             case .unpaired:
                 relayUnpairedRow
@@ -293,15 +293,22 @@ struct PairingSettingsView: View {
     private func formatTTLCountdown(ttl: UInt64) -> String {
         let remaining = Int(Int64(ttl) - Int64(now.timeIntervalSince1970))
         if remaining <= 0 { return "expired" }
-        let minutes = remaining / 60
+        // Sessions are durable (30 days), so raw mm:ss would render as a
+        // 5-digit minute count. Show coarse units when far out and fall back
+        // to mm:ss only in the final hour, where the per-second ticker matters.
+        let days = remaining / 86_400
+        let hours = (remaining % 86_400) / 3_600
+        let minutes = (remaining % 3_600) / 60
         let seconds = remaining % 60
+        if days > 0 { return "\(days)d \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
         return String(format: "%d:%02d", minutes, seconds)
     }
 
     private func ttlColor(ttl: UInt64) -> Color {
         let remaining = Int(Int64(ttl) - Int64(now.timeIntervalSince1970))
         if remaining <= 0 { return .red }
-        if remaining < 60 { return .orange }
+        if remaining < 3_600 { return .orange }   // warn only in the final hour
         return .secondary
     }
 }
