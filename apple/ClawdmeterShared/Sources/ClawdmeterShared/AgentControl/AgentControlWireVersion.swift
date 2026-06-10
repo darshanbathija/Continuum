@@ -220,6 +220,12 @@ public enum AgentControlWireVersion {
     /// falls back to the tmux path below this version.
     public static let harnessSpawnMinimum: Int = 27
 
+    /// v28: minimum wire version exposing user-configured OpenAI/Anthropic-
+    /// compatible custom providers (`ModelCatalog.customProviders`,
+    /// `customProviderId` on session/chat DTOs, `GET /custom-providers`).
+    /// Older Macs decode `customProviders` as `[]` and omit custom rows.
+    public static let customProvidersMinimum: Int = 28
+
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
     /// compatible*: newer servers (e.g. wire v7) work fine with this
@@ -441,5 +447,10 @@ public enum AgentControlWireVersion {
     public static func supportsWorkspaceOnboarding(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= workspaceOnboardingMinimum
+    }
+
+    public static func supportsCustomProviders(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= customProvidersMinimum
     }
 }

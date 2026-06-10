@@ -27,6 +27,8 @@ public struct CreateChatSessionRequest: Codable, Sendable {
     /// keep today's behavior. Unknown wireIds are rejected at create
     /// (422), never silently re-billed to the primary.
     public let providerInstanceId: String?
+    /// v29: route through a user-configured custom provider.
+    public let customProviderId: String?
 
     public init(
         provider: AgentKind,
@@ -36,7 +38,8 @@ public struct CreateChatSessionRequest: Codable, Sendable {
         chatVendor: ChatVendor? = nil,
         billingProvider: String? = nil,
         deepResearch: Bool = false,
-        providerInstanceId: String? = nil
+        providerInstanceId: String? = nil,
+        customProviderId: String? = nil
     ) {
         self.provider = provider
         self.model = model
@@ -46,10 +49,11 @@ public struct CreateChatSessionRequest: Codable, Sendable {
         self.billingProvider = billingProvider
         self.deepResearch = deepResearch
         self.providerInstanceId = providerInstanceId
+        self.customProviderId = customProviderId
     }
 
     private enum CodingKeys: String, CodingKey {
-        case provider, model, effort, codexChatBackend, chatVendor, billingProvider, deepResearch, providerInstanceId
+        case provider, model, effort, codexChatBackend, chatVendor, billingProvider, deepResearch, providerInstanceId, customProviderId
     }
 
     public init(from decoder: Decoder) throws {
@@ -65,6 +69,7 @@ public struct CreateChatSessionRequest: Codable, Sendable {
         self.billingProvider = try c.decodeIfPresent(String.self, forKey: .billingProvider)
         self.deepResearch = try c.decodeIfPresent(Bool.self, forKey: .deepResearch) ?? false
         self.providerInstanceId = try c.decodeIfPresent(String.self, forKey: .providerInstanceId)
+        self.customProviderId = try c.decodeIfPresent(String.self, forKey: .customProviderId)
     }
 }
 
@@ -96,6 +101,8 @@ public struct FrontierModelSlot: Codable, Sendable {
     /// can independently run with deep-research argv. Defaults to false
     /// on older clients (decodeIfPresent).
     public let deepResearch: Bool
+    /// v28: route through a user-configured custom provider.
+    public let customProviderId: String?
 
     public init(
         provider: AgentKind,
@@ -104,7 +111,8 @@ public struct FrontierModelSlot: Codable, Sendable {
         codexChatBackend: CodexChatBackend? = nil,
         deepResearch: Bool = false,
         chatVendor: ChatVendor? = nil,
-        billingProvider: String? = nil
+        billingProvider: String? = nil,
+        customProviderId: String? = nil
     ) {
         self.provider = provider
         self.model = model
@@ -113,10 +121,11 @@ public struct FrontierModelSlot: Codable, Sendable {
         self.deepResearch = deepResearch
         self.chatVendor = chatVendor
         self.billingProvider = billingProvider
+        self.customProviderId = customProviderId
     }
 
     private enum CodingKeys: String, CodingKey {
-        case provider, model, effort, codexChatBackend, deepResearch, chatVendor, billingProvider
+        case provider, model, effort, codexChatBackend, deepResearch, chatVendor, billingProvider, customProviderId
     }
 
     public init(from decoder: Decoder) throws {
@@ -131,6 +140,7 @@ public struct FrontierModelSlot: Codable, Sendable {
         // mirrors the wire's decodeIfPresent philosophy.
         self.chatVendor = (try? c.decodeIfPresent(ChatVendor.self, forKey: .chatVendor)) ?? nil
         self.billingProvider = try c.decodeIfPresent(String.self, forKey: .billingProvider)
+        self.customProviderId = try c.decodeIfPresent(String.self, forKey: .customProviderId)
     }
 }
 
@@ -390,6 +400,8 @@ public struct FrontierChild: Codable, Sendable {
     public let snapshot: WireChatSnapshot?
     public let status: FrontierChildStatus
     public let currentTurnState: TurnState
+    /// v28: custom provider label for broadcast column headers.
+    public let customProviderId: String?
 
     public init(
         childIndex: Int,
@@ -398,7 +410,8 @@ public struct FrontierChild: Codable, Sendable {
         modelSlug: String,
         snapshot: WireChatSnapshot? = nil,
         status: FrontierChildStatus,
-        currentTurnState: TurnState = .idle
+        currentTurnState: TurnState = .idle,
+        customProviderId: String? = nil
     ) {
         self.childIndex = childIndex
         self.sessionId = sessionId
@@ -407,10 +420,11 @@ public struct FrontierChild: Codable, Sendable {
         self.snapshot = snapshot
         self.status = status
         self.currentTurnState = currentTurnState
+        self.customProviderId = customProviderId
     }
 
     private enum CodingKeys: String, CodingKey {
-        case childIndex, sessionId, provider, modelSlug, snapshot, status, currentTurnState
+        case childIndex, sessionId, provider, modelSlug, snapshot, status, currentTurnState, customProviderId
     }
 
     public init(from decoder: Decoder) throws {
@@ -424,6 +438,7 @@ public struct FrontierChild: Codable, Sendable {
         self.currentTurnState = try c.decodeIfPresent(TurnState.self, forKey: .currentTurnState)
             ?? self.snapshot?.currentTurnState
             ?? .idle
+        self.customProviderId = try c.decodeIfPresent(String.self, forKey: .customProviderId)
     }
 }
 
@@ -473,10 +488,34 @@ public enum FrontierChildStatus: String, Codable, Hashable, Sendable, CaseIterab
 public struct ChatProvidersResponse: Codable, Sendable {
     public let providers: [ChatProviderEntry]
     public let enabledProviderIDs: [String]?
+    public let customProviders: [CustomChatProviderEntry]
 
-    public init(providers: [ChatProviderEntry], enabledProviderIDs: [String]? = nil) {
+    public init(
+        providers: [ChatProviderEntry],
+        enabledProviderIDs: [String]? = nil,
+        customProviders: [CustomChatProviderEntry] = []
+    ) {
         self.providers = providers
         self.enabledProviderIDs = enabledProviderIDs
+        self.customProviders = customProviders
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providers, enabledProviderIDs, customProviders
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.providers = try c.decode([ChatProviderEntry].self, forKey: .providers)
+        self.enabledProviderIDs = try c.decodeIfPresent([String].self, forKey: .enabledProviderIDs)
+        self.customProviders = try c.decodeIfPresent([CustomChatProviderEntry].self, forKey: .customProviders) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(providers, forKey: .providers)
+        try c.encodeIfPresent(enabledProviderIDs, forKey: .enabledProviderIDs)
+        try c.encode(customProviders, forKey: .customProviders)
     }
 }
 

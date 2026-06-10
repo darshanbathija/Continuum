@@ -100,4 +100,17 @@ public enum ProviderRegistry {
         guard let descriptor = descriptor(usageProvider: usageProvider) else { return false }
         return ProviderEnablement.isEnabled(descriptor.id)
     }
+
+    /// Parse a custom provider id from a wire namespace id (`custom/<id>`).
+    public static func customProviderId(from wireId: String) -> String? {
+        let prefix = "custom/"
+        guard wireId.hasPrefix(prefix) else { return nil }
+        let id = String(wireId.dropFirst(prefix.count))
+        return id.isEmpty ? nil : id
+    }
+
+    /// Wire namespace id for a custom provider record.
+    public static func wireId(forCustomProviderId id: String) -> String {
+        "custom/\(id)"
+    }
 }

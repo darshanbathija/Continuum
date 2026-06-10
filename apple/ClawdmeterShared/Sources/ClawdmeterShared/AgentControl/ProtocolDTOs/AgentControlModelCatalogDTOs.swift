@@ -121,6 +121,8 @@ public struct ModelCatalogEntry: Codable, Hashable, Sendable, Identifiable {
     public let contextWindow: Int?        // 1_000_000 for "1M" variants, else nil
     public let recommendedFor: String?    // "Plan mode", "Fast iteration"
     public let badge: String?             // "New", "1M", "Fast"
+    /// When set, this entry belongs to a user-configured custom provider.
+    public let customProviderId: String?
 
     public init(
         id: String,
@@ -131,7 +133,8 @@ public struct ModelCatalogEntry: Codable, Hashable, Sendable, Identifiable {
         supportsEffort: Bool = true,
         contextWindow: Int? = nil,
         recommendedFor: String? = nil,
-        badge: String? = nil
+        badge: String? = nil,
+        customProviderId: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -142,6 +145,7 @@ public struct ModelCatalogEntry: Codable, Hashable, Sendable, Identifiable {
         self.contextWindow = contextWindow
         self.recommendedFor = recommendedFor
         self.badge = badge
+        self.customProviderId = customProviderId
     }
 }
 
@@ -170,6 +174,10 @@ public struct ModelCatalog: Codable, Sendable {
     /// behavior for older Macs/iOS builds; an empty array is an explicit
     /// zero-provider state.
     public let enabledProviderIDs: [String]?
+    /// User-configured OpenAI/Anthropic-compatible providers (wire v28).
+    /// Enablement lives on each summary's `enabled` flag — not filtered by
+    /// `enabledProviderIDs`.
+    public let customProviders: [CustomProviderWireSummary]
     public let updatedAt: Date
 
     public init(
@@ -180,6 +188,7 @@ public struct ModelCatalog: Codable, Sendable {
         cursor: [ModelCatalogEntry] = [],
         grok: [ModelCatalogEntry] = [],
         enabledProviderIDs: [String]? = nil,
+        customProviders: [CustomProviderWireSummary] = [],
         updatedAt: Date
     ) {
         self.claude = claude
@@ -189,6 +198,7 @@ public struct ModelCatalog: Codable, Sendable {
         self.cursor = cursor
         self.grok = grok
         self.enabledProviderIDs = enabledProviderIDs
+        self.customProviders = customProviders
         self.updatedAt = updatedAt
     }
 
@@ -267,7 +277,25 @@ public struct ModelCatalog: Codable, Sendable {
 
     /// Resolve a model id to a catalog entry across all providers.
     public func entry(forId id: String) -> ModelCatalogEntry? {
-        AgentKind.allCases.lazy
+        if let match = entry(forId: id, customProviderId: nil) {
+            return match
+        }
+        return customProviders
+            .flatMap(\.entries)
+            .first { $0.id == id || $0.cliAlias == id }
+    }
+
+    /// Collision-safe lookup when a custom endpoint may serve a model id
+    /// that also exists in the bundled catalog (e.g. `gpt-5.5`).
+    public func entry(forId id: String, customProviderId: String?) -> ModelCatalogEntry? {
+        if let customProviderId {
+            if let summary = customProviders.first(where: { $0.id == customProviderId }),
+               let match = summary.entries.first(where: { $0.id == id || $0.cliAlias == id }) {
+                return match
+            }
+            return nil
+        }
+        return AgentKind.allCases.lazy
             .flatMap { entries(for: $0) }
             .first { $0.id == id || $0.cliAlias == id }
     }
@@ -314,6 +342,7 @@ public struct ModelCatalog: Codable, Sendable {
             cursor: cursor,
             grok: grok,
             enabledProviderIDs: enabledProviderIDs,
+            customProviders: customProviders,
             updatedAt: Date()
         )
     }
@@ -327,6 +356,7 @@ public struct ModelCatalog: Codable, Sendable {
             cursor: cursor,
             grok: grok,
             enabledProviderIDs: enabledProviderIDs,
+            customProviders: customProviders,
             updatedAt: Date()
         )
     }
@@ -348,6 +378,7 @@ public struct ModelCatalog: Codable, Sendable {
             cursor: allowed(.cursor) ? cursor : [],
             grok: allowed(.grok) ? grok : [],
             enabledProviderIDs: enabledIDs,
+            customProviders: customProviders,
             updatedAt: updatedAt
         )
     }
@@ -359,7 +390,7 @@ public struct ModelCatalog: Codable, Sendable {
     /// Codable throws on missing keys; decodeIfPresent + default returns
     /// an empty Gemini array.
     private enum CodingKeys: String, CodingKey {
-        case claude, codex, gemini, opencode, cursor, grok, enabledProviderIDs, updatedAt
+        case claude, codex, gemini, opencode, cursor, grok, enabledProviderIDs, customProviders, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -371,6 +402,7 @@ public struct ModelCatalog: Codable, Sendable {
         self.cursor = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .cursor) ?? []
         self.grok = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .grok) ?? []
         self.enabledProviderIDs = try c.decodeIfPresent([String].self, forKey: .enabledProviderIDs)
+        self.customProviders = try c.decodeIfPresent([CustomProviderWireSummary].self, forKey: .customProviders) ?? []
         self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
     }
 
@@ -383,6 +415,7 @@ public struct ModelCatalog: Codable, Sendable {
         try c.encode(cursor, forKey: .cursor)
         try c.encode(grok, forKey: .grok)
         try c.encodeIfPresent(enabledProviderIDs, forKey: .enabledProviderIDs)
+        try c.encode(customProviders, forKey: .customProviders)
         try c.encode(updatedAt, forKey: .updatedAt)
     }
 }

@@ -74,6 +74,29 @@ public struct ProviderDefaultsSnapshot: Codable, Hashable, Sendable {
         return vendor.defaultModelId(in: catalog)
     }
 
+    public func modelId(forChoice choice: ProviderChoice) -> String? {
+        let value = modelByVendor[choice.id]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value?.isEmpty == false ? value : nil
+    }
+
+    public func modelId(forChoice choice: ProviderChoice, catalog: ModelCatalog) -> String? {
+        if let explicit = modelId(forChoice: choice),
+           Self.catalog(catalog, contains: explicit, for: choice) {
+            return explicit
+        }
+        return choice.defaultModelId(in: catalog)
+    }
+
+    public mutating func setDefault(forChoice choice: ProviderChoice, model: String?) {
+        let trimmed = model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            modelByVendor.removeValue(forKey: choice.id)
+        } else {
+            modelByVendor[choice.id] = trimmed
+        }
+        updatedAt = Date()
+    }
+
     public func effort(for vendor: ChatVendor, catalog: ModelCatalog) -> ReasoningEffort? {
         let model = modelId(for: vendor, catalog: catalog)
         guard ProviderModelPickerSupport.supportsEffort(
@@ -108,6 +131,12 @@ public struct ProviderDefaultsSnapshot: Codable, Hashable, Sendable {
 
     private static func catalog(_ catalog: ModelCatalog, contains id: String, for vendor: ChatVendor) -> Bool {
         let entries = vendor.models(in: catalog)
+        guard !entries.isEmpty else { return true }
+        return entries.contains { $0.id == id || $0.cliAlias == id }
+    }
+
+    private static func catalog(_ catalog: ModelCatalog, contains id: String, for choice: ProviderChoice) -> Bool {
+        let entries = choice.models(in: catalog)
         guard !entries.isEmpty else { return true }
         return entries.contains { $0.id == id || $0.cliAlias == id }
     }
@@ -162,8 +191,45 @@ public final class ProviderDefaultsStore: ObservableObject {
         snapshot.modelId(for: vendor, catalog: catalog)
     }
 
+    public func modelId(forChoice choice: ProviderChoice, catalog: ModelCatalog = .bundled) -> String? {
+        snapshot.modelId(forChoice: choice, catalog: catalog)
+    }
+
     public func effort(for vendor: ChatVendor, catalog: ModelCatalog = .bundled) -> ReasoningEffort? {
         snapshot.effort(for: vendor, catalog: catalog)
+    }
+
+    @discardableResult
+    public func setDefault(
+        forChoice choice: ProviderChoice,
+        model: String?,
+        effort: ReasoningEffort?,
+        clearModel: Bool = false,
+        clearEffort: Bool = false,
+        catalog: ModelCatalog = .bundled
+    ) -> ProviderDefaultsSnapshot {
+        var next = snapshot
+        if clearModel {
+            next.modelByVendor.removeValue(forKey: choice.id)
+        } else if let model {
+            next.setDefault(forChoice: choice, model: model)
+        }
+
+        let effectiveModel = next.modelId(forChoice: choice, catalog: catalog)
+        let supportsEffort = ProviderModelPickerSupport.supportsEffort(
+            choice: choice,
+            modelId: effectiveModel,
+            catalog: catalog
+        )
+        if clearEffort || !supportsEffort {
+            next.effortByVendor.removeValue(forKey: choice.id)
+        } else if let effort {
+            next.effortByVendor[choice.id] = effort.rawValue
+        }
+
+        next.updatedAt = Date()
+        persist(next)
+        return next
     }
 
     @discardableResult
@@ -407,6 +473,67 @@ public enum ProviderModelPickerSupport {
         catalog: ModelCatalog
     ) -> ReasoningEffort? {
         supportsEffort(vendor: vendor, modelId: modelId, catalog: catalog) ? effort : nil
+    }
+
+    public static func sections(
+        for choice: ProviderChoice,
+        catalog: ModelCatalog,
+        query: String
+    ) -> [ProviderModelSection] {
+        if case .builtin(let vendor) = choice {
+            return sections(for: vendor, catalog: catalog, query: query)
+        }
+        let filtered = entries(for: choice, catalog: catalog, query: query)
+        return filtered.isEmpty ? [] : [ProviderModelSection(title: "Models", entries: filtered)]
+    }
+
+    public static func entries(
+        for choice: ProviderChoice,
+        catalog: ModelCatalog,
+        query: String = ""
+    ) -> [ModelCatalogEntry] {
+        if case .builtin(let vendor) = choice {
+            return entries(for: vendor, catalog: catalog, query: query)
+        }
+        let all = choice.models(in: catalog)
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return all }
+        return all.filter { entry in
+            let haystack = [
+                entry.displayName,
+                entry.id,
+                entry.cliAlias ?? "",
+                entry.recommendedFor ?? "",
+                entry.badge ?? "",
+                contextLabel(for: entry) ?? "",
+            ]
+            .joined(separator: " ")
+            .lowercased()
+            return haystack.contains(needle)
+        }
+    }
+
+    public static func supportsEffort(
+        choice: ProviderChoice,
+        modelId: String?,
+        catalog: ModelCatalog
+    ) -> Bool {
+        if case .custom = choice { return false }
+        guard case .builtin(let vendor) = choice else { return false }
+        guard let modelId,
+              let entry = vendor.models(in: catalog).first(where: { $0.id == modelId || $0.cliAlias == modelId }) else {
+            return vendor.defaultEffort != nil
+        }
+        return entry.supportsEffort
+    }
+
+    public static func normalizedEffort(
+        _ effort: ReasoningEffort?,
+        choice: ProviderChoice,
+        modelId: String?,
+        catalog: ModelCatalog
+    ) -> ReasoningEffort? {
+        supportsEffort(choice: choice, modelId: modelId, catalog: catalog) ? effort : nil
     }
 
     private static func isFeaturedOpenRouterModel(_ entry: ModelCatalogEntry) -> Bool {
