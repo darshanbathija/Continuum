@@ -277,10 +277,36 @@ final class AppRuntime: ObservableObject {
             }
         }
 
+        // App-support container resolution. Hoisted above the analytics
+        // store so the loader can read the persisted account list.
+        let testingAppSupport = Self.testingAppSupportOverride()
+        let appSupportDirectory = testingAppSupport
+            ?? WorkspaceStore.defaultStoreURL().deletingLastPathComponent()
+        self.appSupportDirectory = appSupportDirectory
+        let providerInstanceStore = ProviderInstanceStore(
+            storeURL: appSupportDirectory.appendingPathComponent("provider-instances.json")
+        )
+        self.providerInstanceStore = providerInstanceStore
+
         // Analytics history: walks the on-disk JSONL caches, computes
         // calendar-day-aligned totals, mirrors the snapshot into iCloud KV
         // for the iOS analytics tab. Plan A8 + A19.
-        self.usageHistoryStore = UsageHistoryStore()
+        // Multi-account: secondary accounts' trees join the AGGREGATE
+        // totals (v1 scope — no per-account breakdown). Closures read the
+        // persisted list per refresh so a freshly added account's history
+        // shows up without a relaunch.
+        self.usageHistoryStore = UsageHistoryStore(loader: UsageHistoryLoader(
+            additionalClaudeDirs: {
+                providerInstanceStore.load()
+                    .filter { $0.kind == .claude && !$0.configRoot.isEmpty }
+                    .map { URL(fileURLWithPath: $0.configRoot).appendingPathComponent("projects", isDirectory: true) }
+            },
+            additionalCodexDirs: {
+                providerInstanceStore.load()
+                    .filter { $0.kind == .codex && !$0.configRoot.isEmpty }
+                    .map { URL(fileURLWithPath: $0.configRoot).appendingPathComponent("sessions", isDirectory: true) }
+            }
+        ))
         // C2 — was `usageHistoryStore.$snapshot` pre-C2 when the
         // store was `@Published`. With the store now `@Observable`,
         // the daemon-side Combine bridge is `snapshotPublisher` (a
@@ -301,13 +327,6 @@ final class AppRuntime: ObservableObject {
         // NotificationDispatcher is an actor. SessionsModel bridges to UI.
         // Per the feature flag plan (T18): gate the daemon start on
         // `UserDefaults.clawdmeter.sessions.enabled`. Default on in v1.
-        let testingAppSupport = Self.testingAppSupportOverride()
-        let appSupportDirectory = testingAppSupport
-            ?? WorkspaceStore.defaultStoreURL().deletingLastPathComponent()
-        self.appSupportDirectory = appSupportDirectory
-        self.providerInstanceStore = ProviderInstanceStore(
-            storeURL: appSupportDirectory.appendingPathComponent("provider-instances.json")
-        )
         let sessionsStoreURL = appSupportDirectory.appendingPathComponent("sessions.json")
         let workspacesStoreURL = appSupportDirectory.appendingPathComponent("workspaces.json")
         let repoEnvStoreURL = appSupportDirectory.appendingPathComponent("repo-env-variables.json")
@@ -889,6 +908,9 @@ final class AppRuntime: ObservableObject {
         modelsByInstanceWireId[instance.wireId] = model
         if persist {
             providerInstanceStore.upsert(ProviderInstanceRecord(instance: instance))
+            // Pull the new account's history into the aggregate now —
+            // the loader's root closures read the list per refresh.
+            usageHistoryStore.forceRefresh()
         }
         let redactedHome = instance.homePathOverride == nil
             ? "nil"
