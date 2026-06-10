@@ -67,7 +67,7 @@ apple/
 │   │       ├── UsageCloudMirror.swift          iCloud KV sync (Mac → iOS)
 │   │       ├── WatchTokenBridge.swift          WCSession iPhone → Watch
 │   │       └── AutoReviver.swift
-│   └── Tests/ClawdmeterSharedTests/            XCTest, 250 tests, all passing
+│   └── Tests/ClawdmeterSharedTests/            XCTest, 1468 tests, all passing
 ├── ClawdmeterMac/                              macOS app
 │   ├── ClawdmeterMacApp.swift                  @main, Window + Settings
 │   ├── AppRuntime.swift                        owns AppModel × 2 + analytics
@@ -155,6 +155,18 @@ What we added on top of ccusage (UI-only):
 | Mac (Codex)  | `CodexSource` reads cached rate-limit state from `~/.codex/sessions/*.jsonl`. |
 | iOS          | `PastedAnthropicTokenProvider.shared()` — iCloud-Keychain shared access group populated by the Mac Authenticate action or manual paste. |
 | Watch        | First tries `WatchTokenBridge.didReceiveToken` (iPhone pushes via WCSession). Falls back to the shared Keychain. |
+
+Multi-account (v0.32.0): the table above describes the PRIMARY account.
+Secondary accounts added in Settings → Providers → Add account… source
+differently — Claude secondaries store the `claude setup-token` OAuth
+token in a per-instance Keychain partition
+(`PastedAnthropicTokenProvider.forInstance`); Codex secondaries read
+auth from `<configRoot>/auth.json` (written by `codex login` under
+`CODEX_HOME`) via `CodexTokenProvider(authPath:)` and rollouts via
+`CodexSource(sessionsDir:)`. Instances persist (path + name only, no
+secrets) in `provider-instances.json`; their analytics trees join the
+aggregate totals via `UsageHistoryLoader`'s `additionalClaudeDirs` /
+`additionalCodexDirs` closures.
 
 ## Cache schema versioning
 

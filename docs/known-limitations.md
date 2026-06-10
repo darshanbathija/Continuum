@@ -61,33 +61,36 @@ Continuum's pure-Swift HChaCha20 prelude to derive the 12-byte
 This is no longer a product blocker. Keep the shared test vectors as the
 contract whenever relay crypto changes.
 
-## 3. F3 HOME isolation type carrier shipped; daemon wire-up deferred
+## 3. F3 per-provider isolation — shipped in v0.32.0 (multi-account)
 
 `ProviderInstanceId` and `ProviderInstanceRegistry`
 ([PR #142](https://github.com/darshanbathija/Clawdmeter/pull/142))
-land the type-level seam for per-provider HOME isolation. The value
-type carries:
+landed the type-level seam; multi-account v1 (v0.32.0 build 227,
+wire 28, `darshanbathija/multi-account-subscriptions`) shipped the
+runtime:
 
-- `homePathOverride: String?` for per-instance config isolation.
-- `keychainAccessGroupOverride: String?` for per-instance Keychain
-  partitioning.
+- `AppRuntime` splits `AppModel` instances per `ProviderInstanceId`
+  (per-account live gauges on Mac Usage + iOS Live).
+- The daemon wire bump shipped as `providerInstanceId` on
+  `CreateChatSessionRequest` + `GET /provider-instances`, gated by
+  `providerInstanceListMinimum = 28`.
+- The Codex #10 invariants are enforced: per-instance Keychain
+  partitioning (`PastedAnthropicTokenProvider.forInstance`), env
+  scrubbing on child spawn (`ProviderInstanceEnvironment`),
+  credential-bleed tests (`AgentSpawnerInstanceEnvTests`), and a
+  fail-closed spawn resolver (`InstanceSpawnEnv`).
+- One deliberate design change from the F3 plan: isolation is
+  **config-dir based** (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`), not a
+  `HOME` swap — a full HOME override broke git/ssh/gh in worktrees.
 
-The PR is source-only. What is NOT yet shipped (deferred to F3-wire):
+What remains follow-up (tracked in `TODOS.md` "v0.32.0 follow-ups"):
 
-- `AppRuntime` does not yet split `AppModel` instances per
-  `ProviderInstanceId`. There is still one `AppModel` per
-  `AgentKind`.
-- The daemon wire bump (`providerInstanceId` field on the mobile
-  protocol gated to `wireVersion ≥ 21`) is not in main.
-- The Codex #10 security invariants — Keychain partitioning
-  enforcement, env scrubbing on child spawn, credential-bleed
-  integration tests, per-instance log redaction — are typed into the
-  value but the daemon does not enforce them yet.
-
-**Net effect:** `claude_personal` and `claude_work` cannot be
-configured side-by-side today. The primary instance for each kind is
-the only one with a code path. F3-wire is the next planned PR in the
-backend architecture track.
+- Multi-account for Gemini/Antigravity, Cursor, Grok, and OpenCode —
+  `ProviderInstanceEnvironment.configDirVariable` returns nil for
+  these kinds and the resolver fails closed on their pins.
+- Per-account analytics breakdown (v1 aggregates all accounts),
+  same-provider broadcast, secondary menu-bar gauges, the boot-replay
+  422 window, and proactive `claude setup-token` expiry nudges.
 
 ## 4. C2 `@Observable` migration deferred
 
