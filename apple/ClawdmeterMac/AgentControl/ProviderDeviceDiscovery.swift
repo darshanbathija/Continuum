@@ -16,9 +16,11 @@ public enum ProviderDeviceAuthStatus: String, Sendable, Equatable {
 /// Action the onboarding sheet can offer when a provider is not ready.
 public enum ProviderDeviceSetupAction: String, Sendable, Equatable, Identifiable {
     case importClaudeFromClaudeCode
+    case installCodexCLI
     case runCodexLogin
     case installAgyCLI
     case openAntigravityApp
+    case installCursorCLI
     case runCursorAgentLogin
     case openOpencodeSignIn
     case addOpenRouterKey
@@ -29,9 +31,11 @@ public enum ProviderDeviceSetupAction: String, Sendable, Equatable, Identifiable
     public var label: String {
         switch self {
         case .importClaudeFromClaudeCode: return "Import from Claude Code"
+        case .installCodexCLI: return "Install codex CLI"
         case .runCodexLogin: return "Run codex login"
         case .installAgyCLI: return "Install agy CLI"
         case .openAntigravityApp: return "Open Antigravity"
+        case .installCursorCLI: return "Install cursor-agent"
         case .runCursorAgentLogin: return "Run cursor-agent login"
         case .openOpencodeSignIn: return "Sign in to OpenCode"
         case .addOpenRouterKey: return "Add OpenRouter key"
@@ -42,8 +46,12 @@ public enum ProviderDeviceSetupAction: String, Sendable, Equatable, Identifiable
     /// Shell one-liner for embedded terminal launch, when applicable.
     public var shellCommand: String? {
         switch self {
+        case .installCodexCLI:
+            return "npm install -g @openai/codex || echo 'npm not found — install Node first: https://nodejs.org'"
         case .runCodexLogin: return "codex login"
         case .runCursorAgentLogin: return "cursor-agent login"
+        case .installCursorCLI:
+            return "echo 'Install the Cursor CLI: curl https://cursor.com/install -fsS | bash' && open https://cursor.com"
         case .installAgyCLI:
             return "echo 'Install the Antigravity 2 agy CLI — see https://antigravity.google' && open https://antigravity.google"
         case .installGrokCLI:
@@ -135,7 +143,42 @@ public struct ProviderDiscoveryResult: Sendable, Equatable {
 /// what's already on the device before the user opts in.
 public enum ProviderDeviceDiscovery {
 
-    public static func discover() async -> ProviderDiscoveryResult {
+    /// Total budget for the probe bundle. A hung probe (slow Keychain, dead
+    /// network mount on PATH) must not strand onboarding on the spinner —
+    /// after the deadline we fall through to "couldn't check" placeholders
+    /// and the user can Re-check device.
+    public static let probeTimeout: Duration = .seconds(5)
+
+    public static func discover(timeout: Duration = probeTimeout) async -> ProviderDiscoveryResult {
+        // First-wins race. A task group would await BOTH children before
+        // returning (group drain), so a hung probe would still strand the
+        // caller past the deadline; the stream yields whichever finishes
+        // first and the loser's yield is ignored after finish().
+        let race = AsyncStream<[ProviderDeviceStatus]?> { continuation in
+            Task.detached(priority: .userInitiated) {
+                continuation.yield(await probeAll())
+                continuation.finish()
+            }
+            Task {
+                try? await Task.sleep(for: timeout)
+                continuation.yield(nil)
+                continuation.finish()
+            }
+        }
+        var first: [ProviderDeviceStatus]?
+        for await value in race {
+            first = value
+            break
+        }
+        if let first {
+            return ProviderDiscoveryResult(statuses: first)
+        }
+        return ProviderDiscoveryResult(
+            statuses: ProviderEnablement.allProviderIds.map(timedOutStatus(for:))
+        )
+    }
+
+    private static func probeAll() async -> [ProviderDeviceStatus] {
         let probes = await Task.detached(priority: .userInitiated) {
             (
                 claude: probeClaude(),
@@ -147,7 +190,7 @@ public enum ProviderDeviceDiscovery {
             )
         }.value
 
-        let statuses = ProviderEnablement.allProviderIds.compactMap { id -> ProviderDeviceStatus? in
+        return ProviderEnablement.allProviderIds.compactMap { id -> ProviderDeviceStatus? in
             switch id {
             case "claude": return probes.claude
             case "codex": return probes.codex
@@ -158,7 +201,24 @@ public enum ProviderDeviceDiscovery {
             default: return nil
             }
         }
-        return ProviderDiscoveryResult(statuses: statuses)
+    }
+
+    private static func timedOutStatus(for id: String) -> ProviderDeviceStatus {
+        let displayName: String = {
+            switch id {
+            case "gemini": return "Antigravity"
+            case "opencode": return "OpenRouter"
+            default: return ProviderRegistry.descriptor(id: id)?.displayName ?? id.capitalized
+            }
+        }()
+        return ProviderDeviceStatus(
+            providerId: id,
+            displayName: displayName,
+            cliInstalled: false,
+            authenticated: false,
+            status: .notInstalled,
+            message: "Couldn't check this Mac in time — use Re-check device"
+        )
     }
 
     // MARK: Per-provider probes
@@ -175,11 +235,7 @@ public enum ProviderDeviceDiscovery {
         let status = resolveStatus(cliInstalled: cliInstalled, authenticated: authenticated)
         var actions: [ProviderDeviceSetupAction] = []
         if !authenticated {
-            if hasClaudeCodeKeychain || cliInstalled {
-                actions.append(.importClaudeFromClaudeCode)
-            } else {
-                actions.append(.importClaudeFromClaudeCode)
-            }
+            actions.append(.importClaudeFromClaudeCode)
         }
         let message: String? = {
             if authenticated {
@@ -210,7 +266,9 @@ public enum ProviderDeviceDiscovery {
         let status = resolveStatus(cliInstalled: cliInstalled, authenticated: authenticated)
         var actions: [ProviderDeviceSetupAction] = []
         if !cliInstalled {
-            actions.append(.runCodexLogin)
+            // `codex login` without the binary is a dead-end terminal; offer
+            // the install first, then login once a re-check finds the CLI.
+            actions.append(.installCodexCLI)
         } else if !authenticated {
             actions.append(.runCodexLogin)
         }
@@ -315,10 +373,9 @@ public enum ProviderDeviceDiscovery {
         let binary = ShellRunner.locateBinary("cursor-agent") ?? ShellRunner.locateBinary("agent")
         let cliInstalled = binary != nil
         let status: ProviderDeviceAuthStatus = cliInstalled ? .installed : .notInstalled
-        var actions: [ProviderDeviceSetupAction] = []
-        if cliInstalled {
-            actions.append(.runCursorAgentLogin)
-        }
+        let actions: [ProviderDeviceSetupAction] = cliInstalled
+            ? [.runCursorAgentLogin]
+            : [.installCursorCLI]
         let message: String? = cliInstalled
             ? "cursor-agent on PATH — run login before first use"
             : "Install cursor-agent CLI"
@@ -326,7 +383,9 @@ public enum ProviderDeviceDiscovery {
             providerId: "cursor",
             displayName: "Cursor",
             cliInstalled: cliInstalled,
-            authenticated: cliInstalled,
+            // Passive discovery never probes Cursor's Keychain, so auth is
+            // honestly unknown here; readiness keys off the binary alone.
+            authenticated: false,
             status: status,
             installedBinary: binary,
             message: message,
@@ -339,16 +398,19 @@ public enum ProviderDeviceDiscovery {
     private static func probeGrok() -> ProviderDeviceStatus {
         let binary = ShellRunner.locateBinary("grok")
         let cliInstalled = binary != nil
-        let status: ProviderDeviceAuthStatus = cliInstalled ? .authenticated : .notInstalled
+        // Same passive model as Cursor: binary presence is an "Installed"
+        // signal, not proof of auth — the ACP handshake authenticates at
+        // session start. Don't claim "Ready/authenticated" off the binary.
+        let status: ProviderDeviceAuthStatus = cliInstalled ? .installed : .notInstalled
         let actions: [ProviderDeviceSetupAction] = cliInstalled ? [] : [.installGrokCLI]
         let message: String? = cliInstalled
-            ? "grok CLI on PATH"
+            ? "grok CLI on PATH — signs in at first session"
             : "Install grok CLI"
         return ProviderDeviceStatus(
             providerId: "grok",
             displayName: "Grok",
             cliInstalled: cliInstalled,
-            authenticated: cliInstalled,
+            authenticated: false,
             status: status,
             installedBinary: binary,
             message: message,
@@ -360,7 +422,6 @@ public enum ProviderDeviceDiscovery {
         cliInstalled: Bool,
         authenticated: Bool
     ) -> ProviderDeviceAuthStatus {
-        if authenticated && cliInstalled { return .authenticated }
         if authenticated { return .authenticated }
         if cliInstalled { return .unauthenticated }
         return .notInstalled

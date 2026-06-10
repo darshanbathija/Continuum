@@ -240,7 +240,7 @@ public struct MacSettingsView: View {
     @ViewBuilder
     private var providerSettings: some View {
         SettingsCard(title: "Providers", sub: nil) {
-            ProviderPreferenceRows(client: runtime?.loopbackClient, runtime: runtime)
+            SettingsProviderRowsWithDeviceStatus(runtime: runtime)
         }
 
         // One-time Full Disk Access opt-in. Continuum reads other tools' usage
@@ -1234,6 +1234,29 @@ private struct AccentPicker: View {
 
 // MARK: - Providers
 
+/// Settings → Providers wrapper that runs device discovery once per
+/// appearance so the same status badges/messages from onboarding show here
+/// (design-doc "Future" item). Status-only: no setup actions in Settings.
+struct SettingsProviderRowsWithDeviceStatus: View {
+    var runtime: AppRuntime?
+    @State private var deviceStatuses: [String: ProviderDeviceStatus] = [:]
+
+    var body: some View {
+        ProviderPreferenceRows(
+            client: runtime?.loopbackClient,
+            runtime: runtime,
+            showDeviceStatus: !deviceStatuses.isEmpty,
+            deviceStatuses: deviceStatuses
+        )
+        .task {
+            let result = await ProviderDeviceDiscovery.discover()
+            deviceStatuses = Dictionary(
+                uniqueKeysWithValues: result.statuses.map { ($0.providerId, $0) }
+            )
+        }
+    }
+}
+
 struct ProviderPreferenceRows: View {
     @Environment(\.tahoe) private var t
     let client: AgentControlClient?
@@ -1241,6 +1264,11 @@ struct ProviderPreferenceRows: View {
     var showDeviceStatus: Bool = false
     var deviceStatuses: [String: ProviderDeviceStatus] = [:]
     var onSetupAction: ((String, ProviderDeviceSetupAction) -> Void)? = nil
+    /// When non-nil, toggles read/write this staged set instead of mutating
+    /// `ProviderEnablement` live. Onboarding stages selections so abandoning
+    /// the sheet (Esc) leaves no persisted state or running pollers behind;
+    /// the caller applies the set once on Continue.
+    var stagedEnabledProviderIDs: Binding<Set<String>>? = nil
     var onEnabledProvidersChanged: (([String]) -> Void)? = nil
     @StateObject private var localStore = ProviderDefaultsStore()
     @State private var snapshot: ProviderDefaultsSnapshot = .empty
@@ -1285,6 +1313,12 @@ struct ProviderPreferenceRows: View {
     }
 
     private func refreshEnabledState() {
+        // Staged mode: the binding is the source of truth; live enablement
+        // changes (e.g. another window) must not clobber the staged picks.
+        if let staged = stagedEnabledProviderIDs {
+            onEnabledProvidersChanged?(Array(staged.wrappedValue))
+            return
+        }
         enabledByProviderId = Dictionary(
             uniqueKeysWithValues: ChatV2Store.defaultChatVendorOrder.map { vendor in
                 let id = providerEnablementId(for: vendor)
@@ -1296,6 +1330,19 @@ struct ProviderPreferenceRows: View {
 
     private func enabledBinding(for vendor: ChatVendor) -> Binding<Bool> {
         let id = providerEnablementId(for: vendor)
+        if let staged = stagedEnabledProviderIDs {
+            return Binding(
+                get: { staged.wrappedValue.contains(id) },
+                set: { newValue in
+                    if newValue {
+                        staged.wrappedValue.insert(id)
+                    } else {
+                        staged.wrappedValue.remove(id)
+                    }
+                    onEnabledProvidersChanged?(Array(staged.wrappedValue))
+                }
+            )
+        }
         return Binding(
             get: { enabledByProviderId[id] ?? ProviderEnablement.isEnabled(id) },
             set: { newValue in

@@ -15,7 +15,13 @@ struct OnboardingSheet: View {
     }
 
     @State private var phase: Phase = .scanning
-    @State private var enabledProviderIDs = ProviderEnablement.enabledProviderIDs()
+    /// Staged selections — nothing touches `ProviderEnablement` (pollers,
+    /// menu-bar items) until Continue, so abandoning the sheet leaves no
+    /// persisted side effects behind.
+    @State private var stagedProviderIDs = Set(ProviderEnablement.enabledProviderIDs())
+    /// Providers the user ran a setup action for; auto-staged once a
+    /// re-check finds them ready (matches the OpenRouter key-save behavior).
+    @State private var pendingSetupProviderIDs: Set<String> = []
     @State private var discoveryResult: ProviderDiscoveryResult?
     @State private var isRefreshingDiscovery = false
     @State private var openRouterKeyDraft = ""
@@ -34,9 +40,6 @@ struct OnboardingSheet: View {
         .frame(width: 600)
         .background(t.surfaceSolid)
         .task { await runInitialDiscovery() }
-        .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
-            enabledProviderIDs = ProviderEnablement.enabledProviderIDs()
-        }
         .sheet(item: $opencodeSetupCommand) { command in
             OpencodeSetupSheet(command: command) {
                 Task { await refreshDiscovery() }
@@ -108,7 +111,7 @@ struct OnboardingSheet: View {
                     onSetupAction: { providerId, action in
                         Task { await performSetup(providerId: providerId, action: action) }
                     },
-                    onEnabledProvidersChanged: { enabledProviderIDs = $0 }
+                    stagedEnabledProviderIDs: $stagedProviderIDs
                 )
                 .padding(16)
             }
@@ -120,7 +123,7 @@ struct OnboardingSheet: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if case .review = phase, enabledProviderIDs.isEmpty {
+            if case .review = phase, stagedProviderIDs.isEmpty {
                 Text("Turn on at least one provider to continue.")
                     .font(TahoeFont.body(12.5, weight: .medium))
                     .foregroundStyle(Color.orange)
@@ -142,7 +145,8 @@ struct OnboardingSheet: View {
                 }
                 Spacer()
                 Button {
-                    guard !enabledProviderIDs.isEmpty else { return }
+                    guard !stagedProviderIDs.isEmpty else { return }
+                    applyStagedSelections()
                     ProviderEnablement.hasOnboarded = true
                     onDone()
                 } label: {
@@ -163,8 +167,7 @@ struct OnboardingSheet: View {
     private var continueLabel: String {
         guard case .review(let result) = phase else { return "Continue" }
         let ready = result.readyProviderIDs.count
-        if ready > 0, enabledProviderIDs.count == ready,
-           Set(enabledProviderIDs) == Set(result.readyProviderIDs) {
+        if ready > 0, stagedProviderIDs == Set(result.readyProviderIDs) {
             return "Continue with \(ready) provider\(ready == 1 ? "" : "s")"
         }
         return "Continue"
@@ -172,7 +175,7 @@ struct OnboardingSheet: View {
 
     private var canContinue: Bool {
         guard case .review = phase else { return false }
-        return !enabledProviderIDs.isEmpty
+        return !stagedProviderIDs.isEmpty
     }
 
     private var discoveryStatuses: [String: ProviderDeviceStatus] {
@@ -258,14 +261,33 @@ struct OnboardingSheet: View {
         discoveryResult = result
         phase = .review(result)
         if preselectReady {
-            for id in result.readyProviderIDs where !ProviderEnablement.isEnabled(id) {
-                if let runtime {
-                    runtime.setProviderEnabled(id, true)
-                } else {
-                    ProviderEnablement.setEnabled(id, true)
-                }
+            stagedProviderIDs.formUnion(result.readyProviderIDs)
+        }
+        // A provider the user just set up (login terminal, key save) gets
+        // staged automatically once a re-check finds it ready, so finishing
+        // `codex login` behaves like saving an OpenRouter key.
+        for id in pendingSetupProviderIDs where result.status(for: id)?.isReady == true {
+            stagedProviderIDs.insert(id)
+            pendingSetupProviderIDs.remove(id)
+        }
+    }
+
+    /// Continue applies every staged toggle in one pass. This is the only
+    /// place onboarding mutates `ProviderEnablement` / starts pollers.
+    private func applyStagedSelections() {
+        for id in ProviderEnablement.allProviderIds {
+            let desired = stagedProviderIDs.contains(id)
+            guard desired != ProviderEnablement.isEnabled(id) else { continue }
+            if let runtime {
+                runtime.setProviderEnabled(id, desired)
+            } else {
+                ProviderEnablement.setEnabled(id, desired)
             }
-            enabledProviderIDs = ProviderEnablement.enabledProviderIDs()
+            // Settings' live toggle seeds Continuum's Claude token on enable;
+            // staged apply must do the same or the gauge polls empty (0%).
+            if id == "claude", desired {
+                Task { await importClaudeFromClaudeCode() }
+            }
         }
     }
 
@@ -278,7 +300,8 @@ struct OnboardingSheet: View {
 
     // MARK: - Setup actions
 
-    private func performSetup(providerId _: String, action: ProviderDeviceSetupAction) async {
+    private func performSetup(providerId: String, action: ProviderDeviceSetupAction) async {
+        await MainActor.run { _ = pendingSetupProviderIDs.insert(providerId) }
         switch action {
         case .importClaudeFromClaudeCode:
             await importClaudeFromClaudeCode()
@@ -294,7 +317,8 @@ struct OnboardingSheet: View {
             await MainActor.run { opencodeSetupCommand = .signIn }
         case .addOpenRouterKey:
             await MainActor.run { openRouterKeyDraft = "" }
-        case .runCodexLogin, .runCursorAgentLogin, .installAgyCLI, .installGrokCLI:
+        case .runCodexLogin, .runCursorAgentLogin, .installCodexCLI, .installCursorCLI,
+             .installAgyCLI, .installGrokCLI:
             guard let command = action.shellCommand else { return }
             await launchSetupTerminal(title: action.label, command: command)
         }
@@ -322,13 +346,7 @@ struct OnboardingSheet: View {
             try await OpencodeAuthFile.shared.setAPIKey(providerId: "openrouter", key: key)
             openRouterKeyMessage = "OpenRouter key saved."
             openRouterKeyDraft = ""
-            if !ProviderEnablement.isEnabled("opencode") {
-                if let runtime {
-                    runtime.setProviderEnabled("opencode", true)
-                } else {
-                    ProviderEnablement.setEnabled("opencode", true)
-                }
-            }
+            stagedProviderIDs.insert("opencode")
             await refreshDiscovery()
         } catch {
             openRouterKeyMessage = error.localizedDescription
