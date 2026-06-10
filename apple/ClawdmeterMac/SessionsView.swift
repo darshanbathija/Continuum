@@ -636,15 +636,24 @@ public final class SessionsModel: ObservableObject {
             return
         }
         let catalog = ModelCatalog.bundled.filteredToEnabledProviders(for: .code)
-        guard let agent = ProviderRegistry.firstEnabledProvider(for: .code)?.agentKind,
-              let modelId = Self.quickSpawnModelId(for: agent, catalog: catalog) else {
+        // The per-repo "+" opens a FIXED config: Codex · GPT-5.5 · Extra High ·
+        // Plan mode (plan + worktree are set in createQuickSpawnProvisionalSession).
+        // Option-click opens the full sheet to customize. Fall back to the sheet
+        // only when Codex / GPT-5.5 isn't enabled so we never silently spawn a
+        // different provider.
+        let agent: AgentKind = .codex
+        let modelId = "gpt-5.5"
+        guard catalog.entries(for: .codex).contains(where: { $0.id == modelId }) else {
+            // Honor the quick-spawn contract: a known repo must NEVER open the
+            // New Session sheet — surface the unavailable-provider case as a
+            // toast instead (⌥-click still opens the full sheet to customize).
             Self.postQuickSpawnFailureToast(
-                title: "No provider enabled",
-                detail: "Enable a provider in Settings → Providers before starting a session."
+                title: "Codex isn’t enabled",
+                detail: "Turn on Codex (GPT-5.5) in Settings → Providers to use “+”, or ⌥-click “+” to pick another provider."
             )
             return
         }
-        let effort = Self.quickSpawnEffort(for: agent, modelId: modelId, catalog: catalog)
+        let effort: ReasoningEffort? = .xhigh
         let sessionId = UUID()
         expandedRepoKeys.insert(repoKey)
         selectedRepoKey = repoKey
@@ -917,31 +926,6 @@ public final class SessionsModel: ObservableObject {
             object: nil,
             userInfo: ["toast": toast]
         )
-    }
-
-    private static func quickSpawnModelId(for agent: AgentKind, catalog: ModelCatalog) -> String? {
-        let defaults = ProviderDefaultsStore()
-        if let vendor = ChatVendor.migrated(from: agent),
-           let model = defaults.modelId(for: vendor, catalog: catalog) {
-            return model
-        }
-        return catalog.entries(for: agent).first?.id
-    }
-
-    private static func quickSpawnEffort(
-        for agent: AgentKind,
-        modelId: String,
-        catalog: ModelCatalog
-    ) -> ReasoningEffort? {
-        if let entry = catalog.entry(forId: modelId), !entry.supportsEffort {
-            return nil
-        }
-        let defaults = ProviderDefaultsStore()
-        if let vendor = ChatVendor.migrated(from: agent),
-           let effort = defaults.effort(for: vendor, catalog: catalog) {
-            return effort
-        }
-        return ComposerStore.ChipDefaults.for(agent: agent, catalog: catalog).effort
     }
 
     /// Collapse the spawn / worktree / shell error zoo into one human,
@@ -2454,13 +2438,33 @@ public final class SessionsModel: ObservableObject {
         // v0.8 REV-DELETE: code sessions go through WorktreeManager; chat
         // sessions get ChatCwdCleaner in Phase 4. Guard here so Phase 2
         // doesn't crash on a chat session reaching this path.
+        //
+        // Closing ONE tab must not tear down the shared worktree/branch while
+        // other tabs still live in it. Every tab in a workspace shares one
+        // worktree, so only delete it when this is the last tab — no other
+        // live sibling session AND no open draft tab in the same workspace.
+        // (The last tab to close still cleans up, so no worktree is leaked.)
         if session.kind == .code, session.ownsWorktree, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
-            _ = try? await WorktreeManager.shared.delete(
-                repoRoot: repoRoot,
-                worktreePath: worktreePath,
-                registryOwned: true,
-                attachedPanePaths: []
-            )
+            let key = WorkspaceKey.of(session)
+            let liveSiblings = key.map { WorkspaceKey.siblings(of: $0, in: registry.sessions, excluding: session.id) } ?? []
+            let draftSiblings = key.map { workspaceDraftTabs(in: $0) } ?? []
+            if liveSiblings.isEmpty && draftSiblings.isEmpty {
+                // Last tab in the workspace — safe to delete the shared worktree/branch.
+                _ = try? await WorktreeManager.shared.delete(
+                    repoRoot: repoRoot,
+                    worktreePath: worktreePath,
+                    registryOwned: true,
+                    attachedPanePaths: []
+                )
+            } else if let heir = liveSiblings.first {
+                // Other live tabs still run in this worktree. Hand ownership to a
+                // surviving sibling so whichever tab closes LAST cleans it up —
+                // only the owner's `ownsWorktree` is set, so without this the
+                // worktree would be orphaned once the owner is closed first.
+                registry.transferWorktreeOwnership(to: heir.id)
+            }
+            // (If only DRAFT tabs remain we keep the worktree for them; it's
+            //  reclaimed when the last spawned tab closes, or via repo archive.)
         }
         if openSessionId == id { openSessionId = nil }
         closeChatStore(for: id)

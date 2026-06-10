@@ -555,10 +555,9 @@ struct CenterThread: View {
                 Divider()
                 queuedSendsPanel
             }
-            if let latest = workbenchState.latestCheckpoint(for: session.id) {
-                Divider()
-                checkpointStrip(latest)
-            }
+            // The inline "Checkpoint · <date> · <summary> · Restore" strip was
+            // removed per user feedback. Checkpoints are still created/restored
+            // from the header More-actions menu and the header status text.
             // Setup Trail — animated, non-blocking provisioning ribbon for an
             // optimistic "+" session. Sits just above the composer (which stays
             // usable the whole time) and confirms each step with a fact.
@@ -662,37 +661,6 @@ struct CenterThread: View {
             .padding(.top, 6)
             .accessibilityIdentifier("code.queue.delete")
         }
-    }
-
-    private func checkpointStrip(_ checkpoint: CheckpointStateSnapshot) -> some View {
-        HStack(spacing: 8) {
-            Label("Checkpoint", systemImage: "bookmark.fill")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(checkpoint.createdAt.formatted(date: .abbreviated, time: .shortened))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.tertiary)
-            if let summary = checkpoint.summary, !summary.isEmpty {
-                Text(summary)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Button {
-                Task { await prepareCheckpointRestore(checkpoint) }
-            } label: {
-                Text("Restore")
-            }
-            .font(.system(size: 10, weight: .semibold))
-            .buttonStyle(PressableButtonStyle())
-            .help("Preview and restore this checkpoint")
-            .accessibilityIdentifier("code.checkpoint-strip.restore")
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
-        .background(Color.secondary.opacity(0.03))
-        .accessibilityIdentifier("code.checkpoint-strip")
     }
 
     @ViewBuilder

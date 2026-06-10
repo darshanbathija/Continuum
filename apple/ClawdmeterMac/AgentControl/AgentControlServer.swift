@@ -7755,16 +7755,25 @@ public final class AgentControlServer {
             // ~/Library/Application Support/Clawdmeter/sdk-chat-transcripts/.
             SDKChatTranscriptMirror.removeMirror(sessionId: uuid)
         } else if session.kind == .code, session.ownsWorktree, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
-            do {
-                let result = try await WorktreeManager.shared.delete(
-                    repoRoot: repoRoot,
-                    worktreePath: worktreePath,
-                    registryOwned: true,
-                    attachedPanePaths: []
-                )
-                serverLogger.info("Worktree GC for session \(uuid.uuidString, privacy: .public): \(String(describing: result), privacy: .public)")
-            } catch {
-                serverLogger.warning("Worktree delete failed: \(error.localizedDescription, privacy: .public)")
+            // Don't tear down the shared worktree/branch while sibling tabs still
+            // live in it — a remote/iOS delete of the owner must not strand a Mac
+            // sibling. Hand ownership to a survivor so the last session still GCs.
+            let liveSiblings = WorkspaceKey.of(session)
+                .map { WorkspaceKey.siblings(of: $0, in: registry.sessions, excluding: uuid) } ?? []
+            if let heir = liveSiblings.first {
+                registry.transferWorktreeOwnership(to: heir.id)
+            } else {
+                do {
+                    let result = try await WorktreeManager.shared.delete(
+                        repoRoot: repoRoot,
+                        worktreePath: worktreePath,
+                        registryOwned: true,
+                        attachedPanePaths: []
+                    )
+                    serverLogger.info("Worktree GC for session \(uuid.uuidString, privacy: .public): \(String(describing: result), privacy: .public)")
+                } catch {
+                    serverLogger.warning("Worktree delete failed: \(error.localizedDescription, privacy: .public)")
+                }
             }
         }
         // Stop the JSONL wiring for this session.

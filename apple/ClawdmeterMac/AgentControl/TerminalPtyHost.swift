@@ -361,13 +361,29 @@ actor TerminalPtyRegistry {
         return host
     }
 
+    /// Opening a terminal for a session launches an interactive Claude in the
+    /// session's worktree (which is already checked out on its branch) instead
+    /// of a bare login shell. `--dangerously-skip-permissions` keeps the
+    /// embedded terminal prompt-free. Falls back to a login shell if the
+    /// `claude` binary can't be located, so the terminal is never dead.
+    /// The enriched `claudePtyEnv` is required — under launchd's thin GUI PATH
+    /// a PTY `claude` can't find node/rg/hooks.
     func spawnShell(cwd: String?, title: String = "") async throws -> TerminalPtyHost {
-        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+        let argv: [String]
+        let env: [String: String]
+        if let claude = ShellRunner.locateBinary("claude") {
+            argv = [claude, "--dangerously-skip-permissions"]
+            env = AgentSpawner.claudePtyEnv()
+        } else {
+            let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+            argv = [shell, "-l"]
+            env = ProcessInfo.processInfo.environment
+        }
         let host = TerminalPtyHost(
             title: title,
-            argv: [shell, "-l"],
+            argv: argv,
             cwd: cwd,
-            env: ProcessInfo.processInfo.environment
+            env: env
         )
         try await host.start()
         await host.setOnExit { [weak self] id in

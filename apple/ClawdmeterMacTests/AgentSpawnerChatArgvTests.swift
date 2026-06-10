@@ -73,7 +73,13 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
         let session = makeChatSession(agent: .claude, model: "opus")
         let argv = AgentSpawner.argv(for: session)
         XCTAssertFalse(argv.isEmpty)
-        XCTAssertEqual(argv.last(2), ["--permission-mode", "plan"],
+        // Verify the `--permission-mode plan` pair is present (in order) rather
+        // than pinning it to the tail — chat sessions append `--strict-mcp-config`
+        // after it, so it's no longer the last flag.
+        guard let pmIndex = argv.firstIndex(of: "--permission-mode"), pmIndex + 1 < argv.count else {
+            return XCTFail("chat session must force plan mode regardless of stored flags")
+        }
+        XCTAssertEqual(argv[pmIndex + 1], "plan",
                        "chat session must force plan mode regardless of stored flags")
     }
 

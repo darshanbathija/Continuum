@@ -53,11 +53,11 @@ struct SidebarProjection {
     }
 }
 
+/// Maps the active status filter to archived-row visibility. The filter is
+/// driven entirely from the sidebar's funnel menu now (the always-visible
+/// bucket strip was removed as redundant); only `.archived` reveals
+/// archived sessions.
 enum SidebarStatusBucketState {
-    static func nextFilter(current: SessionStatusFilter, tapped: SessionStatusFilter) -> SessionStatusFilter {
-        current == tapped ? .all : tapped
-    }
-
     static func showsArchived(for filter: SessionStatusFilter) -> Bool {
         filter == .archived
     }

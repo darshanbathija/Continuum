@@ -586,6 +586,14 @@ public final class AgentSessionRegistry: ObservableObject {
         update(id: id) { _ in projected }
     }
 
+    /// Hand worktree ownership to another session. Used when the session that
+    /// provisioned a shared worktree is closed while siblings still live in it:
+    /// ownership moves to a survivor so whichever tab closes LAST still cleans
+    /// up the worktree (otherwise the orphaned worktree would never be deleted).
+    public func transferWorktreeOwnership(to id: UUID) {
+        update(id: id) { with($0, ownsWorktree: true) }
+    }
+
     /// Sessions v2: swap model on a live session (Phase 0). `effort: nil`
     /// means "leave effort unchanged" — pass the existing value through so
     /// `with()`'s double-optional override semantics don't null it out.

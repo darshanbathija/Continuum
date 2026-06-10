@@ -554,6 +554,64 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertLessThan(worstClose, .milliseconds(100), "Closing a draft tab must remove it from visible tab state within 100ms.")
     }
 
+    /// Perf gate for the worktree-delete guard added to `endSession`. Closing a
+    /// SESSION tab now scans siblings (path-canonicalizing each session) + draft
+    /// tabs and, when the worktree-owner is closed first, transfers ownership to
+    /// a survivor (a registry save). Closing the owner tab in a heavily-populated
+    /// workspace must still stay under the 250ms responsiveness bar.
+    func test_closingSessionTabInLargeWorkspaceStaysUnderResponsivenessBudget() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("close-session-perf")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        let worktree = repo.appendingPathComponent(".claude/worktrees/denver", isDirectory: true)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+
+        // 200 code sessions sharing one worktree — far beyond any real workspace.
+        // The first owns the worktree (the heaviest close: owner-closed-first
+        // triggers the sibling scan AND the ownership transfer + save).
+        var owner: AgentSession!
+        for i in 0..<200 {
+            let session = try await registry.create(
+                repoKey: repo.path,
+                repoDisplayName: "repo",
+                agent: .claude,
+                model: "claude-sonnet-4-6",
+                goal: "tab \(i)",
+                worktreePath: worktree.path,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                planMode: false,
+                mode: .worktree,
+                ownsWorktree: i == 0
+            )
+            if i == 0 { owner = session }
+        }
+        XCTAssertEqual(registry.sessions.count, 200)
+
+        let start = ContinuousClock.now
+        await model.endSession(id: owner.id)
+        let elapsed = start.duration(to: ContinuousClock.now)
+
+        XCTContext.runActivity(named: "Session-tab close worktree-guard latency") { activity in
+            activity.add(XCTAttachment(string: """
+            sessions=200
+            elapsed=\(elapsed)
+            budget=250ms responsiveness bar
+            """))
+        }
+        XCTAssertLessThan(
+            elapsed,
+            .milliseconds(250),
+            "Closing the worktree-owner tab in a 200-session workspace (sibling scan + ownership transfer) must stay within the 250ms responsiveness bar."
+        )
+        // The owner is gone and ownership moved to a survivor, so the worktree
+        // wasn't deleted (siblings still live in it) and the last tab will GC it.
+        XCTAssertNil(registry.session(id: owner.id))
+        XCTAssertEqual(registry.sessions.count, 199)
+        XCTAssertTrue(registry.sessions.contains { $0.ownsWorktree },
+                      "Closing the owner while siblings remain must hand ownership to a survivor, not orphan the worktree.")
+    }
+
     func test_workspaceTabStripCompactsBeyondTwoTabsOnMinimumCenterWidth() {
         let minimumCenterWidth: CGFloat = 420
         let fourTabLabelWidth = WorkspaceTabStrip.adaptiveChatTabLabelWidth(

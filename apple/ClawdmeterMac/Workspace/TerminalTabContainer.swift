@@ -142,10 +142,10 @@ struct TerminalTabContainer: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            ZStack(alignment: .topLeading) {
-                terminalStatusBadge
-                terminalStatusAccessibilityMarker
-            }
+            // The visible "Terminal connected · <pane> · in <cwd>" strip was
+            // removed per user feedback (no real value). Only the 1pt invisible
+            // marker remains so automation can still observe connection state.
+            terminalStatusAccessibilityMarker
         }
     }
 
@@ -186,57 +186,12 @@ struct TerminalTabContainer: View {
         }
     }
 
-    private var terminalStatusBadge: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(statusIndicatorColor)
-                .frame(width: 7, height: 7)
-            Text(connectionState.statusText(hasVisibleOutput: sawOutput))
-                .font(TahoeFont.body(10.5, weight: .semibold))
-                .foregroundStyle(t.fg)
-            TahoeHair(vertical: true).frame(height: 12)
-            Text(activePaneTitle)
-                .font(TahoeFont.mono(10.5, weight: .semibold))
-                .foregroundStyle(t.fg2)
-                .lineLimit(1)
-            Text("in \(terminalCwdLabel)")
-                .font(TahoeFont.body(10.5))
-                .foregroundStyle(t.fg3)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(t.surfaceSolid2.opacity(0.94), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .stroke(t.hairline, lineWidth: 0.75)
-        )
-        .padding(10)
-        .help("\(activePaneTitle)\n\(session.effectiveCwd)")
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(connectionState.statusText(hasVisibleOutput: sawOutput))
-        .accessibilityIdentifier("code.terminal.status")
-    }
-
     private var terminalStatusAccessibilityMarker: some View {
         Text(connectionState.statusText(hasVisibleOutput: sawOutput))
             .font(.system(size: 1))
             .frame(width: 1, height: 1)
             .opacity(0.001)
             .accessibilityIdentifier("code.terminal.status.state")
-    }
-
-    private var statusIndicatorColor: Color {
-        switch connectionState {
-        case .connected where sawOutput:
-            return Color.green.opacity(0.85)
-        case .reconnecting:
-            return Color.orange.opacity(0.9)
-        case .failed, .disconnected:
-            return Color.red.opacity(0.82)
-        default:
-            return t.accent
-        }
     }
 
     private var activePaneTitle: String {

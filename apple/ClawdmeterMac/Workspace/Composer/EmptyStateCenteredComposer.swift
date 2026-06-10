@@ -83,10 +83,17 @@ struct EmptyStateCenteredComposer: View {
     }
 
     var body: some View {
-        VStack(spacing: workspaceDraft == nil ? 18 : 14) {
+        // Only surface the "Inherit sibling context" card when there are real
+        // sibling chats to opt into. An empty workspace has nothing to inherit,
+        // so the section (and its 14pt slot) is dropped entirely.
+        let siblings = workspaceDraft.map { siblingSessions(for: $0) } ?? []
+        return VStack(spacing: workspaceDraft == nil ? 18 : 14) {
             Spacer(minLength: workspaceDraft == nil ? 0 : 14)
-            if workspaceDraft != nil {
-                inheritedContextControls
+            if !siblings.isEmpty {
+                InheritedContextChips(
+                    siblings: siblings,
+                    selectedSourceIds: $store.inheritedContextSourceIds
+                )
             }
             VStack(spacing: 6) {
                 Text(headline)
@@ -166,16 +173,6 @@ struct EmptyStateCenteredComposer: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .composeDraftIncoming)) { note in
             applyIncomingDraft(note: note)
-        }
-    }
-
-    @ViewBuilder
-    private var inheritedContextControls: some View {
-        if let workspaceDraft {
-            InheritedContextChips(
-                siblings: siblingSessions(for: workspaceDraft),
-                selectedSourceIds: $store.inheritedContextSourceIds
-            )
         }
     }
 

@@ -400,6 +400,12 @@ final class ProviderStatusController: NSObject {
         // Eagerly build the popover so the first click renders without delay.
         let pop = NSPopover()
         pop.behavior = .transient
+        // The popover content is the app's always-dark glass card. Pin the
+        // popover to dark appearance so its vibrancy material renders dark even
+        // when the system is in light mode / sits over a light desktop — without
+        // this, the bubble inherits light vibrancy and the light desktop bleeds
+        // through, washing out the light-on-dark content.
+        pop.appearance = NSAppearance(named: .darkAqua)
         // Initial size — NSHostingController.sizingOptions = .preferredContentSize
         // (macOS 13+) makes the popover re-size to whatever SwiftUI's intrinsic
         // content height ends up being. The collapsed/expanded Advanced section
