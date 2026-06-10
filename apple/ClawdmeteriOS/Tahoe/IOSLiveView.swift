@@ -24,6 +24,10 @@ public struct IOSLiveView: View {
     @State private var refreshing: Bool = false
     public var data: TahoeLiveBindings
     public var enabledProviderIDs: [String]?
+    /// Multi-account (wire v28): secondary accounts' usage from the
+    /// paired Mac. Rendered as compact meters under the active
+    /// provider's hero gauge. Empty pre-v28 / single-account.
+    public var secondaryAccounts: [UsageEnvelope.SecondaryInstanceUsage] = []
     /// Optional callbacks injected by IOSRootView. Nil renders are valid
     /// for SwiftUI Previews; production always injects.
     var onRefresh: (() async -> Void)?
@@ -35,12 +39,14 @@ public struct IOSLiveView: View {
     public init(
         data: TahoeLiveBindings = .demo,
         enabledProviderIDs: [String]? = nil,
+        secondaryAccounts: [UsageEnvelope.SecondaryInstanceUsage] = [],
         onRefresh: (() async -> Void)? = nil,
         onOpenSettings: (() -> Void)? = nil,
         agentClient: AgentControlClient? = nil
     ) {
         self.data = data
         self.enabledProviderIDs = enabledProviderIDs
+        self.secondaryAccounts = secondaryAccounts
         self.onRefresh = onRefresh
         self.onOpenSettings = onOpenSettings
         self.agentClient = agentClient
@@ -149,6 +155,11 @@ public struct IOSLiveView: View {
                             .padding(18)
                         }
                         .padding(.horizontal, 16)
+                    }
+
+                    if !secondaryAccounts(for: activeProvider).isEmpty {
+                        secondaryAccountsCard(provider: activeProvider)
+                            .padding(.horizontal, 16).padding(.top, 12)
                     }
                 }
 
@@ -259,6 +270,40 @@ public struct IOSLiveView: View {
         refreshing = true
         defer { refreshing = false }
         await onRefresh()
+    }
+
+    /// Secondary accounts for the ACTIVE provider only — the per-account
+    /// meters live under that provider's hero gauge.
+    private func secondaryAccounts(for provider: TahoeProvider) -> [UsageEnvelope.SecondaryInstanceUsage] {
+        secondaryAccounts.filter { $0.kind == provider.rawValue }
+    }
+
+    private func secondaryAccountsCard(provider: TahoeProvider) -> some View {
+        TahoeGlass(radius: 8, tone: .raised) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("OTHER ACCOUNTS")
+                    .font(TahoeFont.body(11, weight: .bold))
+                    .tracking(0.4)
+                    .foregroundStyle(t.fg3)
+                ForEach(secondaryAccounts(for: provider)) { account in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(account.name)
+                                .font(TahoeFont.mono(12, weight: .medium))
+                                .foregroundStyle(t.fg)
+                            Spacer()
+                            Text("\(account.usage.sessionPct)% · resets in \(TahoeFmt.resetIn(minutes: account.usage.sessionResetMins))")
+                                .font(TahoeFont.mono(11.5))
+                                .monospacedDigit()
+                                .foregroundStyle(t.fg2)
+                        }
+                        TahoePillBar(percent: Double(account.usage.sessionPct), provider: provider, height: 6)
+                    }
+                }
+            }
+            .padding(18)
+        }
+        .accessibilityIdentifier("live.secondaryAccounts")
     }
 
     private var visibleProviders: [TahoeProvider] {

@@ -55,7 +55,10 @@ final class AppRuntime: ObservableObject {
     /// Primaries are registry-seeded and never persisted; see
     /// `ProviderInstanceStore`.
     let providerInstanceStore: ProviderInstanceStore
-    private var modelsByInstanceWireId: [String: AppModel] = [:]
+    /// @Published so account add/remove invalidates runtime-observing
+    /// views (the Usage tab's secondary gauge row). Per-poll updates
+    /// flow through each AppModel's own @Published usage.
+    @Published private var modelsByInstanceWireId: [String: AppModel] = [:]
 
     // Sessions feature:
     let repoIndex: RepoIndex

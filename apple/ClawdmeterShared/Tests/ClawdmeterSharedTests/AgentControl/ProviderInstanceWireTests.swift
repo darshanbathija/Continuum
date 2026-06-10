@@ -607,4 +607,28 @@ final class ProviderInstanceWireTests: XCTestCase {
         XCTAssertEqual(AgentControlWireVersion.providerInstanceListMinimum, 28)
         XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 28)
     }
+
+    func test_usageEnvelope_secondaryInstanceUsage() {
+        let usage = UsageData(
+            sessionPct: 42, sessionResetMins: 60, sessionEpoch: 1_700_000_000,
+            weeklyPct: 10, weeklyResetMins: 600, weeklyEpoch: 1_700_000_000,
+            status: .allowed, representativeClaim: .fiveHour,
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let envelope = UsageEnvelope(
+            claude: nil, codex: nil,
+            usage: [
+                "claude": usage,                  // legacy kind key — not secondary
+                "claude/__primary__": usage,      // primary wireId — not secondary
+                "claude/work": usage,
+                "codex/pro": usage,
+            ],
+            lastChecked: Date()
+        )
+        let secondary = envelope.secondaryInstanceUsage()
+        XCTAssertEqual(secondary.map(\.wireId), ["claude/work", "codex/pro"])
+        XCTAssertEqual(secondary.first?.kind, "claude")
+        XCTAssertEqual(secondary.first?.name, "work")
+        XCTAssertEqual(secondary.first?.usage.sessionPct, 42)
+    }
 }

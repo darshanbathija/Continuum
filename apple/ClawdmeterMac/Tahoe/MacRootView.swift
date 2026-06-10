@@ -284,7 +284,8 @@ struct MacRootView: View {
                             geminiModel: geminiModel,
                             cursorModel: cursorModel,
                             grokModel: grokModel,
-                            usageHistoryStore: runtime.usageHistoryStore
+                            usageHistoryStore: runtime.usageHistoryStore,
+                            secondaryColumns: runtime.tahoeSecondaryColumns
                         )
                         .modifier(TabSlotVisibility(active: tab == .usage))
                     }

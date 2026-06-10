@@ -53,6 +53,9 @@ public final class UsageModel: ObservableObject {
     /// Latest provider opt-in envelope from the paired Mac daemon. Nil means
     /// legacy all-provider behavior for older Mac builds.
     @Published public private(set) var enabledProviderIDs: [String]?
+    /// Multi-account (wire v28): secondary accounts' live usage from the
+    /// paired Mac's /usage envelope. Empty pre-v28 / single-account.
+    @Published public private(set) var secondaryAccounts: [UsageEnvelope.SecondaryInstanceUsage] = []
 
     private var poller: UsagePoller?
     private var clockTimer: Timer?
@@ -189,6 +192,7 @@ public final class UsageModel: ObservableObject {
 
         if let usage = await usagePayload {
             applyEnabledProviderIDs(usage.enabledProviderIDs)
+            secondaryAccounts = usage.secondaryInstanceUsage()
             // Codex: prefer the v6 dict + per-provider fallback shape;
             // legacy `usage.codex` field is still populated by the server
             // and the `usageData(for:)` helper handles fallback per X1.
