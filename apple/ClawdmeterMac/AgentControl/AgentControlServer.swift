@@ -48,6 +48,7 @@ public final class AgentControlServer {
     /// new sessions with the repo's last-used model/effort/agent so
     /// iOS new-session flow doesn't need to ship explicit defaults.
     let workspaceStore: WorkspaceStore
+    let customProviderStore: CustomProviderStore?
     private let repoEnvResolver: RepoEnvRuntimeResolver?
     /// Wire v24: vendor CLI/MCP provisioning. Optional for tests that
     /// instantiate only the session daemon surface.
@@ -260,6 +261,7 @@ public final class AgentControlServer {
         chatStoreRegistry: DaemonChatStoreRegistry? = nil,
         chatFileResolver: SessionFileResolver? = nil,
         workspaceStore: WorkspaceStore? = nil,
+        customProviderStore: CustomProviderStore? = nil,
         repoEnvResolver: RepoEnvRuntimeResolver? = nil,
         vendorProvisioningService: VendorProvisioningService? = nil,
         mobileCommandOutbox: MobileCommandOutbox? = nil,
@@ -278,6 +280,7 @@ public final class AgentControlServer {
         // load + migrate-from-sessions runs without an actor hop. Tests
         // can inject an isolated tmpdir-backed store.
         self.workspaceStore = workspaceStore ?? WorkspaceStore()
+        self.customProviderStore = customProviderStore
         self.repoEnvResolver = repoEnvResolver
         self.vendorProvisioningService = vendorProvisioningService
         self.codeRunProfiles = CodeRunProfileService(repoEnvResolver: repoEnvResolver)
@@ -1441,6 +1444,16 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/chat-providers/refresh") { [weak self] _, conn, _ in
             await self?.handleRefreshChatProviders(connection: conn)
         }
+        // v28: custom OpenAI/Anthropic-compatible provider summaries.
+        t.register(method: "GET", pattern: "/custom-providers") { [weak self] _, conn, _ in
+            await self?.handleGetCustomProviders(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/custom-providers/:id/refresh-models") { [weak self] _, conn, params in
+            await self?.handleRefreshCustomProviderModels(
+                providerId: params["id"] ?? "",
+                connection: conn
+            )
+        }
         // Frontier endpoints back the 3-provider comparison surface.
         t.register(method: "POST", pattern: "/chat-sessions/frontier") { [weak self] req, conn, _ in
             await self?.handlePostFrontier(request: req, connection: conn)
@@ -1495,6 +1508,7 @@ public final class AgentControlServer {
             return true
         }
         let filtered = catalog.filtered(toEnabledProviderIDs: readyModelProviderIDs)
+        let customProviders = customProviderStore?.enabledWireSummaries() ?? []
         return ModelCatalog(
             claude: filtered.claude,
             codex: filtered.codex,
@@ -1503,6 +1517,7 @@ public final class AgentControlServer {
             cursor: filtered.cursor,
             grok: filtered.grok,
             enabledProviderIDs: enabledIDs,
+            customProviders: customProviders,
             updatedAt: filtered.updatedAt
         )
     }
@@ -6553,17 +6568,72 @@ public final class AgentControlServer {
     /// polish phase. Gemini row is hardcoded `available: false, reason:
     /// "v0.9"` until Antigravity (agy) replacement ships.
     private func handleGetChatProviders(connection: NWConnection) async {
-        // v0.9.x: delegate to the ChatProviderProbe actor. Cache +
-        // in-flight de-dup live there now; the inline binary checks
-        // are gone. Auth state reflects ChatProviderAuthObserver
-        // overrides (Claude/Codex stderr + JSONL parsers, Antigravity
-        // agentapi 401 catch) when set.
-        let resp = await ChatProviderProbe.shared.currentProviders()
+        var resp = await ChatProviderProbe.shared.currentProviders()
+        if let store = customProviderStore {
+            let customProviders = store.chatProviderEntries()
+            resp = ChatProvidersResponse(
+                providers: resp.providers,
+                enabledProviderIDs: resp.enabledProviderIDs,
+                customProviders: customProviders
+            )
+        }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let body = try? encoder.encode(resp) {
             sendResponse(.ok(contentType: "application/json", body: body), on: connection)
         } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private struct CustomProvidersListResponse: Codable, Sendable {
+        let providers: [CustomProviderWireSummary]
+    }
+
+    private func handleGetCustomProviders(connection: NWConnection) async {
+        guard let store = customProviderStore else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let summaries = store.allRecords().map { store.wireSummary(for: $0) }
+        sendCodable(CustomProvidersListResponse(providers: summaries), on: connection)
+    }
+
+    private func handleRefreshCustomProviderModels(providerId: String, connection: NWConnection) async {
+        guard let store = customProviderStore else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        guard let record = store.record(id: providerId) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        do {
+            let apiKey = try store.resolveAPIKey(for: record)
+            let probe = CustomProviderAPIProbe()
+            let result = await probe.fetchModels(
+                kind: record.kind,
+                baseURL: record.baseURL,
+                apiKey: apiKey
+            )
+            let outcome = CustomProviderTestOutcome(
+                success: result.success,
+                modelCount: result.models.count,
+                httpStatus: result.httpStatus,
+                errorDetail: result.errorDetail
+            )
+            try store.setTestOutcome(id: providerId, outcome: outcome)
+            if result.success {
+                try store.setModels(id: providerId, models: result.models)
+            }
+            if let summary = store.wireSummary(id: providerId) {
+                sendCodable(summary, on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch let error as CustomProviderStoreError {
+            sendJSON(["error": "custom_provider_unavailable", "detail": error.localizedDescription ?? "unavailable"], on: connection, status: 503)
+        } catch {
             sendResponse(.internalError, on: connection)
         }
     }

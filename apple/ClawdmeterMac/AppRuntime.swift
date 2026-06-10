@@ -66,6 +66,7 @@ final class AppRuntime: ObservableObject {
     let agentSessionRegistry: AgentSessionRegistry
     let workspaceStore: WorkspaceStore
     let repoEnvStore: RepoEnvStore
+    let customProviderStore: CustomProviderStore
     let repoEnvRuntimeResolver: RepoEnvRuntimeResolver
     let vendorProvisioningService: VendorProvisioningService
     let agentControlServer: AgentControlServer
@@ -330,6 +331,7 @@ final class AppRuntime: ObservableObject {
         let sessionsStoreURL = appSupportDirectory.appendingPathComponent("sessions.json")
         let workspacesStoreURL = appSupportDirectory.appendingPathComponent("workspaces.json")
         let repoEnvStoreURL = appSupportDirectory.appendingPathComponent("repo-env-variables.json")
+        let customProvidersStoreURL = appSupportDirectory.appendingPathComponent("custom-providers.json")
 
         self.workspaceStore = WorkspaceStore(
             storeURL: workspacesStoreURL,
@@ -343,6 +345,7 @@ final class AppRuntime: ObservableObject {
         )
         self.agentSessionRegistry = AgentSessionRegistry(storeURL: sessionsStoreURL)
         self.repoEnvStore = RepoEnvStore(storeURL: repoEnvStoreURL)
+        self.customProviderStore = CustomProviderStore(storeURL: customProvidersStoreURL)
         self.repoEnvRuntimeResolver = RepoEnvRuntimeResolver(
             workspaceStore: self.workspaceStore,
             envStore: self.repoEnvStore
@@ -360,6 +363,7 @@ final class AppRuntime: ObservableObject {
             registry: self.agentSessionRegistry,
             notifications: self.notificationDispatcher,
             workspaceStore: self.workspaceStore,
+            customProviderStore: self.customProviderStore,
             repoEnvResolver: self.repoEnvRuntimeResolver,
             vendorProvisioningService: self.vendorProvisioningService,
             mobileCommandOutbox: Self.mobileCommandOutboxForAppBootstrap()
