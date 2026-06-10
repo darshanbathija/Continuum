@@ -293,15 +293,9 @@ public struct MacSettingsView: View {
             }
         }
 
-        SettingsCard(title: "Live Activities",
-                     sub: "Real-time iPhone Lock Screen + Dynamic Island state for each running session.") {
-            LiveActivitySetupView()
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
         if let runtime {
-            SettingsCard(title: "Pairing",
-                         sub: "Pair an iPhone over Tailscale so the iPhone app + widgets see live quota + sessions.") {
+            SettingsCard(title: "Pair iPhone",
+                         sub: "Scan one QR with your iPhone to mirror live quota + sessions.") {
                 PairingSettingsView(runtime: runtime)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -567,7 +561,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .advanced:
             return "Vendor CLI, MCP, hosting, storage, and domain provisioning."
         case .devices:
-            return "Quota behavior, iPhone mirroring, Live Activities, and pairing."
+            return "Quota behavior, iPhone mirroring, and pairing."
         case .diagnostics:
             return "Debug bundles, source checks, cache tools, and wire inspection."
         case .notifications:
