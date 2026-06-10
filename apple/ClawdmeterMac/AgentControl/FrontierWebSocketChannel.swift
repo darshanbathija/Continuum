@@ -177,7 +177,8 @@ public final class FrontierWebSocketChannel: WSChannel {
                 modelSlug: child.model ?? "",
                 snapshot: wire,
                 status: status,
-                currentTurnState: snap.currentTurnState
+                currentTurnState: snap.currentTurnState,
+                customProviderId: child.customProviderId
             ))
         }
         let envelope = FrontierGroupSnapshot(
