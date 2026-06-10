@@ -2278,9 +2278,10 @@ public final class SessionsModel: ObservableObject {
     public func switchMode(sessionId: UUID, to newMode: SessionMode) async {
         guard let session = registry.session(id: sessionId) else { return }
         guard newMode != session.mode, newMode != .cloud else { return }
+        WorkspaceFeedback.info("Mode → \(newMode.rawValue.capitalized)")
         let changer = SessionConfigChanger(registry: registry, repoEnvResolver: repoEnvResolver)
         let result = await changer.swap(sessionId: sessionId, newMode: newMode)
-        surfaceSwap(result, succeeded: "Mode updated", failed: "Couldn't change mode")
+        surfaceSwap(result, succeeded: "Mode updated", failed: "Couldn't change mode", successToast: false)
     }
 
     /// Sessions v2 Phase 1: swap the model on a live session. Wraps
@@ -2311,14 +2312,49 @@ public final class SessionsModel: ObservableObject {
         }
     }
 
+    /// A bound runtime cannot change provider mid-session — model plurality
+    /// lives in workspace tabs. Cross-provider picks open a sibling draft
+    /// configured for the picked provider/model instead of mutating the
+    /// running session: the old path respawned e.g. `claude --model
+    /// cursor-default`, which never becomes ready and strands the session
+    /// on "Connecting to Claude" with a Cursor chip.
+    @discardableResult
+    func openCrossProviderDraft(
+        from session: AgentSession,
+        entry: ModelCatalogEntry,
+        effort: ReasoningEffort?
+    ) -> WorkspaceDraftTab? {
+        WorkspaceFeedback.info("New \(entry.displayName) tab in this worktree")
+        return openDraftWorkspaceTab(
+            from: session,
+            defaults: ComposerStore.ChipDefaults(
+                agent: entry.provider,
+                modelId: entry.id,
+                effort: entry.supportsEffort ? effort : nil,
+                mode: session.mode,
+                planMode: false
+            )
+        )
+    }
+
     public func switchModel(sessionId: UUID, to entry: ModelCatalogEntry, effort: ReasoningEffort? = nil) async {
+        // Cross-provider guard: never hand another provider's model id to the
+        // session's own runtime respawn.
+        if let session = registry.session(id: sessionId), entry.provider != session.agent {
+            openCrossProviderDraft(from: session, entry: entry, effort: effort)
+            return
+        }
+        // Visible feedback within the click (sub-250ms): the chip already
+        // shows the new value; the respawn confirms asynchronously and only
+        // failure needs a follow-up toast.
+        WorkspaceFeedback.info("Model → \(entry.displayName)")
         let changer = SessionConfigChanger(
             registry: registry,
             repoEnvResolver: repoEnvResolver
         )
         let modelToUse = entry.cliAlias ?? entry.id
         let result = await changer.swap(sessionId: sessionId, newModel: modelToUse, newEffort: .some(effort))
-        surfaceSwap(result, succeeded: "Model → \(entry.displayName)", failed: "Couldn't switch model")
+        surfaceSwap(result, succeeded: "Model → \(entry.displayName)", failed: "Couldn't switch model", successToast: false)
     }
 
     /// Sessions v2 Phase 1: swap the effort dial mid-session.
@@ -2333,6 +2369,7 @@ public final class SessionsModel: ObservableObject {
 
     /// Sessions v2 Phase 1: toggle plan/code mid-session (Claude only).
     public func switchPlanMode(sessionId: UUID, planMode: Bool) async {
+        WorkspaceFeedback.success(planMode ? "Switched to Plan mode" : "Switched to Code mode")
         let changer = SessionConfigChanger(
             registry: registry,
             repoEnvResolver: repoEnvResolver
@@ -2340,7 +2377,8 @@ public final class SessionsModel: ObservableObject {
         let result = await changer.swap(sessionId: sessionId, newPlanMode: planMode)
         surfaceSwap(result,
                     succeeded: planMode ? "Switched to Plan mode" : "Switched to Code mode",
-                    failed: "Couldn't change mode")
+                    failed: "Couldn't change mode",
+                    successToast: false)
     }
 
     /// Revive a degraded session through its direct runtime.
@@ -2383,6 +2421,11 @@ public final class SessionsModel: ObservableObject {
             store.setAcceptEdits(false, sessionId: sessionId)
             store.setBypass(true, sessionId: sessionId)
         }
+        // Visible feedback within the click (sub-250ms). The store flip above
+        // is the optimistic state change; waiting for the kill+respawn round
+        // trip made this toast land seconds after the click. Failure below
+        // still replaces it with the rollback explanation.
+        WorkspaceFeedback.success("Permission mode → \(newMode.displayName)")
         let changer = SessionConfigChanger(
             registry: registry,
             repoEnvResolver: repoEnvResolver
@@ -2394,7 +2437,7 @@ public final class SessionsModel: ObservableObject {
             store.setAcceptEdits(priorAcceptEdits, sessionId: sessionId)
             store.setBypass(priorBypass, sessionId: sessionId)
         }
-        surfaceSwap(result, succeeded: "Permission mode updated", failed: "Couldn't change permission mode")
+        surfaceSwap(result, succeeded: "Permission mode updated", failed: "Couldn't change permission mode", successToast: false)
     }
 
     public func endSession(id: UUID) async {

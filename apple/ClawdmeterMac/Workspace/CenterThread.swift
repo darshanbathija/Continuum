@@ -803,6 +803,17 @@ struct CenterThread: View {
             }
             guard !isHarnessDriven, new != session.model else { return }
             if let entry = catalog.entry(forId: new) {
+                if entry.provider != session.agent {
+                    // A bound runtime can't change provider — model plurality
+                    // lives in tabs. Restore this session's chip and open a
+                    // sibling draft configured for the picked provider/model
+                    // (switchModel has the same guard for non-chip callers).
+                    let effort = composerStore.effort
+                    composerStore.agent = session.agent
+                    composerStore.modelId = session.model
+                    model.openCrossProviderDraft(from: session, entry: entry, effort: effort)
+                    return
+                }
                 Task { await model.switchModel(sessionId: session.id, to: entry, effort: composerStore.effort) }
             }
         }
