@@ -17,7 +17,7 @@ Re-baseline evidence on clean `main` before any new change:
 
 User-authorized live-spend verification (gates: `CLAWDMETER_LIVE_VERIFY=1` + `CLAWDMETER_ALLOW_PROVIDER_SPEND=1` + `~/.continuum-live-verify`):
 
-- LiveDriveTests: Codex PASS, Gemini/Antigravity PASS, Grok PASS, Cursor SKIP on real account quota state ("Upgrade your plan to continue" — the documented spawn-time quota surfacing), OpenCode FAIL → fixed → PASS. Full defect chain and fixes in `docs/CODE_TAB_PROVIDER_MATRIX.md` ("OpenCode live-path defect chain").
+- LiveDriveTests: Codex PASS, Gemini/Antigravity PASS, Grok PASS, OpenCode FAIL → fixed → PASS (full defect chain in `docs/CODE_TAB_PROVIDER_MATRIX.md`), Cursor SKIP (real quota state) → PASS (43.7s) after re-logging the `cursor-agent` CLI into the upgraded account. The Cursor skip exposed a real identity split: the CLI login (billing) and the IDE login (which feeds Continuum's quota chip) are independent sessions and were on different accounts — documented in the provider matrix as a hazard. **Every selectable Code provider now has a live end-to-end pass.**
 - The rendered Plan-pane approve click test — the one execution-pending item from 2026-06-09 — passed on the unlocked desktop: `CodeTabHoverShortcutUITests/testPlanPaneApproveButtonApprovesRenderedPendingPlanAndCreatesCheckpoint` (31.9s) in `/tmp/cw-ui-plan-approve.log`.
 
 First-ever full-class UI run (all 40 `CodeTabHoverShortcutUITests`) exposed three regressions that per-test focused runs could not see, all introduced late on 2026-06-09 and shipped in #286:
