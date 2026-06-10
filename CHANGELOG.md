@@ -4,6 +4,32 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.32.1 build 228] - 2026-06-11 - Custom OpenAI/Anthropic-compatible providers + first shipped build of the multi-account work
+
+First public build since 0.31.17 (build 225). It bundles three merged
+PRs that had not yet reached a signed Sparkle feed or TestFlight:
+custom providers (#302), multi-account subscriptions (#304, detailed
+under 0.32.0 below), and the analytics cold-reparse fix (#303).
+
+### Added
+
+- **Custom OpenAI/Anthropic-compatible providers (wire v29).** Point
+  Continuum at any OpenAI- or Anthropic-compatible endpoint (base URL +
+  API key + model id). Add one in Settings → Providers; Continuum probes
+  the endpoint to confirm it answers before saving. Custom providers
+  appear in the Mac Chat provider row, the Mac Code empty-state composer,
+  and the iOS chat + new-session pickers, and route correctly through
+  both the Claude and Codex spawn paths. iOS gates the pickers on
+  `customProvidersMinimum = 29` so older paired Macs degrade to the
+  built-in providers instead of silently mismatching.
+
+### Fixed
+
+- **Build number was pinned by a duplicate key.** `apple/project.yml`
+  carried two `CURRENT_PROJECT_VERSION` lines (227 then 226); YAML keeps
+  the last, so the project actually built as 226. Collapsed to a single
+  authoritative line. This release is build 228.
+
 ## [0.32.0 build 227] - 2026-06-11 - Multi-account Claude + Codex subscriptions across Settings, Chat, Code, and Usage (`darshanbathija/multi-account-subscriptions`)
 
 ### Added
