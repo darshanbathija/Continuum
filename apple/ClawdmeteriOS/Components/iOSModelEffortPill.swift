@@ -61,12 +61,16 @@ struct iOSModelEffortPill: View {
             }
         } label: {
             HStack(spacing: 6) {
+                // Hug + center the model label instead of left-pinning it in a
+                // fixed 96–180pt slot with tail truncation (which clipped long
+                // "Model · Effort" combos and left short ones off-center). The
+                // outer Menu is `.fixedSize(horizontal:)` so the capsule grows.
+                // Mirrors the Mac UsageStatusChip.ModelEffortChip fix.
                 Text(summaryText)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(minWidth: 96, maxWidth: 180, alignment: .leading)
+                    .fixedSize()
                 if let effort = selectedEffort, modelSupportsEffort {
                     Text(effortLabel(effort))
                         .font(.system(size: 13))
