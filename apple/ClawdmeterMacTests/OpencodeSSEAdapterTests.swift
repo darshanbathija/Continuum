@@ -75,6 +75,44 @@ final class OpencodeSSEAdapterTests: XCTestCase {
         OpencodeSSEAdapter.shared.handleEvent(type: "", properties: [:])
     }
 
+    func test_register_startsScopedEventStreamPerDirectoryWithLRUCap() {
+        // Regression for the 2026-06-10 live failure: opencode ≥1.16
+        // scopes /event to one project directory per connection, so an
+        // adapter that only opens the unscoped stream receives nothing
+        // for sessions created in their own cwd — the Code tab never
+        // rendered any OpenCode reply. Registration must open a scoped
+        // stream per distinct session directory, bounded by an LRU cap.
+        let adapter = OpencodeSSEAdapter.shared
+        adapter.stop()
+        defer { adapter.stop() }
+
+        // Before start(), registration records the repo but opens nothing.
+        adapter.register(clawdmeterID: UUID(), opencodeID: "oc_pre", repo: "/tmp/dir-pre")
+        XCTAssertTrue(adapter.activeStreamDirectoriesForTesting.isEmpty)
+
+        adapter.start()
+        XCTAssertTrue(adapter.activeStreamDirectoriesForTesting.contains(""))
+        XCTAssertTrue(adapter.activeStreamDirectoriesForTesting.contains("/tmp/dir-pre"))
+
+        adapter.register(clawdmeterID: UUID(), opencodeID: "oc_a", repo: "/tmp/dir-a")
+        adapter.register(clawdmeterID: UUID(), opencodeID: "oc_b", repo: "/tmp/dir-b")
+        // A second session in an already-streamed directory reuses it.
+        adapter.register(clawdmeterID: UUID(), opencodeID: "oc_b2", repo: "/tmp/dir-b")
+        XCTAssertEqual(
+            adapter.activeStreamDirectoriesForTesting.filter { $0 == "/tmp/dir-b" }.count,
+            1
+        )
+
+        // LRU cap: flooding past the cap evicts the oldest streams while
+        // keeping the newest registrations alive.
+        for index in 0..<40 {
+            adapter.register(clawdmeterID: UUID(), opencodeID: "oc_cap\(index)", repo: "/tmp/cap-\(index)")
+        }
+        XCTAssertLessThanOrEqual(adapter.activeStreamDirectoriesForTesting.count, 32)
+        XCTAssertTrue(adapter.activeStreamDirectoriesForTesting.contains("/tmp/cap-39"))
+        XCTAssertFalse(adapter.activeStreamDirectoriesForTesting.contains("/tmp/dir-pre"))
+    }
+
     func test_cleanStreamCompletionResetsReconnectFailures() {
         let adapter = OpencodeSSEAdapter.shared
         adapter.stop()

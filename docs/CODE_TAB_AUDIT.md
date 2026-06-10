@@ -2,7 +2,50 @@
 
 Date: 2026-06-09 04:02 ICT
 
-Latest evidence update: 2026-06-09 22:33 ICT.
+Latest evidence update: 2026-06-10 (post-merge re-baseline + live-spend verification pass; see the section directly below).
+
+## 2026-06-10 Post-Merge Re-Baseline And Findings (main `d215a7c5`)
+
+PR #286 merged the prior WIP onto `main`; the working tree for this pass started clean at `d215a7c5` (verified identical to the `codex/fix-code-sidebar-usage-refresh` branch tip — `git diff` empty).
+
+Re-baseline evidence on clean `main` before any new change:
+
+- Mac build: `xcodebuild build -scheme "Clawdmeter (Mac)" CODE_SIGNING_ALLOWED=NO` passed, 0 errors (`/tmp/cw-main-build-d215a7c5.log`).
+- Reproducible unit-check script: `script/run_code_tab_unit_checks.sh` passed — SessionLauncherModelTests 20/20, WorkspaceTabsTests 36/36, WorkbenchStateTests 20/20, ChatSendPerProviderTests 15/15, AgentControlServerChatRouteTests 35 executed / 4 expected live-provider skips / 0 failures (`/tmp/cw-unit-checks-main-d215a7c5.log`).
+- ClawdmeterShared full suite (first recorded full pass): `swift test` — 1423 tests, 5 unrelated skips, 0 failures (`/tmp/cw-shared-full-suite.log`).
+- PR window refresh: the 150-PR Code-tab window is now #286..#91 (exactly +#286/−#90 vs the prior window; the path filter was verified to reproduce the prior documented window exactly before recomputing). Evidence cache regenerated at `/tmp/continuum_merged_prs_300.json`.
+
+User-authorized live-spend verification (gates: `CLAWDMETER_LIVE_VERIFY=1` + `CLAWDMETER_ALLOW_PROVIDER_SPEND=1` + `~/.continuum-live-verify`):
+
+- LiveDriveTests: Codex PASS, Gemini/Antigravity PASS, Grok PASS, OpenCode FAIL → fixed → PASS (full defect chain in `docs/CODE_TAB_PROVIDER_MATRIX.md`), Cursor SKIP (real quota state) → PASS (43.7s) after re-logging the `cursor-agent` CLI into the upgraded account. The Cursor skip exposed a real identity split: the CLI login (billing) and the IDE login (which feeds Continuum's quota chip) are independent sessions and were on different accounts — documented in the provider matrix as a hazard. **Every selectable Code provider now has a live end-to-end pass.**
+- The rendered Plan-pane approve click test — the one execution-pending item from 2026-06-09 — passed on the unlocked desktop: `CodeTabHoverShortcutUITests/testPlanPaneApproveButtonApprovesRenderedPendingPlanAndCreatesCheckpoint` (31.9s) in `/tmp/cw-ui-plan-approve.log`.
+
+First-ever full-class UI run (all 40 `CodeTabHoverShortcutUITests`) exposed three regressions that per-test focused runs could not see, all introduced late on 2026-06-09 and shipped in #286:
+
+1. **Center-header AX identifier stomp** (broke 7 tests: density menu, More-actions Archive/End-Session, all three checkpoint-restore tests, permission-mode bypass gate). The container-level `.accessibilityIdentifier("code.center.header")` added for the same-worktree header-switch test propagated onto every child AX element, overwriting `code.header.density`, `code.header.more-actions`, and their selected-state markers. Fixed in `CenterThread.swift` with `.accessibilityElement(children: .contain)` — the same fix class as the documented `code.review.pane` containment fix. The header-switch test still passes (it reads the dedicated `code.center.header.state` overlay marker).
+2. **Repo-settings "New session here" silently became an instant quick-spawn.** The gear-menu row has always called `quickSpawnInRepo`, but it *accidentally* opened the launcher because workspace-section repo keys didn't resolve into `model.repos` and the call fell back to the sheet. The 2026-06-09 managed-workspace key-canonicalization fix removed that accident, turning the row into a redundant duplicate of the adjacent `+` (and provisioning-failing in fixtures). Fixed in `SidebarPane.swift`: the menu row now calls `prepareNewSession(in:)` per the intent map; instant quick-spawn remains the `+` button's behavior.
+3. **Composer draft persistence leaks across UI-test runs.** Composer drafts persist in `UserDefaults.standard` under `clawdmeter.composer.draft.<sessionId>` — correct product behavior, but the fixed fixture UUID accumulated every prior run's typed text (diagnosed via a new always-kept failure attachment that dumps `session-presentation.json` plus the rendered editor values). Fixed test-side with NSArgumentDomain overrides for the seeded draft keys at launch; the diagnostics attachment stays in the test.
+
+A fourth process finding: app-hosted unit/live xctest bundles boot a second Continuum instance whose daemon binds the fixed ports 21731/21732 — running them concurrently with XCUITest corrupts the UI-test app's daemon and fails fixture loads. UI runs must own the machine exclusively.
+
+Full-class UI result after the fixes: `CodeTabHoverShortcutUITests` executed all 40 tests in one exclusive pass — 38 passed in-class (`/tmp/cw-ui-full-class2.log`, 949s) and the 2 in-class failures were both proven environmental with green focused reruns: the draft model-picker test passed immediately focused (popover-open interaction flake), and the permission-mode quick-flip failure was **Shottr** — launched at 03:16:42, between the green first class run and every red rerun — whose global ⌘⇧1/⌘⇧2 screenshot hotkeys swallow the permission-mode shortcuts system-wide. With Shottr quit the test passes in 12.2s (`/tmp/cw-ui-quickflip-noshottr.log`); Shottr was relaunched afterwards. Global-hotkey utilities join external windows (VLC/Chrome) on the documented UI-run interference list.
+
+Route-level live smokes (daemon-route layer; needs `CLAWDMETER_LIVE_PROVIDER_TESTS=1` for the daemon-side spend gate **in addition to** the LiveDrive gates, plus `CLAWDMETER_PROVIDER_<ID>_ENABLED=1` overrides because providers are opt-in-off under a bare test host):
+
+- `test_liveCodeProviderSmoke_createsOwnedWorktreesWithoutPermissionPrompts` PASSED (73.5s): real `/sessions` spawns for Claude, Codex, Cursor, OpenCode, and Gemini with real worktree provisioning, ownership metadata, `.env.local`-only ignored-file copy, no permission prompts, full cleanup (`/tmp/cw-route-live-smoke2.log`). This is the live Claude coverage LiveDriveTests does not provide.
+- `test_cursorRoute_createsSessionWhenProbePasses` PASSED (`/tmp/cw-route-cursor.log`).
+- `test_openRouterRoute_createsOpenCodeSessionAndLiveSendWhenAvailable` PASSED (3.6s): chat-session create with OpenRouter vendor binding plus a real live send through `opencode serve` (`/tmp/cw-route-openrouter2.log`).
+- `testFrontierGeminiBroadcastDrivesViaAgy` PASSED (9.2s): real gemini broadcast child streams an assistant reply via headless `agy` (`/tmp/cw-route-frontier2.log`).
+
+Final verification sweep on the changed tree: `script/run_code_tab_unit_checks.sh` passed all five focused classes — SessionLauncherModelTests 20/20, WorkspaceTabsTests 36/36, WorkbenchStateTests 20/20, ChatSendPerProviderTests 18/18 (now including the three opencode-1.16 regressions), AgentControlServerChatRouteTests 35 executed / 4 expected live skips / 0 failures (`/tmp/cw-unit-checks-final.log`). OpencodeSSEAdapterTests 30/30 and OpencodeSendTests 11/11 also pass.
+
+First-ever whole-bundle run (`xcrun xctest` on the full ClawdmeterMacTests bundle, no live env): exposed three pre-existing issues, none introduced by this pass and none in Code-tab scope —
+
+1. `ChatV2StoreTests` (Chat-tab E2E) crashes standalone under a bare test host (`Fatal error: Index out of range` after frontier-slot assertions see zero enabled providers) and shows 13 stale assertions even with providers enabled via env. Pre-existing Chat-tab test debt; its subjects are untouched by this pass.
+2. `AgentSpawnerChatArgvTests/test_chatClaude_emitsPlanModeArgv` fails standalone (stale argv expectation). Pre-existing; subject untouched.
+3. `AgentControlServerChatRouteTests/test_staleManagedSessionsReturn503ForSendAndInterrupt` fails only inside the whole-bundle sequence and passes standalone — inter-class state pollution; the whole-bundle mode has never been a supported gate (the repo's reproducible gate is the focused script).
+
+These belong to a future Chat-tab pass; recording them here keeps the first whole-bundle result honest.
 
 Scope: primary navigation `Code` tab and the in-tab workbench. This excludes Settings, Usage, and menu-bar surfaces except where a Code-tab control intentionally opens or depends on them.
 

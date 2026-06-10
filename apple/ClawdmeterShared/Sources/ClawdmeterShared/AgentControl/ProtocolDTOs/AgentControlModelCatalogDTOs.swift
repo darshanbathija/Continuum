@@ -193,14 +193,22 @@ public struct ModelCatalog: Codable, Sendable {
     }
 
     /// Bundled default catalog (latest first):
-    /// Opus 4.8 1M / Opus 4.8 / Opus 4.7 1M / Opus 4.7 / Opus 4.6 1M / Sonnet 4.6 / Haiku 4.5 +
+    /// Fable 5 1M / Fable 5 / Opus 4.8 1M / Opus 4.8 / Opus 4.7 1M / Opus 4.7 / Opus 4.6 1M / Sonnet 4.6 / Haiku 4.5 +
     /// GPT-5.5 / GPT-5.4 / GPT-5.3-Codex-Spark / GPT-5.3-Codex / GPT-5.2-Codex.
     /// Gemini entries reflect Antigravity's 2026-05-19 v1internal:fetchAvailableModels
     /// response (Gemini 3.1 Pro High/Low + Gemini 3 Flash).
     public static let bundled = ModelCatalog(
         claude: [
+            // Claude Fable 5 (2026-06): Anthropic's most capable widely
+            // released model. The API serves a 1M window natively, but
+            // Claude Code keeps its long-context mode behind the same
+            // "[1m]" tag as the Opus family, so the catalog mirrors the
+            // -1m/base pair convention (AgentSpawner translates the
+            // "-1m" suffix to the CLI's bracket form at spawn).
+            ModelCatalogEntry(id: "claude-fable-5-1m",         provider: .claude, displayName: "Fable 5 (1M)",    cliAlias: nil,      supportsThinking: true,  supportsEffort: true,  contextWindow: 1_000_000, recommendedFor: "Hardest tasks",  badge: "1M"),
+            ModelCatalogEntry(id: "claude-fable-5",            provider: .claude, displayName: "Fable 5",         cliAlias: nil,      supportsThinking: true,  supportsEffort: true,  contextWindow: 200_000,   recommendedFor: "Frontier work",  badge: "New"),
             ModelCatalogEntry(id: "claude-opus-4-8-1m",        provider: .claude, displayName: "Opus 4.8 (1M)",   cliAlias: nil,      supportsThinking: true,  supportsEffort: true,  contextWindow: 1_000_000, recommendedFor: "Long tasks",     badge: "1M"),
-            ModelCatalogEntry(id: "claude-opus-4-8",           provider: .claude, displayName: "Opus 4.8",        cliAlias: "opus",   supportsThinking: true,  supportsEffort: true,  contextWindow: 200_000,   recommendedFor: "Most work",      badge: "New"),
+            ModelCatalogEntry(id: "claude-opus-4-8",           provider: .claude, displayName: "Opus 4.8",        cliAlias: "opus",   supportsThinking: true,  supportsEffort: true,  contextWindow: 200_000,   recommendedFor: "Most work",      badge: nil),
             ModelCatalogEntry(id: "claude-opus-4-7-1m",        provider: .claude, displayName: "Opus 4.7 (1M)",   cliAlias: nil,      supportsThinking: true,  supportsEffort: true,  contextWindow: 1_000_000, recommendedFor: nil,              badge: "1M"),
             ModelCatalogEntry(id: "claude-opus-4-7",           provider: .claude, displayName: "Opus 4.7",        cliAlias: nil,      supportsThinking: true,  supportsEffort: true,  contextWindow: 200_000,   recommendedFor: nil,              badge: nil),
             ModelCatalogEntry(id: "claude-opus-4-6-1m",        provider: .claude, displayName: "Opus 4.6 (1M)",   cliAlias: nil,      supportsThinking: true,  supportsEffort: true,  contextWindow: 1_000_000, recommendedFor: nil,              badge: "1M"),

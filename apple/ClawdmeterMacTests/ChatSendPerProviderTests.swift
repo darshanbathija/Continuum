@@ -426,4 +426,159 @@ final class ChatSendPerProviderTests: XCTestCase {
         }
         XCTAssertTrue(errorProjected, "OpenCode session.error must render as provider error and interrupt the turn")
     }
+
+    // MARK: - opencode ≥1.16 SSE vocabulary (message.added retired)
+
+    /// Regression for the 2026-06-10 live failure: a real opencode 1.16.2
+    /// serve streamed an entire reply as `message.updated` +
+    /// `message.part.updated`/`message.part.delta` + `session.idle`, and the
+    /// adapter (which only spoke `message.added`) projected nothing — the
+    /// Code tab never showed the reply and the turn never terminated.
+    /// Replays the captured live event sequence verbatim (sanitized ids)
+    /// through `dispatchEvent` and asserts the reply, single-row upsert,
+    /// reasoning suppression, token/model projection, and terminal state.
+    func test_opencodeServeSSE_v116_dispatchesLiveCaptureSequenceToReplyAndCompletion() async throws {
+        let id = UUID()
+        let store = SessionChatStore(sessionId: id, sdkOnly: true)
+        store.start()
+        startedStores.append(store)
+
+        OpencodeSSEAdapter.shared.register(clawdmeterID: id, opencodeID: "ses_v116")
+        OpencodeSSEAdapter.shared.chatStoreAccessor = { lookup in
+            lookup == id ? store : nil
+        }
+
+        // Verbatim event shapes captured from opencode v1.16.2 (/event).
+        let events: [String] = [
+            #"{"type":"message.updated","properties":{"sessionID":"ses_v116","info":{"id":"msg_user1","role":"user","sessionID":"ses_v116","time":{"created":1781030036906},"agent":"build","model":{"providerID":"xai","modelID":"grok-4.3"}}}}"#,
+            #"{"type":"message.part.updated","properties":{"sessionID":"ses_v116","part":{"type":"text","text":"Reply with exactly the token V116_OK and no other text.","messageID":"msg_user1","sessionID":"ses_v116","id":"prt_user1"},"time":1781030036917}}"#,
+            #"{"type":"session.status","properties":{"sessionID":"ses_v116","status":{"type":"busy"}}}"#,
+            #"{"type":"message.updated","properties":{"sessionID":"ses_v116","info":{"id":"msg_asst1","role":"assistant","sessionID":"ses_v116","time":{"created":1781030036928},"mode":"build","agent":"build"}}}"#,
+            #"{"type":"message.part.updated","properties":{"sessionID":"ses_v116","part":{"type":"step-start","id":"prt_step1","sessionID":"ses_v116","messageID":"msg_asst1"}}}"#,
+            #"{"type":"message.part.updated","properties":{"sessionID":"ses_v116","part":{"type":"reasoning","text":"","messageID":"msg_asst1","sessionID":"ses_v116","id":"prt_think1"}}}"#,
+            #"{"type":"message.part.delta","properties":{"sessionID":"ses_v116","messageID":"msg_asst1","partID":"prt_think1","field":"text","delta":"The task is trivial."}}"#,
+            #"{"type":"message.part.delta","properties":{"sessionID":"ses_v116","messageID":"msg_asst1","partID":"prt_text1","field":"text","delta":"V116"}}"#,
+            #"{"type":"message.part.delta","properties":{"sessionID":"ses_v116","messageID":"msg_asst1","partID":"prt_text1","field":"text","delta":"_OK"}}"#,
+            #"{"type":"message.part.updated","properties":{"sessionID":"ses_v116","part":{"type":"text","text":"V116_OK","time":{"start":1781030040610,"end":1781030040838},"id":"prt_text1","sessionID":"ses_v116","messageID":"msg_asst1"}}}"#,
+            #"{"type":"message.updated","properties":{"sessionID":"ses_v116","info":{"id":"msg_asst1","role":"assistant","sessionID":"ses_v116","modelID":"grok-4.3","providerID":"xai","tokens":{"total":51553,"input":51303,"output":5,"reasoning":117,"cache":{"read":128,"write":0}},"time":{"created":1781030036928,"completed":1781030040852},"finish":"stop"}}}"#,
+            #"{"type":"session.idle","properties":{"sessionID":"ses_v116"}}"#,
+        ]
+        for event in events {
+            OpencodeSSEAdapter.shared.dispatchEvent(jsonString: event)
+        }
+
+        let replyProjected = await waitUntil {
+            store.snapshot.currentTurnState == .completed
+                && store.messages.contains {
+                    $0.kind == .assistantText && $0.body == "V116_OK" && !$0.isError
+                }
+        }
+        XCTAssertTrue(replyProjected, "opencode 1.16 SSE sequence must project the assistant reply and complete the turn")
+
+        let assistantRows = store.messages.filter { $0.kind == .assistantText }
+        XCTAssertEqual(assistantRows.count, 1, "delta + cumulative snapshot must upsert one assistant row, not duplicate it")
+        XCTAssertFalse(
+            store.messages.contains { $0.body.contains("The task is trivial.") },
+            "reasoning parts must not render as assistant text"
+        )
+        XCTAssertFalse(
+            store.messages.contains { $0.kind == .userText },
+            "the adapter must not re-echo the user prompt; the daemon already echoed it at send time"
+        )
+        let usageProjected = await waitUntil {
+            store.snapshot.totalInputTokens == 51303
+                && store.snapshot.totalOutputTokens == 122
+                && store.snapshot.modelHint == "grok-4.3"
+        }
+        XCTAssertTrue(usageProjected, "assistant completion must project token totals (output + reasoning) and the model id")
+    }
+
+    /// Deltas-only flow: some turns never emit a final cumulative text
+    /// snapshot before completion. The joined delta buffer must still
+    /// project, and `message.updated` completion must finish the turn.
+    func test_opencodeServeSSE_v116_deltasOnlyReplyProjectsAndCompletes() async throws {
+        let id = UUID()
+        let store = SessionChatStore(sessionId: id, sdkOnly: true)
+        store.start()
+        startedStores.append(store)
+
+        OpencodeSSEAdapter.shared.register(clawdmeterID: id, opencodeID: "ses_v116b")
+        OpencodeSSEAdapter.shared.chatStoreAccessor = { lookup in
+            lookup == id ? store : nil
+        }
+
+        OpencodeSSEAdapter.shared.handleEvent(type: "message.updated", properties: [
+            "sessionID": "ses_v116b",
+            "info": ["id": "msg_b1", "role": "assistant", "sessionID": "ses_v116b", "time": ["created": 1]],
+        ])
+        // The part's kind arrives via an empty cumulative snapshot first…
+        OpencodeSSEAdapter.shared.handleEvent(type: "message.part.updated", properties: [
+            "sessionID": "ses_v116b",
+            "part": ["type": "text", "text": "", "id": "prt_b1", "messageID": "msg_b1", "sessionID": "ses_v116b"],
+        ])
+        // …then the body streams purely as deltas.
+        for delta in ["Hel", "lo ", "deltas"] {
+            OpencodeSSEAdapter.shared.handleEvent(type: "message.part.delta", properties: [
+                "sessionID": "ses_v116b", "messageID": "msg_b1", "partID": "prt_b1",
+                "field": "text", "delta": delta,
+            ])
+        }
+        let streaming = await waitUntil {
+            store.snapshot.currentTurnState == .streaming
+        }
+        XCTAssertTrue(streaming, "delta-streamed text must keep the turn in streaming state")
+        // The body projects once at completion (the staging pipeline is
+        // first-wins by message id), so no partial row may exist yet.
+        XCTAssertFalse(
+            store.messages.contains { $0.kind == .assistantText },
+            "partial delta fragments must not freeze an assistant row at its first fragment"
+        )
+
+        OpencodeSSEAdapter.shared.handleEvent(type: "message.updated", properties: [
+            "sessionID": "ses_v116b",
+            "info": [
+                "id": "msg_b1", "role": "assistant", "sessionID": "ses_v116b",
+                "time": ["created": 1, "completed": 2], "finish": "stop",
+            ],
+        ])
+        let completed = await waitUntil {
+            store.snapshot.currentTurnState == .completed
+                && store.messages.contains { $0.kind == .assistantText && $0.body == "Hello deltas" }
+        }
+        XCTAssertTrue(completed, "assistant completion without a final cumulative snapshot must still finish the turn with the delta-joined body")
+    }
+
+    /// `session.idle` is a terminal safety net for streaming turns only:
+    /// it must not overwrite an interrupted/error turn state.
+    func test_opencodeServeSSE_v116_sessionIdleDoesNotOverrideInterruptedTurn() async throws {
+        let id = UUID()
+        let store = SessionChatStore(sessionId: id, sdkOnly: true)
+        store.start()
+        startedStores.append(store)
+
+        OpencodeSSEAdapter.shared.register(clawdmeterID: id, opencodeID: "ses_v116c")
+        OpencodeSSEAdapter.shared.chatStoreAccessor = { lookup in
+            lookup == id ? store : nil
+        }
+
+        store.setCurrentTurnState(.streaming)
+        OpencodeSSEAdapter.shared.handleEvent(type: "session.error", properties: [
+            "sessionID": "ses_v116c",
+            "error": "provider exploded",
+        ])
+        let interrupted = await waitUntil {
+            store.snapshot.currentTurnState == .interrupted
+        }
+        XCTAssertTrue(interrupted)
+
+        OpencodeSSEAdapter.shared.handleEvent(type: "session.idle", properties: [
+            "sessionID": "ses_v116c",
+        ])
+        // Give any erroneous completion a moment to land, then assert it didn't.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(
+            store.snapshot.currentTurnState, .interrupted,
+            "session.idle must not upgrade an interrupted turn to completed"
+        )
+    }
 }

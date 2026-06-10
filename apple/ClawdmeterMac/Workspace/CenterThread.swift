@@ -353,6 +353,15 @@ struct CenterThread: View {
         .padding(.horizontal, 22)
         .padding(.top, 14)
         .padding(.bottom, 10)
+        // Containment is required here: a bare container identifier
+        // propagates onto every child AX element and overwrote
+        // `code.header.density` / `code.header.more-actions` (and their
+        // selected-state markers), breaking AX addressability for the
+        // header controls. Same bug class as the WorkspaceReviewPane
+        // `code.review.pane` fix. The session/provider/model value
+        // assertions ride the dedicated `code.center.header.state`
+        // overlay marker below.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("code.center.header")
         .accessibilityValue(headerAccessibilityValue)
         .overlay(alignment: .topLeading) {

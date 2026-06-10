@@ -1352,7 +1352,11 @@ struct AnalyticsCache: Codable, Sendable {
     // parsing accepts nested provider model metadata plus Bedrock tool-call
     // fallback attribution. v16 caches undercount Claude-heavy Cursor subagent
     // work, so force another one-time reparse.
-    static let currentVersion: Int = 17
+    // v18 (2026-06-10): claude-fable-5 pricing landed as a manual override in
+    // pricing.json. Days cached before the entry existed priced Fable usage
+    // at $0 and parked the tokens in unpricedModelTokens — force a one-time
+    // reparse so they re-price (same pattern as the v14 Claude-dedup bump).
+    static let currentVersion: Int = 18
 
     let version: Int
     var files: [String: FileEntry]

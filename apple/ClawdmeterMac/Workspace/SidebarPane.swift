@@ -1010,7 +1010,14 @@ struct SidebarPane: View {
     @ViewBuilder
     private func workspaceMenuItems(_ section: SidebarWorkspaceSection) -> some View {
         let workspace = managedWorkspace(for: section)
-        Button { model.quickSpawnInRepo(section.repo.key) } label: {
+        // The gear menu's row opens the full launcher (per the Code-tab
+        // intent map); instant quick-spawn belongs to the adjacent `+`
+        // button. This used to *accidentally* open the launcher because
+        // workspace-section repo keys didn't resolve into `model.repos`
+        // and quickSpawnInRepo fell back to the sheet — the key
+        // canonicalization fix removed that fallback path and turned
+        // this row into a redundant (and fixture-hostile) quick spawn.
+        Button { model.prepareNewSession(in: section.repo.key) } label: {
             Label("New session here", systemImage: "plus")
         }
         .accessibilityIdentifier("code.repo.settings.new-session")

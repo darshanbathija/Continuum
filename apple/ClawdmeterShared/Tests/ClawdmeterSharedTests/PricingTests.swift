@@ -92,6 +92,36 @@ final class PricingTests: XCTestCase {
         XCTAssertEqual(c48, c47, accuracy: 0.0001)
     }
 
+    // Fable 5 (released 2026-06) is the new top Claude Code model; before the
+    // manual pricing override landed, every Fable session priced at $0 and its
+    // tokens parked in unpricedModelTokens. Launch rates: $10/M in, $50/M out,
+    // $12.50/M cache write, $1/M cache read — and the full 1M context bills at
+    // the flat rate (no >200k tier, per platform.claude.com/docs/en/pricing).
+    func test_fable5_pricesAtLaunchRatesIncludingBracketVariant() {
+        let tokens = TokenTotals(inputTokens: 100_000, outputTokens: 50_000)
+        XCTAssertTrue(pricing.isPriced("claude-fable-5"))
+        let base = (pricing.cost(for: "claude-fable-5", tokens: tokens) as NSDecimalNumber).doubleValue
+        XCTAssertEqual(base, 3.50, accuracy: 0.001)   // 100k @ $10/M + 50k @ $50/M
+
+        // Claude Code JSONLs record long-context sessions with the literal
+        // model string "claude-fable-5[1m]" — it must resolve to the same
+        // rates via the prefix-match lookup, not fall through as unpriced.
+        XCTAssertTrue(pricing.isPriced("claude-fable-5[1m]"))
+        let bracket = (pricing.cost(for: "claude-fable-5[1m]", tokens: tokens) as NSDecimalNumber).doubleValue
+        XCTAssertEqual(bracket, base, accuracy: 0.0001)
+
+        // No long-context premium: 1M input tokens bill at the same per-token
+        // rate as 100k.
+        let big = TokenTotals(inputTokens: 1_000_000, outputTokens: 0)
+        let bigCost = (pricing.cost(for: "claude-fable-5", tokens: big) as NSDecimalNumber).doubleValue
+        XCTAssertEqual(bigCost, 10.0, accuracy: 0.001)
+
+        // Cache mix: 100k cache-write @ $12.50/M + 100k cache-read @ $1/M.
+        let cached = TokenTotals(cacheCreationTokens: 100_000, cacheReadTokens: 100_000)
+        let cachedCost = (pricing.cost(for: "claude-fable-5", tokens: cached) as NSDecimalNumber).doubleValue
+        XCTAssertEqual(cachedCost, 1.35, accuracy: 0.001)
+    }
+
     // Bare model names from the opencode provider (e.g. "grok-4.3") must
     // resolve to LiteLLM's provider-prefixed key ("xai/grok-4.3") rather than
     // pricing at $0.
