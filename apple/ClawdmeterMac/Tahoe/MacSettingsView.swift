@@ -1285,6 +1285,10 @@ struct ProviderPreferenceRows: View {
                     catalog: catalog,
                     showDeviceStatus: showDeviceStatus,
                     deviceStatus: deviceStatuses[providerEnablementId(for: vendor)],
+                    // Multi-account: only Settings (which has the live
+                    // runtime) hosts the per-account list. Onboarding
+                    // passes nil and stays single-account.
+                    accountsRuntime: runtime,
                     onSetupAction: onSetupAction,
                     onSelectModel: { entry in update(vendor: vendor, model: entry.id) },
                     onOpenModelMenu: { Task { await refreshCatalogIfAllowed(for: vendor) } }
@@ -1474,6 +1478,9 @@ private struct ProviderPreferenceRow: View {
     let catalog: ModelCatalog
     var showDeviceStatus: Bool = false
     var deviceStatus: ProviderDeviceStatus?
+    /// Multi-account: when set AND the vendor's backing provider
+    /// supports config-dir isolation, render the per-account sub-list.
+    var accountsRuntime: AppRuntime? = nil
     var onSetupAction: ((String, ProviderDeviceSetupAction) -> Void)? = nil
     let onSelectModel: (ModelCatalogEntry) -> Void
     let onOpenModelMenu: () -> Void
@@ -1532,6 +1539,11 @@ private struct ProviderPreferenceRow: View {
                     }
                 }
                 .padding(.leading, 40)
+            }
+            if isEnabled,
+               let accountsRuntime,
+               ProviderAccountsSection.supportsMultiAccount(vendor.backingProvider) {
+                ProviderAccountsSection(runtime: accountsRuntime, kind: vendor.backingProvider)
             }
         }
         .frame(minHeight: 36)
