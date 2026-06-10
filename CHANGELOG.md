@@ -4,6 +4,15 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.13 build 221] - 2026-06-10 - Cross-provider switch opens a sibling tab; instant bottom-right toasts (`fix/cross-provider-switch-and-toast-feedback`)
+
+### Fixed
+
+- **"Connecting to Claude" stranding after a cross-provider model pick.** Picking another provider's model on a bound session swapped only the model id onto the running runtime (`claude --model cursor-default`), which never becomes ready. Cross-provider picks now leave the session untouched and open a sibling draft tab configured for the picked provider/model — model plurality lives in tabs. Guarded at both the chip layer and `switchModel`; regression `test_switchModelAcrossProvidersOpensSiblingDraftInsteadOfMutatingSession`.
+- **Config-swap toasts landed seconds late.** Permission-mode/model/mode/plan toasts posted only after the kill+respawn round trip; they now post at click time (sub-250ms, matching the optimistic chip flip) with failure follow-ups carrying the rollback explanation.
+- **Notification bubbles moved to the bottom-right corner** (trailing slide-in) instead of front-and-center over the transcript.
+- Bumps `CURRENT_PROJECT_VERSION` 220 → 221.
+
 ## [0.31.12 build 220] - 2026-06-10 - Code-tab live verification: OpenCode live SSE fixed, Cursor account wiring, Fable 5 models + pricing (`fix/code-tab-live-verification-pass`)
 
 ### Added
