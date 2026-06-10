@@ -17,6 +17,7 @@ struct NewSessionSheet: View {
     @State private var baseBranch: String = "main"
     @State private var goal: String = ""
     @State private var agent: AgentKind = .claude
+    @State private var customProviderId: String?
     @State private var modelId: String?
     @State private var effort: ReasoningEffort = .medium
     @State private var mode: SessionMode = .worktree
@@ -82,7 +83,33 @@ struct NewSessionSheet: View {
                         .pickerStyle(.segmented)
 
                         if let effectiveAgent {
-                            iOSModelPicker(selectedModelId: $modelId, catalog: client.modelCatalog, agent: effectiveAgent)
+                            if !enabledCustomProviders.isEmpty {
+                                Picker("Custom provider", selection: $customProviderId) {
+                                    Text("Built-in agent").tag(String?.none)
+                                    ForEach(enabledCustomProviders, id: \.id) { summary in
+                                        Text(summary.label).tag(Optional(summary.id))
+                                    }
+                                }
+                                .onChange(of: customProviderId) { _, newValue in
+                                    guard let newValue,
+                                          let summary = enabledCustomProviders.first(where: { $0.id == newValue }) else {
+                                        return
+                                    }
+                                    switch summary.kind {
+                                    case .anthropicCompatible: agent = .claude
+                                    case .openAICompatible: agent = .codex
+                                    }
+                                    modelId = summary.defaultModelId ?? summary.entries.first?.id
+                                    effort = .medium
+                                }
+                            }
+
+                            iOSModelPicker(
+                                selectedModelId: $modelId,
+                                catalog: client.modelCatalog,
+                                agent: effectiveAgent,
+                                customProviderId: customProviderId
+                            )
 
                             iOSEffortDial(selected: $effort, supportsEffort: currentModelSupportsEffort)
 
@@ -258,11 +285,17 @@ struct NewSessionSheet: View {
     }
 
     private var currentModelSupportsEffort: Bool {
+        guard customProviderId == nil else { return false }
         guard let id = modelId,
               let effectiveAgent,
               let entry = client.modelCatalog.entries(for: effectiveAgent).first(where: { $0.id == id || $0.cliAlias == id })
         else { return true }
         return entry.supportsEffort
+    }
+
+    private var enabledCustomProviders: [CustomProviderWireSummary] {
+        guard client.supportsCustomProviders else { return [] }
+        return client.modelCatalog.customProviders.filter(\.enabled)
     }
 
     private func setAgent(_ newAgent: AgentKind) {
@@ -271,6 +304,7 @@ struct NewSessionSheet: View {
             return
         }
         guard newAgent != agent else { return }
+        customProviderId = nil
         let nextAgent = newAgent
         agent = nextAgent
         applyDefaults(for: nextAgent)
@@ -317,8 +351,9 @@ struct NewSessionSheet: View {
                 useWorktree: mode == .worktree,
                 baseBranch: baseBranch.isEmpty ? nil : baseBranch,
                 effort: currentModelSupportsEffort ? effort : nil,
-                abPair: runAsABPair ? abPairPartner(for: effectiveAgent) : nil,
-                providerInstanceId: selectedAccountWireId
+                abPair: customProviderId == nil && runAsABPair ? abPairPartner(for: effectiveAgent) : nil,
+                providerInstanceId: selectedAccountWireId,
+                customProviderId: customProviderId
             ))
             await MainActor.run {
                 isStarting = false

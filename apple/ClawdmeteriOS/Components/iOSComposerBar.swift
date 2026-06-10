@@ -173,6 +173,7 @@ struct iOSComposerBar: View {
                 iOSModelEffortPill(
                     agent: session.agent,
                     catalog: client.modelCatalog,
+                    customProviderId: session.customProviderId,
                     selectedModelId: $modelId,
                     selectedEffort: $effort
                 )

@@ -10,12 +10,14 @@ struct iOSModelPicker: View {
     @Binding var selectedModelId: String?
     let catalog: ModelCatalog
     let agent: AgentKind
+    var customProviderId: String? = nil
 
     var body: some View {
         NavigationLink {
             iOSModelPickerList(
                 catalog: catalog,
                 agent: agent,
+                customProviderId: customProviderId,
                 selectedModelId: $selectedModelId
             )
         } label: {
@@ -61,17 +63,29 @@ struct iOSModelPicker: View {
 
     private var selectedEntry: ModelCatalogEntry? {
         guard let id = selectedModelId else { return nil }
-        return Self.entries(for: agent, in: catalog).first(where: { $0.id == id })
+        return Self.entries(for: agent, customProviderId: customProviderId, in: catalog).first(where: { $0.id == id })
     }
 
     /// Per-agent catalog lookup. Centralized here + reused by `iOSModelPickerList`
     /// to keep the picker exhaustive over `AgentKind` — adding a 4th provider
     /// only requires extending this one switch.
-    fileprivate static func entries(for agent: AgentKind, in catalog: ModelCatalog) -> [ModelCatalogEntry] {
-        catalog.entries(for: agent)
+    static func entries(
+        for agent: AgentKind,
+        customProviderId: String?,
+        in catalog: ModelCatalog
+    ) -> [ModelCatalogEntry] {
+        if let customProviderId,
+           let summary = catalog.customProviders.first(where: { $0.id == customProviderId }) {
+            return summary.entries
+        }
+        return catalog.entries(for: agent)
     }
 
-    fileprivate static func sectionTitle(for agent: AgentKind) -> String {
+    static func sectionTitle(for agent: AgentKind, customProviderId: String?, in catalog: ModelCatalog) -> String {
+        if let customProviderId,
+           let summary = catalog.customProviders.first(where: { $0.id == customProviderId }) {
+            return summary.label
+        }
         switch agent {
         case .claude: return "Claude Code"
         case .codex:  return "Codex"
@@ -87,12 +101,13 @@ struct iOSModelPicker: View {
 struct iOSModelPickerList: View {
     let catalog: ModelCatalog
     let agent: AgentKind
+    var customProviderId: String? = nil
     @Binding var selectedModelId: String?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         List {
-            Section(iOSModelPicker.sectionTitle(for: agent)) {
+            Section(iOSModelPicker.sectionTitle(for: agent, customProviderId: customProviderId, in: catalog)) {
                 ForEach(entries) { entry in
                     Button {
                         selectedModelId = entry.id
@@ -133,7 +148,7 @@ struct iOSModelPickerList: View {
     }
 
     private var entries: [ModelCatalogEntry] {
-        iOSModelPicker.entries(for: agent, in: catalog)
+        iOSModelPicker.entries(for: agent, customProviderId: customProviderId, in: catalog)
     }
 
     private func rowAccessibilityLabel(entry: ModelCatalogEntry) -> String {

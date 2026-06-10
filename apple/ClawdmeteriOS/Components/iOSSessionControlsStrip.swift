@@ -102,10 +102,15 @@ struct iOSSessionControlsStrip: View {
                 iOSModelPickerList(
                     catalog: client.modelCatalog,
                     agent: session.agent,
+                    customProviderId: session.customProviderId,
                     selectedModelId: .init(
                         get: { session.model },
                         set: { newId in
-                            if let newId, let entry = client.modelCatalog.entry(forId: newId) {
+                            if let newId,
+                               let entry = client.modelCatalog.entry(
+                                forId: newId,
+                                customProviderId: session.customProviderId
+                               ) {
                                 Task { await changeModel(to: entry) }
                             }
                         }
@@ -186,7 +191,7 @@ struct iOSSessionControlsStrip: View {
 
     private var currentModelEntry: ModelCatalogEntry? {
         guard let id = session.model else { return nil }
-        return client.modelCatalog.entry(forId: id)
+        return client.modelCatalog.entry(forId: id, customProviderId: session.customProviderId)
     }
 
     private var cursorSwapUnavailable: Bool {
