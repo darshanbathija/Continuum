@@ -89,7 +89,6 @@ struct SidebarPane: View {
         VStack(spacing: 0) {
             searchField
             sidebarHeader
-            statusBuckets
             TahoeHairline()
             content
         }
@@ -317,6 +316,7 @@ struct SidebarPane: View {
                     Button(action: { setStatusFilter(option) }) {
                         Label(option.displayName, systemImage: statusFilter == option ? "checkmark" : "")
                     }
+                    .accessibilityIdentifier("code.sidebar.filter.status.\(option.rawValue)")
                 }
             }
             Section("Group by") {
@@ -404,45 +404,6 @@ struct SidebarPane: View {
         }
     }
 
-    private var statusBuckets: some View {
-        HStack(spacing: 4) {
-            sidebarBucket(
-                title: "Active",
-                count: statusCount(.active),
-                active: statusFilter == .active,
-                color: .green
-            ) { toggleStatusFilter(.active) }
-            sidebarBucket(
-                title: "Review",
-                count: statusCount(.inReview),
-                active: statusFilter == .inReview,
-                color: .orange
-            ) { toggleStatusFilter(.inReview) }
-            sidebarBucket(
-                title: "Done",
-                count: statusCount(.done),
-                active: statusFilter == .done,
-                color: terraCotta
-            ) { toggleStatusFilter(.done) }
-            sidebarBucket(
-                title: "Archive",
-                count: statusCount(.archived),
-                active: statusFilter == .archived,
-                color: .secondary
-            ) { toggleStatusFilter(.archived) }
-        }
-        .padding(.horizontal, 10)
-        .padding(.bottom, 6)
-    }
-
-    private func toggleStatusFilter(_ filter: SessionStatusFilter) {
-        let next = SidebarStatusBucketState.nextFilter(current: statusFilter, tapped: filter)
-        setStatusFilter(next)
-        if grouping != .status {
-            groupingRaw = SessionGrouping.status.rawValue
-        }
-    }
-
     private func setStatusFilter(_ filter: SessionStatusFilter) {
         statusRaw = filter.rawValue
         syncArchivedVisibility(for: filter)
@@ -452,50 +413,6 @@ struct SidebarPane: View {
         let shouldShowArchived = SidebarStatusBucketState.showsArchived(for: filter)
         if model.showArchived != shouldShowArchived {
             model.showArchived = shouldShowArchived
-        }
-    }
-
-    private func sidebarBucket(
-        title: String,
-        count: Int,
-        active: Bool,
-        color: Color,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Text(title)
-                    .font(.system(size: 10, weight: .semibold))
-                Text("\(count)")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundStyle(active ? .white.opacity(0.85) : .secondary)
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .frame(maxWidth: .infinity)
-            .foregroundStyle(active ? .white : color)
-            .background(
-                active ? color.opacity(0.82) : Color.secondary.opacity(0.08),
-                in: RoundedRectangle(cornerRadius: 5)
-            )
-        }
-        .buttonStyle(PressableButtonStyle())
-        .accessibilityIdentifier("code.sidebar.bucket.\(title.lowercased())")
-    }
-
-    private func statusCount(_ filter: SessionStatusFilter) -> Int {
-        let sessions = model.filter(sessions: model.registry.sessions)
-        switch filter {
-        case .all:
-            return sessions.count
-        case .active:
-            return sessions.filter { SessionSidebarGrouper.bucket(for: $0, reviewSessionIds: reviewSessionIds) == .active }.count
-        case .inReview:
-            return sessions.filter { SessionSidebarGrouper.bucket(for: $0, reviewSessionIds: reviewSessionIds) == .inReview }.count
-        case .done:
-            return sessions.filter { SessionSidebarGrouper.bucket(for: $0, reviewSessionIds: reviewSessionIds) == .done }.count
-        case .archived:
-            return sessions.filter { SessionSidebarGrouper.bucket(for: $0, reviewSessionIds: reviewSessionIds) == .archived }.count
         }
     }
 
@@ -1620,7 +1537,7 @@ struct SidebarPane: View {
                     .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             .buttonStyle(PressableButtonStyle())
-            .help("New workspace — Codex · gpt-5.5 · max effort · plan mode (option-click to customize)")
+            .help("New workspace — Codex · GPT-5.5 · extra-high effort · plan mode (option-click to customize)")
             .accessibilityIdentifier("code.repo.new-session")
             // Option/Alt-click escape hatch: power users who want to
             // pick a different agent/model/effort/path get the full

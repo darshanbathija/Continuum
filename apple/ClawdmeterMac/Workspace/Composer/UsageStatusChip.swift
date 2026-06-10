@@ -58,12 +58,15 @@ struct ModelEffortChip: View {
             showingPopover.toggle()
         }) {
             HStack(spacing: 6) {
+                // Hug the text and center it instead of left-pinning inside a
+                // fixed 128–220pt slot (which clipped "Model · Effort" with an
+                // ellipsis and left short labels off-center). The outer button
+                // is `.fixedSize(horizontal:)` so the capsule grows to fit.
                 Text(summaryText)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(minWidth: 128, maxWidth: 220, alignment: .leading)
+                    .fixedSize()
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.secondary)

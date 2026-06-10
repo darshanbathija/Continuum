@@ -44,41 +44,29 @@ struct PermissionModeChip: View {
     }
 
     var body: some View {
-        // Single chip, dual behavior:
-        //   • click          → quick-flip plan ⇆ acceptEdits (the two
-        //                       modes people swap between hourly)
-        //   • arrow          → full menu with ask / accept / plan / bypass
-        // The primary action is an explicit Button. `Menu(primaryAction:)`
-        // renders as an AppKit popup on macOS UI automation and opens the
-        // menu instead of quick-flipping, which made the main click path dead.
-        HStack(spacing: 0) {
-            Button {
-                if let target = Self.quickFlipTarget(current: mode, availableModes: availableModes) {
-                    onChange(target)
-                }
-            } label: {
-                Text(mode.shortLabel)
-                    .font(.system(size: 12, weight: mode == .bypass ? .bold : .semibold))
-                    .foregroundStyle(mode == .bypass ? Color.yellow : .primary)
-                    .lineLimit(1)
-                    .frame(minWidth: 50, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .padding(.leading, 12)
-            .padding(.trailing, 4)
-            .frame(minHeight: 32)
-            .accessibilityLabel("Permission mode")
-            .accessibilityValue(mode.shortLabel)
-            .accessibilityIdentifier("code.composer.permission-mode")
-
-            PermissionModeMenuButton(
-                mode: mode,
-                availableModes: availableModes,
-                onSelect: onChange
-            )
-            .frame(width: 28, height: 32)
-            .padding(.trailing, 6)
+        // The whole pill opens the Mode menu. A full-bleed AppKit popup
+        // button sits on top of the label so a click ANYWHERE on the capsule
+        // pops the dropdown (ask / accept / plan / bypass) — not just the
+        // chevron. Quick-flip-on-click was removed per user feedback; the
+        // ⌘⇧1–4 shortcuts (hosted in ComposerInputCore) still switch modes.
+        // The label hugs its text and centers it (no fixed 50pt min slot) so
+        // both short ("Ask") and wide ("Full access") labels read centered.
+        HStack(spacing: 4) {
+            Text(mode.shortLabel)
+                .font(.system(size: 12, weight: mode == .bypass ? .bold : .semibold))
+                .foregroundStyle(mode == .bypass ? Color.yellow : .primary)
+                .lineLimit(1)
+                .fixedSize()
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
         }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 32)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Permission mode")
+        .accessibilityValue(mode.shortLabel)
+        .accessibilityIdentifier("code.composer.permission-mode")
         .background(
             mode == .bypass
                 ? AnyShapeStyle(Color.yellow.opacity(isHovered ? 0.22 : 0.15))
@@ -95,9 +83,18 @@ struct PermissionModeChip: View {
                 )
                 .allowsHitTesting(false)
         )
+        .overlay {
+            // Invisible click target spanning the entire capsule.
+            PermissionModeMenuButton(
+                mode: mode,
+                availableModes: availableModes,
+                onSelect: onChange
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
         .contentShape(Capsule())
         .fixedSize()
-        .help("Click to toggle plan ⇆ code — use the arrow for ask / bypass (⌘⇧1-4)")
+        .help("Open permission mode menu (⌘⇧1–4)")
         .onHover { isHovered = $0 }
     }
 }
@@ -112,11 +109,14 @@ private struct PermissionModeMenuButton: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSButton {
+        // Transparent, title/image-less button that fills the whole pill (the
+        // SwiftUI label draws the text + chevron underneath). Borderless +
+        // empty content = invisible, but still hit-tests its entire bounds, so
+        // clicking anywhere on the capsule opens the menu.
         let button = NSButton()
         button.isBordered = false
-        button.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)
-        button.imagePosition = .imageOnly
-        button.contentTintColor = .secondaryLabelColor
+        button.title = ""
+        button.imagePosition = .noImage
         button.target = context.coordinator
         button.action = #selector(Coordinator.openMenu(_:))
         button.setAccessibilityLabel("Permission mode menu")
@@ -131,6 +131,17 @@ private struct PermissionModeMenuButton: NSViewRepresentable {
         context.coordinator.availableModes = availableModes
         context.coordinator.onSelect = onSelect
         context.coordinator.button = button
+    }
+
+    // Accept the proposed size so the button FILLS the pill instead of
+    // collapsing to an empty NSButton's tiny intrinsic size (which would
+    // leave most of the capsule dead). This is what makes the whole pill the
+    // clickable hit target.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSButton, context: Context) -> CGSize? {
+        CGSize(
+            width: proposal.width ?? nsView.intrinsicContentSize.width,
+            height: proposal.height ?? nsView.intrinsicContentSize.height
+        )
     }
 
     final class Coordinator: NSObject, NSMenuDelegate {

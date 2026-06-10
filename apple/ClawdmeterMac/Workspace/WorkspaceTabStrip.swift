@@ -426,6 +426,9 @@ struct WorkspaceTabStrip: View {
                     .padding(.horizontal, 8)
             }
         }
+        // Whole tab (title + subtitle + dead space) is one hit target that
+        // selects the tab; the nested × button keeps its own click area.
+        .contentShape(Rectangle())
     }
 
     private func title(for session: AgentSession) -> String {

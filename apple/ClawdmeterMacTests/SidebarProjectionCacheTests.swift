@@ -691,35 +691,20 @@ final class SidebarProjectionCacheTests: XCTestCase {
         XCTAssertLessThan(
             worst,
             .milliseconds(100),
-            "Search text, status buckets, and Archive bucket changes must produce a new Code sidebar projection within the 100ms feedback budget."
+            "Search text and status-filter changes must produce a new Code sidebar projection within the 100ms feedback budget."
         )
     }
 
-    func test_statusBucketTapStateTogglesEachBucketAndArchiveVisibility() {
-        let buckets: [SessionStatusFilter] = [.active, .inReview, .done, .archived]
-
-        for bucket in buckets {
-            let selected = SidebarStatusBucketState.nextFilter(current: .all, tapped: bucket)
-            XCTAssertEqual(selected, bucket, "\(bucket.displayName) bucket should select itself from All.")
+    func test_archiveVisibilityFollowsStatusFilter() {
+        // Only the Archived status filter (chosen from the sidebar funnel menu)
+        // reveals archived sessions; every other filter keeps them hidden.
+        for filter in SessionStatusFilter.allCases {
             XCTAssertEqual(
-                SidebarStatusBucketState.showsArchived(for: selected),
-                bucket == .archived,
-                "\(bucket.displayName) should \(bucket == .archived ? "" : "not ")enable archived visibility."
-            )
-
-            let toggledOff = SidebarStatusBucketState.nextFilter(current: selected, tapped: bucket)
-            XCTAssertEqual(toggledOff, .all, "Tapping \(bucket.displayName) while selected should return to All.")
-            XCTAssertFalse(
-                SidebarStatusBucketState.showsArchived(for: toggledOff),
-                "Toggling \(bucket.displayName) off must leave Archive visibility disabled."
+                SidebarStatusBucketState.showsArchived(for: filter),
+                filter == .archived,
+                "\(filter.displayName) should \(filter == .archived ? "" : "not ")enable archived visibility."
             )
         }
-
-        XCTAssertEqual(
-            SidebarStatusBucketState.nextFilter(current: .active, tapped: .done),
-            .done,
-            "Switching from one bucket to another should select the newly tapped bucket."
-        )
     }
 
     // MARK: - Helpers

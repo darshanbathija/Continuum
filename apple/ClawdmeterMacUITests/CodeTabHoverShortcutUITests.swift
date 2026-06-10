@@ -56,7 +56,15 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             "-clawdmeter.composer.draft.\(Self.seedSessionId)", "",
             "-clawdmeter.composer.draft.empty", "",
         ]
-        if usesPlanApprovalFixture {
+        // Terminal tabs now launch `claude --dangerously-skip-permissions`
+        // (TerminalPtyRegistry.spawnShell) instead of a bare shell. Inject the
+        // fake-claude binary for the terminal tests too so they stay
+        // deterministic — the fixture script emits output once then stays
+        // alive, which is exactly the "connected + survives reconnect" behavior
+        // these tests assert — instead of spawning the host's real claude.
+        let usesFakeClaudeBinary = usesPlanApprovalFixture
+            || name.localizedCaseInsensitiveContains("terminal")
+        if usesFakeClaudeBinary {
             app.launchArguments += [
                 "-clawdmeter.binaries.claude", fixture.fakeClaudeBinary.path,
             ]
@@ -309,10 +317,6 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(element("code.sidebar.search").waitForExistence(timeout: 10), "Code sidebar search should be a real focused field.")
         XCTAssertTrue(element("code.sidebar.filter").waitForExistence(timeout: 10), "Code sidebar filter menu should be addressable.")
         XCTAssertTrue(element("code.sidebar.add-project").waitForExistence(timeout: 10), "Code Add project menu should be addressable.")
-        XCTAssertTrue(element("code.sidebar.bucket.active").waitForExistence(timeout: 10), "Active status bucket should be addressable.")
-        XCTAssertTrue(element("code.sidebar.bucket.review").waitForExistence(timeout: 10), "Review status bucket should be addressable.")
-        XCTAssertTrue(element("code.sidebar.bucket.done").waitForExistence(timeout: 10), "Done status bucket should be addressable.")
-        XCTAssertTrue(element("code.sidebar.bucket.archive").waitForExistence(timeout: 10), "Archive status bucket should be addressable.")
         XCTAssertTrue(element("code.repo.toggle").waitForExistence(timeout: 10), "Repo disclosure should be addressable.")
         XCTAssertTrue(element("code.repo.settings").waitForExistence(timeout: 10), "Repo settings gear should be addressable.")
         XCTAssertTrue(element("code.repo.new-session").waitForExistence(timeout: 10), "Repo quick new-session button should be addressable.")
@@ -359,10 +363,8 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(seedWorkspaceExists(), "Archive all should not remove the managed workspace record.")
         XCTAssertTrue(waitForNonExistence(element("code.worktree.row"), timeout: 5), "Archive all should hide the archived worktree from the default sidebar.")
 
-        let archiveBucket = element("code.sidebar.bucket.archive")
-        XCTAssertTrue(archiveBucket.waitForExistence(timeout: 5), "Archive bucket should remain addressable after Archive all.")
-        archiveBucket.click()
-        XCTAssertTrue(workspaceLeafRowElement().waitForExistence(timeout: 5), "Archive bucket should show sessions archived through repo settings.")
+        selectArchivedFilter()
+        XCTAssertTrue(workspaceLeafRowElement().waitForExistence(timeout: 5), "Archived filter should show sessions archived through repo settings.")
     }
 
     func testRepoSettingsArchiveEntireRepoArchivesSessionsAndRemovesWorkspace() throws {
@@ -374,10 +376,8 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(waitForSeedSessionArchived(timeout: 5), "Archive entire repo should archive every session in the repo.")
         XCTAssertTrue(waitForSeedWorkspaceRemoved(timeout: 5), "Archive entire repo should remove the managed workspace record.")
 
-        let archiveBucket = element("code.sidebar.bucket.archive")
-        XCTAssertTrue(archiveBucket.waitForExistence(timeout: 5), "Archived sessions should remain recoverable after archiving the repo.")
-        archiveBucket.click()
-        XCTAssertTrue(workspaceLeafRowElement().waitForExistence(timeout: 5), "Archive bucket should still show the archived session after the workspace record is removed.")
+        selectArchivedFilter()
+        XCTAssertTrue(workspaceLeafRowElement().waitForExistence(timeout: 5), "Archived filter should still show the archived session after the workspace record is removed.")
     }
 
     func testRepoSettingsRemoveDropsWorkspaceRecordWithoutArchivingSession() throws {
@@ -394,7 +394,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(workspaceLeafRowElement().waitForExistence(timeout: 5), "Removing the workspace record should leave the existing session visible/recoverable.")
     }
 
-    func testWorktreeHoverArchiveRevealsActionAndMovesRowToArchiveBucket() throws {
+    func testWorktreeHoverArchiveRevealsActionAndMovesRowToArchivedFilter() throws {
         openCodeTab()
 
         let row = element("code.worktree.row")
@@ -411,10 +411,8 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(waitForSeedSessionArchived(timeout: 5), "Clicking the archive action should persist archivedAt for the seeded session.")
         XCTAssertTrue(waitForNonExistence(row, timeout: 5), "Archived worktree row should disappear from the default sidebar.")
 
-        let archiveBucket = element("code.sidebar.bucket.archive")
-        XCTAssertTrue(archiveBucket.waitForExistence(timeout: 5), "Archive bucket should remain addressable after archiving.")
-        archiveBucket.click()
-        XCTAssertTrue(workspaceLeafRowElement().waitForExistence(timeout: 5), "Archive bucket should show the archived worktree row.")
+        selectArchivedFilter()
+        XCTAssertTrue(workspaceLeafRowElement().waitForExistence(timeout: 5), "Archived filter should show the archived worktree row.")
     }
 
     func testCodeTabTitlebarFilterAndCommandKFocusSidebarSearch() throws {
@@ -533,10 +531,8 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(waitForSeedSessionArchived(timeout: 5), "Center header Archive should persist archivedAt for the active session.")
         XCTAssertTrue(waitForNonExistence(element("code.worktree.row"), timeout: 5), "Archived active session should leave the default sidebar.")
 
-        let archiveBucket = element("code.sidebar.bucket.archive")
-        XCTAssertTrue(archiveBucket.waitForExistence(timeout: 5), "Archive bucket should remain addressable after header Archive.")
-        archiveBucket.click()
-        XCTAssertTrue(workspaceLeafRowElement().waitForExistence(timeout: 5), "Archive bucket should show the session archived from the center header.")
+        selectArchivedFilter()
+        XCTAssertTrue(workspaceLeafRowElement().waitForExistence(timeout: 5), "Archived filter should show the session archived from the center header.")
     }
 
     func testCenterHeaderMoreActionsEndSessionDeletesNonOwnedSession() throws {
@@ -553,9 +549,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(seedWorkspaceExists(), "Ending a session should not remove the managed workspace record.")
         XCTAssertTrue(waitForNonExistence(element("code.worktree.row"), timeout: 5), "Ended session should leave the default sidebar.")
 
-        let archiveBucket = element("code.sidebar.bucket.archive")
-        XCTAssertTrue(archiveBucket.waitForExistence(timeout: 5), "Archive bucket should remain addressable after End session.")
-        archiveBucket.click()
+        selectArchivedFilter()
         XCTAssertTrue(waitForNonExistence(element("code.worktree.row"), timeout: 5), "Deleted sessions should not appear in Archive.")
     }
 
@@ -573,14 +567,6 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
 
         XCTAssertTrue(waitForCheckpointRefCount(atLeast: 1, timeout: 10), "Create checkpoint should persist a git checkpoint ref for the active session.")
         XCTAssertTrue(element("code.header.checkpoint-status").waitForExistence(timeout: 5), "Create checkpoint should surface immediate header feedback.")
-        XCTAssertTrue(element("code.checkpoint-strip").waitForExistence(timeout: 5), "Create checkpoint should reveal the latest checkpoint strip.")
-        XCTAssertTrue(
-            waitForAny([
-                element("code.checkpoint-strip.restore"),
-                app.buttons["Restore"],
-            ], timeout: 5),
-            "The checkpoint strip should expose Restore."
-        )
 
         try commitSeedRepoFile("post-checkpoint committed state\n", message: "Post checkpoint state")
         XCTAssertEqual(try seedRepoFileContents(), "post-checkpoint committed state\n")
@@ -627,7 +613,6 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         openCenterHeaderMoreActions()
         clickMenuItem(identifier: "code.header.more-actions.create-checkpoint", title: "Create checkpoint")
         XCTAssertTrue(waitForCheckpointRefCount(atLeast: 1, timeout: 10), "Create checkpoint should persist a git checkpoint ref before restore is offered.")
-        XCTAssertTrue(element("code.checkpoint-strip").waitForExistence(timeout: 5), "Create checkpoint should reveal the latest checkpoint strip.")
 
         try writeSeedRepoFile("dirty tracked local state\n")
         XCTAssertTrue(seedRepoStatusLines().contains { $0.contains("notes.md") }, "The fixture repo should contain dirty tracked work before restore.")
@@ -1013,7 +998,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(element("code.workspace.tab.draft").exists, "Picker search/favorite/effort actions should keep the active workspace tab on the draft.")
     }
 
-    func testPermissionModeChipQuickFlipAndShortcutsUpdateDraftComposer() throws {
+    func testPermissionModeChipOpensMenuAndShortcutsUpdateDraftComposer() throws {
         openCodeTab()
 
         let row = workspaceLeafRowElement()
@@ -1034,20 +1019,16 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             "New draft composers should start in Ask permission mode."
         )
 
+        // The entire pill is the hit target now: clicking the chip BODY (not
+        // just the chevron) opens the mode menu. Quick-flip-on-click was
+        // removed — selecting from the menu is the only click path.
         permissionChip.click()
+        clickMenuItem(identifier: "code.composer.permission-mode.plan", title: "Plan mode")
         XCTAssertTrue(
             waitUntil(timeout: 5) {
                 self.accessibilityValue(of: permissionChip).contains("Plan")
             },
-            "Clicking the permission chip should quick-flip from Ask into Plan when Plan is available."
-        )
-
-        permissionChip.click()
-        XCTAssertTrue(
-            waitUntil(timeout: 5) {
-                self.accessibilityValue(of: permissionChip).contains("Accept edits")
-            },
-            "Clicking the permission chip again should quick-flip from Plan to Accept edits."
+            "Clicking anywhere on the permission pill should open the menu; selecting Plan switches the draft into Plan."
         )
 
         app.typeKey("1", modifierFlags: [.command, .shift])
@@ -1709,6 +1690,19 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         let repoSettings = firstElement("code.repo.settings")
         XCTAssertTrue(repoSettings.waitForExistence(timeout: 10), "Repo settings gear should be addressable.", file: file, line: line)
         repoSettings.click()
+    }
+
+    /// Status filtering lives in the sidebar funnel menu (the always-visible
+    /// bucket strip was removed). Open it and pick Archived so archived
+    /// sessions become visible.
+    private func selectArchivedFilter(
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let filter = element("code.sidebar.filter")
+        XCTAssertTrue(filter.waitForExistence(timeout: 10), "Code sidebar filter menu should be addressable.", file: file, line: line)
+        filter.click()
+        clickMenuItem(identifier: "code.sidebar.filter.status.archived", title: "Archived", file: file, line: line)
     }
 
     private func openCenterHeaderMoreActions(

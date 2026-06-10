@@ -87,7 +87,12 @@ public enum AgentSpawner {
             if let promptText = loadDeepResearchPrompt() {
                 argv += ["--append-system-prompt", promptText]
             }
-        } else if let effort {
+        } else if let effort,
+                  ModelCatalog.bundled.entry(forId: model ?? "")?.supportsEffort != false {
+            // Only pass --effort to models that actually expose a reasoning
+            // dial. Haiku 4.5 (and other supportsEffort:false models) don't —
+            // sending it is wrong (and is why a Haiku session can show a
+            // spurious "· Max"). Unknown ids (nil) keep the prior behavior.
             argv += ["--effort", effort.claudeFlagValue]
         }
         if strictMcp {
