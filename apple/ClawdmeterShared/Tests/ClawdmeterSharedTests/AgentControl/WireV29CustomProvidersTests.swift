@@ -1,17 +1,20 @@
 import XCTest
 @testable import ClawdmeterShared
 
-/// Wire v28 — custom OpenAI/Anthropic-compatible providers.
-final class WireV28CustomProvidersTests: XCTestCase {
+/// Wire v29 — custom OpenAI/Anthropic-compatible providers. (v28 = multi-account, PR #304.)
+final class WireV29CustomProvidersTests: XCTestCase {
 
     func testCurrentWireVersion() {
-        XCTAssertEqual(AgentControlWireVersion.current, 28)
-        XCTAssertEqual(AgentControlWireVersion.customProvidersMinimum, 28)
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 29)
+        XCTAssertEqual(AgentControlWireVersion.customProvidersMinimum, 29)
     }
 
     func testCustomProvidersFeatureGate() {
         XCTAssertFalse(AgentControlWireVersion.supportsCustomProviders(serverWireVersion: 27))
-        XCTAssertTrue(AgentControlWireVersion.supportsCustomProviders(serverWireVersion: 28))
+        // 28 = multi-account provider instances (PR #304) — a Mac
+        // advertising 28 does NOT serve /custom-providers.
+        XCTAssertFalse(AgentControlWireVersion.supportsCustomProviders(serverWireVersion: 28))
+        XCTAssertTrue(AgentControlWireVersion.supportsCustomProviders(serverWireVersion: 29))
         XCTAssertFalse(AgentControlWireVersion.supportsCustomProviders(serverWireVersion: nil))
     }
 
@@ -167,7 +170,7 @@ final class WireV28CustomProvidersTests: XCTestCase {
 
     @MainActor
     func testChatV2StorePersistsCustomChoiceKeys() {
-        let suiteName = "WireV28CustomProvidersTests.\(UUID().uuidString)"
+        let suiteName = "WireV29CustomProvidersTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
