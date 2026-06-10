@@ -29,17 +29,25 @@ struct ModelEffortChip: View {
     @Binding var selectedModelId: String?
     @Binding var selectedEffort: ReasoningEffort?
     let modelSupportsEffort: Bool
-    var enabledVendors: [ChatVendor] = ProviderEnablement.enabledChatVendors()
-    /// v0.29.31: when the rich picker's rail switches to another vendor, map
-    /// that vendor back to its AgentKind so the host can align the session's
-    /// agent. Lets the model picker subsume provider selection (the separate
-    /// "Provider" menu chip was removed as redundant). Nil → caller doesn't
-    /// track agent (agent change ignored, e.g. mid-session).
+    var customProviderId: String?
+
+    private var enabledChoices: [ProviderChoice] {
+        ChatV2Store.enabledChatChoices(
+            from: ProviderEnablement.enabledProviderIDs(),
+            catalog: catalog
+        )
+    }
+    /// v0.29.31: when the rich picker's rail switches to another provider, map
+    /// that choice back to its AgentKind + optional customProviderId so the
+    /// host can align the session's agent. Lets the model picker subsume
+    /// provider selection (the separate "Provider" menu chip was removed as
+    /// redundant). Nil → caller doesn't track agent (agent change ignored,
+    /// e.g. mid-session).
     var onSelectAgent: ((AgentKind) -> Void)? = nil
     /// Rich picker selection with the provider included. Bound optimistic
     /// sessions use this to update the pending launch config before the daemon
     /// starts; live-session model swaps still flow through binding onChange.
-    var onSelectModelConfiguration: ((AgentKind, String, ReasoningEffort?) -> Void)? = nil
+    var onSelectModelConfiguration: ((ProviderChoice, String, ReasoningEffort?) -> Void)? = nil
 
     @State private var showingPopover = false
     @State private var isHovered = false
@@ -54,7 +62,7 @@ struct ModelEffortChip: View {
 
     var body: some View {
         Button(action: {
-            guard !enabledVendors.isEmpty else { return }
+            guard !enabledChoices.isEmpty else { return }
             showingPopover.toggle()
         }) {
             HStack(spacing: 6) {
@@ -80,8 +88,8 @@ struct ModelEffortChip: View {
         }
         .buttonStyle(PressableButtonStyle())
         .fixedSize(horizontal: true, vertical: false)
-        .disabled(enabledVendors.isEmpty)
-        .help(enabledVendors.isEmpty ? "Enable a provider in Settings → Providers." : "Change model or effort (⌘⌥M)")
+        .disabled(enabledChoices.isEmpty)
+        .help(enabledChoices.isEmpty ? "Enable a provider in Settings → Providers." : "Change model or effort (⌘⌥M)")
         .accessibilityLabel("Model and effort")
         .accessibilityValue(summaryText)
         .accessibilityIdentifier("code.composer.model-effort")
@@ -105,21 +113,18 @@ struct ModelEffortChip: View {
             // "Effort" footer button below so users can still re-pick
             // effort without re-picking model.
             ComposerModelPicker(
-                initialVendor: initialPickerVendor,
+                initialChoice: initialPickerChoice,
                 store: pickerScratchStore,
                 defaultsStore: providerDefaults,
                 catalog: catalog,
-                enabledVendors: enabledVendors,
+                enabledChoices: enabledChoices,
                 onClose: { showingPopover = false },
-                onSelectModel: { vendor, modelId, effort in
-                    // Align the session's agent to the picked vendor (the rail
-                    // is now the only provider switcher in Code), then set the
-                    // specific model + effort the user chose.
-                    let selectedAgent = vendor.backingProvider
+                onSelectModel: { choice, modelId, effort in
+                    let selectedAgent = choice.backingAgent(in: catalog) ?? agent
                     selectedModelId = modelId
                     selectedEffort = effort
                     onSelectAgent?(selectedAgent)
-                    onSelectModelConfiguration?(selectedAgent, modelId, effort)
+                    onSelectModelConfiguration?(choice, modelId, effort)
                 }
             )
         }
@@ -132,12 +137,16 @@ struct ModelEffortChip: View {
         return info.modelDisplay
     }
 
-    private var initialPickerVendor: ChatVendor {
-        if let migrated = ChatVendor.migrated(from: agent),
-           enabledVendors.contains(migrated) {
-            return migrated
+    private var initialPickerChoice: ProviderChoice {
+        if let customProviderId,
+           enabledChoices.contains(.custom(customProviderId)) {
+            return .custom(customProviderId)
         }
-        return enabledVendors.first ?? .chatgpt
+        if let migrated = ChatVendor.migrated(from: agent),
+           enabledChoices.contains(.builtin(migrated)) {
+            return .builtin(migrated)
+        }
+        return enabledChoices.first ?? .builtin(.chatgpt)
     }
 
     private func cycleEffort(direction: Int) {

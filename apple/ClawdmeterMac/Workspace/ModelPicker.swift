@@ -14,9 +14,11 @@ struct ModelPicker: View {
     /// Catalog the picker reads from. Mac ships the bundled catalog; the
     /// daemon can override via `GET /models` when the iOS client fetches.
     let catalog: ModelCatalog
-    /// Filter — only show models for this agent type. Switching agent
-    /// mid-session is a different flow (D13 overlay).
+    /// Filter — only show models for this agent type, or for a custom provider
+    /// when `customProviderId` is set. Switching agent mid-session is a
+    /// different flow (D13 overlay).
     let agent: AgentKind
+    var customProviderId: String? = nil
     /// Called when the user picks a different model id. The caller is
     /// responsible for actually swapping the session (D13 overlay flow).
     let onSelect: (ModelCatalogEntry) -> Void
@@ -74,6 +76,10 @@ struct ModelPicker: View {
     }
 
     private var modelsForAgent: [ModelCatalogEntry] {
+        if let customProviderId,
+           let summary = catalog.customProviders.first(where: { $0.id == customProviderId }) {
+            return summary.entries
+        }
         switch agent {
         case .claude: return catalog.claude
         case .codex:  return catalog.codex
@@ -86,6 +92,10 @@ struct ModelPicker: View {
     }
 
     private var providerSectionTitle: String {
+        if let customProviderId,
+           let summary = catalog.customProviders.first(where: { $0.id == customProviderId }) {
+            return summary.label
+        }
         switch agent {
         case .claude: return "Claude Code"
         case .codex:  return "Codex"

@@ -41,7 +41,9 @@ struct ComposerInputCore: View {
     /// Called when the rich model picker chooses a provider + model together.
     /// Pending optimistic sessions use this as launch configuration; regular
     /// live-session swaps still use the model/effort bindings below.
-    var onSelectModelConfiguration: ((AgentKind, String, ReasoningEffort?) -> Void)?
+    var onSelectModelConfiguration: ((ProviderChoice, String, ReasoningEffort?) -> Void)?
+    /// When set, scopes the model picker rail to a custom provider session.
+    var customProviderIdForModelPicker: String? = nil
     /// Resolved permission mode for the chip. For bound sessions this
     /// comes from `PermissionModeStore.currentMode(for:)`. For empty
     /// state it's `store.permissionMode`.
@@ -552,23 +554,21 @@ struct ComposerInputCore: View {
                 selectedModelId: $store.modelId,
                 selectedEffort: $store.effort,
                 modelSupportsEffort: modelSupportsEffort,
-                enabledVendors: enabledModelPickerVendors,
+                customProviderId: customProviderIdForModelPicker ?? store.customProviderId,
                 onSelectAgent: { newAgent in
-                    // v0.29.31: provider switching for a NEW session now flows
-                    // through the model picker's vendor rail (the standalone
-                    // "Provider" chip was removed as redundant). Mid-session
-                    // (.bound) agent changes aren't done here — empty-state only.
                     guard case .emptyState = store.modeKind, newAgent != store.agent else { return }
                     store.agent = newAgent
+                    store.customProviderId = nil
                     if newAgent == .cursor, store.permissionMode == .plan {
                         onChangePermissionMode?(.ask)
                     }
                 },
-                onSelectModelConfiguration: { newAgent, modelId, effort in
+                onSelectModelConfiguration: { choice, modelId, effort in
                     if onSelectModelConfiguration != nil {
-                        store.agent = newAgent
+                        store.agent = choice.backingAgent(in: catalog) ?? store.agent
+                        store.customProviderId = choice.customProviderId
                     }
-                    onSelectModelConfiguration?(newAgent, modelId, effort)
+                    onSelectModelConfiguration?(choice, modelId, effort)
                 }
             )
             .layoutPriority(2)
@@ -641,19 +641,21 @@ struct ComposerInputCore: View {
                 selectedModelId: $store.modelId,
                 selectedEffort: $store.effort,
                 modelSupportsEffort: modelSupportsEffort,
-                enabledVendors: enabledModelPickerVendors,
+                customProviderId: customProviderIdForModelPicker ?? store.customProviderId,
                 onSelectAgent: { newAgent in
                     guard case .emptyState = store.modeKind, newAgent != store.agent else { return }
                     store.agent = newAgent
+                    store.customProviderId = nil
                     if newAgent == .cursor, store.permissionMode == .plan {
                         onChangePermissionMode?(.ask)
                     }
                 },
-                onSelectModelConfiguration: { newAgent, modelId, effort in
+                onSelectModelConfiguration: { choice, modelId, effort in
                     if onSelectModelConfiguration != nil {
-                        store.agent = newAgent
+                        store.agent = choice.backingAgent(in: catalog) ?? store.agent
+                        store.customProviderId = choice.customProviderId
                     }
-                    onSelectModelConfiguration?(newAgent, modelId, effort)
+                    onSelectModelConfiguration?(choice, modelId, effort)
                 }
             )
             sendOrStopButton
@@ -754,8 +756,11 @@ struct ComposerInputCore: View {
         return mode
     }
 
-    private var enabledModelPickerVendors: [ChatVendor] {
-        ProviderEnablement.enabledChatVendors()
+    private var enabledModelPickerChoices: [ProviderChoice] {
+        ChatV2Store.enabledChatChoices(
+            from: ProviderEnablement.enabledProviderIDs(),
+            catalog: catalog
+        )
     }
 
     // codeContextChip was deleted in v0.30: PermissionModeChip now does

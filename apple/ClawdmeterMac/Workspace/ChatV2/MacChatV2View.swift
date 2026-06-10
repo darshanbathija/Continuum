@@ -28,6 +28,26 @@ fileprivate enum ChatTitleStore {
     }
 }
 
+fileprivate func chatProviderDisplayName(session: AgentSession, catalog: ModelCatalog) -> String {
+    if let id = session.customProviderId,
+       let summary = catalog.customProviders.first(where: { $0.id == id }) {
+        return summary.label
+    }
+    return session.agent.brandedChatName
+}
+
+fileprivate func pendingColumnDisplayName(
+    provider: AgentKind,
+    customProviderId: String?,
+    catalog: ModelCatalog
+) -> String {
+    if let customProviderId,
+       let summary = catalog.customProviders.first(where: { $0.id == customProviderId }) {
+        return summary.label
+    }
+    return provider.brandedChatName
+}
+
 /// A broadcast that's been requested but whose child sessions haven't spawned
 /// yet. Rendered as skeleton columns the instant the user hits send, so the
 /// comparison surface appears within ~200ms instead of after the multi-second
@@ -39,6 +59,8 @@ fileprivate struct PendingBroadcast {
         let id = UUID()
         let provider: AgentKind
         let model: String?
+        let customProviderId: String?
+        let displayName: String
         var error: String? = nil   // nil = still provisioning
     }
 }
@@ -49,6 +71,8 @@ fileprivate struct FailedBroadcastColumn: Identifiable {
     let id = UUID()
     let provider: AgentKind
     let model: String?
+    let customProviderId: String?
+    let displayName: String
     let reason: String
 }
 
@@ -113,6 +137,7 @@ private struct ChatRoot: View {
             VStack(spacing: 10) {
                 Header(
                     store: store,
+                    catalog: client.modelCatalog,
                     openTarget: openTarget,
                     openSession: openTarget.flatMap { tgt in
                         tgt.isFrontier ? nil : client.chatSessions.first(where: { $0.id == tgt.id })
@@ -120,7 +145,7 @@ private struct ChatRoot: View {
                     children: frontierChildren
                 )
                 if openTarget == nil, let pending = pendingBroadcast {
-                    PendingBroadcastView(pending: pending)
+                    PendingBroadcastView(pending: pending, catalog: client.modelCatalog)
                 } else if let openTarget {
                     switch openTarget {
                     case .solo(let id):
@@ -159,7 +184,7 @@ private struct ChatRoot: View {
                         ReadOnlyTranscript(path: path, client: client)
                     }
                 } else {
-                    StartPanel(store: store)
+                    StartPanel(store: store, catalog: client.modelCatalog)
                 }
                 ComposerBar(
                     store: store,
@@ -199,6 +224,12 @@ private struct ChatRoot: View {
         await client.refreshModelCatalog()
         await client.refreshProviderDefaults()
         store.applyProviderDefaults(client.providerDefaults, catalog: client.modelCatalog)
+        store.applyEnabledChoiceScope(
+            ChatV2Store.enabledChatChoices(
+                from: ProviderEnablement.enabledProviderIDs(),
+                catalog: client.modelCatalog
+            )
+        )
         providerMatrix = await client.refreshChatProviders()
     }
 
@@ -517,6 +548,7 @@ private struct HistoryRow: View {
 private struct Header: View {
     @Environment(\.tahoe) private var t
     @ObservedObject var store: ChatV2Store
+    let catalog: ModelCatalog
     let openTarget: ChatOpenTarget?
     /// The resolved solo/transcript session being viewed (nil for a new draft
     /// or a frontier group). When set, the header MUST reflect THIS session's
@@ -529,16 +561,16 @@ private struct Header: View {
         HStack(spacing: 10) {
             if openTarget?.isFrontier == true {
                 ForEach(children, id: \.id) { child in
-                    ProviderSummary(session: child)
+                    ProviderSummary(session: child, catalog: catalog)
                 }
             } else if let openSession {
                 // Opened an existing chat: show its own provider+model (e.g.
                 // Cursor / cursor-auto), not the global composer selection.
-                ProviderSummary(session: openSession)
+                ProviderSummary(session: openSession, catalog: catalog)
             } else {
                 // New draft (no session yet): the composer pick is what we'll send.
-                ForEach(store.selectedVendors, id: \.self) { vendor in
-                    ProviderDraftSummary(vendor: vendor, store: store)
+                ForEach(store.selectedChoices, id: \.self) { choice in
+                    ProviderDraftSummary(choice: choice, store: store, catalog: catalog)
                 }
             }
         }
@@ -548,18 +580,19 @@ private struct Header: View {
 @available(macOS 14, *)
 private struct ProviderDraftSummary: View {
     @Environment(\.tahoe) private var t
-    let vendor: ChatVendor
+    let choice: ProviderChoice
     @ObservedObject var store: ChatV2Store
+    let catalog: ModelCatalog
 
     var body: some View {
         TahoeGlass(radius: 6, tone: .panel) {
             HStack(spacing: 9) {
-                TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 22)
+                AnyProviderGlyph(choice: choice, catalog: catalog, size: 22)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(vendor.displayName)
+                    Text(choice.displayName(in: catalog))
                         .font(TahoeFont.body(12.5, weight: .semibold))
                         .foregroundStyle(t.fg)
-                    Text(store.model(for: vendor) ?? "default")
+                    Text(store.model(forChoice: choice, catalog: catalog) ?? "default")
                         .font(TahoeFont.mono(10.5))
                         .foregroundStyle(t.fg3)
                         .lineLimit(1)
@@ -567,10 +600,17 @@ private struct ProviderDraftSummary: View {
                 Spacer()
                 Text(store.deepResearch ? "research" : "ready")
                     .font(TahoeFont.body(10, weight: .semibold))
-                    .foregroundStyle(store.deepResearch ? vendor.backingProvider.tahoeProvider.dot : t.fg4)
+                    .foregroundStyle(store.deepResearch ? draftAccent : t.fg4)
             }
             .padding(10)
         }
+    }
+
+    private var draftAccent: Color {
+        if let customProviderId = choice.customProviderId {
+            return CustomProviderAccent.dot(for: customProviderId)
+        }
+        return choice.chatVendor?.backingProvider.tahoeProvider.dot ?? t.fg4
     }
 }
 
@@ -578,13 +618,14 @@ private struct ProviderDraftSummary: View {
 private struct ProviderSummary: View {
     @Environment(\.tahoe) private var t
     let session: AgentSession
+    let catalog: ModelCatalog
 
     var body: some View {
         TahoeGlass(radius: 6, tone: .panel) {
             HStack(spacing: 9) {
-                TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 22)
+                sessionGlyph
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.agent.brandedChatName)
+                    Text(chatProviderDisplayName(session: session, catalog: catalog))
                         .font(TahoeFont.body(12.5, weight: .semibold))
                         .foregroundStyle(t.fg)
                     Text(session.model ?? "default")
@@ -595,10 +636,30 @@ private struct ProviderSummary: View {
                 Spacer()
                 Text(session.deepResearch ? "research" : "live")
                     .font(TahoeFont.body(10, weight: .semibold))
-                    .foregroundStyle(session.deepResearch ? session.agent.tahoeProvider.dot : t.fg4)
+                    .foregroundStyle(session.deepResearch ? sessionAccent : t.fg4)
             }
             .padding(10)
         }
+    }
+
+    @ViewBuilder
+    private var sessionGlyph: some View {
+        if let customProviderId = session.customProviderId {
+            CustomProviderGlyph(
+                label: chatProviderDisplayName(session: session, catalog: catalog),
+                size: 22
+            )
+            .accessibilityIdentifier("provider.glyph.custom.\(customProviderId)")
+        } else {
+            TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 22)
+        }
+    }
+
+    private var sessionAccent: Color {
+        if let customProviderId = session.customProviderId {
+            return CustomProviderAccent.dot(for: customProviderId)
+        }
+        return session.agent.tahoeProvider.dot
     }
 }
 
@@ -606,11 +667,12 @@ private struct ProviderSummary: View {
 private struct StartPanel: View {
     @Environment(\.tahoe) private var t
     @ObservedObject var store: ChatV2Store
+    let catalog: ModelCatalog
 
     var body: some View {
         TahoeGlass(radius: 8, tone: .panel) {
             VStack(spacing: 16) {
-                if store.selectedVendors.isEmpty {
+                if store.selectedChoices.isEmpty {
                     Image(systemName: "switch.2")
                         .font(.system(size: 30, weight: .semibold))
                         .foregroundStyle(t.fg3)
@@ -622,14 +684,18 @@ private struct StartPanel: View {
                         .foregroundStyle(t.fg3)
                 } else {
                     HStack(spacing: 10) {
-                        ForEach(store.selectedVendors, id: \.self) { vendor in
-                            TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 30)
+                        ForEach(store.selectedChoices, id: \.self) { choice in
+                            AnyProviderGlyph(choice: choice, catalog: catalog, size: 30)
                         }
                     }
-                    Text(store.selectedVendorCount == 1 ? "Ask \(store.primaryVendor.displayName)" : "Broadcast to all selected agents")
+                    Text(store.selectedChoiceCount == 1
+                         ? "Ask \(store.primaryChoice.displayName(in: catalog))"
+                         : "Broadcast to all selected agents")
                         .font(TahoeFont.body(18, weight: .semibold))
                         .foregroundStyle(t.fg)
-                    Text(store.selectedVendorCount == 1 ? "One selected vendor answers this thread." : "Send one prompt and compare live replies side by side.")
+                    Text(store.selectedChoiceCount == 1
+                         ? "One selected provider answers this thread."
+                         : "Send one prompt and compare live replies side by side.")
                         .font(TahoeFont.body(12.5))
                         .foregroundStyle(t.fg3)
                 }
@@ -777,7 +843,13 @@ private struct BroadcastTranscript: View {
                                 columnView(child).frame(maxWidth: .infinity)
                             }
                             ForEach(failedColumns) { col in
-                                BroadcastStatusColumn(provider: col.provider, model: col.model, state: .error(col.reason))
+                                BroadcastStatusColumn(
+                                    provider: col.provider,
+                                    model: col.model,
+                                    displayName: col.displayName,
+                                    customProviderId: col.customProviderId,
+                                    state: .error(col.reason)
+                                )
                                     .frame(maxWidth: .infinity)
                             }
                         }
@@ -790,7 +862,13 @@ private struct BroadcastTranscript: View {
                                     columnView(child).frame(width: max(300, per))
                                 }
                                 ForEach(failedColumns) { col in
-                                    BroadcastStatusColumn(provider: col.provider, model: col.model, state: .error(col.reason))
+                                    BroadcastStatusColumn(
+                                        provider: col.provider,
+                                        model: col.model,
+                                        displayName: col.displayName,
+                                        customProviderId: col.customProviderId,
+                                        state: .error(col.reason)
+                                    )
                                         .frame(width: max(300, per))
                                 }
                             }
@@ -850,11 +928,26 @@ private struct ProviderColumn: View {
                 // Provider identity = a 3px column-top edge (DESIGN.md broadcast),
                 // never a colored panel.
                 ProviderEdge(session.agent.tahoeProvider, axis: .horizontal, thickness: 3)
+                    .opacity(session.customProviderId == nil ? 1 : 0)
+                if session.customProviderId != nil {
+                    Rectangle()
+                        .fill(CustomProviderAccent.dot(for: session.customProviderId!))
+                        .frame(height: 3)
+                }
                 HStack(spacing: 8) {
-                    ProviderDot(session.agent.tahoeProvider, size: 6)
-                    TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 20)
+                    if let customProviderId = session.customProviderId {
+                        CustomProviderDot(customProviderId, size: 6)
+                        CustomProviderGlyph(
+                            label: chatProviderDisplayName(session: session, catalog: client.modelCatalog),
+                            size: 20
+                        )
+                        .accessibilityIdentifier("provider.glyph.custom.\(customProviderId)")
+                    } else {
+                        ProviderDot(session.agent.tahoeProvider, size: 6)
+                        TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 20)
+                    }
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(session.agent.brandedChatName)
+                        Text(chatProviderDisplayName(session: session, catalog: client.modelCatalog))
                             .font(TahoeFont.body(12, weight: .semibold))
                             .foregroundStyle(t.fg)
                         Text(session.model ?? "default")
@@ -933,6 +1026,8 @@ private struct BroadcastStatusColumn: View {
     @Environment(\.tahoe) private var t
     let provider: AgentKind
     let model: String?
+    let displayName: String
+    let customProviderId: String?
     var prompt: String? = nil
     enum ColState { case loading, error(String) }
     let state: ColState
@@ -943,9 +1038,9 @@ private struct BroadcastStatusColumn: View {
         TahoeGlass(radius: 6, tone: .raised) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
-                    TahoeProviderGlyph(provider: provider.tahoeProvider, size: 20)
+                    columnGlyph
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(provider.brandedChatName)
+                        Text(displayName)
                             .font(TahoeFont.body(12, weight: .semibold))
                             .foregroundStyle(t.fg)
                         Text(model ?? "default")
@@ -995,6 +1090,16 @@ private struct BroadcastStatusColumn: View {
             }
         }
     }
+
+    @ViewBuilder
+    private var columnGlyph: some View {
+        if let customProviderId {
+            CustomProviderGlyph(label: displayName, size: 20)
+                .accessibilityIdentifier("provider.glyph.custom.\(customProviderId)")
+        } else {
+            TahoeProviderGlyph(provider: provider.tahoeProvider, size: 20)
+        }
+    }
 }
 
 /// Optimistic broadcast surface shown the instant the user hits send, before the
@@ -1004,6 +1109,7 @@ private struct BroadcastStatusColumn: View {
 private struct PendingBroadcastView: View {
     @Environment(\.tahoe) private var t
     let pending: PendingBroadcast
+    let catalog: ModelCatalog
 
     var body: some View {
         TahoeGlass(radius: 8, tone: .panel) {
@@ -1016,7 +1122,11 @@ private struct PendingBroadcastView: View {
                     HStack(alignment: .top, spacing: spacing) {
                         ForEach(pending.columns) { col in
                             BroadcastStatusColumn(
-                                provider: col.provider, model: col.model, prompt: pending.prompt,
+                                provider: col.provider,
+                                model: col.model,
+                                displayName: col.displayName,
+                                customProviderId: col.customProviderId,
+                                prompt: pending.prompt,
                                 state: col.error.map { BroadcastStatusColumn.ColState.error($0) } ?? .loading
                             ).frame(maxWidth: .infinity)
                         }
@@ -1028,7 +1138,11 @@ private struct PendingBroadcastView: View {
                         HStack(alignment: .top, spacing: spacing) {
                             ForEach(pending.columns) { col in
                                 BroadcastStatusColumn(
-                                    provider: col.provider, model: col.model, prompt: pending.prompt,
+                                    provider: col.provider,
+                                    model: col.model,
+                                    displayName: col.displayName,
+                                    customProviderId: col.customProviderId,
+                                    prompt: pending.prompt,
                                     state: col.error.map { BroadcastStatusColumn.ColState.error($0) } ?? .loading
                                 ).frame(width: max(300, per))
                             }
@@ -1508,7 +1622,7 @@ private struct ComposerBar: View {
     // toggle. Selecting 1 provider = solo; 2–3 = broadcast (compare).
     @ViewBuilder
     private var providerControls: some View {
-        if providerEnabledVendors.isEmpty {
+        if providerEnabledChoices.isEmpty {
             Text("No providers enabled")
                 .font(TahoeFont.body(11, weight: .semibold))
                 .foregroundStyle(t.fg4)
@@ -1532,28 +1646,28 @@ private struct ComposerBar: View {
     private var providerBarLabel: some View {
         HStack(spacing: 8) {
             HStack(spacing: 3) {
-                ForEach(store.selectedVendors, id: \.self) { v in
-                    TahoeProviderGlyph(provider: v.backingProvider.tahoeProvider, size: 16)
+                ForEach(store.selectedChoices, id: \.self) { choice in
+                    AnyProviderGlyph(choice: choice, catalog: client.modelCatalog, size: 16)
                 }
             }
-            if store.selectedVendorCount == 0 {
+            if store.selectedChoiceCount == 0 {
                 Text("No provider")
                     .font(TahoeFont.body(11.5, weight: .semibold))
                     .foregroundStyle(t.fg4)
-            } else if store.selectedVendorCount == 1 {
-                let v = store.primaryVendor
+            } else if store.selectedChoiceCount == 1 {
+                let choice = store.primaryChoice
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(v.displayName)
+                    Text(choice.displayName(in: client.modelCatalog))
                         .font(TahoeFont.body(11.5, weight: .semibold))
                         .foregroundStyle(t.fg).lineLimit(1)
-                    if let model = compactModelLabel(for: v) {
+                    if let model = compactModelLabel(for: choice) {
                         Text(model)
                             .font(TahoeFont.mono(8.5))
                             .foregroundStyle(t.fg4).lineLimit(1).truncationMode(.middle)
                     }
                 }
             } else {
-                Text("\(store.selectedVendorCount) providers")
+                Text("\(store.selectedChoiceCount) providers")
                     .font(TahoeFont.body(11.5, weight: .semibold))
                     .foregroundStyle(t.fg)
             }
@@ -1584,8 +1698,8 @@ private struct ComposerBar: View {
 
             ScrollView {
                 VStack(spacing: 2) {
-                    ForEach(providerPickerVendors, id: \.self) { vendor in
-                        providerSelectorRow(vendor)
+                    ForEach(providerPickerChoices, id: \.self) { choice in
+                        providerSelectorRow(choice)
                     }
                 }
                 .padding(.horizontal, 8).padding(.vertical, 6)
@@ -1593,9 +1707,9 @@ private struct ComposerBar: View {
             .frame(maxHeight: 320)
 
             Rectangle().fill(t.hairline).frame(height: 0.5)
-            Text(store.selectedVendorCount <= 1
-                 ? (store.selectedVendorCount == 0 ? "Enable a provider in Settings → Providers" : "Solo · \(store.primaryVendor.displayName)")
-                 : "Comparing \(store.selectedVendorCount) — answers shown side by side")
+            Text(store.selectedChoiceCount <= 1
+                 ? (store.selectedChoiceCount == 0 ? "Enable a provider in Settings → Providers" : "Solo · \(store.primaryChoice.displayName(in: client.modelCatalog))")
+                 : "Comparing \(store.selectedChoiceCount) — answers shown side by side")
                 .font(TahoeFont.body(10.5))
                 .foregroundStyle(t.fg4)
                 .padding(.horizontal, 14).padding(.vertical, 9)
@@ -1606,16 +1720,17 @@ private struct ComposerBar: View {
 
     private var soloCompareToggle: some View {
         HStack(spacing: 2) {
-            soloCompareSegment(title: "Solo", active: store.selectedVendorCount <= 1) {
-                if let vendor = store.selectedVendors.first ?? providerPickerVendors.first {
-                    store.selectedVendors = [vendor]
+            soloCompareSegment(title: "Solo", active: store.selectedChoiceCount <= 1) {
+                if let choice = store.selectedChoices.first
+                    ?? providerPickerChoices.first {
+                    store.selectedChoices = [choice]
                     store.persist()
                 }
             }
-            soloCompareSegment(title: "Compare", active: store.selectedVendorCount > 1) {
-                if store.selectedVendorCount <= 1,
-                   let vendor = firstConfigurableVendor {
-                    store.toggleVendor(vendor)
+            soloCompareSegment(title: "Compare", active: store.selectedChoiceCount > 1) {
+                if store.selectedChoiceCount <= 1,
+                   let choice = firstConfigurableChoice {
+                    store.toggleChoice(choice)
                 }
             }
         }
@@ -1636,12 +1751,12 @@ private struct ComposerBar: View {
     }
 
     @ViewBuilder
-    private func providerSelectorRow(_ vendor: ChatVendor) -> some View {
-        let selected = store.isVendorSelected(vendor)
-        let available = isVendorAvailable(vendor)
+    private func providerSelectorRow(_ choice: ProviderChoice) -> some View {
+        let selected = store.isChoiceSelected(choice)
+        let available = isChoiceAvailable(choice)
         let canSelect = selected || available
         HStack(spacing: 10) {
-            Button { toggleProviderRow(vendor) } label: {
+            Button { toggleProviderRow(choice) } label: {
                 Image(systemName: selected ? "checkmark.square.fill" : "square")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(selected ? t.accent : t.fg4)
@@ -1649,19 +1764,19 @@ private struct ComposerBar: View {
             .buttonStyle(.plain)
             .disabled(!canSelect)
 
-            TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 18)
+            AnyProviderGlyph(choice: choice, catalog: client.modelCatalog, size: 18)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(vendor.displayName)
+                Text(choice.displayName(in: client.modelCatalog))
                     .font(TahoeFont.body(12.5, weight: .semibold))
                     .foregroundStyle(t.fg)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                if let reason = providerUnavailableReason(vendor) {
+                if let reason = choiceUnavailableReason(choice) {
                     Text(reason)
                         .font(TahoeFont.body(9.5))
                         .foregroundStyle(t.fg4).lineLimit(1).truncationMode(.tail)
-                } else if vendor == .cursor, let cursorQuota {
+                } else if case .builtin(let vendor) = choice, vendor == .cursor, let cursorQuota {
                     Text(cursorQuotaSummary(cursorQuota))
                         .font(TahoeFont.mono(9.5))
                         .foregroundStyle(t.fg4)
@@ -1672,9 +1787,9 @@ private struct ComposerBar: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .layoutPriority(1)
 
-            providerRowModelMenu(vendor)
-            if modelSupportsEffort(vendor) { providerRowEffortMenu(vendor) }
-            if let accounts = pickerAccounts(for: vendor) {
+            providerRowModelMenu(choice)
+            if modelSupportsEffort(choice) { providerRowEffortMenu(choice) }
+            if let vendor = choice.chatVendor, let accounts = pickerAccounts(for: vendor) {
                 providerRowAccountMenu(vendor, accounts: accounts)
             }
         }
@@ -1685,10 +1800,12 @@ private struct ComposerBar: View {
         .contentShape(Rectangle())
     }
 
-    private func toggleProviderRow(_ vendor: ChatVendor) {
-        guard ProviderRegistry.isEnabled(chatVendor: vendor) else { return }
-        if !store.isVendorSelected(vendor), !isVendorAvailable(vendor) { return }
-        store.toggleVendor(vendor)
+    private func toggleProviderRow(_ choice: ProviderChoice) {
+        if case .builtin(let vendor) = choice {
+            guard ProviderRegistry.isEnabled(chatVendor: vendor) else { return }
+        }
+        if !store.isChoiceSelected(choice), !isChoiceAvailable(choice) { return }
+        store.toggleChoice(choice)
     }
 
     /// Multi-account: the configured accounts for a vendor's backing
@@ -1729,14 +1846,14 @@ private struct ComposerBar: View {
         .accessibilityIdentifier("chat.account.\(vendor.rawValue)")
     }
 
-    private func providerRowModelMenu(_ vendor: ChatVendor) -> some View {
-        let models = vendor.models(in: client.modelCatalog)
-        let currentId = store.model(for: vendor, catalog: client.modelCatalog)
+    private func providerRowModelMenu(_ choice: ProviderChoice) -> some View {
+        let models = choice.models(in: client.modelCatalog)
+        let currentId = store.model(forChoice: choice, catalog: client.modelCatalog)
         return Menu {
             if models.isEmpty { Text("No models") }
             ForEach(models, id: \.id) { m in
                 Button {
-                    store.selectModel(m.id, for: vendor, catalog: client.modelCatalog)
+                    store.selectModel(m.id, forChoice: choice, catalog: client.modelCatalog)
                 } label: {
                     if m.id == currentId { Label(m.displayName, systemImage: "checkmark") }
                     else { Text(m.displayName) }
@@ -1746,14 +1863,12 @@ private struct ComposerBar: View {
             HStack(spacing: 4) {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold)).foregroundStyle(t.fg4)
-                Text(rowModelLabel(for: vendor))
+                Text(rowModelLabel(for: choice))
                     .font(TahoeFont.body(11)).foregroundStyle(t.fg2)
                     .lineLimit(1).truncationMode(.tail)
             }
             .frame(width: 116, alignment: .leading)
         }
-        // Deterministic fixed width so the model dropdown never collapses (when
-        // flexible) nor balloons (under .fixedSize with a long OpenRouter label).
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
         .frame(width: 116)
     }
@@ -1761,9 +1876,9 @@ private struct ComposerBar: View {
     /// Model name for a row, stripping a redundant "<Provider> · " prefix
     /// (e.g. "OpenRouter · OpenAI: GPT-5.5" → "OpenAI: GPT-5.5") since the row
     /// already shows the provider name.
-    private func rowModelLabel(for vendor: ChatVendor) -> String {
-        let label = compactModelLabel(for: vendor) ?? "Model"
-        let prefix = "\(vendor.displayName) · "
+    private func rowModelLabel(for choice: ProviderChoice) -> String {
+        let label = compactModelLabel(for: choice) ?? "Model"
+        let prefix = "\(choice.displayName(in: client.modelCatalog)) · "
         return label.hasPrefix(prefix) ? String(label.dropFirst(prefix.count)) : label
     }
 
@@ -1775,12 +1890,12 @@ private struct ComposerBar: View {
     }
 
     @ViewBuilder
-    private func providerRowEffortMenu(_ vendor: ChatVendor) -> some View {
-        let current = store.effort(for: vendor, catalog: client.modelCatalog)
+    private func providerRowEffortMenu(_ choice: ProviderChoice) -> some View {
+        let current = store.effort(forChoice: choice, catalog: client.modelCatalog)
         Menu {
             ForEach(ReasoningEffort.allCases, id: \.self) { effort in
                 Button {
-                    store.selectEffort(effort, for: vendor, catalog: client.modelCatalog)
+                    store.selectEffort(effort, forChoice: choice, catalog: client.modelCatalog)
                 } label: {
                     if current == effort { Label(effort.rawValue.capitalized, systemImage: "checkmark") }
                     else { Text(effort.rawValue.capitalized) }
@@ -1900,7 +2015,7 @@ private struct ComposerBar: View {
             return "est. \(max(2, client.frontierChildren(groupId: groupId).count))x tokens"
         }
         if openTarget != nil { return "est. 1x tokens" }
-        return "est. \(store.selectedVendorCount)x tokens"
+        return "est. \(store.selectedChoiceCount)x tokens"
     }
 
     private func dispatchSend() async {
@@ -1930,26 +2045,39 @@ private struct ComposerBar: View {
                 return "Archived transcripts are read-only. Start a new chat to continue."
             case nil:
                 store.normalizeForEnabledProviders()
-                let selectedVendors = store.selectedVendors
-                guard !selectedVendors.isEmpty else {
+                let selectedChoices = store.selectedChoices
+                guard !selectedChoices.isEmpty else {
                     return "Enable a provider in Settings → Providers to start chatting."
                 }
-                let unavailableReasons = selectedVendors.compactMap { providerUnavailableReason($0) }
+                let unavailableReasons = selectedChoices.compactMap { choiceUnavailableReason($0) }
                 guard unavailableReasons.isEmpty else {
                     return unavailableReasons.joined(separator: "\n")
                 }
-                if selectedVendors.count >= 2 {
+                if selectedChoices.count >= 2 {
                     let slots = store.frontierSlots(catalog: client.modelCatalog).filter { slot in
-                        slot.chatVendor.map(isVendorAvailable(_:)) ?? isProviderAvailable(slot.provider)
+                        if let customProviderId = slot.customProviderId {
+                            return isChoiceAvailable(.custom(customProviderId))
+                        }
+                        if let chatVendor = slot.chatVendor {
+                            return isVendorAvailable(chatVendor)
+                        }
+                        return isProviderAvailable(slot.provider)
                     }
                     guard slots.count >= 2 else { return "At least two selected providers must be available." }
-                    // Optimistic: paint skeleton columns immediately so the
-                    // comparison surface appears within ~200ms instead of after
-                    // the multi-second spawn. (openTarget stays nil until the
-                    // group exists, so this renders via PendingBroadcastView.)
                     pendingBroadcast = PendingBroadcast(
                         prompt: trimmed,
-                        columns: slots.map { PendingBroadcast.Column(provider: $0.provider, model: $0.model) }
+                        columns: slots.map { slot in
+                            PendingBroadcast.Column(
+                                provider: slot.provider,
+                                model: slot.model,
+                                customProviderId: slot.customProviderId,
+                                displayName: pendingColumnDisplayName(
+                                    provider: slot.provider,
+                                    customProviderId: slot.customProviderId,
+                                    catalog: client.modelCatalog
+                                )
+                            )
+                        }
                     )
                     failedBroadcastColumns = []
                     guard let created = await client.createBroadcastChat(slots: slots) else {
@@ -1973,7 +2101,14 @@ private struct ComposerBar: View {
                             prompt: trimmed,
                             columns: slots.map { s in
                                 PendingBroadcast.Column(
-                                    provider: s.provider, model: s.model,
+                                    provider: s.provider,
+                                    model: s.model,
+                                    customProviderId: s.customProviderId,
+                                    displayName: pendingColumnDisplayName(
+                                        provider: s.provider,
+                                        customProviderId: s.customProviderId,
+                                        catalog: client.modelCatalog
+                                    ),
                                     error: failedByProvider[s.provider] ?? "Broadcast needs at least two providers to start."
                                 )
                             }
@@ -1983,7 +2118,17 @@ private struct ComposerBar: View {
                     failedBroadcastColumns = created.failedSlots.compactMap { r in
                         guard r.index >= 0, r.index < slots.count else { return nil }
                         let s = slots[r.index]
-                        return FailedBroadcastColumn(provider: s.provider, model: s.model, reason: r.reason ?? "Couldn't start this provider.")
+                        return FailedBroadcastColumn(
+                            provider: s.provider,
+                            model: s.model,
+                            customProviderId: s.customProviderId,
+                            displayName: pendingColumnDisplayName(
+                                provider: s.provider,
+                                customProviderId: s.customProviderId,
+                                catalog: client.modelCatalog
+                            ),
+                            reason: r.reason ?? "Couldn't start this provider."
+                        )
                     }
                     pendingBroadcast = nil
                     openTarget = .frontier(created.groupId)
@@ -2000,29 +2145,36 @@ private struct ComposerBar: View {
                     store.clearAttachments()
                     return response.ok ? nil : response.results.compactMap(\.reason).joined(separator: "\n")
                 } else {
-                    let vendor = selectedVendors.first ?? store.primaryVendor
-                    // Optimistic single-column skeleton so the loading animation
-                    // shows during Claude cold start, not a blank center. Reuses
-                    // the broadcast pending overlay.
+                    let choice = store.primaryChoice
+                    guard let agent = choice.backingAgent(in: client.modelCatalog) else {
+                        return "Selected provider is unavailable."
+                    }
                     pendingBroadcast = PendingBroadcast(
                         prompt: trimmed,
                         columns: [PendingBroadcast.Column(
-                            provider: vendor.backingProvider,
-                            model: store.model(for: vendor, catalog: client.modelCatalog)
+                            provider: agent,
+                            model: store.model(forChoice: choice, catalog: client.modelCatalog),
+                            customProviderId: choice.customProviderId,
+                            displayName: choice.displayName(in: client.modelCatalog)
                         )]
                     )
                     failedBroadcastColumns = []
                     guard let session = await client.createChatSession(
-                        provider: vendor.backingProvider,
-                        model: store.model(for: vendor, catalog: client.modelCatalog),
-                        effort: store.effort(for: vendor, catalog: client.modelCatalog),
-                        chatVendor: vendor,
-                        billingProvider: vendor.billingProvider,
+                        provider: agent,
+                        model: store.model(forChoice: choice, catalog: client.modelCatalog),
+                        effort: store.effort(forChoice: choice, catalog: client.modelCatalog),
+                        chatVendor: choice.chatVendor,
+                        billingProvider: choice.customProviderId ?? choice.chatVendor?.billingProvider,
                         deepResearch: store.deepResearch,
-                        providerInstanceId: store.accountWireId(
-                            for: vendor,
-                            available: providerInstances?.instances(for: vendor.backingProvider)
-                        )
+                        // Account pins only exist on the stock-vendor axis;
+                        // custom-provider choices carry their own credentials.
+                        providerInstanceId: choice.chatVendor.flatMap { vendor in
+                            store.accountWireId(
+                                for: vendor,
+                                available: providerInstances?.instances(for: vendor.backingProvider)
+                            )
+                        },
+                        customProviderId: choice.customProviderId
                     ) else {
                         pendingBroadcast = nil
                         return client.lastError ?? "Couldn't create chat."
@@ -2071,6 +2223,89 @@ private struct ComposerBar: View {
         return providerMatrix?.providers.first { $0.provider == provider && !$0.capabilityProbePassed }?.reason
     }
 
+    private func isChoiceAvailable(_ choice: ProviderChoice) -> Bool {
+        switch choice {
+        case .builtin(let vendor):
+            return isVendorAvailable(vendor)
+        case .custom(let providerId):
+            guard client.modelCatalog.customProviders.contains(where: { $0.id == providerId && $0.enabled }) else {
+                return false
+            }
+            guard let entry = providerMatrix?.customProviders.first(where: { $0.id == providerId }) else {
+                return true
+            }
+            return entry.available
+        }
+    }
+
+    private func choiceUnavailableReason(_ choice: ProviderChoice) -> String? {
+        switch choice {
+        case .builtin(let vendor):
+            return providerUnavailableReason(vendor)
+        case .custom(let providerId):
+            let label = choice.displayName(in: client.modelCatalog)
+            guard client.modelCatalog.customProviders.contains(where: { $0.id == providerId && $0.enabled }) else {
+                return "Enable \(label) in Settings → Custom providers."
+            }
+            guard isChoiceAvailable(choice) else {
+                return providerMatrix?.customProviders.first(where: { $0.id == providerId && !$0.available })?.reason
+                    ?? "\(label) is unavailable."
+            }
+            return nil
+        }
+    }
+
+    private var providerEnabledChoices: [ProviderChoice] {
+        ChatV2Store.enabledChatChoices(
+            from: ProviderEnablement.enabledProviderIDs(),
+            catalog: client.modelCatalog
+        )
+    }
+
+    private var providerPickerChoices: [ProviderChoice] {
+        var choices = providerEnabledChoices
+        for choice in store.selectedChoices where !choices.contains(choice) {
+            switch choice {
+            case .builtin(let vendor):
+                if ProviderRegistry.isEnabled(chatVendor: vendor) {
+                    choices.append(choice)
+                }
+            case .custom(let providerId):
+                if client.modelCatalog.customProviders.contains(where: { $0.id == providerId && $0.enabled }) {
+                    choices.append(choice)
+                }
+            }
+        }
+        return choices.sorted {
+            $0.displayName(in: client.modelCatalog).localizedCaseInsensitiveCompare($1.displayName(in: client.modelCatalog)) == .orderedAscending
+        }
+    }
+
+    private func compactModelLabel(for choice: ProviderChoice) -> String? {
+        guard let id = store.model(forChoice: choice, catalog: client.modelCatalog) else { return nil }
+        if let entry = choice.models(in: client.modelCatalog).first(where: { $0.id == id }) {
+            return entry.displayName
+        }
+        return id
+    }
+
+    private func modelSupportsEffort(_ choice: ProviderChoice) -> Bool {
+        guard let id = store.model(forChoice: choice, catalog: client.modelCatalog) else {
+            return choice.chatVendor?.defaultEffort != nil
+        }
+        return ProviderModelPickerSupport.supportsEffort(
+            choice: choice,
+            modelId: id,
+            catalog: client.modelCatalog
+        )
+    }
+
+    private var firstConfigurableChoice: ProviderChoice? {
+        providerEnabledChoices.first { choice in
+            !store.isChoiceSelected(choice) && isChoiceAvailable(choice)
+        }
+    }
+
     private var providerEnabledVendors: [ChatVendor] {
         ProviderEnablement.enabledChatVendors()
     }
@@ -2085,25 +2320,15 @@ private struct ComposerBar: View {
     }
 
     private func compactModelLabel(for vendor: ChatVendor) -> String? {
-        guard let id = store.model(for: vendor, catalog: client.modelCatalog) else { return nil }
-        if let entry = vendor.models(in: client.modelCatalog).first(where: { $0.id == id }) {
-            return entry.displayName
-        }
-        return id
+        compactModelLabel(for: .builtin(vendor))
     }
 
     private func modelSupportsEffort(_ vendor: ChatVendor) -> Bool {
-        guard let id = store.model(for: vendor, catalog: client.modelCatalog),
-              let entry = vendor.models(in: client.modelCatalog).first(where: { $0.id == id }) else {
-            return vendor.defaultEffort != nil
-        }
-        return entry.supportsEffort
+        modelSupportsEffort(.builtin(vendor))
     }
 
     private var firstConfigurableVendor: ChatVendor? {
-        providerEnabledVendors.first { vendor in
-            !store.isVendorSelected(vendor) && isVendorAvailable(vendor)
-        }
+        firstConfigurableChoice?.chatVendor
     }
 
     /// Solo path: upload each attachment to one session's staging dir

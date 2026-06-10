@@ -42,11 +42,15 @@ import ClawdmeterShared
 public struct ComposerModelPicker: View {
     // MARK: - Public API
 
-    /// Vendor that should be active in the rail when the picker opens.
-    public let initialVendor: ChatVendor
+    /// Choice that should be active in the rail when the picker opens.
+    public let initialChoice: ProviderChoice
 
-    /// Vendors the picker should expose in the rail. Caller filters by any
-    /// Settings → Providers gate; the fallback is also enablement-aware.
+    /// Built-in + custom choices the picker should expose in the rail. Caller
+    /// filters by Settings → Providers / custom-provider enablement.
+    public let enabledChoices: [ProviderChoice]
+
+    /// Legacy vendor list — derived from `enabledChoices` for callers that
+    /// still pass `enabledVendors` only.
     public let enabledVendors: [ChatVendor]
 
     /// Model catalog. Defaults to the bundled catalog.
@@ -63,7 +67,7 @@ public struct ComposerModelPicker: View {
     /// host can mirror the change into the running session via
     /// SessionConfigChanger / ComposerStore. Chat-side leaves this nil
     /// since `selectedModelByVendor` already drives the Chat composer.
-    public var onSelectModel: ((ChatVendor, String, ReasoningEffort?) -> Void)? = nil
+    public var onSelectModel: ((ProviderChoice, String, ReasoningEffort?) -> Void)? = nil
 
     /// Selection mode. `.single` (Code composer / per-vendor chip) picks one
     /// model and closes. `.multi` (Chat broadcast) toggles 1–3 vendors into the
@@ -75,6 +79,8 @@ public struct ComposerModelPicker: View {
 
     /// Multi-mode availability hooks. Kept as closures so the picker stays
     /// decoupled from `ChatProvidersResponse`. Nil → treat as available.
+    public var choiceAvailability: ((ProviderChoice) -> Bool)? = nil
+    public var choiceUnavailableReason: ((ProviderChoice) -> String?)? = nil
     public var vendorAvailability: ((ChatVendor) -> Bool)? = nil
     public var vendorUnavailableReason: ((ChatVendor) -> String?)? = nil
 
@@ -90,6 +96,46 @@ public struct ComposerModelPicker: View {
     @FocusState private var searchFocused: Bool
 
     public init(
+        initialChoice: ProviderChoice,
+        store: ChatV2Store,
+        defaultsStore: ProviderDefaultsStore,
+        catalog: ModelCatalog = .bundled,
+        enabledChoices: [ProviderChoice]? = nil,
+        mode: SelectionMode = .single,
+        choiceAvailability: ((ProviderChoice) -> Bool)? = nil,
+        choiceUnavailableReason: ((ProviderChoice) -> String?)? = nil,
+        vendorAvailability: ((ChatVendor) -> Bool)? = nil,
+        vendorUnavailableReason: ((ChatVendor) -> String?)? = nil,
+        onClose: @escaping () -> Void,
+        onSelectModel: ((ProviderChoice, String, ReasoningEffort?) -> Void)? = nil
+    ) {
+        let resolvedChoices = enabledChoices ?? ChatV2Store.enabledChatChoices(
+            from: ProviderEnablement.enabledProviderIDs(),
+            catalog: catalog
+        )
+        self.initialChoice = initialChoice
+        self.enabledChoices = resolvedChoices
+        self.enabledVendors = resolvedChoices.compactMap(\.chatVendor)
+        self.store = store
+        self.defaultsStore = defaultsStore
+        self.catalog = catalog
+        self.mode = mode
+        self.choiceAvailability = choiceAvailability
+        self.choiceUnavailableReason = choiceUnavailableReason
+        self.vendorAvailability = vendorAvailability
+        self.vendorUnavailableReason = vendorUnavailableReason
+        self.onClose = onClose
+        self.onSelectModel = onSelectModel
+        let active: RailKey
+        if resolvedChoices.contains(initialChoice) {
+            active = Self.railKey(for: initialChoice)
+        } else {
+            active = .favorites
+        }
+        self._activeRail = State(initialValue: active)
+    }
+
+    public init(
         initialVendor: ChatVendor,
         store: ChatV2Store,
         defaultsStore: ProviderDefaultsStore,
@@ -99,22 +145,40 @@ public struct ComposerModelPicker: View {
         vendorAvailability: ((ChatVendor) -> Bool)? = nil,
         vendorUnavailableReason: ((ChatVendor) -> String?)? = nil,
         onClose: @escaping () -> Void,
-        onSelectModel: ((ChatVendor, String, ReasoningEffort?) -> Void)? = nil
+        onSelectModel: ((ProviderChoice, String, ReasoningEffort?) -> Void)? = nil
     ) {
-        self.initialVendor = initialVendor
-        self.store = store
-        self.defaultsStore = defaultsStore
-        self.catalog = catalog
-        self.enabledVendors = enabledVendors
-        self.mode = mode
-        self.vendorAvailability = vendorAvailability
-        self.vendorUnavailableReason = vendorUnavailableReason
-        self.onClose = onClose
-        self.onSelectModel = onSelectModel
-        let active: RailKey = enabledVendors.contains(initialVendor)
-            ? .vendor(initialVendor)
-            : .favorites
-        self._activeRail = State(initialValue: active)
+        let enabledChoices = ChatV2Store.enabledChatChoices(
+            from: ProviderEnablement.enabledProviderIDs(),
+            catalog: catalog
+        ).filter { choice in
+            switch choice {
+            case .builtin(let vendor):
+                return enabledVendors.contains(vendor)
+            case .custom:
+                return true
+            }
+        }
+        self.init(
+            initialChoice: .builtin(initialVendor),
+            store: store,
+            defaultsStore: defaultsStore,
+            catalog: catalog,
+            enabledChoices: enabledChoices,
+            mode: mode,
+            vendorAvailability: vendorAvailability,
+            vendorUnavailableReason: vendorUnavailableReason,
+            onClose: onClose,
+            onSelectModel: onSelectModel
+        )
+    }
+
+    private static func railKey(for choice: ProviderChoice) -> RailKey {
+        switch choice {
+        case .builtin(let vendor):
+            return .vendor(vendor)
+        case .custom(let providerId):
+            return .customProvider(providerId)
+        }
     }
 
     // MARK: - Body
@@ -206,7 +270,7 @@ public struct ComposerModelPicker: View {
             }
             // .multi: a checkmark marks vendors currently in the broadcast set.
             .overlay(alignment: .bottomTrailing) {
-                if mode == .multi, case let .vendor(v) = entry.key, store.isVendorSelected(v) {
+                if mode == .multi, let choice = choice(for: entry.key), store.isChoiceSelected(choice) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(t.accent)
@@ -233,6 +297,22 @@ public struct ComposerModelPicker: View {
                 .foregroundStyle(t.fg2)
         case .vendor(let vendor):
             TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 22)
+        case .customProvider(let providerId):
+            CustomProviderGlyph(
+                label: ProviderChoice.custom(providerId).displayName(in: catalog),
+                size: 22
+            )
+        }
+    }
+
+    private func choice(for key: RailKey) -> ProviderChoice? {
+        switch key {
+        case .favorites:
+            return nil
+        case .vendor(let vendor):
+            return .builtin(vendor)
+        case .customProvider(let providerId):
+            return .custom(providerId)
         }
     }
 
@@ -337,7 +417,9 @@ public struct ComposerModelPicker: View {
     @ViewBuilder
     private func modelRow(entry: VisibleRowEntry, index: Int) -> some View {
         let isSelected = isCurrentlySelected(entry: entry)
-        let isFav = defaultsStore.isFavorite(modelId: entry.model.id, vendor: entry.vendor)
+        let isFav = entry.choice.chatVendor.map {
+            defaultsStore.isFavorite(modelId: entry.model.id, vendor: $0)
+        } ?? false
         // ⌘N is suppressed during search to avoid binding shortcuts to a
         // cross-provider list (would be surprising for the user).
         let shortcut: Character? = (searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && index < 9)
@@ -346,7 +428,9 @@ public struct ComposerModelPicker: View {
 
         HStack(spacing: 10) {
             Button {
-                defaultsStore.toggleFavoriteModel(entry.model.id, for: entry.vendor)
+                if let vendor = entry.choice.chatVendor {
+                    defaultsStore.toggleFavoriteModel(entry.model.id, for: vendor)
+                }
             } label: {
                 Image(systemName: isFav ? "star.fill" : "star")
                     .font(.system(size: 12, weight: .medium))
@@ -355,7 +439,7 @@ public struct ComposerModelPicker: View {
             .buttonStyle(PressableButtonStyle())
             .help(isFav ? "Unstar" : "Star")
             .accessibilityLabel("\(isFav ? "Unstar" : "Star") \(entry.model.displayName)")
-            .accessibilityIdentifier("code.composer.model-picker.favorite.\(entry.vendor.rawValue).\(accessibilityToken(entry.model.id))")
+            .accessibilityIdentifier("code.composer.model-picker.favorite.\(entry.choice.id).\(accessibilityToken(entry.model.id))")
 
             Button {
                 select(entry: entry)
@@ -367,8 +451,8 @@ public struct ComposerModelPicker: View {
                             .foregroundStyle(t.fg)
                             .lineLimit(1)
                         HStack(spacing: 5) {
-                            TahoeProviderGlyph(provider: entry.vendor.backingProvider.tahoeProvider, size: 12)
-                            Text(entry.vendor.displayName)
+                            AnyProviderGlyph(choice: entry.choice, catalog: catalog, size: 12)
+                            Text(entry.choice.displayName(in: catalog))
                                 .font(TahoeFont.body(10.5))
                                 .foregroundStyle(t.fg4)
                         }
@@ -385,8 +469,8 @@ public struct ComposerModelPicker: View {
             }
             .buttonStyle(PressableButtonStyle())
             .keyboardShortcut(shortcut.map { KeyboardShortcut(KeyEquivalent($0), modifiers: .command) })
-            .accessibilityLabel("\(entry.vendor.displayName) \(entry.model.displayName)")
-            .accessibilityIdentifier("code.composer.model-picker.row.\(entry.vendor.rawValue).\(accessibilityToken(entry.model.id))")
+            .accessibilityLabel("\(entry.choice.displayName(in: catalog)) \(entry.model.displayName)")
+            .accessibilityIdentifier("code.composer.model-picker.row.\(entry.choice.id).\(accessibilityToken(entry.model.id))")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -448,6 +532,8 @@ public struct ComposerModelPicker: View {
             return "No starred models yet.\nTap ☆ on any row to add it here."
         case .vendor(let vendor):
             return "No models available for \(vendor.displayName)."
+        case .customProvider(let providerId):
+            return "No models available for \(ProviderChoice.custom(providerId).displayName(in: catalog))."
         }
     }
 
@@ -457,11 +543,11 @@ public struct ComposerModelPicker: View {
         VStack(alignment: .leading, spacing: 8) {
             // .multi: availability + Add/Remove for the previewed/focused vendor
             // (replaces the deleted MacChatModelSelectorPanel's availability row).
-            if mode == .multi, let vendor = bottomBarPreview.vendor {
+            if mode == .multi, let choice = bottomBarPreview.choice {
                 HStack(spacing: 8) {
-                    availabilityLabel(for: vendor)
+                    availabilityLabel(for: choice)
                     Spacer(minLength: 8)
-                    addRemoveButton(for: vendor)
+                    addRemoveButton(for: choice)
                 }
             }
             HStack(spacing: 6) {
@@ -503,37 +589,39 @@ public struct ComposerModelPicker: View {
     /// would pick). When nothing is focused, falls back to the active rail
     /// entry's vendor + its saved default model.
     private struct BottomBarPreview {
-        let vendor: ChatVendor?
+        let choice: ProviderChoice?
         let modelDisplay: String
     }
 
     private var bottomBarPreview: BottomBarPreview {
         if let idx = focusedRowIndex, visibleEntries.indices.contains(idx) {
             let row = visibleEntries[idx]
-            return BottomBarPreview(vendor: row.vendor, modelDisplay: row.model.displayName)
+            return BottomBarPreview(choice: row.choice, modelDisplay: row.model.displayName)
         }
-        let fallbackVendor: ChatVendor? = {
+        let fallbackChoice: ProviderChoice? = {
             switch activeRail {
-            case .favorites: return initialVendor
-            case .vendor(let v): return v
+            case .favorites: return initialChoice
+            case .vendor(let vendor): return .builtin(vendor)
+            case .customProvider(let providerId): return .custom(providerId)
             }
         }()
         let modelDisplay: String = {
-            guard let v = fallbackVendor,
-                  let id = defaultsStore.modelId(for: v, catalog: catalog),
-                  let entry = catalog.entry(forId: id) else {
+            guard let choice = fallbackChoice,
+                  let id = defaultsStore.modelId(forChoice: choice, catalog: catalog)
+                    ?? store.model(forChoice: choice, catalog: catalog),
+                  let entry = catalog.entry(forId: id, customProviderId: choice.customProviderId) else {
                 return "Select model"
             }
             return entry.displayName
         }()
-        return BottomBarPreview(vendor: fallbackVendor, modelDisplay: modelDisplay)
+        return BottomBarPreview(choice: fallbackChoice, modelDisplay: modelDisplay)
     }
 
     private var selectedModelChipContent: some View {
         let preview = bottomBarPreview
         return HStack(spacing: 5) {
-            if let vendor = preview.vendor {
-                TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 12)
+            if let choice = preview.choice {
+                AnyProviderGlyph(choice: choice, catalog: catalog, size: 12)
             }
             Text(preview.modelDisplay)
                 .font(TahoeFont.body(11.5, weight: .semibold))
@@ -547,17 +635,22 @@ public struct ComposerModelPicker: View {
     /// so the running Code session updates without re-picking the model.
     @ViewBuilder
     private var effortMenuChip: some View {
-        let vendor = bottomBarPreview.vendor
-        let modelId = vendor.flatMap { store.model(for: $0, catalog: catalog) ?? defaultsStore.modelId(for: $0, catalog: catalog) }
-        let supports = vendor.map {
-            ProviderModelPickerSupport.supportsEffort(vendor: $0, modelId: modelId, catalog: catalog)
+        let choice = bottomBarPreview.choice
+        let modelId = choice.flatMap {
+            store.model(forChoice: $0, catalog: catalog) ?? defaultsStore.modelId(forChoice: $0, catalog: catalog)
+        }
+        let supports = choice.map {
+            ProviderModelPickerSupport.supportsEffort(choice: $0, modelId: modelId, catalog: catalog)
         } ?? false
-        let current = vendor.flatMap { store.effort(for: $0, catalog: catalog) ?? defaultsStore.effort(for: $0, catalog: catalog) }
-        if supports, let vendor {
+        let current = choice.flatMap {
+            store.effort(forChoice: $0, catalog: catalog)
+                ?? $0.chatVendor.flatMap { defaultsStore.effort(for: $0, catalog: catalog) }
+        }
+        if supports, let choice {
             Menu {
                 ForEach(ReasoningEffort.allCases, id: \.self) { effort in
                     Button {
-                        applyEffort(effort, vendor: vendor)
+                        applyEffort(effort, choice: choice)
                     } label: {
                         if current == effort {
                             Label(effort.displayLabel, systemImage: "checkmark")
@@ -585,7 +678,7 @@ public struct ComposerModelPicker: View {
             .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(t.hairline, lineWidth: 0.5))
             .accessibilityLabel("Effort")
             .accessibilityValue(current?.displayLabel ?? "Default")
-            .accessibilityIdentifier("code.composer.model-picker.effort.\(vendor.rawValue)")
+            .accessibilityIdentifier("code.composer.model-picker.effort.\(choice.id)")
         } else {
             bottomChip {
                 Text("Auto")
@@ -598,29 +691,34 @@ public struct ComposerModelPicker: View {
         }
     }
 
-    private func applyEffort(_ effort: ReasoningEffort, vendor: ChatVendor) {
-        store.selectEffort(effort, for: vendor, catalog: catalog)
+    private func applyEffort(_ effort: ReasoningEffort, choice: ProviderChoice) {
+        store.selectEffort(effort, forChoice: choice, catalog: catalog)
         if mode == .single,
-           let modelId = store.model(for: vendor, catalog: catalog) ?? defaultsStore.modelId(for: vendor, catalog: catalog) {
-            onSelectModel?(vendor, modelId, effort)
+           let modelId = store.model(forChoice: choice, catalog: catalog)
+            ?? defaultsStore.modelId(forChoice: choice, catalog: catalog) {
+            onSelectModel?(choice, modelId, effort)
         }
     }
 
     @ViewBuilder
-    private func availabilityLabel(for vendor: ChatVendor) -> some View {
-        let available = vendorAvailability?(vendor) ?? true
-        Text(available ? "Available" : (vendorUnavailableReason?(vendor) ?? "Unavailable"))
+    private func availabilityLabel(for choice: ProviderChoice) -> some View {
+        let available = choiceAvailability?(choice)
+            ?? choice.chatVendor.flatMap { vendorAvailability?($0) }
+            ?? true
+        let reason = choiceUnavailableReason?(choice)
+            ?? choice.chatVendor.flatMap { vendorUnavailableReason?($0) }
+        Text(available ? "Available" : (reason ?? "Unavailable"))
             .font(TahoeFont.body(11))
             .foregroundStyle(available ? Color.green : Color.orange)
             .lineLimit(1)
     }
 
     @ViewBuilder
-    private func addRemoveButton(for vendor: ChatVendor) -> some View {
-        let selected = store.isVendorSelected(vendor)
-        let toggleable = canToggle(vendor)
+    private func addRemoveButton(for choice: ProviderChoice) -> some View {
+        let selected = store.isChoiceSelected(choice)
+        let toggleable = canToggle(choice)
         Button {
-            store.toggleVendor(vendor)
+            store.toggleChoice(choice)
         } label: {
             Text(selected ? (toggleable ? "Remove" : "Required") : (toggleable ? "Add" : "3 max"))
                 .font(TahoeFont.body(11, weight: .semibold))
@@ -633,11 +731,17 @@ public struct ComposerModelPicker: View {
     /// Removing needs >1 selected (broadcast keeps ≥1); adding needs only that
     /// the provider is available — no upper cap, since the compare columns
     /// scroll horizontally.
-    private func canToggle(_ vendor: ChatVendor) -> Bool {
-        if store.isVendorSelected(vendor) {
-            return store.selectedVendorCount > 1
+    private func canToggle(_ choice: ProviderChoice) -> Bool {
+        if store.isChoiceSelected(choice) {
+            return store.selectedChoiceCount > 1
         }
-        return vendorAvailability?(vendor) ?? true
+        if let availability = choiceAvailability?(choice) {
+            return availability
+        }
+        if let vendor = choice.chatVendor {
+            return vendorAvailability?(vendor) ?? true
+        }
+        return true
     }
 
     private var modeChipContent: some View {
@@ -691,43 +795,47 @@ public struct ComposerModelPicker: View {
     // MARK: - Selection
 
     private func select(entry: VisibleRowEntry) {
-        let vendor = entry.vendor
+        let choice = entry.choice
         if mode == .multi {
-            // Broadcast: add the vendor to the group (if there's room, ≤3) and
-            // set its model. `selectModel` handles per-vendor model + effort
-            // normalization + persistence. Stay open so the user can keep
-            // configuring vendors; the footer Add/Remove toggles membership and
-            // the rail checkmark shows who's in the broadcast.
-            if !store.isVendorSelected(vendor) {
-                store.toggleVendor(vendor)
+            if !store.isChoiceSelected(choice) {
+                store.toggleChoice(choice)
             }
-            store.selectModel(entry.model.id, for: vendor, catalog: catalog)
+            store.selectModel(entry.model.id, forChoice: choice, catalog: catalog)
             return
         }
-        // Persist the new default. Normalize effort so a model that
-        // doesn't support an effort level clears any stale effort that
-        // was carried over from the previously-selected model.
         let normalizedEffort = ProviderModelPickerSupport.normalizedEffort(
-            defaultsStore.effort(for: vendor, catalog: catalog),
-            vendor: vendor,
+            choice.chatVendor.flatMap { defaultsStore.effort(for: $0, catalog: catalog) },
+            choice: choice,
             modelId: entry.model.id,
             catalog: catalog
         )
-        store.selectedModelByVendor[vendor] = entry.model.id
-        defaultsStore.setDefault(
-            for: vendor,
-            model: entry.model.id,
-            effort: normalizedEffort,
-            clearEffort: normalizedEffort == nil,
-            catalog: catalog
-        )
-        onSelectModel?(vendor, entry.model.id, normalizedEffort)
+        if let vendor = choice.chatVendor {
+            store.selectedModelByVendor[vendor] = entry.model.id
+            defaultsStore.setDefault(
+                for: vendor,
+                model: entry.model.id,
+                effort: normalizedEffort,
+                clearEffort: normalizedEffort == nil,
+                catalog: catalog
+            )
+        } else {
+            store.selectModel(entry.model.id, forChoice: choice, catalog: catalog)
+            defaultsStore.setDefault(
+                forChoice: choice,
+                model: entry.model.id,
+                effort: normalizedEffort,
+                clearEffort: normalizedEffort == nil,
+                catalog: catalog
+            )
+        }
+        onSelectModel?(choice, entry.model.id, normalizedEffort)
         onClose()
     }
 
     private func isCurrentlySelected(entry: VisibleRowEntry) -> Bool {
-        let active = defaultsStore.modelId(for: entry.vendor, catalog: catalog)
-            ?? store.selectedModelByVendor[entry.vendor]
+        let active = defaultsStore.modelId(forChoice: entry.choice, catalog: catalog)
+            ?? store.model(forChoice: entry.choice, catalog: catalog)
+            ?? entry.choice.chatVendor.flatMap { store.selectedModelByVendor[$0] }
         return active == entry.model.id
     }
 
@@ -737,9 +845,12 @@ public struct ComposerModelPicker: View {
         var entries: [RailEntry] = [
             RailEntry(key: .favorites, tooltip: "Starred / recent")
         ]
-        for vendor in enabledVendors {
+        for choice in enabledChoices {
             entries.append(
-                RailEntry(key: .vendor(vendor), tooltip: vendor.displayName)
+                RailEntry(
+                    key: Self.railKey(for: choice),
+                    tooltip: choice.displayName(in: catalog)
+                )
             )
         }
         return entries
@@ -755,9 +866,9 @@ public struct ComposerModelPicker: View {
         }
         var seen = Set<String>()
         var out: [VisibleRowEntry] = []
-        for vendor in enabledVendors {
-            for model in ProviderModelPickerSupport.entries(for: vendor, catalog: catalog, query: trimmed) {
-                let row = VisibleRowEntry(vendor: vendor, model: model)
+        for choice in enabledChoices {
+            for model in ProviderModelPickerSupport.entries(for: choice, catalog: catalog, query: trimmed) {
+                let row = VisibleRowEntry(choice: choice, model: model)
                 if seen.insert(row.compositeId).inserted {
                     out.append(row)
                 }
@@ -774,7 +885,7 @@ public struct ComposerModelPicker: View {
             for vendor in enabledVendors {
                 for id in defaultsStore.favoriteModelIds(for: vendor) {
                     guard let model = catalog.entry(forId: id) else { continue }
-                    let row = VisibleRowEntry(vendor: vendor, model: model)
+                    let row = VisibleRowEntry(choice: .builtin(vendor), model: model)
                     if seen.insert(row.compositeId).inserted {
                         out.append(row)
                     }
@@ -783,8 +894,13 @@ public struct ComposerModelPicker: View {
             return out
         case .vendor(let vendor):
             return ProviderModelPickerSupport
-                .entries(for: vendor, catalog: catalog, query: "")
-                .map { VisibleRowEntry(vendor: vendor, model: $0) }
+                .entries(for: .builtin(vendor), catalog: catalog, query: "")
+                .map { VisibleRowEntry(choice: .builtin(vendor), model: $0) }
+        case .customProvider(let providerId):
+            let choice = ProviderChoice.custom(providerId)
+            return ProviderModelPickerSupport
+                .entries(for: choice, catalog: catalog, query: "")
+                .map { VisibleRowEntry(choice: choice, model: $0) }
         }
     }
 
@@ -798,7 +914,11 @@ public struct ComposerModelPicker: View {
             }
         case .vendor(let vendor):
             return ProviderModelPickerSupport
-                .entries(for: vendor, catalog: catalog, query: trimmed)
+                .entries(for: .builtin(vendor), catalog: catalog, query: trimmed)
+                .isEmpty
+        case .customProvider(let providerId):
+            return ProviderModelPickerSupport
+                .entries(for: .custom(providerId), catalog: catalog, query: trimmed)
                 .isEmpty
         }
     }
@@ -809,6 +929,8 @@ public struct ComposerModelPicker: View {
             return "favorites"
         case .vendor(let vendor):
             return vendor.rawValue
+        case .customProvider(let providerId):
+            return "custom-\(providerId)"
         }
     }
 
@@ -827,6 +949,7 @@ public struct ComposerModelPicker: View {
 public enum RailKey: Hashable {
     case favorites
     case vendor(ChatVendor)
+    case customProvider(String)
 }
 
 private struct RailEntry: Identifiable {
@@ -835,14 +958,11 @@ private struct RailEntry: Identifiable {
     var id: RailKey { key }
 }
 
-/// Vendor + model pair carried through the visible list. Composite id
-/// ("\(vendor.rawValue)|\(model.id)") makes ForEach stable even when the
-/// same model id appears under multiple vendors (e.g. OpenRouter-mirrored
-/// frontier models).
+/// Provider choice + model pair carried through the visible list.
 struct VisibleRowEntry: Hashable {
-    let vendor: ChatVendor
+    let choice: ProviderChoice
     let model: ModelCatalogEntry
-    var compositeId: String { "\(vendor.rawValue)|\(model.id)" }
+    var compositeId: String { "\(choice.id)|\(model.id)" }
 }
 
 // MARK: - Effort display fallback
