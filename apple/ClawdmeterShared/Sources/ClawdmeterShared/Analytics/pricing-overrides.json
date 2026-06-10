@@ -2,7 +2,7 @@
   "_meta": {
     "purpose": "Manual overrides applied on top of LiteLLM's snapshot by tools/refresh-pricing.sh. Entries here win over upstream so manual fixes for newly-announced Google/Anthropic/OpenAI rates aren't blown away when LiteLLM hasn't caught up yet.",
     "policy": "Drop an entry from this file once LiteLLM publishes the same or better rates (i.e. once the upstream snapshot would produce the same numbers we have here). Add an `_until` ISO date if you want a temporary override that auto-expires.",
-    "lastUpdated": "2026-06-06"
+    "lastUpdated": "2026-06-10"
   },
   "overrides": {
     "gemini-3.5-flash": {
@@ -62,6 +62,24 @@
       "max_tokens": 128000,
       "mode": "chat",
       "output_cost_per_token": 2.5e-05,
+      "supports_function_calling": true,
+      "supports_prompt_caching": true,
+      "supports_reasoning": true,
+      "supports_tool_choice": true,
+      "supports_vision": true
+    },
+    "claude-fable-5": {
+      "_note": "Claude Fable 5 (released 2026-06). $10/M input, $50/M output, $12.50/M 5m cache write, $20/M 1h cache write, $1/M cache read; full 1M context at standard pricing (no >200k tier). Claude Code JSONLs carry both 'claude-fable-5' and 'claude-fable-5[1m]' model strings; the bracket variant resolves to this key via Pricing's prefix-match lookup. Drop once LiteLLM publishes the same rates. Source: platform.claude.com/docs/en/pricing.",
+      "cache_creation_input_token_cost": 1.25e-05,
+      "cache_creation_input_token_cost_above_1hr": 2e-05,
+      "cache_read_input_token_cost": 1e-06,
+      "input_cost_per_token": 1e-05,
+      "litellm_provider": "anthropic",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "max_tokens": 128000,
+      "mode": "chat",
+      "output_cost_per_token": 5e-05,
       "supports_function_calling": true,
       "supports_prompt_caching": true,
       "supports_reasoning": true,
