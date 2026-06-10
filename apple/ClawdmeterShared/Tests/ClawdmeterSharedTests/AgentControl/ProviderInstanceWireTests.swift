@@ -5,14 +5,20 @@ import XCTest
 /// security wire-up. Companion to `ProviderInstanceIdTests` (which
 /// covers the source-only value type).
 ///
-/// **Codex eng-review #10 acceptance** (HOME isolation is
+/// **Codex eng-review #10 acceptance** (config isolation is
 /// security-critical). Locks in:
 ///   - Env scrub: `CLAUDE_*` / `CODEX_*` / `ANTHROPIC_*` / `GEMINI_*`
 ///     / `OPENCODE_*` / `OPENROUTER_*` / `OPENAI_*` / `CURSOR_*` /
 ///     `GOOGLE_APPLICATION_CREDENTIALS` parent env never leaks into
 ///     a per-instance spawn.
-///   - HOME override: spawn env's HOME is the instance's override,
-///     never inherited from the parent's HOME silently.
+///   - Config-dir isolation (multi-account v1): a non-primary spawn's
+///     `CLAUDE_CONFIG_DIR` / `CODEX_HOME` is the instance's config
+///     root; `HOME` itself passes through untouched (git/ssh/gh need
+///     the real home).
+///   - Primary passthrough: the primary instance's env is byte-identical
+///     to the parent env (pre-multi-account spawns can't regress).
+///   - Secrets injection: per-instance credentials merge AFTER the
+///     scrub so `CLAUDE_CODE_OAUTH_TOKEN` survives the `CLAUDE_*` strip.
 ///   - Cross-instance isolation: building env for instance A doesn't
 ///     show instance B's auth vars.
 ///   - Keychain partitioning: per-instance access group means
@@ -31,7 +37,7 @@ final class ProviderInstanceWireTests: XCTestCase {
 
     // MARK: - Env scrub (Codex #10 acceptance 2)
 
-    func test_buildEnv_setsExplicitHomeFromInstanceOverride() {
+    func test_buildEnv_setsConfigDirVarFromInstanceRoot_andPreservesHome() {
         let instance = ProviderInstanceId(
             kind: .claude,
             name: "personal",
@@ -43,34 +49,74 @@ final class ProviderInstanceWireTests: XCTestCase {
         ]
         let env = ProviderInstanceEnvironment.buildEnv(
             for: instance,
-            parentEnv: parent,
-            userHome: "/users/fallback"
+            parentEnv: parent
         )
         XCTAssertEqual(
-            env["HOME"], "/tmp/clawdmeter-test/claude-personal",
-            "HOME must come from the instance override, not the parent env"
+            env["CLAUDE_CONFIG_DIR"], "/tmp/clawdmeter-test/claude-personal",
+            "CLAUDE_CONFIG_DIR must come from the instance config root"
+        )
+        XCTAssertEqual(
+            env["HOME"], "/Users/somebody/real-home",
+            "HOME must pass through untouched — overriding it breaks git/ssh/gh"
         )
     }
 
-    func test_buildEnv_primaryFallsBackToParentHomeThenUserHome() {
-        let primary = ProviderInstanceId.primary(kind: .claude)
-        let env1 = ProviderInstanceEnvironment.buildEnv(
-            for: primary,
-            parentEnv: ["HOME": "/Users/parent", "PATH": "/usr/bin"],
-            userHome: "/users/fallback"
+    func test_buildEnv_codexInstanceSetsCodexHome() {
+        let instance = ProviderInstanceId(
+            kind: .codex,
+            name: "pro",
+            homePathOverride: "/tmp/clawdmeter-test/codex-pro"
         )
-        XCTAssertEqual(env1["HOME"], "/Users/parent")
+        let env = ProviderInstanceEnvironment.buildEnv(
+            for: instance,
+            parentEnv: ["HOME": "/Users/me", "PATH": "/usr/bin"]
+        )
+        XCTAssertEqual(env["CODEX_HOME"], "/tmp/clawdmeter-test/codex-pro")
+        XCTAssertEqual(env["HOME"], "/Users/me")
+        XCTAssertNil(env["CLAUDE_CONFIG_DIR"])
+    }
 
-        // No parent HOME, no userHome → falls through to
-        // ClawdmeterRealHome.path() (not asserted exact value; just
-        // asserted non-empty + non-nil).
-        let env2 = ProviderInstanceEnvironment.buildEnv(
-            for: primary,
-            parentEnv: ["PATH": "/usr/bin"],
-            userHome: nil
+    /// GOLDEN: the primary instance with no secrets must be a byte-
+    /// identical passthrough — including any user-set CLAUDE_*/CODEX_*
+    /// vars. Pre-multi-account spawn behavior cannot change.
+    func test_buildEnv_primaryNoSecretsIsByteIdenticalPassthrough() {
+        let parent: [String: String] = [
+            "HOME": "/Users/parent",
+            "PATH": "/usr/bin",
+            "CLAUDE_CONFIG_DIR": "/Users/parent/.claude-custom",
+            "ANTHROPIC_VERSION": "2023-06-01",
+            "TERM": "xterm-256color",
+        ]
+        for kind in [AgentKind.claude, .codex] {
+            let env = ProviderInstanceEnvironment.buildEnv(
+                for: .primary(kind: kind),
+                parentEnv: parent
+            )
+            XCTAssertEqual(env, parent, "primary \(kind) spawn env must be untouched")
+        }
+    }
+
+    /// Secrets merge AFTER the scrub: an injected CLAUDE_CODE_OAUTH_TOKEN
+    /// must survive even though CLAUDE_* is on the scrub list.
+    func test_buildEnv_secretsSurviveScrub() {
+        let instance = ProviderInstanceId(
+            kind: .claude,
+            name: "work",
+            homePathOverride: "/tmp/claude-work"
         )
-        XCTAssertNotNil(env2["HOME"])
-        XCTAssertFalse((env2["HOME"] ?? "").isEmpty)
+        let parent: [String: String] = [
+            "HOME": "/Users/me",
+            "PATH": "/usr/bin",
+            // Hostile inherited token that MUST be scrubbed…
+            "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-INHERITED-HOSTILE",
+        ]
+        let env = ProviderInstanceEnvironment.buildEnv(
+            for: instance,
+            parentEnv: parent,
+            secrets: ["CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-instance-work"]
+        )
+        // …and replaced by the instance's own credential.
+        XCTAssertEqual(env["CLAUDE_CODE_OAUTH_TOKEN"], "sk-ant-oat01-instance-work")
     }
 
     func test_buildEnv_scrubsEveryProviderNamespacedPrefix() {
@@ -122,8 +168,9 @@ final class ProviderInstanceWireTests: XCTestCase {
             XCTAssertNil(env[key], "Provider-namespaced env var \(key) must be scrubbed")
         }
 
-        // HOME points at the override (not the hostile parent's HOME).
-        XCTAssertEqual(env["HOME"], "/tmp/work")
+        // Config-dir var points at the instance root; HOME passes through.
+        XCTAssertEqual(env["CLAUDE_CONFIG_DIR"], "/tmp/work")
+        XCTAssertEqual(env["HOME"], "/tmp/parent-home")
     }
 
     /// Codex #10 acceptance 2 (integration test): "verify that leaking
@@ -165,10 +212,10 @@ final class ProviderInstanceWireTests: XCTestCase {
         XCTAssertNil(envA["CLAUDE_SESSION_TOKEN"])
         XCTAssertNil(envB["CLAUDE_SESSION_TOKEN"])
 
-        // HOMEs are distinct and instance-pinned.
-        XCTAssertEqual(envA["HOME"], "/tmp/claude-personal")
-        XCTAssertEqual(envB["HOME"], "/tmp/claude-work")
-        XCTAssertNotEqual(envA["HOME"], envB["HOME"])
+        // Config roots are distinct and instance-pinned.
+        XCTAssertEqual(envA["CLAUDE_CONFIG_DIR"], "/tmp/claude-personal")
+        XCTAssertEqual(envB["CLAUDE_CONFIG_DIR"], "/tmp/claude-work")
+        XCTAssertNotEqual(envA["CLAUDE_CONFIG_DIR"], envB["CLAUDE_CONFIG_DIR"])
     }
 
     func test_isScrubbed_matchesEveryDocumentedPrefix() {

@@ -46,11 +46,23 @@ public struct ProviderInstanceId: Hashable, Codable, Sendable {
     /// default that maps to the existing single-instance behavior.
     public let name: String
 
-    /// Optional per-instance HOME override. When non-nil, the daemon
-    /// spawns child processes with `HOME=<override>` so provider configs
-    /// (~/.claude/, ~/.codex/, etc.) stay isolated per instance.
-    /// `nil` ⇒ inherit the OS user's real HOME (the "primary" default).
+    /// Optional per-instance **config root**. When non-nil, the daemon
+    /// spawns child processes with the provider's config-dir var
+    /// pointed here (`CLAUDE_CONFIG_DIR=<root>` for Claude,
+    /// `CODEX_HOME=<root>` for Codex) so auth + history + settings stay
+    /// isolated per instance. `nil` ⇒ the provider's default location
+    /// under the user's real home (the "primary" default).
+    ///
+    /// Multi-account v1 note: the stored name predates the
+    /// CLAUDE_CONFIG_DIR/CODEX_HOME strategy — it was originally a full
+    /// `HOME` override, which broke git/ssh/gh resolution and was
+    /// dropped. Kept as-is to avoid churning F3/F3-wire call sites;
+    /// prefer the `configRoot` alias in new code.
     public let homePathOverride: String?
+
+    /// Readable alias for `homePathOverride` under the config-dir
+    /// strategy. See that property's doc.
+    public var configRoot: String? { homePathOverride }
 
     /// Optional Keychain access-group override so each instance's
     /// credentials live under a distinct partition. `nil` ⇒ shared

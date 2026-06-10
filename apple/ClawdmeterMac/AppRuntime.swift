@@ -51,6 +51,10 @@ final class AppRuntime: ObservableObject {
     /// `addInstance(_:)` which spawns a fresh `AppModel` and stores it
     /// here.
     let providerInstanceRegistry: ProviderInstanceRegistry
+    /// Disk persistence for non-primary instances (multi-account).
+    /// Primaries are registry-seeded and never persisted; see
+    /// `ProviderInstanceStore`.
+    let providerInstanceStore: ProviderInstanceStore
     private var modelsByInstanceWireId: [String: AppModel] = [:]
 
     // Sessions feature:
@@ -294,6 +298,9 @@ final class AppRuntime: ObservableObject {
         let appSupportDirectory = testingAppSupport
             ?? WorkspaceStore.defaultStoreURL().deletingLastPathComponent()
         self.appSupportDirectory = appSupportDirectory
+        self.providerInstanceStore = ProviderInstanceStore(
+            storeURL: appSupportDirectory.appendingPathComponent("provider-instances.json")
+        )
         let sessionsStoreURL = appSupportDirectory.appendingPathComponent("sessions.json")
         let workspacesStoreURL = appSupportDirectory.appendingPathComponent("workspaces.json")
         let repoEnvStoreURL = appSupportDirectory.appendingPathComponent("repo-env-variables.json")
@@ -546,6 +553,26 @@ final class AppRuntime: ObservableObject {
         }
 
         bootstrapProviderRuntimes()
+
+        // Multi-account boot replay: reconstitute persisted non-primary
+        // instances (registry upsert + per-instance AppModel) without
+        // re-persisting. Async because the registry is an actor; the
+        // primaries above are already live, so a slow replay only delays
+        // the SECONDARY gauges, never the defaults.
+        let persistedInstances = providerInstanceStore.load()
+        if !persistedInstances.isEmpty {
+            Task { @MainActor [self] in
+                for record in persistedInstances {
+                    let ok = await self.addInstance(record.instanceId, persist: false)
+                    if !ok {
+                        runtimeLogger.error(
+                            "Boot replay failed for instance \(record.instanceId.wireId, privacy: .public)"
+                        )
+                    }
+                }
+            }
+        }
+
         runtimeLogger.info("AppRuntime.init COMPLETE instance=\(ObjectIdentifier(self).hashValue)")
     }
 
@@ -828,7 +855,7 @@ final class AppRuntime: ObservableObject {
     /// (invalid name / masquerader) or the kind has no supported
     /// per-kind config (currently `.opencode` / `.unknown`).
     @discardableResult
-    func addInstance(_ instance: ProviderInstanceId) async -> Bool {
+    func addInstance(_ instance: ProviderInstanceId, persist: Bool = true) async -> Bool {
         guard instance.isValidName else { return false }
         guard let config = providerConfig(for: instance.kind) else { return false }
         // Reject re-add of an existing wireId — caller should remove
@@ -836,13 +863,51 @@ final class AppRuntime: ObservableObject {
         if modelsByInstanceWireId[instance.wireId] != nil { return false }
         guard await providerInstanceRegistry.upsert(instance) != nil else { return false }
         let model = makeInstanceAwareModel(config: config, instance: instance)
-        model.start()
+        // Secondary pollers follow the same opt-in + testing gates as the
+        // primaries (init): an instance of a disabled provider registers
+        // (so pickers can list it) but doesn't poll until the kind is
+        // enabled.
+        if !Self.deferProviderSideEffectsForTesting,
+           ProviderEnablement.isEnabled(instance.kind.rawValue) {
+            model.start()
+        }
         modelsByInstanceWireId[instance.wireId] = model
+        if persist {
+            providerInstanceStore.upsert(ProviderInstanceRecord(instance: instance))
+        }
         let redactedHome = instance.homePathOverride == nil
             ? "nil"
             : ProviderInstanceLogRedaction.homeToken(for: instance)
         runtimeLogger.info(
-            "AppRuntime.addInstance wireId=\(instance.wireId, privacy: .public) home=\(redactedHome, privacy: .public)"
+            "AppRuntime.addInstance wireId=\(instance.wireId, privacy: .public) home=\(redactedHome, privacy: .public) persist=\(persist)"
+        )
+        return true
+    }
+
+    /// Tear down a non-primary instance: stop its poller, drop the model,
+    /// unregister, delete its per-instance Keychain credential (Claude),
+    /// and remove the persisted record. Primaries are protected — both
+    /// here and in `ProviderInstanceRegistry.remove`.
+    ///
+    /// `deleteConfigRoot` additionally removes the on-disk instance dir
+    /// (Codex auth.json + provider history live there). Settings passes
+    /// the user's choice from the confirm alert.
+    @discardableResult
+    func removeInstance(_ instance: ProviderInstanceId, deleteConfigRoot: Bool = false) async -> Bool {
+        guard !instance.isPrimary else { return false }
+        if let model = modelsByInstanceWireId.removeValue(forKey: instance.wireId) {
+            model.stop()
+        }
+        await providerInstanceRegistry.remove(wireId: instance.wireId)
+        if instance.kind == .claude {
+            PastedAnthropicTokenProvider.forInstance(instance).clear()
+        }
+        providerInstanceStore.remove(kind: instance.kind, name: instance.name)
+        if deleteConfigRoot, let root = instance.homePathOverride, !root.isEmpty {
+            try? FileManager.default.removeItem(atPath: root)
+        }
+        runtimeLogger.info(
+            "AppRuntime.removeInstance wireId=\(instance.wireId, privacy: .public) deleteConfigRoot=\(deleteConfigRoot)"
         )
         return true
     }
@@ -866,16 +931,25 @@ final class AppRuntime: ObservableObject {
                 tokenProvider: tokenProvider
             )
         case .codex:
-            // Codex auth lives on disk (~/.codex/auth.json) — when
-            // HOME is overridden, the provider naturally lands at
-            // the override's ~/.codex/auth.json. No access-group
-            // wiring needed here today; keychain partitioning kicks
-            // in only if/when CodexTokenProvider grows a Keychain
-            // path (currently file-based).
-            let tokenProvider = CodexTokenProvider()
+            // Codex auth lives on disk. A non-primary instance's
+            // `codex login` writes auth.json under its config root
+            // ($CODEX_HOME) — point the provider there, NOT at the
+            // primary's ~/.codex/auth.json, or the secondary gauge
+            // silently polls the wrong account.
+            let tokenProvider: CodexTokenProvider
+            var sessionsDir: URL?
+            if let root = instance.homePathOverride, !root.isEmpty {
+                let rootURL = URL(fileURLWithPath: root)
+                tokenProvider = CodexTokenProvider(
+                    authPath: rootURL.appendingPathComponent("auth.json")
+                )
+                sessionsDir = rootURL.appendingPathComponent("sessions", isDirectory: true)
+            } else {
+                tokenProvider = CodexTokenProvider()
+            }
             return AppModel(
                 config: config,
-                source: CodexSource(tokenProvider: tokenProvider),
+                source: CodexSource(tokenProvider: tokenProvider, sessionsDir: sessionsDir),
                 tokenProvider: tokenProvider
             )
         case .gemini:
