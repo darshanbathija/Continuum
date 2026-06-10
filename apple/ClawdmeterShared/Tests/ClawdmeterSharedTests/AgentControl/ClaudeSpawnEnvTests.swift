@@ -36,4 +36,22 @@ final class ClaudeSpawnEnvTests: XCTestCase {
         XCTAssertFalse(ClaudeSpawnEnv.leaksAPICredential(["ANTHROPIC_API_KEY": ""]))
         XCTAssertTrue(ClaudeSpawnEnv.leaksAPICredential(["ANTHROPIC_API_KEY": "x"]))
     }
+
+    /// Multi-account: the per-instance subscription OAuth token injected
+    /// at spawn (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`)
+    /// must SURVIVE sanitization — it keeps the flat-pool billing rail,
+    /// unlike the stripped API credentials. Pins the strippedKeys list
+    /// against an over-eager future broadening to a CLAUDE_*/ANTHROPIC_*
+    /// prefix match.
+    func testPreservesClaudeCodeOAuthToken() {
+        let base = [
+            "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-instance",
+            "CLAUDE_CONFIG_DIR": "/tmp/instance-root",
+            "ANTHROPIC_API_KEY": "sk-stripped",
+        ]
+        let out = ClaudeSpawnEnv.sanitized(base: base)
+        XCTAssertEqual(out["CLAUDE_CODE_OAUTH_TOKEN"], "sk-ant-oat01-instance")
+        XCTAssertEqual(out["CLAUDE_CONFIG_DIR"], "/tmp/instance-root")
+        XCTAssertNil(out["ANTHROPIC_API_KEY"])
+    }
 }

@@ -57,6 +57,13 @@ public actor UsageHistoryLoader {
     private let cursorAgentKVDBURL: URL?
     private let cacheURL: URL?
     private let pricing: Pricing
+    /// Multi-account: extra per-account roots merged into the Claude /
+    /// Codex passes ($CLAUDE_CONFIG_DIR/projects, $CODEX_HOME/sessions).
+    /// Closures (not arrays) so accounts added in Settings appear at the
+    /// NEXT refresh without rebuilding the store. Missing dirs enumerate
+    /// to nothing. Totals stay aggregated across accounts (v1 scope).
+    private let additionalClaudeDirs: @Sendable () -> [URL]
+    private let additionalCodexDirs: @Sendable () -> [URL]
 
     private var inFlight: Task<UsageHistorySnapshot, Never>?
     private var sequenceCounter: UInt64 = 0
@@ -74,7 +81,9 @@ public actor UsageHistoryLoader {
         cursorAgentTranscriptRoot: URL? = nil,
         cursorAgentKVDBURL: URL? = nil,
         cacheURL: URL? = nil,
-        pricing: Pricing = .shared
+        pricing: Pricing = .shared,
+        additionalClaudeDirs: @escaping @Sendable () -> [URL] = { [] },
+        additionalCodexDirs: @escaping @Sendable () -> [URL] = { [] }
     ) {
         // v0.26.3: ClawdmeterRealHome (getpwuid) rather than NSHomeDirectory()
         // so the sandboxed Release build resolves spend-history source
@@ -118,6 +127,8 @@ public actor UsageHistoryLoader {
         #endif
         self.cacheURL = cacheURL ?? Self.defaultCacheURL()
         self.pricing = pricing
+        self.additionalClaudeDirs = additionalClaudeDirs
+        self.additionalCodexDirs = additionalCodexDirs
     }
 
     private static func defaultCacheURL() -> URL? {
@@ -189,7 +200,8 @@ public actor UsageHistoryLoader {
             }
         }
 
-        for dir in [claudeDir, codexDir, geminiDir] {
+        for dir in [claudeDir, codexDir, geminiDir]
+            + additionalClaudeDirs() + additionalCodexDirs() {
             observe(Self.mostRecentMtime(inDirectory: dir))
         }
         if let agyDir { observe(Self.mostRecentMtime(inDirectory: agyDir)) }
@@ -276,7 +288,9 @@ public actor UsageHistoryLoader {
         var nextCache = AnalyticsCache(version: AnalyticsCache.currentVersion, files: [:])
 
         let claudeFiles = enumerate(dir: claudeDir, suffix: ".jsonl")
+            + additionalClaudeDirs().flatMap { enumerate(dir: $0, suffix: ".jsonl") }
         let codexFiles = enumerate(dir: codexDir, suffix: ".jsonl")
+            + additionalCodexDirs().flatMap { enumerate(dir: $0, suffix: ".jsonl") }
         // v0.6.0 Antigravity 2: per-conversation files in
         // ~/.gemini/antigravity/conversations/. Pre-build the brain index
         // once per load so the per-file parser doesn't re-read the

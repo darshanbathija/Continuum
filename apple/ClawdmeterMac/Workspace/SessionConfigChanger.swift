@@ -110,7 +110,11 @@ public final class SessionConfigChanger {
             return .spawnError(message: "Could not locate agent binary on PATH")
         }
         do {
-            let env = AgentSpawner.claudePtyEnv(extra: resolvedRepoEnv)
+            // Multi-account: a config swap stays on the session's pinned account.
+            guard let env = await InstanceSpawnEnv.claudeEnv(for: updated, extra: resolvedRepoEnv) else {
+                try? await registry.updateStatus(id: sessionId, status: .degraded)
+                return .spawnError(message: "This session's provider account was removed — re-add it in Settings")
+            }
             _ = try await ClaudePtyRegistry.shared.resumeOrSpawn(id: sessionId, plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env) })
             try await registry.updateRuntime(id: sessionId, worktreePath: session.worktreePath,
                                              runtimeCwd: .some(cwd), tmuxWindowId: nil, tmuxPaneId: nil,
@@ -143,7 +147,11 @@ public final class SessionConfigChanger {
         let argv = AgentSpawner.argv(for: session, autopilot: AutopilotState.shared.isEnabled(sessionId: sessionId))
         guard !argv.isEmpty else { return .spawnError(message: "Could not locate agent binary on PATH") }
         do {
-            let env = AgentSpawner.claudePtyEnv(extra: resolvedRepoEnv)
+            // Multi-account: revive stays on the session's pinned account.
+            guard let env = await InstanceSpawnEnv.claudeEnv(for: session, extra: resolvedRepoEnv) else {
+                try? await registry.updateStatus(id: sessionId, status: .degraded)
+                return .spawnError(message: "This session's provider account was removed — re-add it in Settings")
+            }
             _ = try await ClaudePtyRegistry.shared.resumeOrSpawn(id: sessionId, plan: { ClaudePtyRegistry.SpawnPlan(argv: argv, cwd: cwd, env: env) })
             try await registry.updateRuntime(id: sessionId, worktreePath: session.worktreePath,
                                              runtimeCwd: .some(cwd), tmuxWindowId: nil, tmuxPaneId: nil,

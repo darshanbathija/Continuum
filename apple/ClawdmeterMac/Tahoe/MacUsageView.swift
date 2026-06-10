@@ -23,6 +23,9 @@ public struct MacUsageView: View {
     /// PR #31 chunk 3 (A2): the live usage store the OpenCode dollar
     /// row reads from. Optional so Previews work without a runtime.
     var usageHistoryStore: UsageHistoryStore?
+    /// Multi-account: one extra gauge column per secondary account
+    /// (Settings → Providers → Add account). Empty in Previews.
+    var secondaryColumns: [SecondaryTahoeColumn] = []
     /// v0.29.32: spend/token analytics read other apps' data, so they're gated
     /// behind an explicit "Get access from your Mac" tap. Mirrors the persisted
     /// flag; flipped locally so the view swaps in the charts on grant.
@@ -36,7 +39,8 @@ public struct MacUsageView: View {
         geminiModel: AppModel? = nil,
         cursorModel: AppModel? = nil,
         grokModel: AppModel? = nil,
-        usageHistoryStore: UsageHistoryStore? = nil
+        usageHistoryStore: UsageHistoryStore? = nil,
+        secondaryColumns: [SecondaryTahoeColumn] = []
     ) {
         self.data = data
         self.claudeModel = claudeModel
@@ -45,6 +49,7 @@ public struct MacUsageView: View {
         self.cursorModel = cursorModel
         self.grokModel = grokModel
         self.usageHistoryStore = usageHistoryStore
+        self.secondaryColumns = secondaryColumns
     }
 
     public var body: some View {
@@ -60,6 +65,20 @@ public struct MacUsageView: View {
                         }
                     }
                     .padding(.horizontal, 6).padding(.bottom, 14)
+                    if !enabledSecondaryColumns.isEmpty {
+                        // Secondary accounts get their own row beneath the
+                        // primaries — same column shape, account-tagged
+                        // header, no menu-bar/auto-revive controls.
+                        HStack(spacing: 14) {
+                            ForEach(enabledSecondaryColumns) { column in
+                                SecondaryProviderColumn(column: column)
+                            }
+                            if enabledSecondaryColumns.count < liveColumns.count {
+                                Spacer().frame(maxWidth: .infinity)
+                            }
+                        }
+                        .padding(.horizontal, 6).padding(.bottom, 14)
+                    }
                 }
 
                 if usageAccessGranted {
@@ -105,6 +124,12 @@ public struct MacUsageView: View {
         let row: TahoeLiveRow
         let model: AppModel?
         var id: TahoeProvider { provider }
+    }
+
+    private var enabledSecondaryColumns: [SecondaryTahoeColumn] {
+        secondaryColumns.filter {
+            enabledProviderIDs.contains(ProviderRegistry.rootProviderID(for: $0.provider.rawValue))
+        }
     }
 
     private var liveColumns: [LiveColumn] {
@@ -382,6 +407,88 @@ private struct ProportionBar: View {
 
 // MARK: - Provider column
 
+/// "resets in 12m" / "usage limit" — shared between the primary and
+/// secondary gauge columns so the em-dash sentinel comparison lives in
+/// exactly one place.
+private func quotaSublabel(for row: TahoeLiveRow) -> String {
+    row.sessionResetIn == "\u{2014}" ? "usage limit" : "resets in \(row.sessionResetIn)"
+}
+
+/// The "Weekly · all models" meter block — shared between the primary
+/// and secondary gauge columns (they must not drift).
+private struct WeeklyMeterRow: View {
+    @Environment(\.tahoe) private var t
+    let row: TahoeLiveRow
+    let provider: TahoeProvider
+    var barHeight: CGFloat = 6
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Weekly · all models")
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg2)
+                Spacer()
+                Text("\(Int(row.weeklyPercent))% · \(row.weeklyResetIn)")
+                    .font(TahoeFont.mono(11.5))
+                    .foregroundStyle(t.fg3)
+            }
+            TahoePillBar(percent: row.weeklyPercent, provider: provider, height: barHeight)
+        }
+    }
+}
+
+/// Multi-account gauge column. Same instrument shape as ProviderColumn
+/// with an account-tagged header; menu-bar + auto-revive controls are
+/// primary-only (secondaries have no status item).
+private struct SecondaryProviderColumn: View {
+    @Environment(\.tahoe) private var t
+    let column: SecondaryTahoeColumn
+    @ObservedObject var model: AppModel
+
+    init(column: SecondaryTahoeColumn) {
+        self.column = column
+        self.model = column.model
+    }
+
+    private var row: TahoeLiveRow {
+        AppRuntime.makeTahoeRow(model: model, provider: column.provider)
+    }
+
+    var body: some View {
+        let row = self.row
+        TahoeGlass(radius: 8, tone: .panel) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 10) {
+                    TahoeProviderGlyph(provider: column.provider, size: 28)
+                    HStack(spacing: 6) {
+                        Text(column.provider.displayName)
+                            .font(TahoeFont.body(16, weight: .bold))
+                            .tracking(-0.2)
+                            .foregroundStyle(t.fg)
+                        Text(column.accountName)
+                            .font(TahoeFont.mono(11, weight: .medium))
+                            .foregroundStyle(t.fg2)
+                    }
+                    Spacer()
+                }
+                TahoeQuotaBar(provider: column.provider, percent: row.sessionPercent, size: 220,
+                              label: "session",
+                              sublabel: quotaSublabel(for: row))
+                .padding(.top, 28)
+                .padding(.bottom, 28)
+                if row.hasWeekly {
+                    WeeklyMeterRow(row: row, provider: column.provider)
+                }
+                Spacer(minLength: 12)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityIdentifier("usage.secondary.\(column.wireId)")
+    }
+}
+
 private struct ProviderColumn: View {
     @Environment(\.tahoe) private var t
     var provider: TahoeProvider
@@ -428,8 +535,8 @@ private struct ProviderColumn: View {
         }
     }
 
-    private var quotaSublabel: String {
-        row.sessionResetIn == "\u{2014}" ? "usage limit" : "resets in \(row.sessionResetIn)"
+    private var quotaSublabelText: String {
+        quotaSublabel(for: row)
     }
 
     var body: some View {
@@ -451,7 +558,7 @@ private struct ProviderColumn: View {
 
                 // QuotaBar
                 TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 220,
-                              label: quotaLabel, sublabel: quotaSublabel)
+                              label: quotaLabel, sublabel: quotaSublabelText)
                 .padding(.top, 28)
                 .padding(.bottom, provider == .cursor ? 18 : 28)
 
@@ -462,18 +569,7 @@ private struct ProviderColumn: View {
 
                 // Weekly row — hidden when provider has no weekly window.
                 if row.hasWeekly {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Weekly · all models")
-                                .font(TahoeFont.body(11.5))
-                                .foregroundStyle(t.fg2)
-                            Spacer()
-                            Text("\(Int(row.weeklyPercent))% · \(row.weeklyResetIn)")
-                                .font(TahoeFont.mono(11.5))
-                                .foregroundStyle(t.fg3)
-                        }
-                        TahoePillBar(percent: row.weeklyPercent, provider: provider, height: 6)
-                    }
+                    WeeklyMeterRow(row: row, provider: provider)
                 }
 
                 Spacer(minLength: 12)

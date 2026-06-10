@@ -147,9 +147,11 @@ never crosses any network boundary Continuum controls:
   cached rollups are local.
 - **Keychain entries.** Per-provider tokens, OAuth refresh tokens
   where they apply, and Continuum's pairing bearers live in the
-  user's macOS Keychain. The per-instance partitioning shape lands
-  with F3-wire; until then they all live in the shared Keychain
-  access group.
+  user's macOS Keychain. Multi-account v1 (v0.32.0) partitions each
+  secondary account's Claude token into its own Keychain item via a
+  per-instance service-name suffix within the shared access group
+  (`PastedAnthropicTokenProvider.forInstance`); Codex secondaries
+  keep auth at `<configRoot>/auth.json`, written by `codex login`.
 - **F2 orchestration event store.** Append-only SQLite log of
   orchestration commands at
   `~/Library/Application Support/Clawdmeter/orchestration-events.sqlite`.

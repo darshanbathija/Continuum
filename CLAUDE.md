@@ -1078,6 +1078,153 @@ review pass:
 - Mac, iOS, and Watch schemes all build clean under
   `CODE_SIGNING_ALLOWED=NO` after the watchOS gating fix.
 
+## Multi-account subscriptions (v0.32.0 build 227, 2026-06-11)
+
+Multiple Claude and Codex subscriptions side-by-side on one Mac: add a
+second account in Settings, pin chats/sessions to it, watch both
+accounts' gauges, and have every account's history roll into the
+aggregate analytics. Closes the F3 deferral in
+`docs/known-limitations.md` §3 — `claude_personal` and `claude_work`
+can now be configured side-by-side. Wire bumps 27 → 28. Deferred
+follow-ups (same-provider broadcast, per-account analytics breakdown,
+secondary menu-bar gauges, boot-replay 422 window, token-expiry nudge)
+live in `TODOS.md` under "v0.32.0 follow-ups".
+
+### Persistence + boot replay
+
+- `apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/ProviderInstanceStore.swift`
+  — atomic-write store for NON-primary `ProviderInstanceRecord`s at
+  `~/Library/Application Support/Clawdmeter/provider-instances.json`
+  (next to `sessions.json` / `workspaces.json`), envelope v1, tolerant
+  reads (corrupt/missing/unknown-version ⇒ empty list). Primaries are
+  registry-seeded in memory and intentionally NEVER persisted, so a
+  corrupted store can't take the default account away. **No secrets in
+  the file** — Claude tokens live in per-instance Keychain partitions
+  (`PastedAnthropicTokenProvider.forInstance`); Codex auth lives at
+  `<configRoot>/auth.json` written by `codex login` itself.
+- Per-instance config roots are deterministic:
+  `<AppSupport>/Instances/<kind>/<name>/`. Names pass
+  `ProviderInstanceId.isValidName` (no `/`, `\`, NUL, whitespace, or
+  leading `.` — rejects the `..` path escape) before any path is built.
+- `AppRuntime.init` replays persisted instances on boot (registry
+  upsert + per-instance `AppModel`, `persist: false`) in a post-init
+  Task; primaries are live synchronously so a slow replay only delays
+  SECONDARY gauges. Remove offers keep-data or delete-data.
+
+### Config-dir isolation (NOT a HOME swap)
+
+- `ProviderInstanceEnvironment.buildEnv` sets the kind's surgical
+  config-dir var — `CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for
+  Codex — and leaves `HOME` untouched. A full HOME override broke
+  git/ssh/gh/node in worktrees, which is why the F3 plan's HOME
+  isolation became config-dir isolation. `configDirVariable(for:)`
+  returns nil for gemini/opencode/cursor/grok — those kinds can't be
+  config-isolated yet and the resolver fails closed on their pins.
+- The env builder scrubs inherited `CLAUDE_*` / `ANTHROPIC_*` /
+  `CODEX_*` / `OPENAI_*` / `GEMINI_*` / `OPENCODE_*` / `OPENROUTER_*` /
+  `CURSOR_*` vars (centralized `scrubbedPrefixes` list), then injects
+  per-instance secrets AFTER the scrub so `CLAUDE_CODE_OAUTH_TOKEN`
+  survives the `CLAUDE_*` strip. Always returns a full dict — never nil
+  (nil means "inherit caller env" on `Foundation.Process`, defeating
+  the scrub).
+- `ClaudeConfigSeeder` writes a minimal `.claude.json`
+  (`hasCompletedOnboarding: true`, dark theme) into a fresh
+  `CLAUDE_CONFIG_DIR` so the CLI's first-run wizard doesn't swallow the
+  session's opening prompt; an existing file is never touched.
+
+### Login flows (Settings → Providers → Add account…)
+
+- `apple/ClawdmeterMac/Tahoe/ProviderAccountsUI.swift` —
+  `ProviderAccountsSection` under each provider row +
+  `AddProviderAccountSheet` (name → authenticate → done phases).
+- Claude secondaries run `claude setup-token` in an embedded terminal.
+  `InstanceLoginSupport.ClaudeSetupTokenScanner` regex-matches
+  `sk-ant-oat01-[A-Za-z0-9_-]{40,}` over an ANSI-stripped 4KB rolling
+  tail (tokens split across PTY chunks), stores the hit straight into
+  the per-instance Keychain partition, then drops the buffer. A
+  paste-token field covers CLI output drift. `claude /login` is never
+  used for secondaries — Claude Code's Keychain item is per-OS-user, so
+  a second `/login` would clobber the primary's credential.
+- Codex secondaries run `codex login` under `CODEX_HOME=<configRoot>`;
+  completion is detected by a parse-valid `<configRoot>/auth.json`.
+
+### Fail-closed spawn resolution
+
+- `apple/ClawdmeterMac/AgentControl/InstanceSpawnEnv.swift` —
+  process-wide resolver from a session's pinned `providerInstanceId` to
+  config-dir var + per-instance secrets, attached once by `AppRuntime`
+  and consumed by every spawn path (daemon handlers, config swaps,
+  `SessionScheduler` follow-ups, `SessionConfigChanger`).
+- The failure mode being defended is **wrong-account billing**: a pin
+  the registry no longer carries (account removed), a non-isolatable
+  instance (hand-edited store: empty config root or a kind with no
+  config-dir var), or a Claude secondary with no stored token (a
+  token-less spawn under an empty `CLAUDE_CONFIG_DIR` falls back to the
+  PRIMARY's Keychain login) all refuse to spawn with a re-authenticate
+  error — never a silent fallback to the primary subscription. The
+  primary's spawn env is byte-identical to pre-multi-account behavior
+  (golden test).
+
+### Wire v28
+
+- `AgentControlWireVersion.current` 27 → 28;
+  `providerInstanceListMinimum = 28` +
+  `supportsProviderInstanceList(serverWireVersion:)` gate the pickers.
+- New `GET /provider-instances` returns `ProviderInstanceListResponse`
+  of deliberately path-free `ProviderInstanceDTO`s (wireId, kind, name,
+  isPrimary, displayName — the Mac's filesystem layout never crosses
+  the wire). DTOs live in
+  `AgentControl/ProtocolDTOs/AgentControlProviderInstanceDTOs.swift`.
+- `CreateChatSessionRequest.providerInstanceId` (decodeIfPresent) pins
+  a chat to an account; unknown wireIds 422 at create, never silently
+  re-bill the primary. Pickers render only when a kind has ≥ 2
+  instances; iOS hides them entirely below wire 28.
+- `UsageEnvelope.secondaryInstanceUsage()` surfaces per-instance
+  `usage[<wireId>]` keys (e.g. `claude/work`) added next to the legacy
+  kind keys — primaries stay on the legacy keys for back-compat.
+
+### Surfaces
+
+- Mac Usage tab (`MacUsageView`): a second gauge row beneath the
+  primaries — one rail-meter column per signed-in secondary, header
+  tagged with the account slug, no menu-bar/auto-revive controls.
+- iOS Live (`IOSLiveView`): an OTHER ACCOUNTS card under the active
+  provider's hero gauge, fed by the v28 usage envelope keys.
+- Account pickers: Mac chat provider row (`MacChatV2View`), Mac code
+  empty-state composer (`EmptyStateCenteredComposer`), iOS
+  model-selector sheet (`IOSChatV2View`), iOS new-session sheet
+  (`NewSessionSheet`). `ChatV2Store.selectedAccountByVendor` persists
+  the pick per vendor and validates it against the fetched instance
+  list so a removed account degrades to Default instead of a 422.
+- Per-account live polling: `AppRuntime.modelsByInstanceWireId` is
+  `@Published`; a latent F3-wire gap where a secondary Codex gauge
+  would have polled the primary's `auth.json`/rollouts is closed via
+  `CodexTokenProvider(authPath:)` + `CodexSource(sessionsDir:)`.
+
+### Analytics aggregation
+
+- `UsageHistoryLoader` gains `additionalClaudeDirs` /
+  `additionalCodexDirs` closures (not arrays — re-read per refresh, so
+  an account added in Settings joins the totals on the NEXT refresh
+  without rebuilding the store). `AppRuntime` feeds them from
+  `ProviderInstanceStore.load()`, mapping each record to
+  `<configRoot>/projects` (Claude) / `<configRoot>/sessions` (Codex).
+  Totals stay aggregated across accounts in v1 — no per-account
+  breakdown yet.
+
+### Tests
+
+- 1468 ClawdmeterShared (+26: `ProviderInstanceStoreTests`,
+  `InstanceLoginSupportTests` (scanner/probe), `ClaudeConfigSeederTests`,
+  `ClaudeSpawnEnvTests` env matrix, `ProviderInstanceWireTests` v28
+  DTOs, `MultiAccountAnalyticsTests` multi-root ingestion,
+  `ChatV2StoreAccountTests` pin persistence, `ProviderInstanceIdTests`
+  traversal-name hardening).
+- New Mac `apple/ClawdmeterMacTests/AgentSpawnerInstanceEnvTests.swift`
+  (11): golden primary env, credential-bleed scrub, fail-closed
+  resolver matrix including the Claude token-required gate.
+- Mac / iOS / Watch schemes build clean.
+
 ## Style + voice
 
 - Code comments lead with **what + why**, not implementation play-by-play.

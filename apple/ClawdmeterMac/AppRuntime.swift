@@ -51,7 +51,14 @@ final class AppRuntime: ObservableObject {
     /// `addInstance(_:)` which spawns a fresh `AppModel` and stores it
     /// here.
     let providerInstanceRegistry: ProviderInstanceRegistry
-    private var modelsByInstanceWireId: [String: AppModel] = [:]
+    /// Disk persistence for non-primary instances (multi-account).
+    /// Primaries are registry-seeded and never persisted; see
+    /// `ProviderInstanceStore`.
+    let providerInstanceStore: ProviderInstanceStore
+    /// @Published so account add/remove invalidates runtime-observing
+    /// views (the Usage tab's secondary gauge row). Per-poll updates
+    /// flow through each AppModel's own @Published usage.
+    @Published private var modelsByInstanceWireId: [String: AppModel] = [:]
 
     // Sessions feature:
     let repoIndex: RepoIndex
@@ -222,6 +229,10 @@ final class AppRuntime: ObservableObject {
         // `keychainAccessGroupOverride`) plug into the same map via
         // `addInstance(_:)`.
         self.providerInstanceRegistry = ProviderInstanceRegistry()
+        // Multi-account: every spawn path (daemon handlers, config
+        // swaps, scheduled follow-ups) resolves a session's pinned
+        // account through this process-wide access point.
+        InstanceSpawnEnv.attach(self.providerInstanceRegistry)
         self.modelsByInstanceWireId = [
             ProviderInstanceId.primary(kind: .claude).wireId: self.claudeModel,
             ProviderInstanceId.primary(kind: .codex).wireId:  self.codexModel,
@@ -266,10 +277,36 @@ final class AppRuntime: ObservableObject {
             }
         }
 
+        // App-support container resolution. Hoisted above the analytics
+        // store so the loader can read the persisted account list.
+        let testingAppSupport = Self.testingAppSupportOverride()
+        let appSupportDirectory = testingAppSupport
+            ?? WorkspaceStore.defaultStoreURL().deletingLastPathComponent()
+        self.appSupportDirectory = appSupportDirectory
+        let providerInstanceStore = ProviderInstanceStore(
+            storeURL: appSupportDirectory.appendingPathComponent("provider-instances.json")
+        )
+        self.providerInstanceStore = providerInstanceStore
+
         // Analytics history: walks the on-disk JSONL caches, computes
         // calendar-day-aligned totals, mirrors the snapshot into iCloud KV
         // for the iOS analytics tab. Plan A8 + A19.
-        self.usageHistoryStore = UsageHistoryStore()
+        // Multi-account: secondary accounts' trees join the AGGREGATE
+        // totals (v1 scope — no per-account breakdown). Closures read the
+        // persisted list per refresh so a freshly added account's history
+        // shows up without a relaunch.
+        self.usageHistoryStore = UsageHistoryStore(loader: UsageHistoryLoader(
+            additionalClaudeDirs: {
+                providerInstanceStore.load()
+                    .filter { $0.kind == .claude && !$0.configRoot.isEmpty }
+                    .map { URL(fileURLWithPath: $0.configRoot).appendingPathComponent("projects", isDirectory: true) }
+            },
+            additionalCodexDirs: {
+                providerInstanceStore.load()
+                    .filter { $0.kind == .codex && !$0.configRoot.isEmpty }
+                    .map { URL(fileURLWithPath: $0.configRoot).appendingPathComponent("sessions", isDirectory: true) }
+            }
+        ))
         // C2 — was `usageHistoryStore.$snapshot` pre-C2 when the
         // store was `@Published`. With the store now `@Observable`,
         // the daemon-side Combine bridge is `snapshotPublisher` (a
@@ -290,10 +327,6 @@ final class AppRuntime: ObservableObject {
         // NotificationDispatcher is an actor. SessionsModel bridges to UI.
         // Per the feature flag plan (T18): gate the daemon start on
         // `UserDefaults.clawdmeter.sessions.enabled`. Default on in v1.
-        let testingAppSupport = Self.testingAppSupportOverride()
-        let appSupportDirectory = testingAppSupport
-            ?? WorkspaceStore.defaultStoreURL().deletingLastPathComponent()
-        self.appSupportDirectory = appSupportDirectory
         let sessionsStoreURL = appSupportDirectory.appendingPathComponent("sessions.json")
         let workspacesStoreURL = appSupportDirectory.appendingPathComponent("workspaces.json")
         let repoEnvStoreURL = appSupportDirectory.appendingPathComponent("repo-env-variables.json")
@@ -546,6 +579,34 @@ final class AppRuntime: ObservableObject {
         }
 
         bootstrapProviderRuntimes()
+
+        // Multi-account: secondary accounts' gauges over the wire. Set
+        // AFTER init completes — an escaping self-capture inside init
+        // trips definitive-initialization. Weak: the server outliving
+        // the runtime just drops the per-instance keys.
+        agentControlServer.attachInstanceModelsProvider { [weak self] in
+            self?.allAppModelsByWireId ?? [:]
+        }
+
+        // Multi-account boot replay: reconstitute persisted non-primary
+        // instances (registry upsert + per-instance AppModel) without
+        // re-persisting. Async because the registry is an actor; the
+        // primaries above are already live, so a slow replay only delays
+        // the SECONDARY gauges, never the defaults.
+        let persistedInstances = providerInstanceStore.load()
+        if !persistedInstances.isEmpty {
+            Task { @MainActor [self] in
+                for record in persistedInstances {
+                    let ok = await self.addInstance(record.instanceId, persist: false)
+                    if !ok {
+                        runtimeLogger.error(
+                            "Boot replay failed for instance \(record.instanceId.wireId, privacy: .public)"
+                        )
+                    }
+                }
+            }
+        }
+
         runtimeLogger.info("AppRuntime.init COMPLETE instance=\(ObjectIdentifier(self).hashValue)")
     }
 
@@ -828,7 +889,7 @@ final class AppRuntime: ObservableObject {
     /// (invalid name / masquerader) or the kind has no supported
     /// per-kind config (currently `.opencode` / `.unknown`).
     @discardableResult
-    func addInstance(_ instance: ProviderInstanceId) async -> Bool {
+    func addInstance(_ instance: ProviderInstanceId, persist: Bool = true) async -> Bool {
         guard instance.isValidName else { return false }
         guard let config = providerConfig(for: instance.kind) else { return false }
         // Reject re-add of an existing wireId — caller should remove
@@ -836,13 +897,54 @@ final class AppRuntime: ObservableObject {
         if modelsByInstanceWireId[instance.wireId] != nil { return false }
         guard await providerInstanceRegistry.upsert(instance) != nil else { return false }
         let model = makeInstanceAwareModel(config: config, instance: instance)
-        model.start()
+        // Secondary pollers follow the same opt-in + testing gates as the
+        // primaries (init): an instance of a disabled provider registers
+        // (so pickers can list it) but doesn't poll until the kind is
+        // enabled.
+        if !Self.deferProviderSideEffectsForTesting,
+           ProviderEnablement.isEnabled(instance.kind.rawValue) {
+            model.start()
+        }
         modelsByInstanceWireId[instance.wireId] = model
-        let redactedHome = instance.homePathOverride == nil
+        if persist {
+            providerInstanceStore.upsert(ProviderInstanceRecord(instance: instance))
+            // Pull the new account's history into the aggregate now —
+            // the loader's root closures read the list per refresh.
+            usageHistoryStore.forceRefresh()
+        }
+        let redactedRoot = instance.configRoot == nil
             ? "nil"
             : ProviderInstanceLogRedaction.homeToken(for: instance)
         runtimeLogger.info(
-            "AppRuntime.addInstance wireId=\(instance.wireId, privacy: .public) home=\(redactedHome, privacy: .public)"
+            "AppRuntime.addInstance wireId=\(instance.wireId, privacy: .public) configRoot=\(redactedRoot, privacy: .public) persist=\(persist)"
+        )
+        return true
+    }
+
+    /// Tear down a non-primary instance: stop its poller, drop the model,
+    /// unregister, delete its per-instance Keychain credential (Claude),
+    /// and remove the persisted record. Primaries are protected — both
+    /// here and in `ProviderInstanceRegistry.remove`.
+    ///
+    /// `deleteConfigRoot` additionally removes the on-disk instance dir
+    /// (Codex auth.json + provider history live there). Settings passes
+    /// the user's choice from the confirm alert.
+    @discardableResult
+    func removeInstance(_ instance: ProviderInstanceId, deleteConfigRoot: Bool = false) async -> Bool {
+        guard !instance.isPrimary else { return false }
+        if let model = modelsByInstanceWireId.removeValue(forKey: instance.wireId) {
+            model.stop()
+        }
+        await providerInstanceRegistry.remove(wireId: instance.wireId)
+        if instance.kind == .claude {
+            PastedAnthropicTokenProvider.forInstance(instance).clear()
+        }
+        providerInstanceStore.remove(kind: instance.kind, name: instance.name)
+        if deleteConfigRoot, let root = instance.homePathOverride, !root.isEmpty {
+            try? FileManager.default.removeItem(atPath: root)
+        }
+        runtimeLogger.info(
+            "AppRuntime.removeInstance wireId=\(instance.wireId, privacy: .public) deleteConfigRoot=\(deleteConfigRoot)"
         )
         return true
     }
@@ -866,16 +968,25 @@ final class AppRuntime: ObservableObject {
                 tokenProvider: tokenProvider
             )
         case .codex:
-            // Codex auth lives on disk (~/.codex/auth.json) — when
-            // HOME is overridden, the provider naturally lands at
-            // the override's ~/.codex/auth.json. No access-group
-            // wiring needed here today; keychain partitioning kicks
-            // in only if/when CodexTokenProvider grows a Keychain
-            // path (currently file-based).
-            let tokenProvider = CodexTokenProvider()
+            // Codex auth lives on disk. A non-primary instance's
+            // `codex login` writes auth.json under its config root
+            // ($CODEX_HOME) — point the provider there, NOT at the
+            // primary's ~/.codex/auth.json, or the secondary gauge
+            // silently polls the wrong account.
+            let tokenProvider: CodexTokenProvider
+            var sessionsDir: URL?
+            if let root = instance.configRoot, !root.isEmpty {
+                let rootURL = URL(fileURLWithPath: root)
+                tokenProvider = CodexTokenProvider(
+                    authPath: CodexAuthProbe.authFileURL(configRoot: rootURL)
+                )
+                sessionsDir = rootURL.appendingPathComponent("sessions", isDirectory: true)
+            } else {
+                tokenProvider = CodexTokenProvider()
+            }
             return AppModel(
                 config: config,
-                source: CodexSource(tokenProvider: tokenProvider),
+                source: CodexSource(tokenProvider: tokenProvider, sessionsDir: sessionsDir),
                 tokenProvider: tokenProvider
             )
         case .gemini:

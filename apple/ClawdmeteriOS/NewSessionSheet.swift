@@ -34,6 +34,10 @@ struct NewSessionSheet: View {
     /// model, effort, goal length). Debounced via the .task(id:) below.
     @State private var preflight: PreflightResponse?
     @State private var preflightLoading: Bool = false
+    /// Multi-account (wire v28): configured accounts from the paired
+    /// Mac; nil on older Macs (picker hidden, primary-only behavior).
+    @State private var providerInstances: ProviderInstanceListResponse?
+    @State private var selectedAccountWireId: String?
 
     var body: some View {
         NavigationStack {
@@ -68,6 +72,7 @@ struct NewSessionSheet: View {
                             get: { effectiveAgent ?? agent },
                             set: { newAgent in
                                 setAgent(newAgent)
+                                selectedAccountWireId = nil
                             }
                         )) {
                             ForEach(selectableAgents, id: \.self) { option in
@@ -80,9 +85,23 @@ struct NewSessionSheet: View {
                             iOSModelPicker(selectedModelId: $modelId, catalog: client.modelCatalog, agent: effectiveAgent)
 
                             iOSEffortDial(selected: $effort, supportsEffort: currentModelSupportsEffort)
+
+                            if let accounts = providerInstances?.instances(for: effectiveAgent),
+                               accounts.count >= 2 {
+                                Picker("Account", selection: Binding(
+                                    get: { selectedAccountWireId ?? "" },
+                                    set: { selectedAccountWireId = $0.isEmpty ? nil : $0 }
+                                )) {
+                                    ForEach(accounts) { account in
+                                        Text(account.displayName)
+                                            .tag(account.isPrimary ? "" : account.wireId)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
+                .task { providerInstances = await client.fetchProviderInstances() }
 
                 Section("Run mode") {
                     // v0.7.9: Mode picker removed. Every new session
@@ -298,7 +317,8 @@ struct NewSessionSheet: View {
                 useWorktree: mode == .worktree,
                 baseBranch: baseBranch.isEmpty ? nil : baseBranch,
                 effort: currentModelSupportsEffort ? effort : nil,
-                abPair: runAsABPair ? abPairPartner(for: effectiveAgent) : nil
+                abPair: runAsABPair ? abPairPartner(for: effectiveAgent) : nil,
+                providerInstanceId: selectedAccountWireId
             ))
             await MainActor.run {
                 isStarting = false

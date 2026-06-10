@@ -48,8 +48,13 @@ public final class CodexSource: AISource {
         "https://chatgpt.com/backend-api/api/codex/usage",
     ]
 
-    public init(tokenProvider: TokenProvider, urlSession: URLSession? = nil) {
+    /// Multi-account: a non-primary instance's rollouts live under its
+    /// own `$CODEX_HOME/sessions`. nil ⇒ the primary `~/.codex/sessions`.
+    private let sessionsDir: URL?
+
+    public init(tokenProvider: TokenProvider, urlSession: URLSession? = nil, sessionsDir: URL? = nil) {
         self.tokenProvider = tokenProvider
+        self.sessionsDir = sessionsDir
         if let urlSession {
             self.urlSession = urlSession
         } else {
@@ -588,7 +593,9 @@ public final class CodexSource: AISource {
         // so the sandboxed Release build reads /Users/<you>/.codex/sessions
         // (where the Codex CLI writes rollouts) rather than the empty
         // container path. Release entitlements grant /.codex/ read access.
-        let sessionsRoot = ClawdmeterRealHome.url().appendingPathComponent(".codex/sessions", isDirectory: true)
+        // Multi-account: non-primary instances inject their own dir.
+        let sessionsRoot = sessionsDir
+            ?? ClawdmeterRealHome.url().appendingPathComponent(".codex/sessions", isDirectory: true)
         guard fm.fileExists(atPath: sessionsRoot.path) else { return [] }
 
         guard let enumerator = fm.enumerator(

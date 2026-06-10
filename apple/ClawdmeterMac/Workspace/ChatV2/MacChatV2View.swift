@@ -1426,6 +1426,10 @@ private struct ComposerBar: View {
     // v0.29.x — multi-provider selector (Option A): one compact bar that opens a
     // single popover (flat per-provider checklist + model/effort + Solo/Compare).
     @State private var providerPopoverPresented = false
+    // Multi-account (wire v28): configured-account list. Loaded once per
+    // composer appearance; nil (older Mac / fetch failure) hides the
+    // account menus entirely.
+    @State private var providerInstances: ProviderInstanceListResponse?
     // v0.29.8 — backing store for the new ComposerModelPicker. Each
     // ProviderDefaultsStore instance reads/writes the same UserDefaults
     // keys, so writes from the picker persist and other instances pick
@@ -1437,6 +1441,11 @@ private struct ComposerBar: View {
     @StateObject private var providerDefaultsStore = ProviderDefaultsStore()
 
     var body: some View {
+        composerBody
+            .task { providerInstances = await client.fetchProviderInstances() }
+    }
+
+    private var composerBody: some View {
         TahoeGlass(radius: 8, tone: .raised) {
             ZStack(alignment: .bottom) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -1665,6 +1674,9 @@ private struct ComposerBar: View {
 
             providerRowModelMenu(vendor)
             if modelSupportsEffort(vendor) { providerRowEffortMenu(vendor) }
+            if let accounts = pickerAccounts(for: vendor) {
+                providerRowAccountMenu(vendor, accounts: accounts)
+            }
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -1677,6 +1689,44 @@ private struct ComposerBar: View {
         guard ProviderRegistry.isEnabled(chatVendor: vendor) else { return }
         if !store.isVendorSelected(vendor), !isVendorAvailable(vendor) { return }
         store.toggleVendor(vendor)
+    }
+
+    /// Multi-account: the configured accounts for a vendor's backing
+    /// kind, or nil when the picker shouldn't render (one account, or
+    /// the Mac is below wire v28 and the list never loaded).
+    private func pickerAccounts(for vendor: ChatVendor) -> [ProviderInstanceDTO]? {
+        guard let list = providerInstances?.instances(for: vendor.backingProvider),
+              list.count >= 2 else { return nil }
+        return list
+    }
+
+    private func providerRowAccountMenu(_ vendor: ChatVendor, accounts: [ProviderInstanceDTO]) -> some View {
+        let currentWireId = store.accountWireId(for: vendor, available: accounts)
+        let currentLabel = accounts.first { $0.wireId == currentWireId }?.displayName ?? "Default"
+        return Menu {
+            ForEach(accounts) { account in
+                Button {
+                    store.selectAccount(account.isPrimary ? nil : account.wireId, for: vendor)
+                } label: {
+                    let isCurrent = account.isPrimary ? currentWireId == nil : account.wireId == currentWireId
+                    if isCurrent { Label(account.displayName, systemImage: "checkmark") }
+                    else { Text(account.displayName) }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "person.crop.circle")
+                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(t.fg4)
+                Text(currentLabel)
+                    .font(TahoeFont.mono(10)).foregroundStyle(t.fg2)
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            .frame(width: 84, alignment: .leading)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Which \(vendor.displayName) account runs this chat")
+        .accessibilityIdentifier("chat.account.\(vendor.rawValue)")
     }
 
     private func providerRowModelMenu(_ vendor: ChatVendor) -> some View {
@@ -1968,7 +2018,11 @@ private struct ComposerBar: View {
                         effort: store.effort(for: vendor, catalog: client.modelCatalog),
                         chatVendor: vendor,
                         billingProvider: vendor.billingProvider,
-                        deepResearch: store.deepResearch
+                        deepResearch: store.deepResearch,
+                        providerInstanceId: store.accountWireId(
+                            for: vendor,
+                            available: providerInstances?.instances(for: vendor.backingProvider)
+                        )
                     ) else {
                         pendingBroadcast = nil
                         return client.lastError ?? "Couldn't create chat."

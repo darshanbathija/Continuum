@@ -62,6 +62,11 @@ struct EmptyStateCenteredComposer: View {
     @StateObject private var store: ComposerStore
     /// Drives the one-shot fade+rise entrance when the empty state appears.
     @State private var appeared = false
+    /// Multi-account: configured accounts for the selected agent kind
+    /// (in-process registry read; ≥2 shows the account menu). The wireId
+    /// pins the spawn; nil = primary.
+    @State private var accountChoices: [ProviderInstanceId] = []
+    @State private var selectedAccountWireId: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
@@ -222,12 +227,65 @@ struct EmptyStateCenteredComposer: View {
                 .pickerStyle(.menu)
             }
             Spacer()
+            if accountChoices.count >= 2 {
+                accountMenu
+            }
             Text(workspaceDraft == nil ? "Goal becomes the first user message." : "New tab stays in this workspace.")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .task(id: store.agent) { await refreshAccountChoices() }
+    }
+
+    /// Which configured account runs this session. Rendered only when the
+    /// selected agent kind has ≥2 accounts (Settings → Providers → Add
+    /// account). nil selection = the Default (primary) account.
+    private var accountMenu: some View {
+        Menu {
+            ForEach(accountChoices, id: \.wireId) { instance in
+                Button {
+                    selectedAccountWireId = instance.isPrimary ? nil : instance.wireId
+                } label: {
+                    let label = instance.isPrimary ? "Default" : instance.name
+                    let isCurrent = instance.isPrimary
+                        ? selectedAccountWireId == nil
+                        : selectedAccountWireId == instance.wireId
+                    if isCurrent { Label(label, systemImage: "checkmark") }
+                    else { Text(label) }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "person.crop.circle")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(accountChoices.first { $0.wireId == selectedAccountWireId }.map(\.name) ?? "Default")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Which \(store.agent.rawValue) account runs this session")
+        .accessibilityIdentifier("code.account.menu")
+    }
+
+    private func refreshAccountChoices() async {
+        guard let registry = AppDelegate.runtime?.providerInstanceRegistry,
+              ProviderInstanceEnvironment.configDirVariable(for: store.agent) != nil else {
+            accountChoices = []
+            selectedAccountWireId = nil
+            return
+        }
+        let choices = await registry.instances(for: store.agent)
+        accountChoices = choices
+        // Agent switch: a claude/work pin makes no sense on a codex spawn.
+        if let pinned = selectedAccountWireId,
+           !choices.contains(where: { $0.wireId == pinned }) {
+            selectedAccountWireId = nil
+        }
     }
 
     private var quickChips: some View {
@@ -390,6 +448,7 @@ struct EmptyStateCenteredComposer: View {
                     effort: firstSendPlan.effort,
                     acceptEdits: firstSendPlan.acceptEdits,
                     autopilot: firstSendPlan.autopilot,
+                    providerInstanceId: selectedAccountWireId,
                     initialMessage: initialBody.isEmpty ? nil : initialBody,
                     inheritedContextSourceIds: firstSendPlan.inheritedContextSourceIds
                 )
@@ -404,6 +463,7 @@ struct EmptyStateCenteredComposer: View {
                     effort: firstSendPlan.effort,
                     acceptEdits: firstSendPlan.acceptEdits,
                     autopilot: firstSendPlan.autopilot,
+                    providerInstanceId: selectedAccountWireId,
                     initialMessage: initialBody.isEmpty ? nil : initialBody
                 )
             }

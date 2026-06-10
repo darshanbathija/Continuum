@@ -8,8 +8,9 @@ import Foundation
 /// promotes deferred D4).** Each instance owns:
 ///   - a `kind` (the provider family)
 ///   - a stable `name` ("personal", "work", "pro", "oss"; user-defined)
-///   - an optional `homePathOverride` for per-instance config isolation
-///     (e.g. `~/.claude-personal/` vs `~/.claude-work/`)
+///   - an optional `homePathOverride` — the instance config root under
+///     `<AppSupport>/Instances/<kind>/<name>/`, applied at spawn as
+///     `CLAUDE_CONFIG_DIR` / `CODEX_HOME` (see `configRoot`)
 ///   - an optional `keychainAccessGroupOverride` so each instance can
 ///     scope its credential entries separately (codex #10 security hook)
 ///
@@ -46,11 +47,23 @@ public struct ProviderInstanceId: Hashable, Codable, Sendable {
     /// default that maps to the existing single-instance behavior.
     public let name: String
 
-    /// Optional per-instance HOME override. When non-nil, the daemon
-    /// spawns child processes with `HOME=<override>` so provider configs
-    /// (~/.claude/, ~/.codex/, etc.) stay isolated per instance.
-    /// `nil` ⇒ inherit the OS user's real HOME (the "primary" default).
+    /// Optional per-instance **config root**. When non-nil, the daemon
+    /// spawns child processes with the provider's config-dir var
+    /// pointed here (`CLAUDE_CONFIG_DIR=<root>` for Claude,
+    /// `CODEX_HOME=<root>` for Codex) so auth + history + settings stay
+    /// isolated per instance. `nil` ⇒ the provider's default location
+    /// under the user's real home (the "primary" default).
+    ///
+    /// Multi-account v1 note: the stored name predates the
+    /// CLAUDE_CONFIG_DIR/CODEX_HOME strategy — it was originally a full
+    /// `HOME` override, which broke git/ssh/gh resolution and was
+    /// dropped. Kept as-is to avoid churning F3/F3-wire call sites;
+    /// prefer the `configRoot` alias in new code.
     public let homePathOverride: String?
+
+    /// Readable alias for `homePathOverride` under the config-dir
+    /// strategy. See that property's doc.
+    public var configRoot: String? { homePathOverride }
 
     /// Optional Keychain access-group override so each instance's
     /// credentials live under a distinct partition. `nil` ⇒ shared
@@ -110,18 +123,46 @@ public struct ProviderInstanceId: Hashable, Codable, Sendable {
         "\(kind.rawValue)/\(name)"
     }
 
+    /// Parse a `kind/name` wireId into its parts. nil for strings with no
+    /// separator or an empty name (a malformed `"claude/"` is NOT a valid
+    /// instance key anywhere). The single source of truth for the wireId
+    /// shape — server /usage assembly, the Mac gauge adapter, the
+    /// envelope helper, and ChatV2Store all parse through here.
+    public static func parseWireId(_ wireId: String) -> (kind: String, name: String)? {
+        guard let slash = wireId.firstIndex(of: "/") else { return nil }
+        let name = String(wireId[wireId.index(after: slash)...])
+        guard !name.isEmpty else { return nil }
+        return (kind: String(wireId[..<slash]), name: name)
+    }
+
+    /// True when `wireId` names a SECONDARY (non-primary) instance.
+    public static func isSecondaryWireId(_ wireId: String) -> Bool {
+        guard let parsed = parseWireId(wireId) else { return false }
+        return parsed.name != primaryName
+    }
+
     // MARK: - Name validation
 
     /// A name is valid when it:
     ///   - is non-empty
     ///   - does not contain `/` (would break `wireId` round-trip)
+    ///   - does not start with `.` (rejects `.`/`..`/dotfiles — the name
+    ///     becomes a path component of the instance config root, and a
+    ///     relative-path name would resolve OUTSIDE `Instances/<kind>/`;
+    ///     `removeInstance(deleteConfigRoot:)` on an account named `..`
+    ///     would recursively delete every sibling account's data)
+    ///   - contains no path separators, NULs, or whitespace
     ///   - is not the reserved `primaryName` sentinel UNLESS the instance
     ///     has no overrides (i.e. is the back-compat primary). This
     ///     prevents a masquerader (`name == "__primary__"` plus overrides)
     ///     from being registered and overwriting the seeded primary.
     public var isValidName: Bool {
         guard !name.isEmpty else { return false }
-        guard !name.contains("/") else { return false }
+        guard !name.hasPrefix(".") else { return false }
+        guard name.unicodeScalars.allSatisfy({ scalar in
+            scalar != "/" && scalar != "\\" && scalar != "\0"
+                && !CharacterSet.whitespacesAndNewlines.contains(scalar)
+        }) else { return false }
         if name == Self.primaryName && !isPrimary { return false }
         return true
     }

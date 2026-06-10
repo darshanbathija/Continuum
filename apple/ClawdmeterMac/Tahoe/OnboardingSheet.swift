@@ -28,7 +28,7 @@ struct OnboardingSheet: View {
     @State private var isSavingOpenRouterKey = false
     @State private var openRouterKeyMessage: String?
     @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
-    @State private var setupTerminal: OnboardingSetupTerminal?
+    @State private var setupTerminal: SetupTerminalSession?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -46,7 +46,7 @@ struct OnboardingSheet: View {
             }
         }
         .sheet(item: $setupTerminal) { terminal in
-            OnboardingSetupTerminalSheet(terminal: terminal) {
+            SetupTerminalSheet(terminal: terminal) {
                 setupTerminal = nil
                 Task { await refreshDiscovery() }
             }
@@ -362,50 +362,11 @@ struct OnboardingSheet: View {
                 cwd: NSHomeDirectory(),
                 title: title
             )
-            setupTerminal = OnboardingSetupTerminal(id: host.id.uuidString, title: title, host: host)
+            setupTerminal = SetupTerminalSession(id: host.id.uuidString, title: title, host: host)
         } catch {
             // Best-effort fallback: open the user's Terminal.app with the command.
             let script = "tell application \"Terminal\" to do script \"\(command.replacingOccurrences(of: "\"", with: "\\\""))\""
             NSAppleScript(source: script)?.executeAndReturnError(nil)
-        }
-    }
-}
-
-// MARK: - Embedded setup terminal
-
-private struct OnboardingSetupTerminal: Identifiable {
-    let id: String
-    let title: String
-    let host: TerminalPtyHost
-}
-
-private struct OnboardingSetupTerminalSheet: View {
-    @Environment(\.tahoe) private var t
-    let terminal: OnboardingSetupTerminal
-    let onClose: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                TahoeIcon("terminal", size: 14, weight: .bold)
-                    .foregroundStyle(t.accent)
-                Text(terminal.title)
-                    .font(TahoeFont.body(14, weight: .semibold))
-                    .foregroundStyle(t.fg)
-                Spacer(minLength: 0)
-                Button("Done", action: onClose)
-                    .buttonStyle(.bordered)
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            TahoeHair()
-            DirectPtyTerminalView(host: terminal.host)
-                .frame(minWidth: 640, minHeight: 360)
-        }
-        .frame(minWidth: 640, minHeight: 420)
-        .onDisappear {
-            Task { await terminal.host.kill() }
         }
     }
 }

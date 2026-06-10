@@ -109,6 +109,12 @@ public final class ChatV2Store: ObservableObject {
     @Published public var selectedVendors: [ChatVendor]
     @Published public var selectedModelByVendor: [ChatVendor: String]
     @Published public var selectedEffortByVendor: [ChatVendor: ReasoningEffort]
+    /// Multi-account (wire v28): per-vendor pinned account
+    /// (`ProviderInstanceId.wireId`). Absent / unknown ⇒ the primary
+    /// account. Views validate the stored value against the fetched
+    /// `/provider-instances` list before sending so a removed account
+    /// degrades to Default instead of a create-time 422.
+    @Published public var selectedAccountByVendor: [ChatVendor: String]
 
     // Legacy provider-mode fields remain public for older call sites and
     // migration, but Chat V2 now derives runtime behavior from
@@ -172,6 +178,28 @@ public final class ChatV2Store: ObservableObject {
             defaults.dictionary(forKey: Self.defaultsPrefix + "effortByProvider") ?? [:]
         )
         self.deepResearch = defaults.bool(forKey: Self.defaultsPrefix + "deepResearch")
+        self.selectedAccountByVendor = Self.decodeVendorStringMap(
+            defaults.dictionary(forKey: Self.defaultsPrefix + "accountByVendor") ?? [:]
+        )
+    }
+
+    /// The pinned account wireId for a vendor — nil means the primary.
+    /// `available` (the fetched instance list) filters out stale pins.
+    public func accountWireId(for vendor: ChatVendor, available: [ProviderInstanceDTO]? = nil) -> String? {
+        guard let wireId = selectedAccountByVendor[vendor] else { return nil }
+        if let available, !available.contains(where: { $0.wireId == wireId }) {
+            return nil
+        }
+        return wireId
+    }
+
+    public func selectAccount(_ wireId: String?, for vendor: ChatVendor) {
+        if let wireId, ProviderInstanceId.isSecondaryWireId(wireId) {
+            selectedAccountByVendor[vendor] = wireId
+        } else {
+            selectedAccountByVendor.removeValue(forKey: vendor)
+        }
+        persist()
     }
 
     // MARK: - Persistence
@@ -197,6 +225,7 @@ public final class ChatV2Store: ObservableObject {
         }
         defaults.set(vendorsToPersist.map(\.rawValue), forKey: Self.defaultsPrefix + "vendors")
         defaults.set(Self.encodeMap(selectedModelByVendor), forKey: Self.defaultsPrefix + "modelByVendor")
+        defaults.set(Self.encodeMap(selectedAccountByVendor), forKey: Self.defaultsPrefix + "accountByVendor")
         defaults.set(Self.encodeMap(selectedEffortByVendor.mapValues { $0.rawValue }),
                      forKey: Self.defaultsPrefix + "effortByVendor")
         defaults.set(mode.rawValue, forKey: Self.defaultsPrefix + "mode")

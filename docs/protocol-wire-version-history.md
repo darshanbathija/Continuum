@@ -159,3 +159,16 @@ route codex/cursor/gemini spawns through the daemon's ACP harness
 tmux argv. Both fields decode-if-present, so older daemons ignore them
 and older clients omit them — back-compat preserved. `harnessSpawnMinimum
 = 27` gates the Mac fork.
+v28 (2026-06-11): multi-account subscriptions v1. Adds
+`GET /provider-instances` returning `ProviderInstanceListResponse` of
+path-free `ProviderInstanceDTO`s (wireId, kind, name, isPrimary,
+displayName — config roots are Mac-local and never cross the wire),
+plus optional `providerInstanceId: String?` on
+`CreateChatSessionRequest` (decode-if-present) so a chat can pin to a
+configured account; unknown wireIds are rejected at create (422),
+never silently re-billed to the primary. The `/usage` envelope gains
+per-SECONDARY-instance keys (`claude/work`) next to the legacy kind
+keys (primaries stay on the legacy keys), surfaced via
+`UsageEnvelope.secondaryInstanceUsage()`. `providerInstanceListMinimum
+= 28` gates the Mac + iOS account pickers; clients paired to a Mac on
+wire < 28 hide the pickers entirely and keep primary-only behavior.

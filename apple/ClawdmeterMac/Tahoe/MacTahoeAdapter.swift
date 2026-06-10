@@ -30,7 +30,33 @@ extension AppRuntime {
         )
     }
 
+    /// Secondary (multi-account) live columns, one per non-primary
+    /// instance with a kind that maps onto a Tahoe provider column.
+    /// Sorted by wireId for stable layout.
+    var tahoeSecondaryColumns: [SecondaryTahoeColumn] {
+        allAppModelsByWireId
+            .compactMap { (wireId, model) -> SecondaryTahoeColumn? in
+                guard ProviderInstanceId.isSecondaryWireId(wireId),
+                      let parsed = ProviderInstanceId.parseWireId(wireId) else { return nil }
+                let provider: TahoeProvider
+                switch parsed.kind {
+                case "claude": provider = .claude
+                case "codex":  provider = .codex
+                default: return nil
+                }
+                guard ProviderEnablement.isEnabled(parsed.kind) else { return nil }
+                return SecondaryTahoeColumn(
+                    wireId: wireId, accountName: parsed.name, provider: provider, model: model
+                )
+            }
+            .sorted { $0.wireId < $1.wireId }
+    }
+
     private func tahoeRow(model: AppModel, provider: TahoeProvider) -> TahoeLiveRow {
+        Self.makeTahoeRow(model: model, provider: provider)
+    }
+
+    static func makeTahoeRow(model: AppModel, provider: TahoeProvider) -> TahoeLiveRow {
         let fallbackModelName = model.config.reviveModel.isEmpty ? provider.displayName : model.config.reviveModel
         guard let usage = model.usage else {
             return TahoeLiveRow(
@@ -69,4 +95,17 @@ extension AppRuntime {
         )
     }
 
+}
+
+
+/// One multi-account gauge column: a non-primary instance's AppModel +
+/// its Tahoe provider mapping. The row is computed at render time by
+/// `SecondaryProviderColumn` (which observes the model) so per-poll
+/// updates invalidate the gauge.
+public struct SecondaryTahoeColumn: Identifiable {
+    public let wireId: String
+    public let accountName: String
+    public let provider: TahoeProvider
+    let model: AppModel
+    public var id: String { wireId }
 }

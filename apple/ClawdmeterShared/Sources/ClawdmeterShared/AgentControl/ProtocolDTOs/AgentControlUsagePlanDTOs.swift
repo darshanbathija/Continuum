@@ -116,6 +116,32 @@ public struct UsageEnvelope: Codable, Sendable {
         return nil
     }
 
+    /// Multi-account (wire v28): one entry per SECONDARY account key
+    /// (`claude/work`) in the `usage` dict. Primaries stay on the legacy
+    /// kind keys and never appear here. Sorted by wireId for stable UI.
+    public struct SecondaryInstanceUsage: Sendable, Equatable, Identifiable {
+        public let wireId: String
+        public let kind: String
+        public let name: String
+        public let usage: UsageData
+        public var id: String { wireId }
+    }
+
+    public func secondaryInstanceUsage() -> [SecondaryInstanceUsage] {
+        guard let usage else { return [] }
+        return usage.compactMap { (key, value) -> SecondaryInstanceUsage? in
+            guard ProviderInstanceId.isSecondaryWireId(key),
+                  let parsed = ProviderInstanceId.parseWireId(key) else { return nil }
+            return SecondaryInstanceUsage(
+                wireId: key,
+                kind: parsed.kind,
+                name: parsed.name,
+                usage: value
+            )
+        }
+        .sorted { $0.wireId < $1.wireId }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case claude, codex, usage, enabledProviderIDs, lastChecked
     }

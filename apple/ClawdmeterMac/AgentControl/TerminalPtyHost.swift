@@ -393,12 +393,20 @@ actor TerminalPtyRegistry {
         return host
     }
 
-    func spawnCommand(_ command: String, cwd: String?, title: String = "") async throws -> TerminalPtyHost {
+    func spawnCommand(
+        _ command: String,
+        cwd: String?,
+        title: String = "",
+        env: [String: String]? = nil
+    ) async throws -> TerminalPtyHost {
         let host = TerminalPtyHost(
             title: title,
             argv: ["/bin/zsh", "-lc", command],
             cwd: cwd,
-            env: ProcessInfo.processInfo.environment
+            // Multi-account login flows pass an instance-scoped env
+            // (CLAUDE_CONFIG_DIR / CODEX_HOME) so `claude setup-token` /
+            // `codex login` write credentials under the instance root.
+            env: env ?? ProcessInfo.processInfo.environment
         )
         try await host.start()
         await host.setOnExit { [weak self] id in

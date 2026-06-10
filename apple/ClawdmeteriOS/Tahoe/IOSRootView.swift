@@ -205,6 +205,7 @@ public struct IOSRootView: View {
                 IOSLiveView(
                     data: live,
                     enabledProviderIDs: usageModel.enabledProviderIDs,
+                    secondaryAccounts: usageModel.secondaryAccounts,
                     onRefresh: { await agentClient.refreshAll() },
                     onOpenSettings: { settingsPresented = true },
                     agentClient: agentClient

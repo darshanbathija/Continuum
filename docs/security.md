@@ -24,7 +24,7 @@ Continuum has six trust tiers:
 | 2 | Paired iPhone / Apple Watch | **Trusted peer** | Pairing is QR + bearer-token + (for the secure-cloud path) per-pairing ECDH. iPhone derives the same symmetric key as the Mac and can decrypt every relay frame and every APNS body. |
 | 3 | Cloudflare relay Worker (E2) | **Untrusted** | Sees opaque XChaCha20-Poly1305 envelopes only. Never holds the session key. Audit log records sender role + envelope type + byte length — never body content. |
 | 4 | Cloudflare APNS gateway Worker (E5) | **Untrusted for payload** / trusted for `.p8` | Holds the operator's APNS signing key. Forwards sealed payloads to Apple. Cannot decrypt the body; only the paired iPhone can. |
-| 5 | Third-party provider CLIs (claude, codex, opencode, cursor, antigravity/gemini) | **Sandboxed children** | Spawned by the Mac daemon as child processes. Each owns its own telemetry, its own auth state, and its own network egress. Continuum does not proxy or inspect their traffic. F3 [PR #142](https://github.com/darshanbathija/Clawdmeter/pull/142) carries the type-level seam for HOME isolation across instances (e.g. `claude_personal` vs. `claude_work`); the wire-up that actually enforces env scrub on spawn is F3-wire and not in main yet. |
+| 5 | Third-party provider CLIs (claude, codex, opencode, cursor, antigravity/gemini) | **Sandboxed children** | Spawned by the Mac daemon as child processes. Each owns its own telemetry, its own auth state, and its own network egress. Continuum does not proxy or inspect their traffic. F3 [PR #142](https://github.com/darshanbathija/Clawdmeter/pull/142) carried the type-level seam for per-instance isolation (e.g. `claude_personal` vs. `claude_work`); multi-account v1 (v0.32.0) ships the enforcement — config-dir isolation (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`) plus env scrub on spawn via `ProviderInstanceEnvironment` and a fail-closed pin resolver (`InstanceSpawnEnv`). See §6. |
 | 6 | Sparkle appcast + GitHub release assets | **Authenticated release channel** | The appcast is served from GitHub Pages, while DMGs are hosted on GitHub Releases. Sparkle verifies EdDSA update signatures; the release script gates Developer ID signing, notarization, stapling, asset byte length, and appcast output before publishing. |
 
 The trust root is the local Mac daemon. Compromising the daemon
@@ -80,11 +80,15 @@ close or 15-minute TTL expiry. Forward secrecy follows by construction —
 nothing on disk can be seized after the fact to decrypt prior captured
 ciphertext.
 
-Per-instance Keychain access groups (the
-`keychainAccessGroupOverride` field on `ProviderInstanceId`) are typed
-into the model in [PR #142](https://github.com/darshanbathija/Clawdmeter/pull/142)
-but enforcement of partition boundaries is the daemon's job in F3-wire,
-which is not yet in main.
+Per-instance Keychain partitioning shipped with multi-account v1
+(v0.32.0): each non-primary instance's Claude token lives in its own
+Keychain item via a per-instance service-name suffix within the shared
+access group (`PastedAnthropicTokenProvider.forInstance`). The
+`keychainAccessGroupOverride` field on `ProviderInstanceId` (typed in
+[PR #142](https://github.com/darshanbathija/Clawdmeter/pull/142))
+remains unset in v1 — a feature that starts setting it must also
+persist it in `ProviderInstanceStore` or lose the partition on boot
+replay.
 
 ### 3.3 Rotation cadence
 
@@ -194,40 +198,53 @@ acceptance):
 
 Source: APNS gateway Worker [PR #147](https://github.com/darshanbathija/Clawdmeter/pull/147).
 
-## 6. F3 HOME isolation
+## 6. F3 per-instance isolation (shipped in v0.32.0)
 
-The provider-instance registry ships in source-only form in
-[PR #142](https://github.com/darshanbathija/Clawdmeter/pull/142). The
-type carries two security-relevant fields:
+The provider-instance registry shipped in source-only form in
+[PR #142](https://github.com/darshanbathija/Clawdmeter/pull/142);
+multi-account v1 (v0.32.0 build 227, wire 28) ships the runtime
+enforcement. One deliberate change from the original F3 plan: the
+daemon does NOT swap `HOME` (a full HOME override broke git/ssh/gh in
+worktrees). Instead, `homePathOverride` is the instance's **config
+root** and the daemon sets the provider's surgical config-dir var —
+`CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for Codex
+(`ProviderInstanceEnvironment.configDirVariable`). Kinds without a
+config-dir var (gemini, cursor, grok, opencode) cannot be isolated
+yet, and the spawn resolver fails closed on their pins.
 
-- `homePathOverride: String?` — when set, the daemon spawns the
-  child process with `HOME=<override>` so provider configs
-  (`~/.claude/`, `~/.codex/`, etc.) stay isolated per instance.
-- `keychainAccessGroupOverride: String?` — when set, each instance's
-  credential entries live under a distinct Keychain partition.
+What is enforced today:
 
-The shape these guarantee, when the daemon wire-up lands in F3-wire:
+- **Keychain partitioning.** Each non-primary Claude instance's token
+  lives in its own Keychain item via a per-instance service-name
+  suffix (`PastedAnthropicTokenProvider.forInstance`); Codex auth
+  lives at `<configRoot>/auth.json`, written by `codex login` itself.
+  `keychainAccessGroupOverride` remains unset in v1 (see §3.2 note).
+- **Env scrubbing on child spawn.** `ProviderInstanceEnvironment.buildEnv`
+  strips `CLAUDE_*`, `ANTHROPIC_*`, `CODEX_*`, `OPENAI_*`, `GEMINI_*`,
+  `OPENCODE_*`, `OPENROUTER_*`, and `CURSOR_*` vars from the parent
+  environment (centralized `scrubbedPrefixes` list), then injects the
+  instance's own secrets after the scrub. An attacker who injects an
+  env var into the parent shell cannot bleed it into a child provider
+  process. The builder always returns a full dict — never nil, which
+  on `Foundation.Process` would mean "inherit caller env" and defeat
+  the scrub.
+- **Fail-closed pin resolution.** `InstanceSpawnEnv.resolve` refuses
+  to spawn for an unknown pin (account removed), a non-isolatable
+  instance (hand-edited store), or a Claude secondary with no stored
+  token — never a silent fallback to the primary subscription, which
+  would bill a different account than the user picked.
+- **Per-instance log redaction.** Spawn-path log lines carry the
+  instance's wireId (`claude/work`) but never the raw config-root
+  path, since the path may contain user identifiers.
+- **Credential bleed integration tests.**
+  `apple/ClawdmeterMacTests/AgentSpawnerInstanceEnvTests.swift` seeds
+  leaked-credential env vars for one instance and asserts another
+  instance's spawn env never carries them, plus a golden test that the
+  primary's spawn env is byte-identical to pre-multi-account behavior.
 
-- **Keychain partitioning.** Each `ProviderInstanceId` with an
-  override is given its own access group; Keychain queries from one
-  instance cannot see another instance's items.
-- **Env scrubbing on child spawn.** The daemon strips all `CLAUDE_*`,
-  `CODEX_*`, provider-namespaced env vars from the parent environment
-  before re-applying only the instance's own env. An attacker who
-  somehow injects an env var into the parent shell cannot bleed it
-  into a child provider process.
-- **Per-instance log redaction.** Log lines prefix the instance's
-  user-visible name (`claude_work:...`) but NEVER the raw
-  `homePathOverride` value, since the override may contain user
-  identifiers or directory names the user considers sensitive.
-- **Credential bleed integration tests.** Required by F3-wire
-  acceptance; an integration test seeds a leaked-key scenario in
-  instance A and asserts instance B's credentials remain unreachable.
-
-The shape is wired into the type today (input validation rejects empty
-names and slash-containing names, and the registry refuses to overwrite
-a seeded primary instance — see the PR #142 review-fix commit). The
-runtime enforcement lands when F3-wire ships.
+Input validation rejects empty names, slash/backslash/NUL/whitespace
+names, and leading-dot names (the `..` relative-path escape), and the
+registry refuses to overwrite a seeded primary instance.
 
 ## 7. Audit log
 
