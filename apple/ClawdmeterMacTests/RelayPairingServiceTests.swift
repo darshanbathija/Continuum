@@ -51,8 +51,8 @@ final class RelayPairingServiceTests: XCTestCase {
         XCTAssertGreaterThan(bundle.ttl, now)
         XCTAssertLessThanOrEqual(bundle.ttl, now + 31 * 24 * 60 * 60)
 
-        // The relay URL defaults to staging (no env override).
-        XCTAssertEqual(bundle.relayUrl, RelayEnvironment.staging.baseURL)
+        // The relay URL defaults to the production relay (no env override).
+        XCTAssertEqual(bundle.relayUrl, RelayEnvironment.production.baseURL)
     }
 
     func testIPhoneCanDeriveMatchingSymmetricKey() async throws {
