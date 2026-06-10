@@ -218,6 +218,11 @@ public enum CursorHooksUsageParser {
         }
 
         let raw = String(chunk[open.upperBound..<close])
+        // Lock-free fast path first — the per-call formatter allocations
+        // here went through ICU on every timestamp (v0.31.17 energy bug).
+        if let date = ISO8601Fast.parse(raw) {
+            return date
+        }
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = fractional.date(from: raw) {

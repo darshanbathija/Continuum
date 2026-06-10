@@ -4,6 +4,39 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.18 build 226] - 2026-06-11 - Fix: analytics cold reparse pegged 3 CPU cores for hours (`darshanbathija/fix-excess-power-drain`)
+
+### Fixed
+
+- **Continuum drew ~20x more energy than any other app** (Activity Monitor
+  12-hr power 9,881 vs 549 for the next app; sustained ~167% CPU). Root
+  cause chain: the v18 analytics-cache schema bump (#287) forced a one-time
+  cold reparse of the full multi-GB Claude + Codex JSONL corpus, and the
+  per-line timestamp parse went through `ISO8601DateFormatter` → ICU
+  `SimpleDateFormat`, which serializes every call behind ICU's global
+  mutexes — 14 concurrent parse threads spent ~40% of their samples in
+  `psynch_mutexwait` and the pass never finished. Because the cache is only
+  written at the END of a full pass, every relaunch restarted the cold
+  reparse from zero, making the burn permanent.
+- **New `ISO8601Fast` parser** — pure-Swift, lock-free, allocation-free
+  fixed-format ISO-8601 parse (Hinnant days-from-civil math). Measured
+  2,312x faster than the ICU path single-threaded (105µs → 0.05µs per
+  parse), and it removes the cross-thread contention entirely. Wired in as
+  the first attempt in `ClaudeAdapter`, `CodexAdapter`, `ClaudeUsageParser`,
+  `CodexUsageParser`, and `CursorHooksUsageParser` (which previously
+  allocated two fresh formatters per timestamp); the ICU formatters remain
+  as fallback for exotic strings.
+- **Analytics cache now checkpoints mid-pass** after the Claude and Codex
+  corpora finish parsing, overlaying onto the previously-read cache so an
+  interrupted cold reparse (quit, sleep, crash) resumes instead of
+  restarting from zero. The final end-of-pass write still prunes deleted
+  files.
+- **Parse TaskGroup now runs at `.utility` priority** instead of inheriting
+  user-initiated QoS from the MainActor refresh path, so corpus parsing
+  schedules onto efficiency cores and stops starving the rest of the app's
+  async work.
+- Bumps `CURRENT_PROJECT_VERSION` 225 → 226.
+
 ## [0.31.14 build 222] - 2026-06-10 - Unified platform rebuild: Mac + iOS/watchOS aligned on build 222 (`release/0.31.14`)
 
 ### Changed

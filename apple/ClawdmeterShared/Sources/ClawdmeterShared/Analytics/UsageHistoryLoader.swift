@@ -368,6 +368,17 @@ public actor UsageHistoryLoader {
             },
             cache: cache
         )
+        // Checkpoint after each multi-GB corpus: a cold reparse (cache
+        // schema bump) that gets interrupted — quit, sleep, crash — must
+        // not restart from zero on the next launch. Before this, the
+        // cache was only written at the END of the full pass, so an
+        // interrupted cold parse burned hours of CPU on every relaunch
+        // (v0.31.17 energy bug). Checkpoints overlay onto the previously
+        // read cache so providers not yet re-walked this pass keep their
+        // old entries; the final writeCache below still writes the pure
+        // nextCache, preserving the pruning of deleted files.
+        for result in claudeResults { nextCache.files[result.path] = result.cacheEntry }
+        writeCheckpoint(base: cache, overlay: nextCache)
 
         let codexResults = await load(
             CachedFileSourceAdapter(files: codexFiles, activeURL: codexActive) { url in
@@ -375,6 +386,8 @@ public actor UsageHistoryLoader {
             },
             cache: cache
         )
+        for result in codexResults { nextCache.files[result.path] = result.cacheEntry }
+        writeCheckpoint(base: cache, overlay: nextCache)
 
         let cursorHookResults = await load(
             CachedFileSourceAdapter(files: cursorHookFiles, activeURL: cursorHookActive) { url in
@@ -835,9 +848,13 @@ public actor UsageHistoryLoader {
             var inFlight = 0
 
             // Seed with N tasks, then add one for each completion.
+            // Utility priority: parsing inherits user-initiated QoS from
+            // the MainActor refresh path otherwise, which schedules a
+            // multi-GB cold reparse onto P-cores and starves the rest of
+            // the app's async work (v0.31.17 energy bug).
             while inFlight < concurrency, let file = iterator.next() {
                 inFlight += 1
-                group.addTask {
+                group.addTask(priority: .utility) {
                     do {
                         return try parser(file.url)
                     } catch {
@@ -852,7 +869,7 @@ public actor UsageHistoryLoader {
                 if let r = result { out.append(r) }
                 if let file = iterator.next() {
                     inFlight += 1
-                    group.addTask {
+                    group.addTask(priority: .utility) {
                         do {
                             return try parser(file.url)
                         } catch {
@@ -1278,6 +1295,17 @@ public actor UsageHistoryLoader {
             return AnalyticsCache(version: AnalyticsCache.currentVersion, files: [:])
         }
         return decoded
+    }
+
+    /// Mid-pass checkpoint: old entries + everything parsed so far. Never
+    /// drops a not-yet-re-walked provider's cached rows the way writing
+    /// the bare in-progress `nextCache` would.
+    private func writeCheckpoint(base: AnalyticsCache, overlay: AnalyticsCache) {
+        // `base` came from readCache(), which already guarantees
+        // version == currentVersion (stale versions decode to empty).
+        var merged = base
+        for (path, entry) in overlay.files { merged.files[path] = entry }
+        writeCache(merged)
     }
 
     private func writeCache(_ cache: AnalyticsCache) {

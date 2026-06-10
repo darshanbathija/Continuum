@@ -137,6 +137,9 @@ public enum CodexUsageParser {
 
     private static func parseTimestamp(_ raw: Any?) -> Date {
         guard let s = raw as? String else { return Date() }
+        // Lock-free fast path first — ICU formatters contend under the
+        // loader's concurrent file parse (v0.31.17 energy bug).
+        if let d = ISO8601Fast.parse(s) { return d }
         if let d = isoFractional.date(from: s) { return d }
         if let d = isoFormatter.date(from: s) { return d }
         return Date()
