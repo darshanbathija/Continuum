@@ -4,6 +4,18 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.14 build 222] - 2026-06-10 - Unified platform rebuild: Mac + iOS/watchOS aligned on build 222 (`release/0.31.14`)
+
+### Changed
+
+- **All platforms rebuilt from the same commit as build 222.** No code
+  changes since 0.31.13 — this release brings iOS/watchOS TestFlight
+  (previously build 220) up to the full 0.31.12 + 0.31.13 feature set
+  (Fable 5 models + pricing, OpenCode live SSE fixes, cross-provider
+  sibling tabs, instant bottom-right toasts) and keeps the Mac DMG on
+  the same build number.
+- Bumps `CURRENT_PROJECT_VERSION` 221 → 222.
+
 ## [0.31.13 build 221] - 2026-06-10 - Cross-provider switch opens a sibling tab; instant bottom-right toasts (`fix/cross-provider-switch-and-toast-feedback`)
 
 ### Fixed
