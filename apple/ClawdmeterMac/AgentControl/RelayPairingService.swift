@@ -73,7 +73,10 @@ public struct RelayPairingCreationGrantClient {
 
     public init(
         urlSession: URLSession = .shared,
-        authToken: String? = ProcessInfo.processInfo.environment["CLAWDMETER_RELAY_CREATION_GRANT_TOKEN"]
+        // Keychain-stored token wins; the env var is the dev/`wrangler dev`
+        // fallback. Never embed the token in the bundle (see SECRETS.md).
+        authToken: String? = RelayGrantTokenStore.shared.token
+            ?? ProcessInfo.processInfo.environment["CLAWDMETER_RELAY_CREATION_GRANT_TOKEN"]
     ) {
         self.urlSession = urlSession
         let trimmedToken = authToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -205,7 +208,8 @@ public final class RelayPairingService: ObservableObject {
         self.pairingStore = pairingStore
         self.processEnv = processEnv
         let grantClient = RelayPairingCreationGrantClient(
-            authToken: processEnv["CLAWDMETER_RELAY_CREATION_GRANT_TOKEN"]
+            authToken: RelayGrantTokenStore.shared.token
+                ?? processEnv["CLAWDMETER_RELAY_CREATION_GRANT_TOKEN"]
         )
         self.creationGrantProvider = creationGrantProvider ?? { request in
             try await grantClient.issueGrant(request)

@@ -18,6 +18,11 @@ struct PairingSettingsView: View {
     @ObservedObject var pairingService: RelayPairingService
     @State private var qrImage: NSImage?
     @State private var didCopyRelay: Bool = false
+    /// Relay creation-grant token entry. Empty after save; we never echo the
+    /// stored value back into the field (it lives in the Keychain).
+    @State private var grantTokenInput: String = ""
+    @State private var grantTokenIsStored: Bool = RelayGrantTokenStore.shared.isConfigured
+    @State private var didSaveGrantToken: Bool = false
     /// Live ticker so the "expires in N:NN" label re-renders without a state
     /// change from the pairing service.
     @State private var now: Date = Date()
@@ -42,6 +47,8 @@ struct PairingSettingsView: View {
                     Spacer()
                 }
             }
+            TahoeHair()
+            relayGrantTokenSection
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { refreshRelayQR() }
@@ -92,6 +99,62 @@ struct PairingSettingsView: View {
                 relayBundleRow
             }
         }
+    }
+
+    // MARK: - Relay grant token
+
+    /// One-time paste of the relay creation-grant token. It's required to mint
+    /// pairing QRs against the production relay and is stored in the Keychain —
+    /// never embedded in the app (see infra/SECRETS.md).
+    private var relayGrantTokenSection: some View {
+        tahoeSection(
+            "Relay access token",
+            footer: "Paste the relay grant token once. It's stored in your Mac's Keychain and lets this Mac mint pairing codes. Leave blank if you don't have one."
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    SecureField(grantTokenIsStored ? "Token saved — paste to replace" : "Relay grant token", text: $grantTokenInput)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 360)
+                    Button("Save", action: saveGrantToken)
+                        .disabled(grantTokenInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if grantTokenIsStored {
+                        Button("Remove", role: .destructive, action: clearGrantToken)
+                    }
+                }
+                HStack(spacing: 6) {
+                    if didSaveGrantToken {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        Text("Saved").foregroundStyle(.green)
+                    } else if grantTokenIsStored {
+                        Image(systemName: "checkmark.shield.fill").foregroundStyle(t.accent)
+                        Text("A token is stored in your Keychain.").foregroundStyle(.secondary)
+                    } else {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Text("No token stored — pairing QRs can't be minted yet.").foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption)
+            }
+        }
+    }
+
+    private func saveGrantToken() {
+        let trimmed = grantTokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if RelayGrantTokenStore.shared.setToken(trimmed) {
+            grantTokenInput = ""
+            grantTokenIsStored = true
+            didSaveGrantToken = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { didSaveGrantToken = false }
+        }
+    }
+
+    private func clearGrantToken() {
+        RelayGrantTokenStore.shared.clear()
+        grantTokenInput = ""
+        grantTokenIsStored = false
+        didSaveGrantToken = false
     }
 
     @ViewBuilder

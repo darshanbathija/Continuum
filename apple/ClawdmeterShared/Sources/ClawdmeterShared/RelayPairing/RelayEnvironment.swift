@@ -29,8 +29,10 @@ public enum RelayEnvironment: String, Codable, Sendable, CaseIterable {
         }
     }
 
-    /// Default for E7. Flip to `.production` in the E3/E4 GA cut.
-    public static let `default`: RelayEnvironment = .staging
+    /// GA default: the production relay Worker
+    /// (`clawdmeter-relay.continuumai.workers.dev`). Dev builds still override
+    /// via `CLAWDMETER_RELAY_URL` for `wrangler dev` localhost round-trips.
+    public static let `default`: RelayEnvironment = .production
 
     /// Resolve the relay URL the Mac should bake into a fresh QR. Order
     /// of precedence:
