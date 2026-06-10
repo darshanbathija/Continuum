@@ -394,7 +394,21 @@ if [[ -d "$MOUNT_POINT/${APP_NAME}.app" ]]; then
   echo "✓ DMG mounts and contains ${APP_NAME}.app"
   codesign --verify --deep --strict "$MOUNT_POINT/${APP_NAME}.app" 2>&1 | head -2
   if [[ "$SIGN_MODE" == "developerid" ]]; then
-    spctl -a -vvv -t exec "$MOUNT_POINT/${APP_NAME}.app" 2>&1 | head -2
+    # spctl exits non-zero for an un-notarized app, and under `set -o
+    # pipefail` the old `spctl … | head` form killed the whole release the
+    # first time the deferred-notarization mode actually ran: release-mac.sh
+    # invokes this script with CLAWDMETER_SKIP_BUILD_SCRIPT_NOTARIZATION=1
+    # and notarizes the DMG itself AFTERWARDS, so "Unnotarized Developer ID"
+    # is the expected state here. Only treat rejection as fatal when this
+    # script owned notarization (i.e. the app should already be accepted).
+    SPCTL_OUT="$(spctl -a -vvv -t exec "$MOUNT_POINT/${APP_NAME}.app" 2>&1 || true)"
+    printf '%s\n' "$SPCTL_OUT" | head -2
+    if [[ "${CLAWDMETER_SKIP_BUILD_SCRIPT_NOTARIZATION:-0}" == "1" ]]; then
+      echo "  (Gatekeeper acceptance is gated on release-mac.sh's DMG notarization step)"
+    elif ! printf '%s\n' "$SPCTL_OUT" | grep -q "accepted"; then
+      echo "✗ Gatekeeper rejected ${APP_NAME}.app after in-script notarization" >&2
+      exit 1
+    fi
   fi
 else
   echo "✗ DMG mounted but no ${APP_NAME}.app inside"
