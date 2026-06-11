@@ -153,6 +153,12 @@ final class GitDiffStoreTests: XCTestCase {
         XCTAssertEqual(worktreeAfterUnstage.trimmingCharacters(in: .whitespacesAndNewlines), "tracked.txt")
     }
 
+    func test_worktreeDiffFormattingUsesCompactThousands() {
+        XCTAssertEqual(WorktreeDiffFormatting.compactCount(18), "18")
+        XCTAssertEqual(WorktreeDiffFormatting.compactCount(11000), "11k")
+        XCTAssertEqual(WorktreeDiffFormatting.compactCount(1680), "1.7k")
+    }
+
     func test_gitDiffPaneActionDescriptorsExposeStableTargets() {
         let unstagedFile = GitDiffPane.fileActionDescriptors(for: .unstaged)
         XCTAssertEqual(GitDiffPane.FileActionDescriptors.rowAccessibilityIdentifier, "code.diff.git.file.row")
