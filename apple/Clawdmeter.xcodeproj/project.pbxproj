@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A815C2FAB3A047049510AD1F /* CustomProviderStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52A8D33DF7BE4B4CA6E429CC /* CustomProviderStore.swift */; };
+		1DC6C939B83D4C96AB09FE41 /* CustomProviderSpawnPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E14243A8F554D7FBC9B40B0 /* CustomProviderSpawnPlan.swift */; };
+		769804BB345549E2BA1EB7CD /* CustomProviderAPIProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C80B3B188F4FF0AFC786C4 /* CustomProviderAPIProbe.swift */; };
+		6468C99228F447B6B1EE992C /* CustomProviderSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A6CF67909CF45F69E644D68 /* CustomProviderSettings.swift */; };
 		006EEA9AA50560F63C68B82D /* iOSModelPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47379626A67ED52F4DF364AE /* iOSModelPicker.swift */; };
 		0127E090A7799D2F4A7BC9BB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 052C6AEF07A486E8A35669C5 /* Assets.xcassets */; };
 		0190050C63A0552D50548BA8 /* CodexPlanPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCF9A1F1CC3BBCFFE5BFE1B3 /* CodexPlanPane.swift */; };
@@ -502,6 +506,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		52A8D33DF7BE4B4CA6E429CC /* CustomProviderStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomProviderStore.swift; sourceTree = "<group>"; };
+		0E14243A8F554D7FBC9B40B0 /* CustomProviderSpawnPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomProviderSpawnPlan.swift; sourceTree = "<group>"; };
+		18C80B3B188F4FF0AFC786C4 /* CustomProviderAPIProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomProviderAPIProbe.swift; sourceTree = "<group>"; };
+		8A6CF67909CF45F69E644D68 /* CustomProviderSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomProviderSettings.swift; sourceTree = "<group>"; };
 		012447D961770BC6D8F59436 /* F1dWireChatParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = F1dWireChatParityTests.swift; sourceTree = "<group>"; };
 		015F6FD7463F3710A54A36EB /* MacMenubarPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMenubarPopover.swift; sourceTree = "<group>"; };
 		0212D82878893E944B18EC31 /* GrokAnalyticsRangeAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokAnalyticsRangeAdapterTests.swift; sourceTree = "<group>"; };
@@ -967,6 +975,9 @@
 		02FCCC418BA0C1695E829FB9 /* AgentControl */ = {
 			isa = PBXGroup;
 			children = (
+				18C80B3B188F4FF0AFC786C4 /* CustomProviderAPIProbe.swift */,
+				0E14243A8F554D7FBC9B40B0 /* CustomProviderSpawnPlan.swift */,
+				52A8D33DF7BE4B4CA6E429CC /* CustomProviderStore.swift */,
 				2D57648012C2D3368CD2ED3C /* AcpHarnessBridge.swift */,
 				BC9DC6C356E49170FC1FE84C /* AgentControlServer.swift */,
 				98827BB6B0A2F3F766FF3C57 /* AgentControlServer+RepoOnboarding.swift */,
@@ -1450,6 +1461,7 @@
 			isa = PBXGroup;
 			children = (
 				58B2791865D23423A7F4CC0F /* AnalyticsRangeAdapter.swift */,
+				8A6CF67909CF45F69E644D68 /* CustomProviderSettings.swift */,
 				C2D094B6FFC14AA31CD6E63E /* KeyboardCheatSheet.swift */,
 				5E503A54446667EB3A1CEE00 /* MacCodeShell.swift */,
 				015F6FD7463F3710A54A36EB /* MacMenubarPopover.swift */,
@@ -2182,6 +2194,10 @@
 				0D5249B534DF8025B1A19E2C /* MacTahoeAdapter.swift in Sources */,
 				FC09E87265C8C2DFEF77D40F /* MacTerminalView.swift in Sources */,
 				E2C107C402AACE6FAB80BBB3 /* MacUsageView.swift in Sources */,
+				A815C2FAB3A047049510AD1F /* CustomProviderStore.swift in Sources */,
+				1DC6C939B83D4C96AB09FE41 /* CustomProviderSpawnPlan.swift in Sources */,
+				769804BB345549E2BA1EB7CD /* CustomProviderAPIProbe.swift in Sources */,
+				6468C99228F447B6B1EE992C /* CustomProviderSettings.swift in Sources */,
 				EB76FBD9A97AD9FC87600DEB /* MarkdownDocumentTabView.swift in Sources */,
 				ECB0775FEF1BF8D1B9D4B339 /* MarkdownRenderer.swift in Sources */,
 				F2A463341EA0924E426712F0 /* MentionPicker.swift in Sources */,

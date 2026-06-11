@@ -100,8 +100,8 @@ public struct MacUsageView: View {
                     AnalyticsRow(usageHistoryStore: usageHistoryStore)
                         .padding(.top, 14)
 
-                    // Token volume (not dollars): tokens grouped by family with
-                    // a per-model breakdown. Surfaces models regardless of price.
+                    // Token volume (not dollars): flat ranked leaderboard across
+                    // all models. Surfaces models regardless of price.
                     TokensByModelSection(usageHistoryStore: usageHistoryStore)
                         .padding(.horizontal, 6).padding(.top, 18)
                 } else {
@@ -205,203 +205,27 @@ public struct MacUsageView: View {
     }
 }
 
-// MARK: - Tokens by model / family
+// MARK: - Tokens by model (ranked leaderboard)
 
 private struct TokensByModelSection: View {
-    @Environment(\.tahoe) private var t
     var usageHistoryStore: UsageHistoryStore?
     // v0.29.31: time selector matching the dollar charts. Defaults to "all"
     // so the landing view preserves the prior all-time numbers; the toggle
     // narrows to today/7d/30d/90d via the windowed `byDayByModel` rollup.
     @State private var range: String = "all"
 
-    private struct Family: Identifiable {
-        let id: String
-        let total: TokenTotals
-        let models: [(name: String, totals: TokenTotals)]
-        /// Largest single-model volume in the family — model bars scale to it.
-        var maxModel: Int { models.map(\.totals.totalTokens).max() ?? 0 }
-    }
-
-    /// Map a raw model name to a provider family for grouping.
-    static func family(for model: String) -> String {
-        if let providerID = UsageHistorySnapshot.modelProviderID(forModelKey: model) {
-            switch providerID {
-            case "claude": return "Claude"
-            case "codex": return "OpenAI"
-            case "gemini": return "Gemini"
-            case "cursor": return "Cursor"
-            case "grok": return "Grok"
-            case "opencode": return "OpenCode"
-            default: break
-            }
-        }
-        let m = model.lowercased()
-        if m.hasPrefix("cursor/") || m.hasPrefix("cursor-") || m == "cursor" { return "Cursor" }
-        if m.hasPrefix("claude") || m == "opus" || m == "sonnet" || m == "haiku" { return "Claude" }
-        if m.hasPrefix("gpt") || m.hasPrefix("chatgpt") || m.hasPrefix("o1") || m.hasPrefix("o3") || m.hasPrefix("o4") || m.contains("codex") { return "OpenAI" }
-        if m.hasPrefix("gemini") || m.hasPrefix("gemma") { return "Gemini" }
-        if m.hasPrefix("grok") || m.hasPrefix("xai/") { return "Grok" }
-        return "Other"
-    }
-
-    static func displayModel(_ model: String) -> String {
-        let stripped = UsageHistorySnapshot.displayModelName(forModelKey: model)
-        if stripped != model { return stripped }
-        if model.lowercased().hasPrefix("cursor/") {
-            return String(model.dropFirst("cursor/".count))
-        }
-        return model
-    }
-
-    private func families(from byModel: [String: TokenTotals]) -> [Family] {
-        guard !byModel.isEmpty else { return [] }
-        var grouped: [String: [(String, TokenTotals)]] = [:]
-        for (model, totals) in byModel where totals.totalTokens > 0 {
-            grouped[Self.family(for: model), default: []].append((model, totals))
-        }
-        return grouped.map { (fam, models) -> Family in
-            var sum = TokenTotals.zero
-            for (_, tot) in models { sum += tot }
-            let sorted = models.sorted { $0.1.totalTokens > $1.1.totalTokens }
-                .map { (name: $0.0, totals: $0.1) }
-            return Family(id: fam, total: sum, models: sorted)
-        }
-        .sorted { $0.total.totalTokens > $1.total.totalTokens }
-    }
-
-    /// Family accent — reuse the provider lanes where they exist so the bars
-    /// key the same colors as the dollar charts/legend above.
-    private func familyColor(_ family: String) -> Color {
-        switch family {
-        case "Claude": return TahoeProvider.claude.dot
-        case "OpenAI": return TahoeProvider.codex.dot
-        case "Gemini": return TahoeProvider.gemini.dot
-        case "Grok":   return TahoeProvider.grok.dot
-        case "Cursor": return TahoeProvider.cursor.dot
-        case "OpenCode": return TahoeProvider.opencode.dot
-        default:        return t.fg3                                      // "Other"
-        }
-    }
-
     var body: some View {
         let byModel: [String: TokenTotals] = {
             guard let snapshot = usageHistoryStore?.snapshot else { return [:] }
-            return AnalyticsRangeAdapter.tokensByModel(snapshot: snapshot.filteredToEnabledProviders(), range: range)
+            return TokensByModelLeaderboard.tokensByModel(
+                snapshot: snapshot.filteredToEnabledProviders(),
+                range: range
+            )
         }()
-        let fams = families(from: byModel)
-        let grand = fams.reduce(0) { $0 + $1.total.totalTokens }
-        TahoeGlass(radius: 8, tone: .panel) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Tokens by model")
-                            .font(TahoeFont.body(15, weight: .bold))
-                            .foregroundStyle(t.fg)
-                        Text(fams.isEmpty
-                             ? "No token activity \(Self.rangeBlurb(range))."
-                             : "\(Self.fmt(grand)) tokens \(Self.rangeBlurb(range)) · grouped by family")
-                            .font(TahoeFont.body(11))
-                            .foregroundStyle(t.fg3)
-                    }
-                    Spacer()
-                    RangeSelector(value: $range)
-                }
-                ForEach(fams) { fam in
-                    familyBlock(fam, grandTotal: grand)
-                }
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        let entries = TokensByModelLeaderboard.rankedEntries(from: byModel)
+        TokensByModelLeaderboardView(entries: entries, range: range) {
+            TokensByModelRangeSelector(value: $range)
         }
-    }
-
-    @ViewBuilder
-    private func familyBlock(_ fam: Family, grandTotal: Int) -> some View {
-        let color = familyColor(fam.id)
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 7) {
-                Circle().fill(color).frame(width: 8, height: 8)
-                Text(fam.id)
-                    .font(TahoeFont.body(13, weight: .semibold))
-                    .foregroundStyle(t.fg)
-                Text(grandTotal > 0 ? "\(Int((Double(fam.total.totalTokens) / Double(grandTotal) * 100).rounded()))%" : "")
-                    .font(TahoeFont.body(10.5))
-                    .foregroundStyle(t.fg4)
-                Spacer()
-                Text(Self.fmt(fam.total.totalTokens) + " tokens")
-                    .font(TahoeFont.mono(12))
-                    .foregroundStyle(t.fg)
-            }
-            // Family share of the grand total — full-width bar.
-            ProportionBar(fraction: grandTotal > 0 ? Double(fam.total.totalTokens) / Double(grandTotal) : 0,
-                          color: color, height: 5)
-            ForEach(fam.models, id: \.name) { m in
-                HStack(spacing: 8) {
-                    Text(Self.displayModel(m.name))
-                        .font(TahoeFont.mono(11))
-                        .foregroundStyle(t.fg3)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(width: 168, alignment: .leading)
-                    // Bar scaled to the family's largest model.
-                    ProportionBar(fraction: fam.maxModel > 0 ? Double(m.totals.totalTokens) / Double(fam.maxModel) : 0,
-                                  color: color, height: 6)
-                        .frame(width: 84)
-                    Spacer(minLength: 8)
-                    Text("in \(Self.fmt(m.totals.inputTokens)) · out \(Self.fmt(m.totals.outputTokens)) · cache \(Self.fmt(m.totals.cacheReadTokens + m.totals.cacheCreationTokens))")
-                        .font(TahoeFont.body(10))
-                        .foregroundStyle(t.fg4)
-                        .lineLimit(1)
-                    Text(Self.fmt(m.totals.totalTokens))
-                        .font(TahoeFont.mono(11))
-                        .foregroundStyle(t.fg)
-                        .frame(width: 64, alignment: .trailing)
-                }
-            }
-            TahoeHair()
-        }
-    }
-
-    static func rangeBlurb(_ range: String) -> String {
-        switch range {
-        case "today", "24h": return "today"
-        case "7d":  return "in the past 7 days"
-        case "30d": return "in the past 30 days"
-        case "90d": return "in the past 90 days"
-        case "all": return "all-time"
-        default:     return "in the past 7 days"
-        }
-    }
-
-    /// Compact token count: 1.2K / 3.4M / 5.6B.
-    static func fmt(_ n: Int) -> String {
-        if n >= 1_000_000_000 { return String(format: "%.1fB", Double(n) / 1e9) }
-        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1e6) }
-        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1e3) }
-        return "\(n)"
-    }
-}
-
-/// Thin horizontal proportion bar (0…1) used by the tokens-by-model section.
-private struct ProportionBar: View {
-    @Environment(\.tahoe) private var t
-    var fraction: Double
-    var color: Color
-    var height: CGFloat = 6
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule(style: .continuous)
-                    .fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.06))
-                Capsule(style: .continuous)
-                    .fill(LinearGradient(colors: [color.opacity(0.95), color.opacity(0.5)],
-                                         startPoint: .leading, endPoint: .trailing))
-                    .frame(width: max(2, geo.size.width * CGFloat(min(1, max(0, fraction)))))
-            }
-        }
-        .frame(height: height)
     }
 }
 
@@ -719,7 +543,7 @@ private struct AnalyticsRow: View {
                 TahoeHair(vertical: true).frame(height: 14)
                 Legend()
                 Spacer()
-                RangeSelector(value: $range)
+                TokensByModelRangeSelector(value: $range)
             }
             .padding(.horizontal, 14)
 
@@ -946,50 +770,6 @@ private struct Legend: View {
                         .foregroundStyle(t.fg2)
                 }
             }
-        }
-    }
-}
-
-private struct RangeSelector: View {
-    @Environment(\.tahoe) private var t
-    @Binding var value: String
-    private let items: [(String, String)] = [
-        // v0.22.17: "24h" replaced with "Today" to match ccusage's
-        // daily-bucket model. The previous "past 24h" view split today's
-        // total across 6 equally-weighted four-hour buckets — pure
-        // smoke-and-mirrors, since UsageHistoryLoader stores data at
-        // day-resolution. "Today" tells the truth: a single day's spend.
-        ("today","Today"),("7d","7d"),("30d","30d"),("90d","90d"),("all","All time"),
-    ]
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(items, id: \.0) { (k, label) in
-                let active = k == value
-                Button { value = k } label: {
-                    Text(label)
-                        .font(TahoeFont.mono(11.5, weight: active ? .bold : .semibold))
-                        .foregroundStyle(active ? t.fg : t.fg3)
-                        .tracking(0.2)
-                        .padding(.horizontal, 11).padding(.vertical, 4)
-                        .background {
-                            if active {
-                                Capsule(style: .continuous)
-                                    .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.10) : .white)
-                                    .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0, y: 1)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(2)
-        .background {
-            Capsule(style: .continuous)
-                .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.06) : Color(.sRGB, white: 15.0/255, opacity: 0.05))
-        }
-        .overlay {
-            Capsule(style: .continuous).stroke(t.hairline, lineWidth: 0.5)
         }
     }
 }
