@@ -59,31 +59,7 @@ enum AnalyticsRangeAdapter {
     /// raw model name; this is token volume, not dollars, so unpriced models
     /// (Grok, free OpenRouter models, etc.) are included.
     static func tokensByModel(snapshot: UsageHistorySnapshot, range: String) -> [String: TokenTotals] {
-        if range == "all" {
-            if !snapshot.tokensByModel.isEmpty { return snapshot.tokensByModel }
-            // Fallback for older snapshots that predate the aggregate field.
-            var out: [String: TokenTotals] = [:]
-            for (_, modelMap) in snapshot.byDayByModel {
-                for (model, totals) in modelMap { out[model, default: .zero] += totals }
-            }
-            return out
-        }
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let startOffset: Int
-        switch range {
-        case "today", "24h": startOffset = 0
-        case "7d":           startOffset = 6
-        case "30d":          startOffset = 29
-        case "90d":          startOffset = (7 * 11) + 6   // 84-day span, matches weekly12
-        default:             startOffset = 6
-        }
-        let start = cal.date(byAdding: .day, value: -startOffset, to: today) ?? today
-        var out: [String: TokenTotals] = [:]
-        for (day, modelMap) in snapshot.byDayByModel where day >= start && day <= today {
-            for (model, totals) in modelMap { out[model, default: .zero] += totals }
-        }
-        return out
+        TokensByModelLeaderboard.tokensByModel(snapshot: snapshot, range: range)
     }
 
     // MARK: - Today: a single bar showing today's per-provider spend
