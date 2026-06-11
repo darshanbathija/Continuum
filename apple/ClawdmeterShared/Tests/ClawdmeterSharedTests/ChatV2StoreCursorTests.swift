@@ -3,6 +3,25 @@ import XCTest
 
 final class ChatV2StoreCursorTests: XCTestCase {
 
+    private var savedEnablement: [String: Bool] = [:]
+
+    // ChatV2Store derives its pre-scope default from GLOBAL ProviderEnablement,
+    // which persists to disk across runs. Snapshot + disable all so the
+    // "nothing enabled ⇒ empty/filtered selection" assertions are deterministic
+    // regardless of what an earlier test (or run) left enabled.
+    override func setUp() {
+        super.setUp()
+        savedEnablement = Dictionary(uniqueKeysWithValues:
+            ProviderRegistry.allProviderIDs.map { ($0, ProviderEnablement.isEnabled($0)) })
+        for id in ProviderRegistry.allProviderIDs { ProviderEnablement.setEnabled(id, false) }
+    }
+
+    override func tearDown() {
+        for (id, on) in savedEnablement { ProviderEnablement.setEnabled(id, on) }
+        savedEnablement = [:]
+        super.tearDown()
+    }
+
     @MainActor
     func test_cursorAndOpenRouterAreSelectableChatVendors() async {
         XCTAssertTrue(ChatV2Store.defaultChatVendorOrder.contains(.cursor))

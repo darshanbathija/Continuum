@@ -113,6 +113,9 @@
 		3E4133E8D5F42ACFC89F2CAE /* MacRelayClientReconnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10A51537AA0E4F893EADB693 /* MacRelayClientReconnectTests.swift */; };
 		3E4ECC9D7E017C2E27E605F5 /* ComposerInputCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CD788C3119613C920DFB7B0 /* ComposerInputCore.swift */; };
 		3E9CD88D0034E5FCBA9A093B /* CustomProviderSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2164B168973D3B024958E5 /* CustomProviderSettings.swift */; };
+		9B0C1D2E3F4A5B6C7D8E9F01 /* SkillsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A8B9C0D1E2F3A4B5C6D7E8F /* SkillsSettingsView.swift */; };
+		A1C2D3E4F5A6B7C8D9E0F1A2 /* SkillPluginImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7B8C9D0E1F2A3 /* SkillPluginImporter.swift */; };
+		C3D4E5F6A7B8C9D0E1F2A3B4 /* SkillPluginImporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F6A7B8C9D0E1F2A3B4C5 /* SkillPluginImporterTests.swift */; };
 		3FA93795C2490B0FF32C0353 /* TailscaleWhoisIpOnlyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D2A6ACB7ED52F90032E358F /* TailscaleWhoisIpOnlyTests.swift */; };
 		3FEC8086C160D365D5C211B0 /* AttachmentChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0273C0880168A1CE3A2927 /* AttachmentChip.swift */; };
 		40413B717F409C644643AF73 /* PRCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A629825BB527592CC870F4 /* PRCoordinatorTests.swift */; };
@@ -633,6 +636,9 @@
 		49F781A75D25FE8478D4F1E4 /* PairingScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScannerView.swift; sourceTree = "<group>"; };
 		49FF764D16075FBD5CFDC73E /* QuickSpawnContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickSpawnContractTests.swift; sourceTree = "<group>"; };
 		4B2164B168973D3B024958E5 /* CustomProviderSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomProviderSettings.swift; sourceTree = "<group>"; };
+		7A8B9C0D1E2F3A4B5C6D7E8F /* SkillsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillsSettingsView.swift; sourceTree = "<group>"; };
+		B2C3D4E5F6A7B8C9D0E1F2A3 /* SkillPluginImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillPluginImporter.swift; sourceTree = "<group>"; };
+		D4E5F6A7B8C9D0E1F2A3B4C5 /* SkillPluginImporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillPluginImporterTests.swift; sourceTree = "<group>"; };
 		4B2A6E12E7475B6319B2F93C /* iOSSourcesPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSSourcesPane.swift; sourceTree = "<group>"; };
 		4B5CD71EDF0C57482E26E894 /* RepoIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoIndexTests.swift; sourceTree = "<group>"; };
 		4BC8A2A65523DC9639BAB4F9 /* RepoOnboardingIdempotencyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoOnboardingIdempotencyStore.swift; sourceTree = "<group>"; };
@@ -1324,6 +1330,7 @@
 				A1E4A21BAAD10FDDAA381ED9 /* ChatItemRowInvalidationTests.swift */,
 				D4E5F60718293A4B5C6D7E8F /* TranscriptMessageGutterTests.swift */,
 				C4B75F5B0C83A9A8DD22B8D0 /* ChatItemRowSubtitleTests.swift */,
+				D4E5F6A7B8C9D0E1F2A3B4C5 /* SkillPluginImporterTests.swift */,
 				89238D6504115C6F85FDA4E7 /* ChatSendPerProviderTests.swift */,
 				AA51A0428BF8248DE24EF7DD /* ClaudePtyE2ETests.swift */,
 				13323AB70617753B08B0D66D /* ClaudePtyHostTests.swift */,
@@ -1513,6 +1520,8 @@
 				8B1A00A70CD4E6DD901790A3 /* PlanCompletionSurfaces.swift */,
 				CDCD6719CB028959F40A3DA0 /* ProviderAccountsUI.swift */,
 				8502D79883F8A1C3ED82A085 /* RepoEnvVariablesSettingsView.swift */,
+				7A8B9C0D1E2F3A4B5C6D7E8F /* SkillsSettingsView.swift */,
+				B2C3D4E5F6A7B8C9D0E1F2A3 /* SkillPluginImporter.swift */,
 				109D16354B4A1137F53A4E15 /* SetupTerminalSheet.swift */,
 				4FE36F4B9D0C20CEBC060E31 /* VendorProvisioningSettingsView.swift */,
 				FDE0094134F03C624183D395 /* RepoEnv */,
@@ -2069,6 +2078,7 @@
 				A1388DEC178AA53C0C034517 /* ChatItemRowInvalidationTests.swift in Sources */,
 				C3D4E5F60718293A4B5C6D7E /* TranscriptMessageGutterTests.swift in Sources */,
 				F31B5898F1F17A1D74B79A59 /* ChatItemRowSubtitleTests.swift in Sources */,
+				C3D4E5F6A7B8C9D0E1F2A3B4 /* SkillPluginImporterTests.swift in Sources */,
 				08BE5FDB4A47495B6B5C587B /* ChatSendPerProviderTests.swift in Sources */,
 				9A791C53B086D17E99DAA910 /* ChatV2StoreTests.swift in Sources */,
 				B584F755412DA522F9801672 /* ClaudePtyE2ETests.swift in Sources */,
@@ -2195,6 +2205,8 @@
 				6C9453475B3A784FC8F7186D /* ComposerModelPicker.swift in Sources */,
 				816EAF073506FA86D50AA3AD /* CustomProviderAPIProbe.swift in Sources */,
 				3E9CD88D0034E5FCBA9A093B /* CustomProviderSettings.swift in Sources */,
+				9B0C1D2E3F4A5B6C7D8E9F01 /* SkillsSettingsView.swift in Sources */,
+				A1C2D3E4F5A6B7C8D9E0F1A2 /* SkillPluginImporter.swift in Sources */,
 				06F29732F6D8077C9E39BDD7 /* CustomProviderSpawnPlan.swift in Sources */,
 				358A9B2460162DB1CE1CF53C /* CustomProviderStore.swift in Sources */,
 				B081F058485D14758B82D037 /* DaemonChatStoreRegistry.swift in Sources */,

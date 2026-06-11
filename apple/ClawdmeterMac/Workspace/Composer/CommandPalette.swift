@@ -13,12 +13,31 @@ struct PaletteCommand: Identifiable, Hashable {
     let label: String       // user-visible name (often matches id)
     let description: String
     let source: Source
+    /// Absolute path to `SKILL.md` when the skill is file-backed.
+    let filePath: String?
 
     enum Source: Hashable {
         case claudeGlobal       // ~/.claude/skills/<name>
         case claudeProject      // <repo>/.claude/skills/<name>
+        case gstack             // ~/.agents/skills/gstack/<name>
+        case customPlugin(id: String)
         case codexBuiltin
     }
+}
+
+/// One row inside a skill directory (e.g. `SKILL.md`, `references/`).
+struct SkillDirectoryEntry: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let isDirectory: Bool
+}
+
+/// Loaded detail for the Settings → Providers → Skills inspector.
+struct SkillDetail: Equatable {
+    let command: PaletteCommand
+    let bodyMarkdown: String
+    let lastModified: Date?
+    let children: [SkillDirectoryEntry]
 }
 
 /// Walks installed skills and exposes them as a cached list. Cache TTL
@@ -64,6 +83,11 @@ final class SkillCatalog: ObservableObject {
         await performRefresh()
     }
 
+    /// Force the next refresh to rescan skill directories.
+    func invalidateCache() {
+        lastLoad = .distantPast
+    }
+
     private func shouldRefresh() -> Bool {
         let now = Date()
         let globalRoot = URL(fileURLWithPath: NSString("~/.claude/skills").expandingTildeInPath)
@@ -81,8 +105,9 @@ final class SkillCatalog: ObservableObject {
         let projectRoot = projectSkillsRoot
         // The heavy work — 127 file reads + frontmatter parse — moves off
         // the main actor here. `enumerate` and helpers are nonisolated.
+        let customRoots = SkillPluginStore.customPluginRoots()
         let fresh = await Task.detached(priority: .utility) {
-            Self.enumerateNonisolated(projectSkillsRoot: projectRoot)
+            Self.enumerateNonisolated(projectSkillsRoot: projectRoot, customPluginRoots: customRoots)
         }.value
         // Hop back to main to publish.
         commands = fresh
@@ -115,28 +140,188 @@ final class SkillCatalog: ObservableObject {
             // X3: forward-compat unknown agent — no palette plumbed.
             pool = []
         }
-        if trimmed.isEmpty { return pool }
-        return pool.filter {
+        // gstack installs the same skills into both ~/.claude/skills and
+        // ~/.agents/skills/gstack, so a name like "review" surfaces twice in
+        // the Claude pool. Collapse by id (Claude copy wins) so the list
+        // doesn't double-list or collide the ForEach `id: \.element.id` keys.
+        let deduped = Self.dedupedByID(pool)
+        if trimmed.isEmpty { return deduped }
+        return deduped.filter {
             $0.id.lowercased().contains(trimmed) || $0.description.lowercased().contains(trimmed)
         }
     }
 
+    /// Source preference when two commands share an id. Lower wins: a
+    /// user's own Claude skill outranks the gstack/plugin copy of the same
+    /// name.
+    nonisolated static func sourcePriority(_ source: PaletteCommand.Source) -> Int {
+        switch source {
+        case .claudeProject: return 0
+        case .claudeGlobal:  return 1
+        case .gstack:        return 2
+        case .customPlugin:  return 3
+        case .codexBuiltin:  return 4
+        }
+    }
+
+    /// Collapse same-id commands to one entry, keeping the highest-priority
+    /// source. Preserves the input's (label) ordering.
+    nonisolated static func dedupedByID(_ commands: [PaletteCommand]) -> [PaletteCommand] {
+        var bestPriority: [String: Int] = [:]
+        for command in commands {
+            let priority = sourcePriority(command.source)
+            if let existing = bestPriority[command.id], existing <= priority { continue }
+            bestPriority[command.id] = priority
+        }
+        var emitted = Set<String>()
+        var out: [PaletteCommand] = []
+        for command in commands {
+            guard bestPriority[command.id] == sourcePriority(command.source) else { continue }
+            if emitted.insert(command.id).inserted { out.append(command) }
+        }
+        return out
+    }
+
     // MARK: - Walkers (all `nonisolated static` so `Task.detached` can run them off main)
 
-    nonisolated static func enumerateNonisolated(projectSkillsRoot: URL?) -> [PaletteCommand] {
+    nonisolated static func enumerateNonisolated(
+        projectSkillsRoot: URL?,
+        customPluginRoots: [(id: String, root: URL)] = []
+    ) -> [PaletteCommand] {
         var out: [PaletteCommand] = []
+        // gstack installs its skills into ~/.claude/skills (so the CLI can
+        // actually run them) AND keeps a repo checkout at ~/.agents/skills/gstack.
+        // Use the checkout only as a *roster* of which names are gstack-managed,
+        // then emit each skill once from ~/.claude/skills — tagging gstack ones
+        // .gstack and the user's own .claudeGlobal. Walking both roots for
+        // emission listed every gstack skill twice (palette dup-id + double rows).
+        let gstackRoster = gstackSkillNames()
         out.append(contentsOf: walkClaudeSkills(
             root: URL(fileURLWithPath: NSString("~/.claude/skills").expandingTildeInPath),
-            source: .claudeGlobal
+            source: .claudeGlobal,
+            reclassifyGstack: gstackRoster
         ))
         if let projectSkillsRoot {
             out.append(contentsOf: walkClaudeSkills(root: projectSkillsRoot, source: .claudeProject))
+        }
+        for plugin in customPluginRoots {
+            out.append(contentsOf: walkPluginSkills(root: plugin.root, source: .customPlugin(id: plugin.id)))
         }
         out.append(contentsOf: codexBuiltins())
         return out.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
     }
 
-    nonisolated private static func walkClaudeSkills(root: URL, source: PaletteCommand.Source) -> [PaletteCommand] {
+    /// Names of skills in the gstack repo checkout, used to tag their copies
+    /// under ~/.claude/skills as `.gstack` rather than `.claudeGlobal`. Empty
+    /// when gstack isn't installed.
+    nonisolated static func gstackSkillNames() -> Set<String> {
+        let root = URL(fileURLWithPath: NSString("~/.agents/skills/gstack").expandingTildeInPath)
+        return Set(walkPluginSkills(root: root, source: .gstack).map(\.id))
+    }
+
+    /// Load the rendered body + directory children for a file-backed skill.
+    nonisolated static func loadDetail(for command: PaletteCommand) -> SkillDetail? {
+        guard let filePath = command.filePath else {
+            guard command.source == .codexBuiltin else { return nil }
+            return SkillDetail(
+                command: command,
+                bodyMarkdown: command.description,
+                lastModified: nil,
+                children: []
+            )
+        }
+        guard let content = try? String(contentsOf: URL(fileURLWithPath: filePath), encoding: .utf8) else {
+            return nil
+        }
+        let body = stripFrontmatter(from: content)
+        let skillDir = URL(fileURLWithPath: filePath).deletingLastPathComponent()
+        let mtime = (try? skillDir
+            .appendingPathComponent("SKILL.md")
+            .resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate)
+        let children = listSkillDirectory(skillDir)
+        return SkillDetail(
+            command: command,
+            bodyMarkdown: body,
+            lastModified: mtime,
+            children: children
+        )
+    }
+
+    nonisolated private static func stripFrontmatter(from content: String) -> String {
+        guard content.hasPrefix("---\n") else { return content }
+        let body = content.dropFirst(4)
+        guard let endRange = body.range(of: "\n---") else { return content }
+        let remainder = body[endRange.upperBound...]
+        if remainder.hasPrefix("\n") {
+            return String(remainder.dropFirst())
+        }
+        return String(remainder)
+    }
+
+    nonisolated private static func listSkillDirectory(_ root: URL) -> [SkillDirectoryEntry] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        return entries
+            .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
+            .map { url in
+                let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                return SkillDirectoryEntry(id: url.path, name: url.lastPathComponent, isDirectory: isDir)
+            }
+    }
+
+    /// Whether a plugin root contains at least one discoverable skill.
+    nonisolated static func pluginRootContainsSkills(_ path: String) -> Bool {
+        !walkPluginSkills(
+            root: URL(fileURLWithPath: path, isDirectory: true),
+            source: .customPlugin(id: "probe")
+        ).isEmpty
+    }
+
+    /// Plugin repos may lay out skills one or two directories deep.
+    nonisolated private static func walkPluginSkills(root: URL, source: PaletteCommand.Source) -> [PaletteCommand] {
+        var out = walkClaudeSkills(root: root, source: source)
+        if !out.isEmpty { return out }
+
+        let rootSkill = root.appendingPathComponent("SKILL.md")
+        if FileManager.default.fileExists(atPath: rootSkill.path),
+           let content = try? String(contentsOf: rootSkill, encoding: .utf8),
+           let parsed = SkillFrontmatter.parse(content) {
+            return [PaletteCommand(
+                id: parsed.name,
+                label: parsed.name,
+                description: parsed.description,
+                source: source,
+                filePath: rootSkill.path
+            )]
+        }
+
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        for entry in entries {
+            let isDir = (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            guard isDir else { continue }
+            out.append(contentsOf: walkClaudeSkills(root: entry, source: source))
+        }
+        return out
+    }
+
+    nonisolated private static func walkClaudeSkills(
+        root: URL,
+        source: PaletteCommand.Source,
+        reclassifyGstack roster: Set<String> = []
+    ) -> [PaletteCommand] {
         guard let entries = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else {
             return []
         }
@@ -149,18 +334,28 @@ final class SkillCatalog: ObservableObject {
                 paletteLogger.warning("skipped \(skillFile.path, privacy: .public): malformed frontmatter")
                 continue
             }
-            out.append(PaletteCommand(id: parsed.name, label: parsed.name, description: parsed.description, source: source))
+            // A ~/.claude/skills entry whose name is in the gstack roster is a
+            // gstack-managed copy — surface it under the G stack group, not Claude.
+            let effectiveSource: PaletteCommand.Source =
+                roster.contains(parsed.name) ? .gstack : source
+            out.append(PaletteCommand(
+                id: parsed.name,
+                label: parsed.name,
+                description: parsed.description,
+                source: effectiveSource,
+                filePath: skillFile.path
+            ))
         }
         return out
     }
 
     nonisolated private static func codexBuiltins() -> [PaletteCommand] {
         [
-            PaletteCommand(id: "clear",   label: "clear",   description: "Clear the current conversation context.", source: .codexBuiltin),
-            PaletteCommand(id: "compact", label: "compact", description: "Compact the conversation transcript.", source: .codexBuiltin),
-            PaletteCommand(id: "model",   label: "model",   description: "Switch the active model for this session.", source: .codexBuiltin),
-            PaletteCommand(id: "help",    label: "help",    description: "Show CLI help.", source: .codexBuiltin),
-            PaletteCommand(id: "quit",    label: "quit",    description: "Exit the session.", source: .codexBuiltin),
+            PaletteCommand(id: "clear",   label: "clear",   description: "Clear the current conversation context.", source: .codexBuiltin, filePath: nil),
+            PaletteCommand(id: "compact", label: "compact", description: "Compact the conversation transcript.", source: .codexBuiltin, filePath: nil),
+            PaletteCommand(id: "model",   label: "model",   description: "Switch the active model for this session.", source: .codexBuiltin, filePath: nil),
+            PaletteCommand(id: "help",    label: "help",    description: "Show CLI help.", source: .codexBuiltin, filePath: nil),
+            PaletteCommand(id: "quit",    label: "quit",    description: "Exit the session.", source: .codexBuiltin, filePath: nil),
         ]
     }
 
@@ -269,6 +464,10 @@ struct CommandPaletteView: View {
             tag("Claude", color: .orange)
         case .claudeProject:
             tag("Project", color: .blue)
+        case .gstack:
+            tag("G stack", color: .green)
+        case .customPlugin:
+            tag("Plugin", color: .teal)
         case .codexBuiltin:
             tag("Codex", color: .purple)
         }
