@@ -619,6 +619,47 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: aliasPath))
     }
 
+    func test_delete_removesWorkspaceRecord() {
+        let store = WorkspaceStore(storeURL: workspacesURL, sessionsURL: sessionsURL)
+        let id = UUID()
+        store.upsert(CodeWorkspaceRecord(
+            id: id,
+            projectId: UUID(),
+            repoRoot: "/repos/remove-me",
+            repoDisplayName: "remove-me",
+            runtimeCwd: "/repos/remove-me"
+        ))
+        XCTAssertTrue(store.delete(id: id))
+        XCTAssertNil(store.workspace(id: id))
+        XCTAssertFalse(store.all().contains { $0.id == id })
+    }
+
+    func test_delete_deferredPersistenceEventuallyWrites() async {
+        let store = WorkspaceStore(storeURL: workspacesURL, sessionsURL: sessionsURL)
+        let id = UUID()
+        store.upsert(CodeWorkspaceRecord(
+            id: id,
+            projectId: UUID(),
+            repoRoot: "/repos/deferred-remove",
+            repoDisplayName: "deferred-remove",
+            runtimeCwd: "/repos/deferred-remove"
+        ))
+        XCTAssertTrue(store.delete(id: id, deferPersistence: true))
+        XCTAssertNil(store.workspace(id: id))
+
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
+            if let data = try? Data(contentsOf: workspacesURL),
+               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let workspaces = root["workspaces"] as? [[String: Any]],
+               !workspaces.contains(where: { ($0["id"] as? String) == id.uuidString }) {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTFail("Deferred delete should flush workspaces.json within 2s")
+    }
+
     // MARK: - syncActiveSessions
 
     func test_syncActiveSessions_synthesizesMissingWorkspace() {

@@ -541,6 +541,60 @@ final class SidebarProjectionCacheTests: XCTestCase {
         XCTAssertEqual(model.filteredRepos.map { $0.key }, [repo.key])
     }
 
+    @MainActor
+    func test_removeManagedWorkspaceDropsRepoWithin250ms() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SidebarProjectionRemoveRepo-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let repoRoot = directory.appendingPathComponent("managed-repo", isDirectory: true).path
+        try? FileManager.default.createDirectory(atPath: repoRoot, withIntermediateDirectories: true)
+        let workspaceId = UUID()
+        let workspaceStore = WorkspaceStore(
+            storeURL: directory.appendingPathComponent("workspaces.json"),
+            sessionsURL: directory.appendingPathComponent("sessions.json")
+        )
+        workspaceStore.upsert(CodeWorkspaceRecord(
+            id: workspaceId,
+            projectId: UUID(),
+            repoRoot: repoRoot,
+            repoDisplayName: "managed-repo",
+            runtimeCwd: repoRoot
+        ))
+        let repoKey = RepoIdentity.normalize(repoRoot)
+        let model = SessionsModel(
+            repoIndex: RepoIndex(),
+            registry: AgentSessionRegistry(storeURL: directory.appendingPathComponent("sessions.json")),
+            workspaceStore: workspaceStore
+        )
+        model.repos = [
+            AgentRepo(
+                key: repoKey,
+                displayName: "managed-repo",
+                hasActiveSessions: false
+            )
+        ]
+
+        let start = ContinuousClock.now
+        XCTAssertTrue(model.removeManagedWorkspace(id: workspaceId))
+        XCTAssertNil(workspaceStore.workspace(id: workspaceId))
+        XCTAssertTrue(model.repos.isEmpty)
+        let elapsed = start.duration(to: ContinuousClock.now)
+
+        XCTContext.runActivity(named: "Remove managed workspace feedback latency") { activity in
+            activity.add(XCTAttachment(string: """
+            elapsed=\(elapsed)
+            budget=250ms
+            """))
+        }
+        XCTAssertLessThan(
+            elapsed,
+            .milliseconds(250),
+            "Removing a managed repo must drop the sidebar repo row within the 250ms feedback budget."
+        )
+    }
+
     func test_repoRecentsInvalidateProjectionCacheForExternalSections() {
         let sessions: [AgentSession] = []
         let cache = SingleSlotProjectionCache<SidebarProjectionKey, SidebarProjection>()

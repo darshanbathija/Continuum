@@ -1046,8 +1046,8 @@ struct SidebarPane: View {
             let ids = section.sessions.map(\.id)
             let workspaceId = workspace?.id
             Task {
+                if let workspaceId { _ = model.removeManagedWorkspace(id: workspaceId) }
                 try? await model.registry.archive(ids: ids)
-                if let workspaceId { _ = model.workspaceStore.delete(id: workspaceId) }
             }
         } label: {
             Label("Archive entire repo", systemImage: "archivebox.fill")
@@ -1061,7 +1061,7 @@ struct SidebarPane: View {
         if let ws = workspace {
             Divider()
             Button(role: .destructive) {
-                _ = model.workspaceStore.delete(id: ws.id)
+                _ = model.removeManagedWorkspace(id: ws.id)
             } label: {
                 Label("Remove “\(section.repo.displayName)” from list", systemImage: "trash")
             }
