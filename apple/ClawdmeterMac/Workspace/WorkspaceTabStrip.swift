@@ -27,10 +27,8 @@ struct WorkspaceTabStrip: View {
     private static let tabSpacing: CGFloat = 6
     private static let newTabButtonWidth: CGFloat = 26
     private static let chatTabChromeWidth: CGFloat = 49
-    private static let compactLabelWidth: CGFloat = 44
     private static let idealLabelWidth: CGFloat = 118
     private static let expandedLabelWidth: CGFloat = 170
-    private static let compactFitTarget = 4
 
     private enum TabItem: Identifiable {
         case session(AgentSession)
@@ -96,64 +94,29 @@ struct WorkspaceTabStrip: View {
         }
     }
 
-    private var itemIDs: [String] {
-        items.map(\.id)
-    }
-
-    private var activeItemId: String? {
-        if let activeDocumentTabId {
-            return "document-\(activeDocumentTabId.uuidString)"
-        }
-        if let activeTerminalTabId {
-            return "terminal-\(activeTerminalTabId.uuidString)"
-        }
-        if let activeDraftTabId {
-            return "draft-\(activeDraftTabId.uuidString)"
-        }
-        if let activeSessionId {
-            return "session-\(activeSessionId.uuidString)"
-        }
-        return nil
-    }
-
     var body: some View {
         GeometryReader { geometry in
             let labelWidth = Self.adaptiveChatTabLabelWidth(
                 availableWidth: geometry.size.width,
                 itemCount: items.count
             )
-            let tabScrollWidth = Self.scrollableTabContentWidth(
-                availableWidth: geometry.size.width,
-                labelWidth: labelWidth,
-                itemCount: items.count
-            )
             HStack(spacing: 0) {
-                ScrollViewReader { proxy in
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: Self.tabSpacing) {
-                            ForEach(items) { item in
-                                tabView(item, labelWidth: labelWidth)
-                                    .id(item.id)
-                            }
-                        }
-                        .padding(.leading, Self.stripHorizontalPadding / 2)
-                        .padding(.vertical, 7)
-                    }
-                    .onAppear {
-                        scrollActiveTabIntoView(proxy)
-                    }
-                    .onChange(of: activeItemId) { _, _ in
-                        scrollActiveTabIntoView(proxy)
-                    }
-                    .onChange(of: itemIDs) { _, _ in
-                        scrollActiveTabIntoView(proxy)
+                HStack(spacing: Self.tabSpacing) {
+                    ForEach(items) { item in
+                        tabView(item, labelWidth: labelWidth)
+                            .id(item.id)
                     }
                 }
-                .frame(width: tabScrollWidth, alignment: .leading)
+                .padding(.leading, Self.stripHorizontalPadding / 2)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .clipped()
+                .layoutPriority(0)
 
                 newTabButton
                     .padding(.trailing, Self.stripHorizontalPadding / 2)
                     .padding(.vertical, 7)
+                    .layoutPriority(1)
             }
         }
         .frame(height: 40)
@@ -181,25 +144,13 @@ struct WorkspaceTabStrip: View {
               availableWidth > 0
         else { return Self.idealLabelWidth }
 
-        let fitCount = max(1, min(itemCount, Self.compactFitTarget))
         let widthForLabels = availableWidth
             - Self.stripHorizontalPadding
             - Self.newTabButtonWidth
-            - (CGFloat(fitCount) * Self.tabSpacing)
-            - (CGFloat(fitCount) * Self.chatTabChromeWidth)
-        let candidate = floor(widthForLabels / CGFloat(fitCount))
-        return max(Self.compactLabelWidth, min(Self.expandedLabelWidth, candidate))
-    }
-
-    static func scrollableTabContentWidth(availableWidth: CGFloat, labelWidth: CGFloat, itemCount: Int) -> CGFloat {
-        let maxScrollableWidth = max(0, availableWidth - Self.newTabButtonWidth - (Self.stripHorizontalPadding / 2))
-        guard itemCount > 0 else {
-            return min(Self.stripHorizontalPadding / 2, maxScrollableWidth)
-        }
-        let contentWidth = (Self.stripHorizontalPadding / 2)
-            + (CGFloat(itemCount) * (labelWidth + Self.chatTabChromeWidth))
-            + (CGFloat(max(0, itemCount - 1)) * Self.tabSpacing)
-        return min(contentWidth, maxScrollableWidth)
+            - (CGFloat(itemCount) * Self.tabSpacing)
+            - (CGFloat(itemCount) * Self.chatTabChromeWidth)
+        let candidate = floor(widthForLabels / CGFloat(itemCount))
+        return max(0, min(Self.expandedLabelWidth, candidate))
     }
 
     static func estimatedChatTabStripWidth(labelWidth: CGFloat, itemCount: Int) -> CGFloat {
@@ -223,15 +174,6 @@ struct WorkspaceTabStrip: View {
             terminalButton(tab, session: session, labelWidth: labelWidth)
         case .document(let tab):
             documentButton(tab, labelWidth: labelWidth)
-        }
-    }
-
-    private func scrollActiveTabIntoView(_ proxy: ScrollViewProxy) {
-        guard let target = activeItemId else { return }
-        DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.12)) {
-                proxy.scrollTo(target, anchor: .trailing)
-            }
         }
     }
 
