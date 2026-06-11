@@ -47,6 +47,16 @@ public actor WorktreeManager {
         public let branchAliasPath: String?
     }
 
+    /// Result of renaming a worktree's display folder and git branch together.
+    public struct RenamedWorktree: Sendable {
+        public let oldPath: String
+        public let newPath: String
+        public let oldBranchName: String?
+        public let newBranchName: String?
+        public let workspaceSlug: String
+        public let branchAliasPath: String?
+    }
+
     private struct AddedWorktree: Sendable {
         let path: String
         let branchName: String?
@@ -218,6 +228,27 @@ public actor WorktreeManager {
     /// Legacy slug derivation (goal + session-id-shortid). Kept for
     /// back-compat with code paths that haven't been migrated to the
     /// city-named worktrees yet; new spawns should call `slug(city:)`.
+    /// Derive a git-safe branch name from a user-supplied rename label.
+    /// Preserves an existing slash prefix (`user/feature` → `user/new-name`).
+    public static func renamedBranchName(currentBranch: String?, newDisplayName: String) -> String {
+        let slug = slug(city: newDisplayName)
+        guard let current = currentBranch?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !current.isEmpty
+        else { return slug }
+        if let slash = current.lastIndex(of: "/") {
+            let prefix = String(current[..<slash])
+            return "\(prefix)/\(slug)"
+        }
+        return slug
+    }
+
+    /// Replace the last path component with a slug derived from `newDisplayName`.
+    public static func renamedWorktreePath(currentPath: String, newDisplayName: String) -> String {
+        let slug = slug(city: newDisplayName)
+        let parent = (currentPath as NSString).deletingLastPathComponent
+        return (parent as NSString).appendingPathComponent(slug)
+    }
+
     public static func slug(goal: String?, sessionId: UUID) -> String {
         let shortId = sessionId.uuidString.replacingOccurrences(of: "-", with: "").prefix(6).lowercased()
         let goalSlug: String
@@ -713,6 +744,141 @@ public actor WorktreeManager {
         _ = try? await runGit(args: ["worktree", "prune"], cwd: repoRoot)
         worktreeLogger.info("Trashed worktree \(worktreePath, privacy: .public)")
         return .deleted
+    }
+
+    /// Rename a worktree's sidebar label folder and its checked-out git branch.
+    /// Clawdmeter-managed worktrees move under `~/Clawdmeter/workspaces/…`;
+    /// Conductor-style paths (`…/conductor/workspaces/<repo>/<slug>`) swap the
+    /// last folder component. Ownership markers + branch alias symlinks are
+    /// updated when present.
+    public func renameWorktree(
+        repoRoot: String,
+        worktreePath: String,
+        newDisplayName: String
+    ) async throws -> RenamedWorktree {
+        let trimmed = newDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw WorktreeError.invalidName
+        }
+
+        let oldPath = WorkspaceKey.canonicalPath(worktreePath)
+        let currentBranch = try await currentBranch(cwd: oldPath)
+        let newBranchName = Self.renamedBranchName(
+            currentBranch: currentBranch,
+            newDisplayName: trimmed
+        )
+        let marker = try? readOwnershipMarker(worktreePath: oldPath)
+
+        let newPath: String
+        if let marker,
+           let storageRoot = marker.storageRoot,
+           let projectSlug = marker.projectSlug {
+            let workspaceSlug = Self.slug(city: trimmed)
+            newPath = Self.layout(
+                storageRoot: storageRoot,
+                projectSlug: projectSlug,
+                workspaceSlug: workspaceSlug,
+                branchName: newBranchName
+            ).path
+        } else {
+            newPath = WorkspaceKey.canonicalPath(
+                Self.renamedWorktreePath(currentPath: oldPath, newDisplayName: trimmed)
+            )
+        }
+
+        if newPath == oldPath && newBranchName == currentBranch {
+            return RenamedWorktree(
+                oldPath: oldPath,
+                newPath: oldPath,
+                oldBranchName: currentBranch,
+                newBranchName: currentBranch,
+                workspaceSlug: (oldPath as NSString).lastPathComponent,
+                branchAliasPath: marker?.branchAliasPath
+            )
+        }
+
+        if newPath != oldPath && FileManager.default.fileExists(atPath: newPath) {
+            throw WorktreeError.collisionUnresolvable
+        }
+        if newBranchName != currentBranch {
+            let listResult = try await runGit(args: ["branch", "--list", newBranchName], cwd: repoRoot)
+            let listed = listResult.stdoutString
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !listed.isEmpty {
+                throw WorktreeError.collisionUnresolvable
+            }
+        }
+
+        if newBranchName != currentBranch {
+            let branchResult = try await runGit(args: ["branch", "-m", newBranchName], cwd: oldPath)
+            guard branchResult.exitStatus == 0 else {
+                throw WorktreeError.gitFailed(operation: "branch -m", stderr: branchResult.stderrString)
+            }
+        }
+
+        if marker != nil {
+            removeBranchAliasIfOwned(marker: marker, worktreePath: oldPath)
+        }
+
+        if newPath != oldPath {
+            try FileManager.default.createDirectory(
+                at: URL(fileURLWithPath: newPath).deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let moveResult = try await runGit(args: ["worktree", "move", oldPath, newPath], cwd: repoRoot)
+            guard moveResult.exitStatus == 0 else {
+                throw WorktreeError.gitFailed(operation: "worktree move", stderr: moveResult.stderrString)
+            }
+        }
+
+        var branchAliasPath: String? = marker?.branchAliasPath
+        let workspaceSlug = (newPath as NSString).lastPathComponent
+        if let marker {
+            let layout = Self.layout(
+                storageRoot: marker.storageRoot ?? workspaceStorageRoot,
+                projectSlug: marker.projectSlug ?? Self.projectFolderSlug(fromRepoRoot: repoRoot),
+                workspaceSlug: workspaceSlug,
+                branchName: newBranchName
+            )
+            let alias = createBranchAlias(layout: layout, worktreePath: newPath)
+            let recordedLayout = WorktreeLayout(
+                storageRoot: layout.storageRoot,
+                projectSlug: layout.projectSlug,
+                workspaceSlug: layout.workspaceSlug,
+                projectRoot: layout.projectRoot,
+                path: layout.path,
+                branchAliasPath: alias
+            )
+            branchAliasPath = recordedLayout.branchAliasPath
+            let gitDir = try await absoluteGitDir(cwd: newPath)
+            try writeOwnershipMarker(
+                gitDir: gitDir,
+                marker: OwnershipMarker(
+                    version: marker.version,
+                    markerId: marker.markerId,
+                    repoRoot: marker.repoRoot,
+                    worktreePath: newPath,
+                    branchName: newBranchName,
+                    storageRoot: recordedLayout.storageRoot,
+                    projectSlug: recordedLayout.projectSlug,
+                    workspaceSlug: recordedLayout.workspaceSlug,
+                    branchAliasPath: recordedLayout.branchAliasPath,
+                    createdAt: marker.createdAt
+                )
+            )
+        }
+
+        worktreeLogger.info(
+            "Renamed worktree \(oldPath, privacy: .public) → \(newPath, privacy: .public) branch=\(newBranchName ?? "(unchanged)", privacy: .public)"
+        )
+        return RenamedWorktree(
+            oldPath: oldPath,
+            newPath: newPath,
+            oldBranchName: currentBranch,
+            newBranchName: newBranchName,
+            workspaceSlug: workspaceSlug,
+            branchAliasPath: branchAliasPath
+        )
     }
 
     /// Re-check-out a previously-trashed worktree at its original path from its
@@ -1560,6 +1726,7 @@ public actor WorktreeManager {
         case gitFailed(operation: String, stderr: String)
         case collisionUnresolvable
         case fileCopyFailed(String)
+        case invalidName
 
         public var errorDescription: String? {
             switch self {
@@ -1569,9 +1736,11 @@ public actor WorktreeManager {
                 let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
                 return detail.isEmpty ? "\(operation) failed" : "\(operation) failed: \(detail)"
             case .collisionUnresolvable:
-                return "could not allocate a unique worktree path"
+                return "That name is already in use by another branch or workspace folder"
             case .fileCopyFailed(let message):
                 return message
+            case .invalidName:
+                return "Name cannot be empty"
             }
         }
     }
