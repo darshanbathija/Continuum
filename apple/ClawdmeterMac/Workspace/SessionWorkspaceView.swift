@@ -716,7 +716,7 @@ struct SessionWorkspaceView: View {
 // `SessionComparisonSheet.swift` (A6 foundation extraction).
 //
 // `StatusPulseDot` + `AttentionBadge` + `SessionHoverActions` +
-// `ConnectingTranscriptState` live in `SessionStatusBadges.swift`
+// `TranscriptEmptyState` live in `SessionStatusBadges.swift`
 // (A6 foundation extraction).
 //
 // `WorkspaceSwitcherSheet` lives in `WorkspaceSwitcherSheet.swift`

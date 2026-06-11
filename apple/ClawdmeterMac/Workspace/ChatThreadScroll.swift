@@ -104,7 +104,7 @@ struct ChatThreadScroll: View {
                                 .padding(.bottom, 4)
                         }
                         if projection.turns.isEmpty && !liveStatusSlice.isLoading {
-                            emptyState
+                            TranscriptEmptyState()
                                 .frame(maxWidth: .infinity)
                         } else {
                             ForEach(projection.turns) { turn in
@@ -564,19 +564,6 @@ struct ChatThreadScroll: View {
     /// One row in the thread. Either a plain user/assistant/meta message, or
     // ChatItem + ToolPair now live in ClawdmeterShared (T1 extraction).
     // Views read `store.snapshot.items` directly — no per-render walk.
-
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "hammer")
-                .font(.system(size: 22))
-                .foregroundStyle(.secondary)
-            Text("Build something great")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 36)
-    }
 
     // MARK: - A9 row construction
     //
