@@ -1858,14 +1858,13 @@ private struct ComposerBar: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
                 HStack(spacing: 7) {
+                    composerActionsMenu
                     if openTarget == nil {
                         providerControls
                             .layoutPriority(1)
-                        deepResearchChip
                     } else {
                         lockedModeChip
                     }
-                    attachmentButton
                     Spacer()
                     micButton
                     sendButton
@@ -2194,23 +2193,45 @@ private struct ComposerBar: View {
         .help("Reasoning effort")
     }
 
-    private var deepResearchChip: some View {
-        Button {
-            store.deepResearch.toggle()
-            store.persist()
-        } label: {
-            HStack(spacing: 5) {
-                TahoeIcon("search", size: 11)
-                Text("Deep Research")
-                    .font(TahoeFont.body(11, weight: .semibold))
+    /// Bottom-left "+" overflow: Deep Research + Attach. Mirrors the code
+    /// composer's `composerToolsMenu` so the chat footer reads as
+    /// `+  provider  …  mic  send` instead of scattering action chips.
+    private var composerActionsMenu: some View {
+        Menu {
+            if openTarget == nil {
+                Button {
+                    store.deepResearch.toggle()
+                    store.persist()
+                } label: {
+                    if store.deepResearch {
+                        Label("Deep Research", systemImage: "checkmark")
+                    } else {
+                        Label("Deep Research", systemImage: "magnifyingglass")
+                    }
+                }
             }
-            .foregroundStyle(store.deepResearch ? t.accent : t.fg3)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 6)
-            .background(store.deepResearch ? t.accent.opacity(0.15) : Color.white.opacity(0.045), in: Capsule())
-            .overlay(Capsule().stroke(store.deepResearch ? t.accent.opacity(0.4) : t.hairline, lineWidth: 0.5))
+            Button(action: pickAttachments) {
+                Label("Attach", systemImage: "paperclip")
+            }
+        } label: {
+            TahoeIcon("plus", size: 12)
+                .foregroundStyle(store.deepResearch ? t.accent : t.fg3)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.045), in: Capsule())
+                .overlay(
+                    Capsule().stroke(
+                        store.deepResearch ? t.accent.opacity(0.35) : t.hairline,
+                        lineWidth: 0.5
+                    )
+                )
         }
-        .buttonStyle(PressableButtonStyle())
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Deep Research, attach files, and more")
+        .accessibilityLabel("Composer actions")
+        .accessibilityIdentifier("chat.composer.actions")
     }
 
     private var lockedModeChip: some View {
@@ -2224,18 +2245,6 @@ private struct ComposerBar: View {
         .padding(.vertical, 6)
         .background(Color.white.opacity(0.045), in: Capsule())
         .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
-    }
-
-    private var attachmentButton: some View {
-        Button(action: pickAttachments) {
-            TahoeIcon("paperclip", size: 12)
-                .foregroundStyle(t.fg3)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.045), in: Capsule())
-                .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
-        }
-        .buttonStyle(PressableButtonStyle())
     }
 
     private var attachmentStrip: some View {

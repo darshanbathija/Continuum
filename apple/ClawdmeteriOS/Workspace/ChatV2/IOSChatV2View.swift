@@ -984,18 +984,12 @@ private struct Composer: View {
                 }
 
                 HStack(spacing: 7) {
+                    composerActionsMenu
                     if openTarget == nil {
                         providerControls
-                        deepResearchButton
                     } else {
                         threadBadge
                     }
-                    Button { fileImporterPresented = true } label: {
-                        TahoeIcon("paperclip", size: 13).foregroundStyle(t.fg3)
-                            .frame(width: 30, height: 30)
-                            .background(Color.white.opacity(0.06), in: Circle())
-                    }
-                    .buttonStyle(.plain)
                     Spacer()
                     sendButton
                 }
@@ -1079,17 +1073,36 @@ private struct Composer: View {
         .frame(maxWidth: 176, alignment: .leading)
     }
 
-    private var deepResearchButton: some View {
-        Button {
-            store.deepResearch.toggle()
-            store.persist()
+    /// Bottom-left "+" overflow: Deep Research + Attach. Mirrors the Mac
+    /// chat composer's `composerActionsMenu`.
+    private var composerActionsMenu: some View {
+        Menu {
+            if openTarget == nil {
+                Button {
+                    store.deepResearch.toggle()
+                    store.persist()
+                } label: {
+                    if store.deepResearch {
+                        Label("Deep Research", systemImage: "checkmark")
+                    } else {
+                        Label("Deep Research", systemImage: "magnifyingglass")
+                    }
+                }
+            }
+            Button { fileImporterPresented = true } label: {
+                Label("Attach", systemImage: "paperclip")
+            }
         } label: {
-            TahoeIcon("search", size: 13)
+            TahoeIcon("plus", size: 13)
                 .foregroundStyle(store.deepResearch ? t.accent : t.fg3)
                 .frame(width: 30, height: 30)
-                .background(store.deepResearch ? t.accent.opacity(0.16) : Color.white.opacity(0.06), in: Circle())
+                .background(
+                    store.deepResearch ? t.accent.opacity(0.16) : Color.white.opacity(0.06),
+                    in: Circle()
+                )
         }
-        .buttonStyle(.plain)
+        .accessibilityLabel("Composer actions")
+        .accessibilityIdentifier("chat.composer.actions")
     }
 
     private var threadBadge: some View {
