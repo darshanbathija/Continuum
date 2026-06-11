@@ -126,6 +126,7 @@
 		429198BE705AACE1B656260E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE0C409B82A2CE3CC4741248 /* ContentView.swift */; };
 		430A5F81EEBDB5C450018559 /* SidebarProjectionCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACEC58065CF9E56EFC7561D9 /* SidebarProjectionCacheTests.swift */; };
 		43CE166F0225B3A52F99D7BA /* QuickStartRepoSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4353CCA0F5543AEB084A0406 /* QuickStartRepoSheet.swift */; };
+		B2C3D4E5F60718293A4B5C6E /* RepoSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C7 /* RepoSettingsSheet.swift */; };
 		44996E84FA30C403B50066AA /* OnboardingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25B0334147E01FBA4B4E6081 /* OnboardingSheet.swift */; };
 		451598EB455093AD2AF41C79 /* iOSAPNSRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70C1FF5F7DCCAE40D4D3220 /* iOSAPNSRegistration.swift */; };
 		453B70AABD9A8921BA9706FB /* PathValidatorMacTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98E6E75C4550204AE0288EB6 /* PathValidatorMacTests.swift */; };
@@ -626,6 +627,7 @@
 		41CDAADDCEB563D1401793AB /* SessionComparisonSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionComparisonSheet.swift; sourceTree = "<group>"; };
 		431A968EFD55C9DDC919219D /* AntigravityTaskComplication.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityTaskComplication.swift; sourceTree = "<group>"; };
 		4353CCA0F5543AEB084A0406 /* QuickStartRepoSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickStartRepoSheet.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5C7 /* RepoSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSettingsSheet.swift; sourceTree = "<group>"; };
 		44830246BE8DE33251B9CE1B /* ClawdmeterMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawdmeterMacApp.swift; sourceTree = "<group>"; };
 		44BE8FD74ED4AB02157B15A6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		44F439E06FC6F2C86BB0E8A9 /* ClawdmeterWatchWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ClawdmeterWatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1269,6 +1271,7 @@
 				2C26322AF31DD69281D1B0B3 /* ProvisioningTrailView.swift */,
 				93A894C6B7326CFA1F502397 /* PRReviewPane.swift */,
 				4353CCA0F5543AEB084A0406 /* QuickStartRepoSheet.swift */,
+				A1B2C3D4E5F60718293A4B5C7 /* RepoSettingsSheet.swift */,
 				F0C71FABF0D6B86D4326D903 /* QuietDisclosure.swift */,
 				951A4C91204882AF01A3950D /* ReviewPaneGutter.swift */,
 				84E9F4135D88422C10ADF505 /* RunProfileManager.swift */,
@@ -2290,6 +2293,7 @@
 				3C391FC18132F11AED711762 /* ProvisioningTrailView.swift in Sources */,
 				DCA8543E3CD0D2378D6C6BC3 /* PseudoTerminal.swift in Sources */,
 				43CE166F0225B3A52F99D7BA /* QuickStartRepoSheet.swift in Sources */,
+				B2C3D4E5F60718293A4B5C6E /* RepoSettingsSheet.swift in Sources */,
 				0D64A3A6B6B8E57782AEC0DC /* QuietDisclosure.swift in Sources */,
 				23D6E3DB6CFE748F738370BA /* RateLimiter.swift in Sources */,
 				2A6FA0289E540BFABE9CC438 /* RelayClient.swift in Sources */,

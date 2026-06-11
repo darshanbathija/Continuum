@@ -376,6 +376,28 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
     }
 
+    func testRepoSettingsOpenSettingsShowsRepoSettingsSheet() throws {
+        openCodeTab()
+
+        openRepoSettingsMenu()
+        clickMenuItem(identifier: "code.repo.settings.open-settings", title: "Settings & Env Variables")
+
+        XCTAssertTrue(
+            element("code.repo.settings.sheet").waitForExistence(timeout: 5),
+            "Settings & Env Variables should open the repo settings sheet."
+        )
+        XCTAssertTrue(
+            element("settings.env.root").waitForExistence(timeout: 5),
+            "Repo settings sheet should include the env variables manager."
+        )
+
+        element("code.repo.settings.done").click()
+        XCTAssertTrue(
+            waitForNonExistence(element("code.repo.settings.sheet"), timeout: 5),
+            "Done should dismiss the repo settings sheet."
+        )
+    }
+
     func testRepoSettingsArchiveAllArchivesSessionsWithoutRemovingWorkspace() throws {
         openCodeTab()
 
