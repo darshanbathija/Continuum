@@ -1917,7 +1917,7 @@ private struct ComposerBar: View {
     }
 
     /// Compact composer control: stacked glyphs of the selected providers + a
-    /// label (solo → name·model; multi → "N providers"). Opens the selector.
+    /// label (solo → name·model; multi → "N models"). Opens the selector.
     private var providerBarLabel: some View {
         HStack(spacing: 8) {
             HStack(spacing: 3) {
@@ -1942,7 +1942,7 @@ private struct ComposerBar: View {
                     }
                 }
             } else {
-                Text("\(store.selectedChoiceCount) providers")
+                Text("\(store.selectedChoiceCount) models")
                     .font(TahoeFont.body(11.5, weight: .semibold))
                     .foregroundStyle(t.fg)
             }
