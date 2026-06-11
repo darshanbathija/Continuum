@@ -2149,7 +2149,7 @@ public final class SessionsModel: ObservableObject {
             }
             let cursorState = await CursorModelProbe.shared.currentState()
             guard cursorState.binaryPath != nil else {
-                throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
+                throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Install the CLI and ensure it's on your PATH.")
             }
             guard cursorState.authenticated else {
                 throw SpawnError.missingBinary("Run cursor-agent login, then try again.")
@@ -2220,7 +2220,7 @@ public final class SessionsModel: ObservableObject {
                 }
                 let cursorState = await CursorModelProbe.shared.currentState()
                 guard cursorState.binaryPath != nil else {
-                    throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
+                    throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Install the CLI and ensure it's on your PATH.")
                 }
                 guard cursorState.authenticated else {
                     throw SpawnError.missingBinary("Run cursor-agent login, then try again.")

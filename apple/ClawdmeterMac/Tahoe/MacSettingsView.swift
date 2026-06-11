@@ -166,8 +166,6 @@ public struct MacSettingsView: View {
             advancedSettings
         case .devices:
             deviceSettings
-        case .diagnostics:
-            diagnosticsSettings
         case .notifications:
             notificationSettings
         case .externalTools:
@@ -301,15 +299,6 @@ public struct MacSettingsView: View {
                 PairingSettingsView(runtime: runtime)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-        }
-    }
-
-    @ViewBuilder
-    private var diagnosticsSettings: some View {
-        SettingsCard(title: "Diagnostics",
-                     sub: "Diagnose data sources, copy debug bundles, force refresh, and explore the on-disk cache.") {
-            DiagnosticsSettingsView()
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -518,7 +507,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case envVariables
     case advanced
     case devices
-    case diagnostics
     case notifications
     case externalTools
     case shortcuts
@@ -533,7 +521,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .envVariables: return "Env Variables"
         case .advanced: return "Advanced"
         case .devices: return "Devices"
-        case .diagnostics: return "Diagnostics"
         case .notifications: return "Notifications"
         case .externalTools: return "External Tools"
         case .shortcuts: return "Shortcuts"
@@ -554,8 +541,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             return "Vendor CLI, MCP, hosting, storage, and domain provisioning."
         case .devices:
             return "Quota behavior, iPhone mirroring, and pairing."
-        case .diagnostics:
-            return "Debug bundles, source checks, cache tools, and wire inspection."
         case .notifications:
             return "DND, batching, chimes, previews, and event toggles."
         case .externalTools:
@@ -573,7 +558,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .envVariables: return "command"
         case .advanced: return "bolt"
         case .devices: return "link"
-        case .diagnostics: return "gear"
         case .notifications: return "bell"
         case .externalTools: return "external"
         case .shortcuts: return "command"
