@@ -12,17 +12,23 @@ public struct ProviderDefaultsSnapshot: Codable, Hashable, Sendable {
     /// providers. Backward-compatible: snapshots persisted before v0.29.8
     /// decode with this dictionary empty (see custom `init(from:)`).
     public var favoriteModelsByVendor: [String: [String]]
+    /// Global user-defined order for the Starred rail. Each entry is a
+    /// composite id `"<choice.id>|<model.id>"`. ⌘1…⌘9 bind to this order.
+    /// When empty, the picker falls back to `favoriteModelsByVendor` order.
+    public var favoriteOrder: [String]
     public var updatedAt: Date
 
     public init(
         modelByVendor: [String: String] = [:],
         effortByVendor: [String: String] = [:],
         favoriteModelsByVendor: [String: [String]] = [:],
+        favoriteOrder: [String] = [],
         updatedAt: Date = Date()
     ) {
         self.modelByVendor = modelByVendor
         self.effortByVendor = effortByVendor
         self.favoriteModelsByVendor = favoriteModelsByVendor
+        self.favoriteOrder = favoriteOrder
         self.updatedAt = updatedAt
     }
 
@@ -30,11 +36,12 @@ public struct ProviderDefaultsSnapshot: Codable, Hashable, Sendable {
         modelByVendor: [:],
         effortByVendor: [:],
         favoriteModelsByVendor: [:],
+        favoriteOrder: [],
         updatedAt: Date(timeIntervalSince1970: 0)
     )
 
     private enum CodingKeys: String, CodingKey {
-        case modelByVendor, effortByVendor, favoriteModelsByVendor, updatedAt
+        case modelByVendor, effortByVendor, favoriteModelsByVendor, favoriteOrder, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -42,7 +49,46 @@ public struct ProviderDefaultsSnapshot: Codable, Hashable, Sendable {
         self.modelByVendor = try c.decodeIfPresent([String: String].self, forKey: .modelByVendor) ?? [:]
         self.effortByVendor = try c.decodeIfPresent([String: String].self, forKey: .effortByVendor) ?? [:]
         self.favoriteModelsByVendor = try c.decodeIfPresent([String: [String]].self, forKey: .favoriteModelsByVendor) ?? [:]
+        self.favoriteOrder = try c.decodeIfPresent([String].self, forKey: .favoriteOrder) ?? []
         self.updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date(timeIntervalSince1970: 0)
+    }
+
+    public static func favoriteCompositeId(choiceId: String, modelId: String) -> String {
+        "\(choiceId)|\(modelId)"
+    }
+
+    public static func parseFavoriteCompositeId(_ compositeId: String) -> (choiceId: String, modelId: String)? {
+        guard let separator = compositeId.firstIndex(of: "|") else { return nil }
+        let choiceId = String(compositeId[..<separator])
+        let modelId = String(compositeId[compositeId.index(after: separator)...])
+        guard !choiceId.isEmpty, !modelId.isEmpty else { return nil }
+        return (choiceId, modelId)
+    }
+
+    /// Resolved Starred-rail order. Prunes stale entries and falls back to the
+    /// legacy per-vendor ordering when `favoriteOrder` has not been written yet.
+    public func resolvedFavoriteOrder(enabledVendors: [ChatVendor]) -> [String] {
+        let active = activeFavoriteCompositeIds()
+        if !favoriteOrder.isEmpty {
+            let pruned = favoriteOrder.filter { active.contains($0) }
+            let missing = active.filter { !pruned.contains($0) }
+            return pruned + missing
+        }
+        var out: [String] = []
+        for vendor in enabledVendors {
+            for modelId in favoriteModelIds(for: vendor) {
+                out.append(Self.favoriteCompositeId(choiceId: vendor.rawValue, modelId: modelId))
+            }
+        }
+        return out
+    }
+
+    private func activeFavoriteCompositeIds() -> Set<String> {
+        favoriteModelsByVendor.reduce(into: Set<String>()) { result, pair in
+            for modelId in pair.value {
+                result.insert(Self.favoriteCompositeId(choiceId: pair.key, modelId: modelId))
+            }
+        }
     }
 
     public func favoriteModelIds(for vendor: ChatVendor) -> [String] {
@@ -284,11 +330,19 @@ public final class ProviderDefaultsStore: ObservableObject {
         let trimmed = modelId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return snapshot }
         var next = snapshot
+        let compositeId = ProviderDefaultsSnapshot.favoriteCompositeId(
+            choiceId: vendor.rawValue,
+            modelId: trimmed
+        )
         var current = next.favoriteModelsByVendor[vendor.rawValue] ?? []
         if let index = current.firstIndex(of: trimmed) {
             current.remove(at: index)
+            next.favoriteOrder.removeAll { $0 == compositeId }
         } else {
             current.insert(trimmed, at: 0)
+            if !next.favoriteOrder.contains(compositeId) {
+                next.favoriteOrder.append(compositeId)
+            }
         }
         if current.isEmpty {
             next.favoriteModelsByVendor.removeValue(forKey: vendor.rawValue)
@@ -300,8 +354,36 @@ public final class ProviderDefaultsStore: ObservableObject {
         return next
     }
 
+    /// Reorders the Starred rail. `destinationIndex` is the row index the
+    /// dragged item should land on (SwiftUI drop-target semantics).
+    @discardableResult
+    public func moveFavorite(
+        dragId: String,
+        to destinationIndex: Int,
+        enabledVendors: [ChatVendor]
+    ) -> ProviderDefaultsSnapshot {
+        var next = snapshot
+        var order = next.resolvedFavoriteOrder(enabledVendors: enabledVendors)
+        guard let sourceIndex = order.firstIndex(of: dragId),
+              sourceIndex != destinationIndex,
+              destinationIndex >= 0,
+              destinationIndex < order.count else {
+            return snapshot
+        }
+        order.remove(at: sourceIndex)
+        order.insert(dragId, at: destinationIndex)
+        next.favoriteOrder = order
+        next.updatedAt = Date()
+        persist(next)
+        return next
+    }
+
     public func favoriteModelIds(for vendor: ChatVendor) -> [String] {
         snapshot.favoriteModelIds(for: vendor)
+    }
+
+    public func resolvedFavoriteOrder(enabledVendors: [ChatVendor]) -> [String] {
+        snapshot.resolvedFavoriteOrder(enabledVendors: enabledVendors)
     }
 
     public func isFavorite(modelId: String, vendor: ChatVendor) -> Bool {
@@ -312,6 +394,7 @@ public final class ProviderDefaultsStore: ObservableObject {
         defaults.set(next.modelByVendor, forKey: Self.defaultsPrefix + "modelByVendor")
         defaults.set(next.effortByVendor, forKey: Self.defaultsPrefix + "effortByVendor")
         defaults.set(next.favoriteModelsByVendor, forKey: Self.defaultsPrefix + "favoriteModelsByVendor")
+        defaults.set(next.favoriteOrder, forKey: Self.defaultsPrefix + "favoriteOrder")
         defaults.set(next.updatedAt.timeIntervalSince1970, forKey: Self.defaultsPrefix + "updatedAt")
         snapshot = next
     }
@@ -320,11 +403,13 @@ public final class ProviderDefaultsStore: ObservableObject {
         let modelMap = defaults.dictionary(forKey: defaultsPrefix + "modelByVendor") as? [String: String] ?? [:]
         let effortMap = defaults.dictionary(forKey: defaultsPrefix + "effortByVendor") as? [String: String] ?? [:]
         let favoritesMap = defaults.dictionary(forKey: defaultsPrefix + "favoriteModelsByVendor") as? [String: [String]] ?? [:]
+        let favoriteOrder = defaults.array(forKey: defaultsPrefix + "favoriteOrder") as? [String] ?? []
         let updatedAtRaw = defaults.object(forKey: defaultsPrefix + "updatedAt") as? TimeInterval
         return ProviderDefaultsSnapshot(
             modelByVendor: modelMap,
             effortByVendor: effortMap,
             favoriteModelsByVendor: favoritesMap,
+            favoriteOrder: favoriteOrder,
             updatedAt: updatedAtRaw.map(Date.init(timeIntervalSince1970:)) ?? Date(timeIntervalSince1970: 0)
         )
     }
