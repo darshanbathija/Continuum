@@ -20,8 +20,22 @@ enum UpdateControlSnapshot: Equatable {
     case automaticChecksDisabled
 }
 
-func updateControlShouldRender(_ snapshot: UpdateControlSnapshot, showsInactiveStates: Bool) -> Bool {
+func updateControlShouldRender(
+    _ snapshot: UpdateControlSnapshot,
+    showsInactiveStates: Bool,
+    awaitingManualCheckPopover: Bool = false
+) -> Bool {
     if showsInactiveStates { return true }
+    if awaitingManualCheckPopover {
+        switch snapshot {
+        case .checking, .upToDate, .failed, .invalidAppcast, .corruptedDownload,
+             .setupBlocked, .translocated, .nonApplicationsInstall,
+             .automaticChecksDisabled, .cancelled:
+            return true
+        default:
+            break
+        }
+    }
     switch snapshot {
     case .available, .installing, .relaunchPending:
         return true
@@ -79,7 +93,11 @@ struct UpdateAppControl: View {
 
     @ViewBuilder
     var body: some View {
-        if updateControlShouldRender(snapshot, showsInactiveStates: showsInactiveStates) {
+        if updateControlShouldRender(
+            snapshot,
+            showsInactiveStates: showsInactiveStates,
+            awaitingManualCheckPopover: coordinator.wrapped?.awaitingManualCheckPopover ?? false
+        ) {
             Button(action: primaryAction) {
                 HStack(spacing: compact ? 5 : 6) {
                     icon
@@ -109,6 +127,15 @@ struct UpdateAppControl: View {
             .popover(isPresented: $popoverPresented, arrowEdge: .bottom) {
                 UpdatePopoverContent(coordinator: coordinator.wrapped)
                     .frame(width: 400)
+            }
+            .onAppear(perform: presentPopoverIfAwaitingManualCheck)
+            .onChange(of: coordinator.wrapped?.state) { _, _ in
+                presentPopoverIfAwaitingManualCheck()
+            }
+            .onChange(of: popoverPresented) { _, isPresented in
+                if !isPresented {
+                    coordinator.wrapped?.acknowledgeManualCheckPopover()
+                }
             }
         }
     }
@@ -262,6 +289,18 @@ struct UpdateAppControl: View {
             popoverPresented = true
         }
     }
+
+    private func presentPopoverIfAwaitingManualCheck() {
+        guard coordinator.wrapped?.awaitingManualCheckPopover == true else { return }
+        switch snapshot {
+        case .checking, .upToDate, .failed, .invalidAppcast, .corruptedDownload,
+             .setupBlocked, .translocated, .nonApplicationsInstall,
+             .automaticChecksDisabled, .cancelled:
+            popoverPresented = true
+        default:
+            break
+        }
+    }
 }
 
 struct UpdatePopoverContent: View {
@@ -400,7 +439,7 @@ struct UpdatePopoverContent: View {
         case .checking:
             return "Checking for updates"
         case .upToDate:
-            return "Continuum is up to date"
+            return "You're up to date"
         case .installing:
             return "Installing update"
         case .installedRelaunchPending(let version):
