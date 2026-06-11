@@ -4,6 +4,40 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.33.0 build 230] - 2026-06-11 - Light theme, leaderboard, effort pill, vendor Install All, and 21 targeted fixes
+
+Quiet White light theme, flat tokens-by-model leaderboard, provider logo
+in model chip, effort pill, Install All vendor flow, and sidebar rename —
+plus 13 targeted fixes across the Code tab, chat provider rows,
+worktrees, and Settings.
+
+### Added
+
+- **Quiet White light theme.** Crisp light variant togglable in Settings → Appearance or auto-switched with macOS appearance (default stays Dark). Full segmented-control and surface token support across every view.
+- **Flat ranked leaderboard for tokens by model.** The model card is now a compact percentage-bar list with token count and cost per model at a glance.
+- **Provider logo in model chip.** The composer and session header show the provider's logo alongside the model name.
+- **Install All for vendor provisioning.** One-tap button in the vendor setup sheet installs every missing dependency.
+- **Rename workspace and git branch from the sidebar.** Right-click any workspace in the Code sidebar → Rename renames both the local folder and its tracking branch atomically.
+- **Worktree branch in Code tab breadcrumb.** The active worktree branch name is now visible in the breadcrumb path.
+- **Effort as its own composer pill.** Reasoning effort (Low / Medium / High / Max) has a dedicated chip in the Code tab composer, separate from the model selector.
+- **Worktree diffs yield to the archive affordance on hover.** Diff previews step aside when hovering a worktree row so the archive button is always reachable.
+
+### Fixed
+
+- **Segmented controls are visible in Quiet White light mode.** The `segmentTrack` token was missing from `TahoeTokens`, causing both the track and active fill to collapse to `surface1 = #FFFFFF` (invisible). Now threaded through the full token chain and both view call sites.
+- **Usage bars are even when fewer providers are active.** Provider gauge columns divide available width equally regardless of how many are enabled.
+- **Worktree live-status dot aligns in hover and selected states.**
+- **Duplicate Diff label hidden in Settings.**
+- **Mic permission prompt fires for composer dictation.** Ctrl+M now requests microphone access on first use.
+- **Redundant worktree mode removed from Code tab header.**
+- **Code tab empty state refreshed.**
+- **Chat provider rows are fully clickable in Ask or Compare mode.**
+- **Custom provider sheet opens reliably.**
+- **Update-check result is always shown.** "You're up to date" banner now appears after manual checks.
+- **Repo removal in Code sidebar is instant.** Sidebar responds in < 250ms.
+- **Diagnostics tab removed from Settings.** Settings is now five clean tabs.
+- **Code workspace tabs stay fixed.**
+
 ## [0.32.1 build 228] - 2026-06-11 - Custom OpenAI/Anthropic-compatible providers + first shipped build of the multi-account work
 
 First public build since 0.31.17 (build 225). It bundles three merged
