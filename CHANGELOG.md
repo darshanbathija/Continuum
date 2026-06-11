@@ -4,6 +4,27 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.34.0 build 233] - 2026-06-11 - OpenCode Go as a first-class provider
+
+OpenCode Go joins Claude, Codex, Cursor, Antigravity, and Grok as a
+first-class provider. It shows as "OpenCode" in the providers tab, tracks
+5h / weekly / monthly quota, and its Go models (Kimi, GLM, DeepSeek,
+MiniMax, Qwen) are selectable in both Chat and Code.
+
+### Added
+
+- **OpenCode Go provider.** Add your Go API key (from opencode.ai/zen) in Settings or onboarding to use OpenCode in Chat and Code, and pick Go models from the provider tray and model picker. An optional workspace ID + auth cookie drive the 5h / weekly / monthly quota meters on the Usage tab. The model catalog is pulled live from the Go `/models` API, and OpenCode gets a menu-bar gauge like every other provider.
+
+### Notes
+
+- Quota meters are best-effort: OpenCode has not shipped a public usage API yet, so the meters populate only when the optional dashboard credentials are configured. The API key alone powers chat + code.
+
+### Fixed
+
+- Auth state no longer misleads — a valid Go key with no quota data shows "quota unavailable" instead of a bogus "signed out", and dashboard-only credentials no longer mark the provider chat-ready when it can't actually run a model.
+- Quota meters never show a fabricated number: an unfetched weekly or monthly window is hidden rather than mirroring the 5h value.
+- The Go auth cookie is stored in the macOS Keychain, not in UserDefaults.
+
 ## [0.33.1 build 232] - 2026-06-11 - Fix Claude chat sticking on "streaming" with no reply on the first turn
 
 Starting a Claude chat and immediately sending a prompt could leave the
