@@ -4,33 +4,51 @@ import ClawdmeterShared
 // MARK: - Settings section
 
 struct CustomProviderSettingsSection: View {
-    @Environment(\.tahoe) private var t
     var runtime: AppRuntime?
 
-    @State private var showEditor = false
-    @State private var editingRecord: CustomProviderRecord?
+    var body: some View {
+        if let runtime {
+            CustomProviderSettingsContent(runtime: runtime)
+        } else {
+            CustomProviderSettingsUnavailableContent()
+        }
+    }
+}
+
+private struct CustomProviderSettingsUnavailableContent: View {
+    @Environment(\.tahoe) private var t
+
+    var body: some View {
+        Text("Custom providers are unavailable in this preview.")
+            .font(TahoeFont.body(12.5))
+            .foregroundStyle(t.fg3)
+    }
+}
+
+struct CustomProviderEditorPresentation: Identifiable {
+    let id = UUID()
+    var editingRecord: CustomProviderRecord?
+}
+
+private struct CustomProviderSettingsContent: View {
+    @Environment(\.tahoe) private var t
+    let runtime: AppRuntime
+
+    @State private var editorPresentation: CustomProviderEditorPresentation?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let store = runtime?.customProviderStore {
-                CustomProviderRows(
-                    store: store,
-                    client: runtime?.loopbackClient,
-                    registry: runtime?.agentSessionRegistry,
-                    onEdit: { record in
-                        editingRecord = record
-                        showEditor = true
-                    }
-                )
-            } else {
-                Text("Custom providers are unavailable in this preview.")
-                    .font(TahoeFont.body(12.5))
-                    .foregroundStyle(t.fg3)
-            }
+            CustomProviderRows(
+                store: runtime.customProviderStore,
+                client: runtime.loopbackClient,
+                registry: runtime.agentSessionRegistry,
+                onEdit: { record in
+                    editorPresentation = CustomProviderEditorPresentation(editingRecord: record)
+                }
+            )
 
             Button {
-                editingRecord = nil
-                showEditor = true
+                editorPresentation = CustomProviderEditorPresentation(editingRecord: nil)
             } label: {
                 HStack(spacing: 6) {
                     TahoeIcon("plus", size: 11, weight: .bold)
@@ -40,18 +58,16 @@ struct CustomProviderSettingsSection: View {
                 .foregroundStyle(t.accent)
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
             .accessibilityIdentifier("settings.provider.custom.add")
         }
-        .sheet(isPresented: $showEditor) {
-            if let store = runtime?.customProviderStore {
-                CustomProviderEditorSheet(
-                    store: store,
-                    client: runtime?.loopbackClient,
-                    editingRecord: editingRecord
-                ) {
-                    showEditor = false
-                    editingRecord = nil
-                }
+        .sheet(item: $editorPresentation) { presentation in
+            CustomProviderEditorSheet(
+                store: runtime.customProviderStore,
+                client: runtime.loopbackClient,
+                editingRecord: presentation.editingRecord
+            ) {
+                editorPresentation = nil
             }
         }
     }
