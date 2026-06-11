@@ -567,10 +567,10 @@ struct ChatThreadScroll: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "ellipsis.bubble")
+            Image(systemName: "hammer")
                 .font(.system(size: 22))
                 .foregroundStyle(.secondary)
-            Text("No messages yet")
+            Text("Build something great")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         }
