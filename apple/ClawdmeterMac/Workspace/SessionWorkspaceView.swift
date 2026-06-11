@@ -586,7 +586,7 @@ struct SessionWorkspaceView: View {
             )
             WorkspaceContextHeader(draft: draft, catalog: launcher.modelCatalog)
             Divider()
-            EmptyStateCenteredComposer(
+            CodeWorkspaceDraftComposer(
                 model: model,
                 launcher: launcher,
                 presentationStore: presentationStore,

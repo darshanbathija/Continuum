@@ -62,6 +62,8 @@ struct ComposerInputCore: View {
     /// (+ · access · model · effort · send) for the centered empty-state.
     /// The in-session composer keeps the full chrome (defaults false).
     var minimalChrome: Bool = false
+    /// Optional override for the text field placeholder.
+    var placeholderOverride: String? = nil
 
     struct PrimaryActionDescriptor: Equatable {
         enum Kind: Equatable {
@@ -1215,6 +1217,9 @@ struct ComposerInputCore: View {
     }
 
     private var textFieldPlaceholder: String {
+        if let placeholderOverride {
+            return placeholderOverride
+        }
         switch store.modeKind {
         case .bound:
             if sessionIsRunning && onQueue != nil {
