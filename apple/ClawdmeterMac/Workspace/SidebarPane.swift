@@ -778,21 +778,36 @@ struct SidebarPane: View {
         var id: String { path }
     }
 
-    /// Fixed trailing-slot geometry for worktree rows. Each accessory is
-    /// absolutely positioned from the trailing edge so the live-status dot
-    /// stays aligned across idle, hover, and selected states.
+    /// Trailing-slot geometry for worktree rows. Reserve label padding only
+    /// for accessories that are actually visible so branch names aren't
+    /// squeezed when idle.
     private enum WorktreeRowChromeLayout {
         static let trailingInset: CGFloat = 18
         static let archiveWidth: CGFloat = 22
         static let accessorySpacing: CGFloat = 6
-        static let statusWidth: CGFloat = 14
+        static let provisioningWidth: CGFloat = 14
         static let countWidth: CGFloat = 30
         static let diffWidth: CGFloat = 52
 
-        static let statusTrailingOffset: CGFloat = trailingInset + archiveWidth + accessorySpacing
-        static let countTrailingOffset: CGFloat = statusTrailingOffset + statusWidth + accessorySpacing
-        static let diffTrailingOffset: CGFloat = countTrailingOffset + countWidth + accessorySpacing
-        static let labelTrailingPadding: CGFloat = diffTrailingOffset + diffWidth
+        static func labelTrailingPadding(
+            showsArchive: Bool,
+            showsSessionCount: Bool,
+            showsDiff: Bool,
+            provisioning: Bool
+        ) -> CGFloat {
+            var width = trailingInset
+            var itemCount = 0
+            func add(_ itemWidth: CGFloat) {
+                if itemCount > 0 { width += accessorySpacing }
+                width += itemWidth
+                itemCount += 1
+            }
+            if showsDiff { add(diffWidth) }
+            if showsSessionCount { add(countWidth) }
+            if provisioning { add(provisioningWidth) }
+            if showsArchive { add(archiveWidth) }
+            return itemCount > 0 ? width : 8
+        }
     }
 
     /// Group a repo's sessions by their worktree (branch), newest-active first.
@@ -834,16 +849,16 @@ struct SidebarPane: View {
             } == true
         let isHovered = hoveredWorktreePath == wt.path
         let provisioning = wt.sessions.contains { model.isProvisioning($0.id) }
-        let isActive = wt.sessions.contains { $0.status == .running }
-        let showsArchiveAction = isHovered || isOpen
+        let showsArchiveAction = isHovered
         let diffStat = worktreeDiffs.stat(for: wt.path)
         let showsDiff = !isHovered && diffStat.map { !$0.isEmpty } == true
         let showsSessionCount = !isHovered && wt.sessions.count > 1
-        let usesTrailingLane = isActive
-            || provisioning
-            || wt.sessions.count > 1
-            || diffStat.map { !$0.isEmpty } == true
-            || showsArchiveAction
+        let labelTrailingPadding = WorktreeRowChromeLayout.labelTrailingPadding(
+            showsArchive: showsArchiveAction,
+            showsSessionCount: showsSessionCount,
+            showsDiff: showsDiff,
+            provisioning: provisioning
+        )
         Button {
             // openSession() keeps any in-progress draft alive (don't clear it).
             if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
@@ -861,7 +876,8 @@ struct SidebarPane: View {
                     Text(wt.branch)
                         .font(TahoeFont.body(12.5, weight: .medium))
                         .foregroundStyle(t.fg)
-                        .lineLimit(1).truncationMode(.middle)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     Text(worktreeSubtitle(wt))
                         .font(TahoeFont.body(9.5))
                         .foregroundStyle(t.fg4)
@@ -870,12 +886,7 @@ struct SidebarPane: View {
                 Spacer(minLength: 4)
             }
             .padding(.leading, 48)
-            .padding(
-                .trailing,
-                usesTrailingLane
-                    ? WorktreeRowChromeLayout.labelTrailingPadding
-                    : 8
-            )
+            .padding(.trailing, labelTrailingPadding)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
@@ -895,7 +906,6 @@ struct SidebarPane: View {
         .accessibilityValue(isOpen ? "selected" : "not selected")
         .overlay(alignment: .trailing) {
             worktreeTrailingChrome(
-                isActive: isActive,
                 provisioning: provisioning,
                 showsArchive: showsArchiveAction,
                 showsSessionCount: showsSessionCount,
@@ -930,7 +940,6 @@ struct SidebarPane: View {
 
     @ViewBuilder
     private func worktreeTrailingChrome(
-        isActive: Bool,
         provisioning: Bool,
         showsArchive: Bool,
         showsSessionCount: Bool,
@@ -940,58 +949,40 @@ struct SidebarPane: View {
         emphasizedDiff: Bool,
         onArchive: @escaping () -> Void
     ) -> some View {
-        ZStack(alignment: .trailing) {
-            Group {
-                if let diffStat, showsDiff {
-                    WorktreeDiffBadge(stat: diffStat, emphasized: emphasizedDiff)
-                        .help("Diff against default branch — \(diffStat.additions) additions, \(diffStat.deletions) deletions")
-                }
+        HStack(spacing: WorktreeRowChromeLayout.accessorySpacing) {
+            if let diffStat, showsDiff {
+                WorktreeDiffBadge(stat: diffStat, emphasized: emphasizedDiff)
+                    .frame(minWidth: WorktreeRowChromeLayout.diffWidth, alignment: .trailing)
+                    .help("Diff against default branch — \(diffStat.additions) additions, \(diffStat.deletions) deletions")
             }
-            .frame(width: WorktreeRowChromeLayout.diffWidth, alignment: .trailing)
-            .padding(.trailing, WorktreeRowChromeLayout.diffTrailingOffset)
-
-            Group {
-                if showsSessionCount {
-                    Text("\(sessionCount)")
-                        .font(TahoeFont.body(9.5, weight: .semibold))
-                        .foregroundStyle(t.fg3)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(t.hair2, in: Capsule())
-                        .help("\(sessionCount) models on this branch — open to switch via tabs")
-                }
+            if showsSessionCount {
+                Text("\(sessionCount)")
+                    .font(TahoeFont.body(9.5, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(t.hair2, in: Capsule())
+                    .frame(minWidth: WorktreeRowChromeLayout.countWidth)
+                    .help("\(sessionCount) models on this branch — open to switch via tabs")
             }
-            .frame(width: WorktreeRowChromeLayout.countWidth, alignment: .trailing)
-            .padding(.trailing, WorktreeRowChromeLayout.countTrailingOffset)
-
-            Group {
-                if isActive {
-                    StatusPulseDot(color: .green, isLive: true)
-                        .help("AI session running in this worktree")
-                } else if provisioning {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.6)
-                        .frame(width: 14, height: 14)
-                        .help("Setting up this worktree")
-                }
+            if provisioning {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.6)
+                    .frame(
+                        width: WorktreeRowChromeLayout.provisioningWidth,
+                        height: WorktreeRowChromeLayout.provisioningWidth
+                    )
+                    .help("Setting up this worktree")
             }
-            .frame(
-                width: WorktreeRowChromeLayout.statusWidth,
-                height: WorktreeRowChromeLayout.statusWidth
-            )
-            .padding(.trailing, WorktreeRowChromeLayout.statusTrailingOffset)
-
-            Group {
-                if showsArchive {
-                    SessionHoverActions(onArchive: onArchive)
-                }
+            if showsArchive {
+                SessionHoverActions(onArchive: onArchive)
+                    .frame(
+                        width: WorktreeRowChromeLayout.archiveWidth,
+                        height: WorktreeRowChromeLayout.archiveWidth
+                    )
             }
-            .frame(
-                width: WorktreeRowChromeLayout.archiveWidth,
-                height: WorktreeRowChromeLayout.archiveWidth
-            )
-            .padding(.trailing, WorktreeRowChromeLayout.trailingInset)
         }
+        .padding(.trailing, WorktreeRowChromeLayout.trailingInset)
     }
 
     @ViewBuilder
