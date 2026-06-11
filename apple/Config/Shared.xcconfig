@@ -1,0 +1,5 @@
+// Shared build settings propagated to SPM when referenced via
+// XCODE_XCCONFIG_FILE or xcodebuild -xcconfig (see tools/build-ios.sh).
+// Xcode 27 rejects WATCHOS_DEPLOYMENT_TARGET 8.0 from swift-markdown/cmark-gfm.
+WATCHOS_DEPLOYMENT_TARGET = 10.0
+EXCLUDED_ARCHS[sdk=watchos*] = armv7k

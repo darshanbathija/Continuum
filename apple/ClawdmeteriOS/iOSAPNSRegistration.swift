@@ -56,6 +56,7 @@ final class iOSAppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        IOSAppBootstrap.finishLaunching()
         return true
     }
 

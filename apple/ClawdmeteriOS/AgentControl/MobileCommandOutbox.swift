@@ -58,9 +58,10 @@ public final class MobileCommandOutbox: ObservableObject {
     }
 
     public nonisolated static func defaultStoreURL() -> URL {
-        let appSupport = FileManager.default.urls(
+        let appSupport = (FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!.appendingPathComponent("Clawdmeter", isDirectory: true)
+        ).first ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("Clawdmeter", isDirectory: true)
         try? FileManager.default.createDirectory(
             at: appSupport, withIntermediateDirectories: true
         )
