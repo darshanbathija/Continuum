@@ -66,6 +66,7 @@ struct iOSModelEffortPill: View {
                 // "Model · Effort" combos and left short ones off-center). The
                 // outer Menu is `.fixedSize(horizontal:)` so the capsule grows.
                 // Mirrors the Mac UsageStatusChip.ModelEffortChip fix.
+                AnyProviderGlyph(choice: currentPickerChoice, catalog: catalog, size: 14)
                 Text(summaryText)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
@@ -88,6 +89,16 @@ struct iOSModelEffortPill: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var currentPickerChoice: ProviderChoice {
+        if let customProviderId {
+            return .custom(customProviderId)
+        }
+        if let migrated = ChatVendor.migrated(from: agent) {
+            return .builtin(migrated)
+        }
+        return .builtin(.chatgpt)
     }
 
     private var summaryText: String {
