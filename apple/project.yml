@@ -20,7 +20,7 @@ settings:
   base:
     SWIFT_VERSION: "5.10"
     MARKETING_VERSION: "0.33.0"
-    CURRENT_PROJECT_VERSION: "230"
+    CURRENT_PROJECT_VERSION: "231"
 
 packages:
   ClawdmeterShared:
