@@ -17,6 +17,10 @@ final class ProviderDescriptorTests: XCTestCase {
             [.chatgpt, .claude, .antigravity, .cursor, .openrouter, .grok]
         )
         XCTAssertEqual(
+            ProviderDescriptor.modelPickerOrder,
+            [.claude, .chatgpt, .cursor, .openrouter, .grok, .antigravity]
+        )
+        XCTAssertEqual(
             UsageRecord.Provider.analyticsDisplayOrder,
             [.claude, .codex, .gemini, .opencode, .cursor, .grok]
         )

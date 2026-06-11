@@ -84,4 +84,20 @@ public enum ProviderChoice: Hashable, Identifiable, Sendable {
         if case .custom(let id) = self { return id }
         return nil
     }
+
+    /// Analytics bucket used to read trailing-30d usage for rail ordering.
+    public var usageProvider: UsageRecord.Provider? {
+        guard case .builtin(let vendor) = self else { return nil }
+        return ProviderDescriptor.byChatVendor[vendor]?.analyticsProvider
+    }
+
+    /// Fallback rail rank when 30d usage is tied or unavailable.
+    public var modelPickerDefaultRank: Int {
+        switch self {
+        case .builtin(let vendor):
+            return ProviderDescriptor.byChatVendor[vendor]?.modelPickerRank ?? Int.max
+        case .custom:
+            return ProviderDescriptor.all.count
+        }
+    }
 }

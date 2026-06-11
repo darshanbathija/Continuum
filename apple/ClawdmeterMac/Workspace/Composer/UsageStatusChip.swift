@@ -29,11 +29,15 @@ struct ModelEffortChip: View {
     @Binding var selectedEffort: ReasoningEffort?
     let modelSupportsEffort: Bool
     var customProviderId: String?
+    /// Optional analytics snapshot source for usage-weighted provider rail
+    /// ordering. Defaults to the app runtime store on macOS.
+    var usageHistoryStore: UsageHistoryStore? = AppDelegate.runtime?.usageHistoryStore
 
     private var enabledChoices: [ProviderChoice] {
         ChatV2Store.enabledChatChoices(
             from: ProviderEnablement.enabledProviderIDs(),
-            catalog: catalog
+            catalog: catalog,
+            usageSnapshot: usageHistoryStore?.snapshot
         )
     }
     /// v0.29.31: when the rich picker's rail switches to another provider, map

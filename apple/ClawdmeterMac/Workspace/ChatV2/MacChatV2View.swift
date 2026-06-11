@@ -2261,7 +2261,8 @@ private struct ComposerBar: View {
     private var providerEnabledChoices: [ProviderChoice] {
         ChatV2Store.enabledChatChoices(
             from: ProviderEnablement.enabledProviderIDs(),
-            catalog: client.modelCatalog
+            catalog: client.modelCatalog,
+            usageSnapshot: AppDelegate.runtime?.usageHistoryStore.snapshot
         )
     }
 
@@ -2279,9 +2280,11 @@ private struct ComposerBar: View {
                 }
             }
         }
-        return choices.sorted {
-            $0.displayName(in: client.modelCatalog).localizedCaseInsensitiveCompare($1.displayName(in: client.modelCatalog)) == .orderedAscending
-        }
+        return ChatV2Store.sortModelPickerChoices(
+            choices,
+            usageSnapshot: AppDelegate.runtime?.usageHistoryStore.snapshot,
+            catalog: client.modelCatalog
+        )
     }
 
     private func compactModelLabel(for choice: ProviderChoice) -> String? {
