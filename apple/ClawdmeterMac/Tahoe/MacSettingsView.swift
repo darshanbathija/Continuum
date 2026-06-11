@@ -222,6 +222,7 @@ public struct MacSettingsView: View {
                         Text(mode.label).tag(mode)
                     }
                 }
+                .labelsHidden()
                 .pickerStyle(.segmented)
                 .frame(width: 180)
             }
