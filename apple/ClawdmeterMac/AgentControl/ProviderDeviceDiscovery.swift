@@ -24,6 +24,8 @@ public enum ProviderDeviceSetupAction: String, Sendable, Equatable, Identifiable
     case runCursorAgentLogin
     case openOpencodeSignIn
     case addOpenRouterKey
+    case addOpenCodeGoKey
+    case configureOpenCodeGoQuota
     case installGrokCLI
 
     public var id: String { rawValue }
@@ -39,6 +41,8 @@ public enum ProviderDeviceSetupAction: String, Sendable, Equatable, Identifiable
         case .runCursorAgentLogin: return "Log In"
         case .openOpencodeSignIn: return "Sign in to OpenCode"
         case .addOpenRouterKey: return "Add OpenRouter key"
+        case .addOpenCodeGoKey: return "Add OpenCode Go key"
+        case .configureOpenCodeGoQuota: return "Configure quota tracking"
         case .installGrokCLI: return "Install grok CLI"
         }
     }
@@ -56,7 +60,8 @@ public enum ProviderDeviceSetupAction: String, Sendable, Equatable, Identifiable
             return "echo 'Install the Antigravity 2 agy CLI — see https://antigravity.google' && open https://antigravity.google"
         case .installGrokCLI:
             return "echo 'Install the grok CLI from https://x.ai' && open https://x.ai"
-        case .importClaudeFromClaudeCode, .openAntigravityApp, .openOpencodeSignIn, .addOpenRouterKey:
+        case .importClaudeFromClaudeCode, .openAntigravityApp, .openOpencodeSignIn,
+             .addOpenRouterKey, .addOpenCodeGoKey, .configureOpenCodeGoQuota:
             return nil
         }
     }
@@ -86,7 +91,7 @@ public struct ProviderDeviceStatus: Sendable, Equatable, Identifiable {
         case "gemini":
             return cliInstalled && authenticated
         case "opencode":
-            // OpenRouter key is the gate; opencode binary helps setup but
+            // Go API key is the gate; opencode binary helps setup but
             // isn't required to turn the provider on.
             return authenticated
         case "cursor":
@@ -206,7 +211,7 @@ public enum ProviderDeviceDiscovery {
         let displayName: String = {
             switch id {
             case "gemini": return "Antigravity"
-            case "opencode": return "OpenRouter"
+            case "opencode": return "OpenCode"
             default: return ProviderRegistry.descriptor(id: id)?.displayName ?? id.capitalized
             }
         }()
@@ -328,35 +333,40 @@ public enum ProviderDeviceDiscovery {
         )
     }
 
-    /// **OpenRouter / OpenCode** — OpenRouter API key in
-    /// `~/.local/share/opencode/auth.json` or `$OPENROUTER_API_KEY`. The
-    /// opencode binary enables in-app `auth login` but isn't required to
-    /// enable the provider.
+    /// **OpenCode Go** — subscription API key in auth.json / `OPENCODE_API_KEY`,
+    /// plus optional dashboard credentials for quota polling. The opencode
+    /// binary enables in-app `auth login` but isn't required to enable Go.
     private static func probeOpenCode() async -> ProviderDeviceStatus {
         let binary = await MainActor.run {
             OpencodeProcessManager.shared.locateBinary()
         }
-        let openRouterKey = await OpencodeAuthFile.shared.apiKey(providerId: "openrouter")
-        let envKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let authenticated = (openRouterKey?.isEmpty == false) || (envKey?.isEmpty == false)
+        let goAuth = await OpenCodeGoCredentials.hasGoAuth()                     // Go API key → chat/code
+        let dashboardAuth = OpenCodeGoCredentials.dashboardQuotaConfig() != nil  // workspace+cookie → quota meters only
+        // Readiness gates on the Go API key ALONE. Dashboard creds can only feed
+        // the quota meters — they can't route a Go model through `opencode serve`
+        // — so a dashboard-only state must NOT pre-enable / mark the provider ready.
+        let authenticated = goAuth
         let cliInstalled = binary != nil
         let status = resolveStatus(cliInstalled: cliInstalled, authenticated: authenticated)
         var actions: [ProviderDeviceSetupAction] = []
-        if !authenticated {
-            actions.append(.addOpenRouterKey)
+        if !goAuth {
+            actions.append(.addOpenCodeGoKey)
             if cliInstalled {
                 actions.append(.openOpencodeSignIn)
             }
+        } else if !dashboardAuth {
+            actions.append(.configureOpenCodeGoQuota)
         }
         let message: String? = {
-            if authenticated { return "OpenRouter key configured" }
-            if cliInstalled { return "Add an OpenRouter API key or sign in via opencode" }
-            return "Add an OpenRouter API key in Settings"
+            if goAuth && dashboardAuth { return "OpenCode Go connected · quota tracking on" }
+            if goAuth { return "OpenCode Go API key configured · add workspace for quota meters" }
+            if dashboardAuth { return "Quota tracking configured · add your OpenCode Go API key to use OpenCode" }
+            if cliInstalled { return "Add your OpenCode Go API key or sign in via opencode" }
+            return "Add your OpenCode Go API key in Settings"
         }()
         return ProviderDeviceStatus(
             providerId: "opencode",
-            displayName: "OpenRouter",
+            displayName: "OpenCode",
             cliInstalled: cliInstalled,
             authenticated: authenticated,
             status: status,

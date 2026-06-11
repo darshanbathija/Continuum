@@ -62,28 +62,17 @@ final class OpencodeSendTests: XCTestCase {
         XCTAssertEqual(parts?.first?["text"] as? String, prompt)
     }
 
-    func test_requestBody_includesModelOverrideForPickedOpenRouterModel() throws {
-        // When the user picked an OpenRouter model in the Code tab, the
-        // opencode message body must carry the matching OpenCode model object.
-        // The opencode-default sentinel still omits the override so the CLI's
-        // own default can run.
-        let model = try XCTUnwrap(AgentControlServer.opencodeModelObject(forModelId: "anthropic/claude-sonnet-4.6"))
-        let body: [String: Any] = [
-            "parts": [["type": "text", "text": "hello"]],
-            "model": model
-        ]
-        let data = try JSONSerialization.data(withJSONObject: body)
-        let decoded = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        let decodedModel = decoded?["model"] as? [String: String]
-        XCTAssertEqual(decodedModel?["providerID"], "openrouter")
-        XCTAssertEqual(decodedModel?["modelID"], "anthropic/claude-sonnet-4.6")
-        XCTAssertNil(decoded?["variant"])
-        XCTAssertNil(decoded?["providerID"])
-        XCTAssertNil(decoded?["modelID"])
-        let parts = decoded?["parts"] as? [[String: Any]]
-        XCTAssertEqual(parts?.count, 1)
-        XCTAssertEqual(parts?.first?["text"] as? String, "hello")
+    func test_requestBody_includesModelOverrideForPickedGoModel() throws {
+        let model = try XCTUnwrap(AgentControlServer.opencodeModelObject(forModelId: "kimi-k2.6"))
+        XCTAssertEqual(model["providerID"], "opencode-go")
+        XCTAssertEqual(model["modelID"], "kimi-k2.6")
         XCTAssertNil(AgentControlServer.opencodeModelObject(forModelId: "opencode-default"))
+    }
+
+    func test_requestBody_stillRoutesLegacyOpenRouterSlugs() throws {
+        let model = try XCTUnwrap(AgentControlServer.opencodeModelObject(forModelId: "anthropic/claude-sonnet-4.6"))
+        XCTAssertEqual(model["providerID"], "openrouter")
+        XCTAssertEqual(model["modelID"], "anthropic/claude-sonnet-4.6")
     }
 
     func test_requestBody_preservesPromptWithNewlines() throws {

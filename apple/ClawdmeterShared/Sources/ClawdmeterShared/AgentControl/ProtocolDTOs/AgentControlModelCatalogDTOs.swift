@@ -264,11 +264,14 @@ public struct ModelCatalog: Codable, Sendable {
             ModelCatalogEntry(id: "gemini-3-flash-thinking",   provider: .gemini, displayName: "Gemini 3 Flash (Thinking)",   cliAlias: "flash-thinking",     supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Complex problem solving", badge: "Thinking"),
         ],
         opencode: [
-            ModelCatalogEntry(id: "openai/gpt-5.5", provider: .opencode, displayName: "OpenRouter · GPT-5.5", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: nil, recommendedFor: "Most work", badge: "BYOK"),
-            ModelCatalogEntry(id: "anthropic/claude-opus-4.7", provider: .opencode, displayName: "OpenRouter · Claude Opus 4.7", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: 200_000, recommendedFor: "Deep reasoning", badge: nil),
-            ModelCatalogEntry(id: "anthropic/claude-sonnet-4.6", provider: .opencode, displayName: "OpenRouter · Claude Sonnet 4.6", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: 200_000, recommendedFor: "Plan mode", badge: nil),
-            ModelCatalogEntry(id: "google/gemini-3-pro", provider: .opencode, displayName: "OpenRouter · Gemini 3 Pro", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: 2_000_000, recommendedFor: "Deep reasoning", badge: "Pro"),
-            ModelCatalogEntry(id: "opencode-default", provider: .opencode, displayName: "OpenCode default", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "BYOK provider", badge: "Default"),
+            ModelCatalogEntry(id: "kimi-k2.6", provider: .opencode, displayName: "OpenCode Go · Kimi K2.6", cliAlias: "opencode-go/kimi-k2.6", supportsThinking: true, supportsEffort: false, contextWindow: 256_000, recommendedFor: "Most work", badge: "Go"),
+            ModelCatalogEntry(id: "kimi-k2.5", provider: .opencode, displayName: "OpenCode Go · Kimi K2.5", cliAlias: "opencode-go/kimi-k2.5", supportsThinking: true, supportsEffort: false, contextWindow: 256_000, recommendedFor: "Fast iteration", badge: "Go"),
+            ModelCatalogEntry(id: "glm-5.1", provider: .opencode, displayName: "OpenCode Go · GLM 5.1", cliAlias: "opencode-go/glm-5.1", supportsThinking: true, supportsEffort: false, contextWindow: 200_000, recommendedFor: "Deep reasoning", badge: "Go"),
+            ModelCatalogEntry(id: "deepseek-v4-pro", provider: .opencode, displayName: "OpenCode Go · DeepSeek V4 Pro", cliAlias: "opencode-go/deepseek-v4-pro", supportsThinking: true, supportsEffort: false, contextWindow: 128_000, recommendedFor: "Deep reasoning", badge: "Go"),
+            ModelCatalogEntry(id: "deepseek-v4-flash", provider: .opencode, displayName: "OpenCode Go · DeepSeek V4 Flash", cliAlias: "opencode-go/deepseek-v4-flash", supportsThinking: false, supportsEffort: false, contextWindow: 128_000, recommendedFor: "Fast iteration", badge: "Fast"),
+            ModelCatalogEntry(id: "minimax-m2.5", provider: .opencode, displayName: "OpenCode Go · MiniMax M2.5", cliAlias: "opencode-go/minimax-m2.5", supportsThinking: true, supportsEffort: false, contextWindow: 200_000, recommendedFor: "Most work", badge: "Go"),
+            ModelCatalogEntry(id: "qwen3.7-max", provider: .opencode, displayName: "OpenCode Go · Qwen3.7 Max", cliAlias: "opencode-go/qwen3.7-max", supportsThinking: true, supportsEffort: false, contextWindow: 256_000, recommendedFor: "Deep reasoning", badge: "Go"),
+            ModelCatalogEntry(id: "opencode-default", provider: .opencode, displayName: "OpenCode default", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "Go account default", badge: "Default"),
         ],
         cursor: [
             ModelCatalogEntry(id: CursorModelCatalog.autoModelId, provider: .cursor, displayName: "Cursor default / Auto", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "Cursor account default", badge: "Auto"),
@@ -353,6 +356,10 @@ public struct ModelCatalog: Codable, Sendable {
             customProviders: customProviders,
             updatedAt: Date()
         )
+    }
+
+    public func replacingOpenCodeGo(_ opencode: [ModelCatalogEntry]) -> ModelCatalog {
+        replacingOpenRouter(opencode)
     }
 
     public func replacingOpenRouter(_ opencode: [ModelCatalogEntry]) -> ModelCatalog {

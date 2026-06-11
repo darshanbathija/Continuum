@@ -20,6 +20,7 @@ public struct MacUsageView: View {
     var geminiModel: AppModel?
     var cursorModel: AppModel?
     var grokModel: AppModel?
+    var opencodeModel: AppModel?
     /// PR #31 chunk 3 (A2): the live usage store the OpenCode dollar
     /// row reads from. Optional so Previews work without a runtime.
     var usageHistoryStore: UsageHistoryStore?
@@ -39,6 +40,7 @@ public struct MacUsageView: View {
         geminiModel: AppModel? = nil,
         cursorModel: AppModel? = nil,
         grokModel: AppModel? = nil,
+        opencodeModel: AppModel? = nil,
         usageHistoryStore: UsageHistoryStore? = nil,
         secondaryColumns: [SecondaryTahoeColumn] = []
     ) {
@@ -48,6 +50,7 @@ public struct MacUsageView: View {
         self.geminiModel = geminiModel
         self.cursorModel = cursorModel
         self.grokModel = grokModel
+        self.opencodeModel = opencodeModel
         self.usageHistoryStore = usageHistoryStore
         self.secondaryColumns = secondaryColumns
     }
@@ -139,6 +142,7 @@ public struct MacUsageView: View {
             LiveColumn(provider: .gemini, row: data.gemini, model: geminiModel),
             LiveColumn(provider: .cursor, row: data.cursor, model: cursorModel),
             LiveColumn(provider: .grok, row: data.grok, model: grokModel),
+            LiveColumn(provider: .opencode, row: data.opencode, model: opencodeModel),
         ].filter { enabledProviderIDs.contains(ProviderRegistry.rootProviderID(for: $0.provider.rawValue)) }
     }
 
@@ -356,6 +360,7 @@ private struct ProviderColumn: View {
         switch provider {
         case .grok: return "credits used"
         case .cursor: return "billing period"
+        case .opencode: return "5 hour"
         default: return "session"
         }
     }
@@ -385,10 +390,17 @@ private struct ProviderColumn: View {
                 TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 220,
                               label: quotaLabel, sublabel: quotaSublabelText)
                 .padding(.top, 28)
-                .padding(.bottom, provider == .cursor ? 18 : 28)
+                .padding(.bottom, (provider == .cursor || provider == .opencode) ? 18 : 28)
 
                 if provider == .cursor, let quota = row.cursorQuota {
                     CursorMonthlyMeters(quota: quota, fallbackTotalPct: Int(row.sessionPercent))
+                        .padding(.bottom, row.hasWeekly ? 18 : 0)
+                }
+
+                // Only render the monthly meter when the window was actually
+                // fetched (monthlyPct != nil) — never a fabricated number.
+                if provider == .opencode, let quota = row.opencodeGoQuota, let monthlyPct = quota.monthlyPct {
+                    OpenCodeGoMonthlyMeter(monthlyPct: monthlyPct, resetMins: quota.monthlyResetMins)
                         .padding(.bottom, row.hasWeekly ? 18 : 0)
                 }
 
@@ -440,6 +452,34 @@ private struct ProviderColumn: View {
             // up and calls `setVisible(_:)` on the matching status item.
             // No notification needed.
         }
+    }
+}
+
+private struct OpenCodeGoMonthlyMeter: View {
+    @Environment(\.tahoe) private var t
+    var monthlyPct: Int
+    var resetMins: Int
+
+    var body: some View {
+        let value = min(100, max(0, monthlyPct))
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text("Monthly")
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                Spacer()
+                Text("\(value)%")
+                    .font(TahoeFont.mono(10.5))
+                    .foregroundStyle(t.fg3)
+            }
+            TahoePillBar(percent: Double(value), provider: .opencode, height: 5)
+            if resetMins > 0 {
+                Text("resets in \(TahoeFmt.resetIn(minutes: resetMins))")
+                    .font(TahoeFont.body(10))
+                    .foregroundStyle(t.fg4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

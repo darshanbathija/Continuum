@@ -281,6 +281,7 @@ struct MacRootView: View {
                         let _ = geminiModel.usage
                         let _ = cursorModel.usage
                         let _ = grokModel.usage
+                        let _ = runtime.opencodeModel.usage
                         MacUsageView(
                             data: runtime.tahoeLive,
                             claudeModel: claudeModel,
@@ -288,6 +289,7 @@ struct MacRootView: View {
                             geminiModel: geminiModel,
                             cursorModel: cursorModel,
                             grokModel: grokModel,
+                            opencodeModel: runtime.opencodeModel,
                             usageHistoryStore: runtime.usageHistoryStore,
                             secondaryColumns: runtime.tahoeSecondaryColumns
                         )

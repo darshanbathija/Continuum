@@ -287,6 +287,7 @@ public actor OpencodeAuthFile {
     /// provider doesn't get a wrong label.
     internal static func defaultDisplayName(for providerId: String) -> String {
         switch providerId.lowercased() {
+        case "opencode-go", "opencode": return "OpenCode Go"
         case "openrouter":   return "OpenRouter"
         case "anthropic":    return "Anthropic"
         case "openai":       return "OpenAI"

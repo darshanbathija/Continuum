@@ -19,12 +19,7 @@ extension AppRuntime {
             claude: tahoeRow(model: claudeModel, provider: .claude),
             codex:  tahoeRow(model: codexModel,  provider: .codex),
             gemini: tahoeRow(model: geminiModel, provider: .gemini),
-            // v0.28.0: Cursor now driven by a real AppModel (CursorSource
-            // → api2.cursor.sh GetCurrentPeriodUsage) instead of the
-            // static "Cursor Auto" placeholder. The same fallback path
-            // tahoeRow renders for un-authed providers handles the
-            // "cursor-agent not logged in" case (sessionPercent: 0,
-            // resetIn: "—", modelName: "Cursor").
+            opencode: tahoeRow(model: opencodeModel, provider: .opencode),
             cursor: tahoeRow(model: cursorModel, provider: .cursor),
             grok: tahoeRow(model: grokModel, provider: .grok)
         )
@@ -69,7 +64,8 @@ extension AppRuntime {
                 autoReviveAgo: "",
                 supportsAutoRevive: model.config.supportsAutoRevive,
                 hasWeekly: model.config.hasWeeklyWindow,
-                cursorQuota: nil
+                cursorQuota: nil,
+                opencodeGoQuota: nil
             )
         }
         let modelName: String = {
@@ -78,11 +74,20 @@ extension AppRuntime {
             }
             return fallbackModelName
         }()
+        // OpenCode Go's weekly row renders only when the source actually fetched
+        // the weekly window; otherwise hide it rather than show a misleading
+        // 0% / copied value. Other providers keep their static config gate.
+        let hasWeekly: Bool = {
+            if provider == .opencode {
+                return usage.opencodeGoQuota?.weeklyAvailable ?? false
+            }
+            return model.config.hasWeeklyWindow
+        }()
         return TahoeLiveRow(
             sessionPercent: Double(usage.sessionPct),
-            weeklyPercent: model.config.hasWeeklyWindow ? Double(usage.weeklyPct) : -1,
+            weeklyPercent: hasWeekly ? Double(usage.weeklyPct) : -1,
             sessionResetIn: TahoeFmt.resetIn(minutes: usage.sessionResetMins),
-            weeklyResetIn: model.config.hasWeeklyWindow ? TahoeFmt.resetIn(minutes: usage.weeklyResetMins) : "",
+            weeklyResetIn: hasWeekly ? TahoeFmt.resetIn(minutes: usage.weeklyResetMins) : "",
             modelName: modelName,
             autoReviveOn: model.config.supportsAutoRevive ? model.autoReviver.isEnabled : false,
             autoReviveAgo: model.config.supportsAutoRevive
@@ -90,8 +95,10 @@ extension AppRuntime {
                                           // when added, plumb here.
                 : "",
             supportsAutoRevive: model.config.supportsAutoRevive,
-            hasWeekly: model.config.hasWeeklyWindow,
-            cursorQuota: usage.cursorQuota
+            hasWeekly: hasWeekly,
+            cursorQuota: usage.cursorQuota,
+            opencodeGoQuota: usage.opencodeGoQuota,
+            stale: false
         )
     }
 

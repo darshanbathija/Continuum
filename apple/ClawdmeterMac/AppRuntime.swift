@@ -33,6 +33,8 @@ final class AppRuntime: ObservableObject {
     /// credits meter for live usage limits; token analytics remain history-ledger
     /// based.
     let grokModel: AppModel
+    /// OpenCode Go subscription quota + model catalog.
+    let opencodeModel: AppModel
     let usageHistoryStore: UsageHistoryStore
 
     /// F3-wire (Codex eng-review #10): one `AppModel` per registered
@@ -233,6 +235,12 @@ final class AppRuntime: ObservableObject {
             tokenProvider: grokTokenProvider
         )
 
+        self.opencodeModel = AppModel(
+            config: .opencode,
+            source: OpenCodeGoSource(),
+            tokenProvider: OpenCodeGoTokenProvider()
+        )
+
         // F3-wire (Codex eng-review #10): seed the provider-instance
         // registry with the primary for every kind and map each kind's
         // primary wireId to the AppModel we just constructed. Custom
@@ -251,10 +259,7 @@ final class AppRuntime: ObservableObject {
             ProviderInstanceId.primary(kind: .gemini).wireId: self.geminiModel,
             ProviderInstanceId.primary(kind: .cursor).wireId: self.cursorModel,
             ProviderInstanceId.primary(kind: .grok).wireId: self.grokModel,
-            // `.opencode` and `.unknown` don't have a per-kind AppModel
-            // (OpenCode runs as a long-lived `opencode serve` daemon,
-            // unknown is forward-compat sentinel only); they resolve
-            // through the registry but never have a model entry.
+            ProviderInstanceId.primary(kind: .opencode).wireId: self.opencodeModel,
         ]
 
         // Don't forward objectWillChange — it was saturating main thread with
@@ -286,6 +291,11 @@ final class AppRuntime: ObservableObject {
                 runtimeLogger.info("Grok poller deferred under XCTest; CLI untouched during unit-test app bootstrap")
             } else {
                 runtimeLogger.info("Grok poller deferred (provider disabled); CLI untouched until enabled")
+            }
+            if ProviderEnablement.isEnabled("opencode") {
+                opencodeModel.start()
+            } else {
+                runtimeLogger.info("OpenCode Go poller deferred (provider disabled)")
             }
         }
 
@@ -390,6 +400,7 @@ final class AppRuntime: ObservableObject {
             gemini: self.geminiModel,
             cursor: self.cursorModel,
             grok: self.grokModel,
+            opencode: self.opencodeModel,
             history: self.usageHistoryStore
         )
         self.sessionsModel = SessionsModel(
@@ -794,8 +805,8 @@ final class AppRuntime: ObservableObject {
                     _ = await CursorModelProbe.shared.currentModels()
                 }
                 if openrouterOn {
-                    if stale { await OpenRouterModelProbe.shared.invalidate() }
-                    _ = await OpenRouterModelProbe.shared.currentModels()
+                    if stale { await OpenCodeGoModelProbe.shared.invalidate() }
+                    _ = await OpenCodeGoModelProbe.shared.currentModels()
                 }
             }
         }
@@ -877,7 +888,7 @@ final class AppRuntime: ObservableObject {
             if id == "cursor" {
                 await CursorModelProbe.shared.invalidate()
             } else if id == "opencode" {
-                await OpenRouterModelProbe.shared.invalidate()
+                await OpenCodeGoModelProbe.shared.invalidate()
             }
         }
         runtimeLogger.info("Provider \(id, privacy: .public) \(enabled ? "enabled" : "disabled", privacy: .public)")
@@ -1039,7 +1050,8 @@ final class AppRuntime: ObservableObject {
         case .codex:  return .codex
         case .gemini: return .gemini
         case .cursor: return .cursor
-        case .opencode, .grok, .unknown: return nil
+        case .opencode: return .opencode
+        case .grok, .unknown: return nil
         }
     }
 

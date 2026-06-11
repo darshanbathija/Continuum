@@ -1315,6 +1315,12 @@ struct SettingsProviderRowsWithDeviceStatus: View {
     @State private var isRefreshingDiscovery = false
     @State private var setupTerminal: SetupTerminalSession?
     @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
+    @State private var showOpenCodeGoSetupPanel = false
+    @State private var openCodeGoKeyDraft = ""
+    @State private var openCodeGoWorkspaceDraft = ""
+    @State private var openCodeGoAuthCookieDraft = ""
+    @State private var isSavingOpenCodeGoKey = false
+    @State private var openCodeGoKeyMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1327,6 +1333,9 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                     Task { await performSetup(providerId: providerId, action: action) }
                 }
             )
+            if showOpenCodeGoSetupPanel {
+                openCodeGoSetupPanel
+            }
             if !deviceStatuses.isEmpty {
                 Button {
                     Task { await refreshDiscovery() }
@@ -1381,8 +1390,17 @@ struct SettingsProviderRowsWithDeviceStatus: View {
             }
         case .openOpencodeSignIn:
             await MainActor.run { opencodeSetupCommand = .signIn }
-        case .addOpenRouterKey:
-            break
+        case .addOpenRouterKey, .addOpenCodeGoKey:
+            await MainActor.run {
+                showOpenCodeGoSetupPanel = true
+                openCodeGoKeyDraft = ""
+            }
+        case .configureOpenCodeGoQuota:
+            await MainActor.run {
+                showOpenCodeGoSetupPanel = true
+                openCodeGoWorkspaceDraft = UserDefaults.standard.string(forKey: OpenCodeGoCredentials.workspaceDefaultsKey) ?? ""
+                openCodeGoAuthCookieDraft = UserDefaults.standard.string(forKey: OpenCodeGoCredentials.authCookieDefaultsKey) ?? ""
+            }
         case .runCodexLogin, .runCursorAgentLogin, .installCodexCLI, .installCursorCLI,
              .installAgyCLI, .installGrokCLI:
             guard let command = action.shellCommand else { return }
@@ -1417,6 +1435,72 @@ struct SettingsProviderRowsWithDeviceStatus: View {
         } catch {
             let script = "tell application \"Terminal\" to do script \"\(command.replacingOccurrences(of: "\"", with: "\\\""))\""
             NSAppleScript(source: script)?.executeAndReturnError(nil)
+        }
+    }
+
+    private var openCodeGoSetupPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("OpenCode Go")
+                    .font(TahoeFont.body(12.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Spacer(minLength: 0)
+                Button {
+                    showOpenCodeGoSetupPanel = false
+                } label: {
+                    TahoeIcon("xmark", size: 10, weight: .bold)
+                        .foregroundStyle(t.fg3)
+                }
+                .buttonStyle(.plain)
+            }
+            Text("Paste your Go API key from opencode.ai/zen — that powers chat + code. Optional: add workspace ID + auth cookie for 5h / weekly / monthly meters (best-effort; OpenCode has not shipped a usage API yet, so meters may stay empty). The cookie is stored in your Keychain.")
+                .font(TahoeFont.body(11.5))
+                .foregroundStyle(t.fg3)
+            SecureField("OpenCode Go API key", text: $openCodeGoKeyDraft)
+                .textFieldStyle(.roundedBorder)
+            TextField("Workspace ID (from opencode.ai/workspace/…/go)", text: $openCodeGoWorkspaceDraft)
+                .textFieldStyle(.roundedBorder)
+            SecureField("Auth cookie (optional, for quota meters)", text: $openCodeGoAuthCookieDraft)
+                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 8) {
+                Button {
+                    Task { await saveOpenCodeGoCredentials() }
+                } label: {
+                    Text(isSavingOpenCodeGoKey ? "Saving…" : "Save")
+                        .font(TahoeFont.body(12, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(openCodeGoKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSavingOpenCodeGoKey)
+            }
+            if let openCodeGoKeyMessage {
+                Text(openCodeGoKeyMessage)
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg3)
+            }
+        }
+        .padding(12)
+        .background(t.glassTintHi.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func saveOpenCodeGoCredentials() async {
+        let key = openCodeGoKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        isSavingOpenCodeGoKey = true
+        defer { isSavingOpenCodeGoKey = false }
+        do {
+            try await OpencodeAuthFile.shared.setAPIKey(providerId: "opencode-go", key: key)
+            let workspace = openCodeGoWorkspaceDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cookie = openCodeGoAuthCookieDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !workspace.isEmpty, !cookie.isEmpty {
+                OpenCodeGoCredentials.saveDashboardQuotaConfig(workspaceId: workspace, authCookie: cookie)
+            }
+            openCodeGoKeyMessage = "OpenCode Go connected."
+            openCodeGoKeyDraft = ""
+            runtime?.opencodeModel.forcePoll()
+            await OpenCodeGoModelProbe.shared.invalidate()
+            await refreshDiscovery()
+        } catch {
+            openCodeGoKeyMessage = error.localizedDescription
         }
     }
 }
@@ -1589,7 +1673,7 @@ struct ProviderPreferenceRows: View {
                 next = next.replacingCursor(await CursorModelProbe.shared.currentModels())
             }
             if ProviderEnablement.isEnabled("opencode") {
-                next = next.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
+                next = next.replacingOpenCodeGo(await OpenCodeGoModelProbe.shared.currentModels())
             }
             catalog = next
         }
@@ -1600,7 +1684,7 @@ struct ProviderPreferenceRows: View {
         if id == "cursor" {
             await CursorModelProbe.shared.invalidate()
         } else if id == "opencode" {
-            await OpenRouterModelProbe.shared.invalidate()
+            await OpenCodeGoModelProbe.shared.invalidate()
         }
     }
 

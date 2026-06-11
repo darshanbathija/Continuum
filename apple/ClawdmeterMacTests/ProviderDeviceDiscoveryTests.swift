@@ -45,7 +45,7 @@ final class ProviderDeviceDiscoveryTests: XCTestCase {
     func test_providerDeviceStatus_isReady_opencodeRequiresAuthOnly() {
         XCTAssertTrue(ProviderDeviceStatus(
             providerId: "opencode",
-            displayName: "OpenRouter",
+            displayName: "OpenCode",
             cliInstalled: false,
             authenticated: true,
             status: .authenticated
