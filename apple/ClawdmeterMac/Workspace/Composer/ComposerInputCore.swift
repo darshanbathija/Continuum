@@ -766,6 +766,7 @@ struct ComposerInputCore: View {
             contextUsedTokens: 0,
             contextLimitTokens: entry?.contextWindow,
             costDollar: 0,
+            contextBreakdown: nil,
             sessionPct: nil,
             sessionResetMins: nil,
             weeklyPct: nil,

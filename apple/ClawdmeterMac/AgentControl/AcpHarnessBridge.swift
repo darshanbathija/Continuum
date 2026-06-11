@@ -251,6 +251,9 @@ final class AcpHarnessBridge {
         if case .usage(let usage) = event {
             recordHarnessUsage(usage)
         }
+        if case .contextBreakdown(let breakdown) = event {
+            store.setContextBreakdown(breakdown)
+        }
         if case .turnEnded = event {
             lastUsageUpdate = nil
         }

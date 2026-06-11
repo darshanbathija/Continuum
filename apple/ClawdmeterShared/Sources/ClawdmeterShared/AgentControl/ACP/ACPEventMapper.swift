@@ -71,6 +71,12 @@ public enum ACPEventMapper {
             )
             return [.usage(usage)]
 
+        case .contextWindowUpdate:
+            if let breakdown = ContextWindowBreakdownParser.fromACPUpdate(raw) {
+                return [.contextBreakdown(breakdown)]
+            }
+            return []
+
         case .availableCommandsUpdate:
             return [] // surfaced via initialize; not a turn event
 

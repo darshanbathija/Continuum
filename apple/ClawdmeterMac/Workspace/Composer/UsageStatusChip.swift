@@ -10,6 +10,7 @@ struct UsageStatusInfo: Equatable {
     let contextUsedTokens: Int
     let contextLimitTokens: Int?
     let costDollar: Decimal
+    let contextBreakdown: ContextWindowBreakdown?
     let sessionPct: Int?
     let sessionResetMins: Int?
     let weeklyPct: Int?
@@ -190,7 +191,7 @@ struct ContextUsageChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(PressableButtonStyle())
-        .help("Context window utilisation — click for plan usage (⌘⌥C)")
+        .help("Context window utilisation — click for breakdown (⌘⌥C)")
         .accessibilityLabel("Context window")
         .accessibilityValue(percentText)
         .accessibilityIdentifier("code.composer.context-usage")
@@ -374,14 +375,15 @@ struct ModelEffortPopover: View {
     }
 }
 
-/// Context window + Session cost + Plan usage rows.
+/// Context window breakdown + Plan usage rows.
 struct ContextUsagePopover: View {
     let info: UsageStatusInfo
 
     struct RowDescriptor: Equatable, Identifiable {
         enum Kind: Equatable {
+            case contextHeader
+            case contextBreakdown
             case progress(tint: Tint)
-            case cost
             case header
             case note
         }
@@ -401,7 +403,24 @@ struct ContextUsagePopover: View {
 
     static func rowDescriptors(for info: UsageStatusInfo) -> [RowDescriptor] {
         var rows: [RowDescriptor] = []
-        if let limit = info.contextLimitTokens, limit > 0 {
+        if let breakdown = info.contextBreakdown {
+            rows.append(RowDescriptor(
+                id: "code.context-usage.section.context",
+                kind: .contextHeader,
+                label: "Context",
+                value: breakdown.headerText,
+                fraction: breakdown.fractionUsed
+            ))
+            for entry in breakdown.displayEntries {
+                rows.append(RowDescriptor(
+                    id: "code.context-usage.row.\(entry.id.accessibilitySuffix)",
+                    kind: .contextBreakdown,
+                    label: entry.label,
+                    value: ContextWindowBreakdown.formatPercent(entry.percent),
+                    fraction: nil
+                ))
+            }
+        } else if let limit = info.contextLimitTokens, limit > 0 {
             rows.append(RowDescriptor(
                 id: "code.context-usage.row.context",
                 kind: .progress(tint: .accent),
@@ -410,14 +429,6 @@ struct ContextUsagePopover: View {
                 fraction: min(1.0, max(0, Double(info.contextUsedTokens) / Double(limit)))
             ))
         }
-
-        rows.append(RowDescriptor(
-            id: "code.context-usage.row.cost",
-            kind: .cost,
-            label: "Session cost",
-            value: costText(for: info),
-            fraction: nil
-        ))
 
         if info.cursorQuota != nil || info.sessionPct != nil || info.weeklyPct != nil {
             rows.append(RowDescriptor(
@@ -506,19 +517,15 @@ struct ContextUsagePopover: View {
     @ViewBuilder
     private func rowView(_ row: RowDescriptor) -> some View {
         switch row.kind {
+        case .contextHeader:
+            contextHeaderRow(label: row.label, value: row.value ?? "", fraction: row.fraction ?? 0)
+                .accessibilityIdentifier(row.id)
+        case .contextBreakdown:
+            breakdownRow(label: row.label, value: row.value ?? "")
+                .accessibilityIdentifier(row.id)
         case .progress(let tint):
             progressRow(label: row.label, value: row.value ?? "", fraction: row.fraction ?? 0, tint: color(for: tint))
                 .accessibilityIdentifier(row.id)
-        case .cost:
-            HStack {
-                Text(row.label)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(row.value ?? "")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-            }
-            .accessibilityIdentifier(row.id)
         case .header:
             VStack(alignment: .leading, spacing: 14) {
                 Divider()
@@ -534,6 +541,33 @@ struct ContextUsagePopover: View {
                 .lineLimit(row.id == "code.context-usage.row.cursor-included" ? 1 : nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier(row.id)
+        }
+    }
+
+    @ViewBuilder
+    private func contextHeaderRow(label: String, value: String, fraction: Double) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text(value)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            QuotaPillBar(fraction: max(0, min(1, fraction)), tint: SessionsV2Theme.accent)
+        }
+    }
+
+    @ViewBuilder
+    private func breakdownRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 12, design: .monospaced))
         }
     }
 
@@ -607,21 +641,6 @@ struct ContextUsagePopover: View {
         case .warn: return SessionsV2Theme.warn
         case .danger: return SessionsV2Theme.danger
         }
-    }
-
-    private static func costText(for info: UsageStatusInfo) -> String {
-        let n = info.costDollar as NSDecimalNumber
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        if n.doubleValue < 1 {
-            formatter.minimumFractionDigits = 4
-            formatter.maximumFractionDigits = 4
-        } else {
-            formatter.minimumFractionDigits = 2
-            formatter.maximumFractionDigits = 2
-        }
-        return formatter.string(from: n) ?? "$\(info.costDollar)"
     }
 }
 

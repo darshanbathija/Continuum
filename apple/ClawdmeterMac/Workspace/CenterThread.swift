@@ -1210,19 +1210,45 @@ struct CenterThread: View {
             cacheReadTokens: snap?.totalCacheReadTokens ?? 0
         )
         let dollar = Pricing.shared.cost(for: modelId, tokens: totals)
+        let limit = entry?.contextWindow
+        let contextBreakdown = resolvedContextBreakdown(
+            snapshot: snap,
+            usedTokens: used,
+            limitTokens: limit
+        )
         let claudePlan = (session.agent == .claude) ? AppDelegate.runtime?.claudeModel.usage : nil
         let cursorPlan = (session.agent == .cursor) ? AppDelegate.runtime?.cursorModel.usage?.cursorQuota : nil
         return UsageStatusInfo(
             modelDisplay: entry?.displayName ?? modelId,
             effortDisplay: effort.map(effortLabel) ?? "Default",
             contextUsedTokens: used,
-            contextLimitTokens: entry?.contextWindow,
+            contextLimitTokens: limit,
             costDollar: dollar,
+            contextBreakdown: contextBreakdown,
             sessionPct: claudePlan?.sessionPct,
             sessionResetMins: claudePlan?.sessionResetMins,
             weeklyPct: claudePlan?.weeklyPct,
             weeklyResetMins: claudePlan?.weeklyResetMins,
             cursorQuota: cursorPlan
+        )
+    }
+
+    /// Prefer a provider-published breakdown from the chat snapshot; fall
+    /// back to a local estimate so the Code tab popover always renders the
+    /// Cursor-style category rows instead of session cost.
+    private func resolvedContextBreakdown(
+        snapshot: SessionChatStore.ChatSnapshot?,
+        usedTokens: Int,
+        limitTokens: Int?
+    ) -> ContextWindowBreakdown? {
+        if let published = snapshot?.contextBreakdown {
+            return published
+        }
+        guard let limitTokens, limitTokens > 0 else { return nil }
+        return ContextWindowBreakdownParser.estimate(
+            usedTokens: usedTokens,
+            limitTokens: limitTokens,
+            messages: snapshot?.messages ?? []
         )
     }
 
