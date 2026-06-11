@@ -1527,6 +1527,72 @@ public final class SessionsModel: ObservableObject {
             }
     }
 
+    /// Whether any foreground workspace tab (session, draft, terminal, or
+    /// document) still lives in `key`. Used when closing one tab so we don't
+    /// tear down the shared worktree/branch while other tabs remain open.
+    func workspaceHasOpenTabs(in key: WorkspaceKey, excludingSessionId: UUID? = nil) -> Bool {
+        if !WorkspaceKey.siblings(of: key, in: registry.sessions, excluding: excludingSessionId).isEmpty {
+            return true
+        }
+        if !workspaceDraftTabs(in: key).isEmpty { return true }
+        if !workspaceTerminalTabs(in: key).isEmpty { return true }
+        if !workspaceDocumentTabs(in: key).isEmpty { return true }
+        return false
+    }
+
+    /// Workspace keys with open client-side tabs (drafts/terminals/documents)
+    /// for a repo. Keeps sidebar worktree rows visible when every session tab
+    /// was closed but unsent drafts still reference the branch.
+    func openWorkspaceTabKeys(inRepo repoKey: String) -> [WorkspaceKey] {
+        let canonical = WorkspaceKey.canonicalPath(repoKey)
+        var keys = Set<WorkspaceKey>()
+        for draft in workspaceDraftTabs where WorkspaceKey.canonicalPath(draft.workspaceKey.repoKey) == canonical {
+            keys.insert(draft.workspaceKey)
+        }
+        for tab in workspaceTerminalTabs where WorkspaceKey.canonicalPath(tab.workspaceKey.repoKey) == canonical {
+            keys.insert(tab.workspaceKey)
+        }
+        for tab in workspaceDocumentTabs where WorkspaceKey.canonicalPath(tab.workspaceKey.repoKey) == canonical {
+            keys.insert(tab.workspaceKey)
+        }
+        return Array(keys)
+    }
+
+    private func promoteWorkspaceForegroundSelection(in key: WorkspaceKey?) {
+        guard let key else { return }
+        if openSessionId != nil
+            || selectedWorkspaceDraftTabId != nil
+            || selectedWorkspaceTerminalTabId != nil
+            || selectedWorkspaceDocumentTabId != nil {
+            return
+        }
+        if let session = WorkspaceKey.siblings(of: key, in: registry.sessions).last {
+            openSession(session)
+            return
+        }
+        if let draft = workspaceDraftTabs(in: key).last {
+            selectDraftWorkspaceTab(draft)
+            return
+        }
+        if let terminal = workspaceTerminalTabs(in: key).last {
+            selectWorkspaceTerminalTab(terminal)
+            return
+        }
+        if let document = workspaceDocumentTabs(in: key).last {
+            selectWorkspaceDocumentTab(document)
+        }
+    }
+
+    private func finalizeWorkspaceIfEmpty(in key: WorkspaceKey) async {
+        guard !workspaceHasOpenTabs(in: key) else { return }
+        _ = try? await WorktreeManager.shared.delete(
+            repoRoot: key.repoKey,
+            worktreePath: key.workspacePath,
+            registryOwned: true,
+            attachedPanePaths: []
+        )
+    }
+
     @discardableResult
     func openDraftWorkspaceTab(
         from session: AgentSession,
@@ -1591,6 +1657,11 @@ public final class SessionsModel: ObservableObject {
             }
         }
         draftComposerStores.removeValue(forKey: id)
+        if let workspaceKey = removed?.workspaceKey {
+            promoteWorkspaceForegroundSelection(in: workspaceKey)
+            let key = workspaceKey
+            Task { await finalizeWorkspaceIfEmpty(in: key) }
+        }
     }
 
     /// #185-named convenience over `openDraftWorkspaceTab(from:defaults:)`.
@@ -2470,11 +2541,15 @@ public final class SessionsModel: ObservableObject {
         // worktree, so only delete it when this is the last tab — no other
         // live sibling session AND no open draft tab in the same workspace.
         // (The last tab to close still cleans up, so no worktree is leaked.)
+        let workspaceKey = WorkspaceKey.of(session)
         if session.kind == .code, session.ownsWorktree, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
-            let key = WorkspaceKey.of(session)
-            let liveSiblings = key.map { WorkspaceKey.siblings(of: $0, in: registry.sessions, excluding: session.id) } ?? []
-            let draftSiblings = key.map { workspaceDraftTabs(in: $0) } ?? []
-            if liveSiblings.isEmpty && draftSiblings.isEmpty {
+            let liveSiblings = workspaceKey.map {
+                WorkspaceKey.siblings(of: $0, in: registry.sessions, excluding: session.id)
+            } ?? []
+            let hasRemainingTabs = workspaceKey.map {
+                workspaceHasOpenTabs(in: $0, excluding: session.id)
+            } ?? false
+            if !hasRemainingTabs {
                 // Last tab in the workspace — safe to delete the shared worktree/branch.
                 _ = try? await WorktreeManager.shared.delete(
                     repoRoot: repoRoot,
@@ -2483,16 +2558,15 @@ public final class SessionsModel: ObservableObject {
                     attachedPanePaths: []
                 )
             } else if let heir = liveSiblings.first {
-                // Other live tabs still run in this worktree. Hand ownership to a
-                // surviving sibling so whichever tab closes LAST cleans it up —
-                // only the owner's `ownsWorktree` is set, so without this the
-                // worktree would be orphaned once the owner is closed first.
+                // Other live session tabs still run in this worktree. Hand ownership
+                // to a surviving sibling so whichever tab closes LAST cleans it up.
                 registry.transferWorktreeOwnership(to: heir.id)
             }
-            // (If only DRAFT tabs remain we keep the worktree for them; it's
-            //  reclaimed when the last spawned tab closes, or via repo archive.)
+            // Draft/terminal/document tabs also keep the worktree alive until the
+            // last foreground tab in the workspace closes.
         }
         if openSessionId == id { openSessionId = nil }
+        promoteWorkspaceForegroundSelection(in: workspaceKey)
         closeChatStore(for: id)
         try? await registry.delete(id: id)
     }

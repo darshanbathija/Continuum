@@ -729,7 +729,7 @@ struct SidebarPane: View {
                 // A worktree is one leaf row; the model sessions running on it
                 // (Claude → Codex handoff) live as TABS in the workspace, sorted
                 // by age — NOT a third sidebar tier. Newest worktree first.
-                ForEach(worktreeGroups(section.sessions), id: \.path) { wt in
+                ForEach(worktreeGroups(section.sessions, repoKey: section.repo.key), id: \.path) { wt in
                     worktreeRow(wt)
                 }
             }
@@ -738,6 +738,7 @@ struct SidebarPane: View {
 
     /// One branch's worktree + the model sessions running on it.
     private struct WorktreeGroup: Identifiable {
+        let repoKey: String
         let path: String
         let branch: String
         let sessions: [AgentSession]
@@ -745,13 +746,21 @@ struct SidebarPane: View {
     }
 
     /// Group a repo's sessions by their worktree (branch), newest-active first.
-    private func worktreeGroups(_ sessions: [AgentSession]) -> [WorktreeGroup] {
-        let grouped = Dictionary(grouping: sessions) { (s: AgentSession) -> String in
+    /// Also surfaces worktrees that only have open draft/terminal/document tabs
+    /// so closing every session tab doesn't hide the branch from the sidebar.
+    private func worktreeGroups(_ sessions: [AgentSession], repoKey: String) -> [WorktreeGroup] {
+        var grouped = Dictionary(grouping: sessions) { (s: AgentSession) -> String in
             WorkspaceKey.of(s)?.workspacePath ?? s.worktreePath ?? s.repoKey ?? s.id.uuidString
+        }
+        for key in model.openWorkspaceTabKeys(inRepo: repoKey) {
+            if grouped[key.workspacePath] == nil {
+                grouped[key.workspacePath] = []
+            }
         }
         return grouped.map { path, ss in
             let last = (path as NSString).lastPathComponent
             return WorktreeGroup(
+                repoKey: repoKey,
                 path: path,
                 branch: last.isEmpty ? path : last,
                 sessions: ss.sorted { $0.createdAt < $1.createdAt }
@@ -767,10 +776,12 @@ struct SidebarPane: View {
     /// as tabs there (sorted by age). No third sidebar tier.
     @ViewBuilder
     private func worktreeRow(_ wt: WorktreeGroup) -> some View {
+        let worktreeKey = WorkspaceKey(repoKey: wt.repoKey, workspacePath: wt.path)
         let activeWorkspaceKey = model.activeWorkspaceKey
-        let isOpen = activeWorkspaceKey.map { key in
-            wt.sessions.contains { WorkspaceKey.of($0) == key }
-        } ?? false
+        let isOpen = activeWorkspaceKey == worktreeKey
+            || activeWorkspaceKey.map { key in
+                wt.sessions.contains { WorkspaceKey.of($0) == key }
+            } == true
         let isHovered = hoveredWorktreePath == wt.path
         let provisioning = wt.sessions.contains { model.isProvisioning($0.id) }
         let isActive = wt.sessions.contains { $0.status == .running }
@@ -779,6 +790,12 @@ struct SidebarPane: View {
                 // openSession() keeps any in-progress draft alive (don't clear it).
                 if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
                     model.openSession(primary)
+                } else if let draft = model.workspaceDraftTabs(in: worktreeKey).last {
+                    model.selectDraftWorkspaceTab(draft)
+                } else if let terminal = model.workspaceTerminalTabs(in: worktreeKey).last {
+                    model.selectWorkspaceTerminalTab(terminal)
+                } else if let document = model.workspaceDocumentTabs(in: worktreeKey).last {
+                    model.selectWorkspaceDocumentTab(document)
                 }
             } label: {
                 HStack(spacing: 8) {
@@ -869,6 +886,13 @@ struct SidebarPane: View {
     /// The models running on a worktree, oldest→newest (the handoff chain) with
     /// consecutive duplicates collapsed, e.g. "Claude · Codex".
     private func worktreeSubtitle(_ wt: WorktreeGroup) -> String {
+        if wt.sessions.isEmpty {
+            let key = WorkspaceKey(repoKey: wt.repoKey, workspacePath: wt.path)
+            if !model.workspaceDraftTabs(in: key).isEmpty { return "Draft" }
+            if !model.workspaceTerminalTabs(in: key).isEmpty { return "Terminal" }
+            if !model.workspaceDocumentTabs(in: key).isEmpty { return "Document" }
+            return "Worktree"
+        }
         let names = wt.sessions
             .sorted { $0.createdAt < $1.createdAt }
             .map { AgentKindUI.displayName(for: $0.agent) }
