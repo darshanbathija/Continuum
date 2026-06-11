@@ -31,9 +31,39 @@ final class WorkspaceKeyTests: XCTestCase {
         XCTAssertEqual(siblings.map(\.id), [active.id])
     }
 
+    func test_workspaceBranchLabelUsesWorktreeSlugNotRepoName() {
+        let session = makeSession(
+            repo: "/Users/dev/conductor/repos/Clawdmeter",
+            repoDisplayName: "Clawdmeter",
+            cwd: "/Users/dev/conductor/workspaces/Clawdmeter/oslo"
+        )
+
+        XCTAssertEqual(session.displayLabel, "Clawdmeter")
+        XCTAssertEqual(session.workspaceBranchLabel, "oslo")
+    }
+
+    func test_workspaceBranchLabelPrefersProvisioningWorkspaceSlug() {
+        let session = makeSession(
+            repo: "/Users/dev/conductor/repos/Clawdmeter",
+            repoDisplayName: "Clawdmeter",
+            cwd: "/Users/dev/Clawdmeter/workspaces/Clawdmeter/kolkata",
+            provisioning: WorktreeProvisioningMetadata(
+                ownershipMarkerId: "marker",
+                branchName: "feature/kolkata",
+                worktreePath: "/Users/dev/Clawdmeter/workspaces/Clawdmeter/kolkata",
+                workspaceSlug: "kolkata",
+                filesToCopy: WorktreeFileCopySummary(source: .disabled, patterns: [])
+            )
+        )
+
+        XCTAssertEqual(session.workspaceBranchLabel, "kolkata")
+    }
+
     private func makeSession(
         repo: String,
+        repoDisplayName: String = "repo",
         cwd: String?,
+        provisioning: WorktreeProvisioningMetadata? = nil,
         mode: SessionMode = .worktree,
         kind: SessionKind = .code,
         archived: Bool = false,
@@ -42,11 +72,12 @@ final class WorkspaceKeyTests: XCTestCase {
         AgentSession(
             id: UUID(),
             repoKey: kind == .code ? repo : nil,
-            repoDisplayName: "repo",
+            repoDisplayName: repoDisplayName,
             agent: .claude,
             model: nil,
             goal: nil,
             worktreePath: cwd,
+            provisioning: provisioning,
             tmuxWindowId: nil,
             tmuxPaneId: nil,
             status: .running,
