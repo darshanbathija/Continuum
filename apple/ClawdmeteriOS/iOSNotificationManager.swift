@@ -59,21 +59,10 @@ public final class iOSNotificationManager: ObservableObject {
     }
 
     // MARK: - Background task scheduling
-
-    public func registerBackgroundTask() {
-        BGTaskScheduler.shared.register(
-            forTaskWithIdentifier: Self.taskIdentifier,
-            using: nil
-        ) { task in
-            guard let task = task as? BGAppRefreshTask else { return }
-            Task { @MainActor [weak self] in
-                guard let self else { task.setTaskCompleted(success: false); return }
-                let succeeded = await self.performRefresh()
-                self.scheduleBackgroundRefresh()
-                task.setTaskCompleted(success: succeeded)
-            }
-        }
-    }
+    //
+    // BGTaskScheduler.register(forTaskWithIdentifier:) is owned by
+    // `ClawdmeteriOSApp.init` (with expiration handling). Registering the
+    // same identifier twice crashes at launch — do not add a second registrar.
 
     public func scheduleBackgroundRefresh() {
         let request = BGAppRefreshTaskRequest(identifier: Self.taskIdentifier)
