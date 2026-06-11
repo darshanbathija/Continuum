@@ -24,6 +24,7 @@ Set via `wrangler secret put <NAME> --env <env>`:
 |---|---|---|---|
 | `RELAY_OPERATOR_SIGNING_KEY` | Signs first-peer relay session creation bundles so clients cannot create arbitrary DO sessions | Annual | 32 random bytes (base64). Keep this Worker-side except for local operator fallback via `CLAWDMETER_RELAY_OPERATOR_SIGNING_KEY`. |
 | `RELAY_CREATION_GRANT_TOKEN` | Authorizes `/creation-grant` callers before the relay signs a first-connect proof | Quarterly / incident-driven | 32+ random bytes. Provision approved Macs with the same value via `CLAWDMETER_RELAY_CREATION_GRANT_TOKEN`; never embed it in the shipped app bundle. |
+| `RELAY_CLIENT_PROVISIONING_KEY` | Lets shipped Mac apps auto-provision per-install grant tokens via `POST /v1/relay/provision/grant-token` | Annual / incident-driven | 32 random bytes (base64). Must match the client key baked into Mac release builds (or `CLAWDMETER_RELAY_CLIENT_PROVISIONING_KEY` for dev). Rate-limited per install id; not interchangeable with `RELAY_CREATION_GRANT_TOKEN`. |
 
 Per-env Cloudflare KV namespaces (created via `wrangler kv namespace create`):
 

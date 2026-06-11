@@ -23,7 +23,13 @@ import {
   makeHeader,
   makeOpaqueBody,
   TEST_RELAY_CREATION_GRANT_TOKEN,
+  TEST_RELAY_CLIENT_PROVISIONING_KEY,
+  TEST_RELAY_INSTALL_ID,
 } from "./helpers";
+import {
+  issueDeviceGrantToken,
+  issueProvisionRequestSignature,
+} from "../src/provision";
 
 describe("HTTP routes", () => {
   it("GET /healthz returns 200 ok", async () => {
@@ -133,6 +139,61 @@ describe("HTTP routes", () => {
       }
     );
     expect(res.status).toBe(400);
+  });
+
+  it("POST /provision/grant-token returns a device grant usable for creation-grant", async () => {
+    const issuedAtSeconds = Math.floor(Date.now() / 1000);
+    const provisionAuth = await issueProvisionRequestSignature(
+      TEST_RELAY_CLIENT_PROVISIONING_KEY,
+      TEST_RELAY_INSTALL_ID,
+      issuedAtSeconds
+    );
+    const provision = await SELF.fetch(
+      "https://relay.invalid/v1/relay/provision/grant-token",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${provisionAuth}`,
+        },
+        body: JSON.stringify({
+          installId: TEST_RELAY_INSTALL_ID,
+          issuedAtSeconds,
+        }),
+      }
+    );
+    expect(provision.status).toBe(201);
+    const provisionBody = (await provision.json()) as { grantToken: string };
+    expect(provisionBody.grantToken.length).toBeGreaterThan(32);
+
+    const p = await newPairing();
+    const grant = await SELF.fetch(
+      `https://relay.invalid/v1/relay/sessions/${p.sid}/creation-grant`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${provisionBody.grantToken}`,
+        },
+        body: JSON.stringify({
+          macTokenHash: p.macTokHash,
+          iosTokenHash: p.iosTokHash,
+          ttlSeconds: p.ttlSeconds,
+          senderMacFingerprint: "mac_fingerprint_123",
+        }),
+      }
+    );
+    expect(grant.status).toBe(201);
+    const grantBody = (await grant.json()) as {
+      creation: { signature: string };
+    };
+    expect(grantBody.creation.signature.length).toBeGreaterThan(16);
+
+    const expectedDeviceGrant = await issueDeviceGrantToken(
+      TEST_RELAY_CLIENT_PROVISIONING_KEY,
+      TEST_RELAY_INSTALL_ID
+    );
+    expect(provisionBody.grantToken).toBe(expectedDeviceGrant);
   });
 });
 

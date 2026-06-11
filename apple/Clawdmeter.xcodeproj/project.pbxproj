@@ -263,6 +263,9 @@
 		968F1A809DD00135F492B0FE /* RelaySubscriptionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F51A41CE73D5F9E79AE1DE9 /* RelaySubscriptionBridge.swift */; };
 		96A37EE3F9DD16B68B705113 /* VendorProvisioningService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8524794C9A655A7937BDCB51 /* VendorProvisioningService.swift */; };
 		97623C56C0F6148B34FE03C6 /* RelayGrantTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1392A469BC8DB11964EE6640 /* RelayGrantTokenStore.swift */; };
+		97A1B2C3D4E5F60718293A4 /* RelayInstallIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87A1B2C3D4E5F60718293A4 /* RelayInstallIdentity.swift */; };
+		97B2C3D4E5F60718293A4B5 /* RelayGrantProvisioner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87B2C3D4E5F60718293A4B5 /* RelayGrantProvisioner.swift */; };
+		97C3D4E5F60718293A4B5C6 /* RelayGrantProvisionerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87C3D4E5F60718293A4B5C6 /* RelayGrantProvisionerTests.swift */; };
 		97AFB2408A239828ECA833EC /* SessionStatusBadges.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD46C6D38786A4F6BE0A898A /* SessionStatusBadges.swift */; };
 		992369A8A9BB035112912C5D /* WorkspaceTabStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 594E8E5EB863340343E9FD96 /* WorkspaceTabStrip.swift */; };
 		994EF8EE0DE9D535DD99503D /* ChatThreadScroll.swift in Sources */ = {isa = PBXBuildFile; fileRef = 028DE0E9D5008C3A4F3E78C6 /* ChatThreadScroll.swift */; };
@@ -549,6 +552,9 @@
 		13323AB70617753B08B0D66D /* ClaudePtyHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudePtyHostTests.swift; sourceTree = "<group>"; };
 		137B6506B52758A0B8DBBFBA /* AgentTransportPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTransportPolicy.swift; sourceTree = "<group>"; };
 		1392A469BC8DB11964EE6640 /* RelayGrantTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayGrantTokenStore.swift; sourceTree = "<group>"; };
+		87A1B2C3D4E5F60718293A4 /* RelayInstallIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayInstallIdentity.swift; sourceTree = "<group>"; };
+		87B2C3D4E5F60718293A4B5 /* RelayGrantProvisioner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayGrantProvisioner.swift; sourceTree = "<group>"; };
+		87C3D4E5F60718293A4B5C6 /* RelayGrantProvisionerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayGrantProvisionerTests.swift; sourceTree = "<group>"; };
 		13951B634E1A812CE5D605E3 /* RelayPairingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayPairingServiceTests.swift; sourceTree = "<group>"; };
 		140C97848E0B933AD18F9DBF /* TerminalPtyHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalPtyHost.swift; sourceTree = "<group>"; };
 		147082FC165068DD00F8A062 /* WorkspaceReviewPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceReviewPane.swift; sourceTree = "<group>"; };
@@ -1052,6 +1058,8 @@
 				925041B8C85D144E1647A0E6 /* RateLimiter.swift */,
 				79E1F5321E3651A75B2E2369 /* RelayClient.swift */,
 				1392A469BC8DB11964EE6640 /* RelayGrantTokenStore.swift */,
+				87A1B2C3D4E5F60718293A4 /* RelayInstallIdentity.swift */,
+				87B2C3D4E5F60718293A4B5 /* RelayGrantProvisioner.swift */,
 				AD0F7E72EBBEC05B986430D9 /* RelayPairingService.swift */,
 				F974A5DC7DD41CA6A46E47B4 /* RelayRequestDispatcher.swift */,
 				8F51A41CE73D5F9E79AE1DE9 /* RelaySubscriptionBridge.swift */,
@@ -1355,6 +1363,7 @@
 				EF1D26C6988F4C479B90EABC /* ProviderDeviceDiscoveryTests.swift */,
 				49FF764D16075FBD5CFDC73E /* QuickSpawnContractTests.swift */,
 				13951B634E1A812CE5D605E3 /* RelayPairingServiceTests.swift */,
+				87C3D4E5F60718293A4B5C6 /* RelayGrantProvisionerTests.swift */,
 				C6C27ACCEB5AD84FECF5AEA3 /* RelaySubscriptionBridgeTests.swift */,
 				337AF680AD19B43DD3270247 /* RepoEnvStoreTests.swift */,
 				4B5CD71EDF0C57482E26E894 /* RepoIndexTests.swift */,
@@ -2101,6 +2110,7 @@
 				ADAE20B9D59C1799CC1E11C2 /* ProviderDeviceDiscoveryTests.swift in Sources */,
 				F33648618E69E2686F1031E7 /* QuickSpawnContractTests.swift in Sources */,
 				8E978F11CA98449998C89F7B /* RelayPairingServiceTests.swift in Sources */,
+				97C3D4E5F60718293A4B5C6 /* RelayGrantProvisionerTests.swift in Sources */,
 				64E086F91AA0ACFC3C4EB8F1 /* RelaySubscriptionBridgeTests.swift in Sources */,
 				41EAAB68BF58DAB12A369538 /* RepoEnvStoreTests.swift in Sources */,
 				D512BBBBF8AE0CEF5EB1E05A /* RepoIndexTests.swift in Sources */,
@@ -2266,6 +2276,8 @@
 				23D6E3DB6CFE748F738370BA /* RateLimiter.swift in Sources */,
 				2A6FA0289E540BFABE9CC438 /* RelayClient.swift in Sources */,
 				97623C56C0F6148B34FE03C6 /* RelayGrantTokenStore.swift in Sources */,
+				97A1B2C3D4E5F60718293A4 /* RelayInstallIdentity.swift in Sources */,
+				97B2C3D4E5F60718293A4B5 /* RelayGrantProvisioner.swift in Sources */,
 				BEBEDF3EC84554BEEE967A5E /* RelayPairingService.swift in Sources */,
 				89ADE4E63EEB722FF704EB23 /* RelayRequestDispatcher.swift in Sources */,
 				968F1A809DD00135F492B0FE /* RelaySubscriptionBridge.swift in Sources */,

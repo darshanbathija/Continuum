@@ -10,6 +10,9 @@ import {
 export const TEST_RELAY_OPERATOR_SIGNING_KEY =
   "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
 export const TEST_RELAY_CREATION_GRANT_TOKEN = "test-relay-grant-token";
+export const TEST_RELAY_CLIENT_PROVISIONING_KEY =
+  "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+export const TEST_RELAY_INSTALL_ID = "11111111-1111-4111-8111-111111111111";
 
 /** A fresh, throwaway session id (suitable for the URL path). */
 export function newSessionId(): string {
