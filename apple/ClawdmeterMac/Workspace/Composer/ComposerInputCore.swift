@@ -1137,6 +1137,9 @@ struct ComposerInputCore: View {
     private func toggleDictation() {
         if dictation.state == .recording {
             dictation.stop()
+        } else if case .denied = dictation.state {
+            // Permission was previously denied — route to the matching pane.
+            dictation.openPrivacySettings()
         } else {
             composerTextBeforeDictation = store.text
             Task { await dictation.start() }
@@ -1147,7 +1150,7 @@ struct ComposerInputCore: View {
         switch dictation.state {
         case .recording: return "Stop dictation (Ctrl+M)"
         case .requestingPermission: return "Requesting permission…"
-        case .denied(let r): return r
+        case .denied(let r): return "\(r) Click to open System Settings."
         case .unavailable(let r): return r
         case .idle: return "Dictate (Ctrl+M)"
         }

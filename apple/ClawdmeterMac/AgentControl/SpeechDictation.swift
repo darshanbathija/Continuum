@@ -1,6 +1,8 @@
 import Foundation
 import Speech
 import AVFoundation
+import AVFAudio
+import AppKit
 import OSLog
 
 private let dictationLogger = Logger(subsystem: "com.clawdmeter.mac", category: "SpeechDictation")
@@ -99,6 +101,19 @@ public final class SpeechDictation: ObservableObject {
         state = .idle
     }
 
+    /// Opens the System Settings pane that matches the current denial reason.
+    public func openPrivacySettings() {
+        let urlString: String
+        switch state {
+        case .denied(let reason) where reason.contains("Speech recognition"):
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
+        default:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        }
+        guard let url = URL(string: urlString) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     // MARK: - Implementation
 
     private func beginCapture() throws {
@@ -145,22 +160,45 @@ public final class SpeechDictation: ObservableObject {
     // MARK: - Permissions
 
     private static func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
-        await withCheckedContinuation { continuation in
+        let current = SFSpeechRecognizer.authorizationStatus()
+        guard current == .notDetermined else { return current }
+        return await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { status in
                 continuation.resume(returning: status)
             }
         }
     }
 
+    /// Microphone TCC for `AVAudioEngine` is owned by `AVAudioApplication` on
+    /// macOS 14+. `AVCaptureDevice.requestAccess(for: .audio)` can return
+    /// denied without ever presenting the system sheet for audio-engine apps.
     private static func requestMicrophoneAccess() async -> Bool {
         if #available(macOS 14.0, *) {
-            return await AVCaptureDevice.requestAccess(for: .audio)
-        } else {
+            switch AVAudioApplication.shared.recordPermission {
+            case .granted:
+                return true
+            case .denied:
+                return false
+            case .undetermined:
+                return await AVAudioApplication.requestRecordPermission()
+            @unknown default:
+                return false
+            }
+        }
+
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .denied, .restricted:
+            return false
+        case .notDetermined:
             return await withCheckedContinuation { continuation in
                 AVCaptureDevice.requestAccess(for: .audio) { granted in
                     continuation.resume(returning: granted)
                 }
             }
+        @unknown default:
+            return false
         }
     }
 
