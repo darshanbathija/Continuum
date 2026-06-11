@@ -2547,7 +2547,7 @@ public final class SessionsModel: ObservableObject {
                 WorkspaceKey.siblings(of: $0, in: registry.sessions, excluding: session.id)
             } ?? []
             let hasRemainingTabs = workspaceKey.map {
-                workspaceHasOpenTabs(in: $0, excluding: session.id)
+                workspaceHasOpenTabs(in: $0, excludingSessionId: session.id)
             } ?? false
             if !hasRemainingTabs {
                 // Last tab in the workspace — safe to delete the shared worktree/branch.
