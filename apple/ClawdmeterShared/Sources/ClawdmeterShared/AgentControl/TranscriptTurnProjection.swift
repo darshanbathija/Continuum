@@ -104,18 +104,12 @@ public struct TranscriptTurnSummary: Hashable, Sendable {
         self.toolCallCount = toolCallCount
     }
 
-    public var workedForLabel: String {
-        "Worked for \(Self.formatDuration(durationSeconds))"
-    }
-
-    public var countLabel: String {
-        let toolLabel = toolCallCount == 1 ? "1 tool call" : "\(toolCallCount) tool calls"
-        let messageLabel = hiddenMessageCount == 1 ? "1 message" : "\(hiddenMessageCount) messages"
-        return "\(toolLabel), \(messageLabel)"
+    public var thoughtForLabel: String {
+        "Thought for \(Self.formatDuration(durationSeconds))"
     }
 
     public var disclosureLabel: String {
-        "\(workedForLabel) · \(countLabel)"
+        thoughtForLabel
     }
 
     public static func formatDuration(_ seconds: TimeInterval) -> String {
