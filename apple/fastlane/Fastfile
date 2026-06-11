@@ -285,6 +285,7 @@ lane :continuum_archive do
     output_directory: "./build",
     output_name: "Continuum-iOS.ipa",
     include_symbols: true,
+    xcodebuild_formatter: "",
     xcargs: "-allowProvisioningUpdates #{auth} WATCHOS_DEPLOYMENT_TARGET=10.0 EXCLUDED_ARCHS=armv7k"
   )
   UI.success "iOS + Watch archived → ./build/Continuum-iOS.ipa"
