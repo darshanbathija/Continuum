@@ -6,7 +6,7 @@ import ClawdmeterShared
 /// pre-selects ready ones, and offers setup actions for the rest.
 struct OnboardingSheet: View {
     @Environment(\.tahoe) private var t
-    var runtime: AppRuntime?
+    let runtime: AppRuntime
     var onDone: () -> Void
 
     private enum Phase: Equatable {
@@ -29,7 +29,7 @@ struct OnboardingSheet: View {
     @State private var openRouterKeyMessage: String?
     @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
     @State private var setupTerminal: SetupTerminalSession?
-    @State private var showCustomProviderEditor = false
+    @State private var customProviderEditorPresentation: CustomProviderEditorPresentation?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -52,16 +52,14 @@ struct OnboardingSheet: View {
                 Task { await refreshDiscovery() }
             }
         }
-        .sheet(isPresented: $showCustomProviderEditor) {
-            if let store = runtime?.customProviderStore {
-                CustomProviderEditorSheet(
-                    store: store,
-                    client: runtime?.loopbackClient,
-                    editingRecord: nil
-                ) {
-                    showCustomProviderEditor = false
-                    Task { await runtime?.loopbackClient?.refreshModelCatalog() }
-                }
+        .sheet(item: $customProviderEditorPresentation) { _ in
+            CustomProviderEditorSheet(
+                store: runtime.customProviderStore,
+                client: runtime.loopbackClient,
+                editingRecord: nil
+            ) {
+                customProviderEditorPresentation = nil
+                Task { await runtime.loopbackClient?.refreshModelCatalog() }
             }
         }
     }
@@ -117,7 +115,7 @@ struct OnboardingSheet: View {
             }
             TahoeGlass(radius: 6, tone: .panel) {
                 ProviderPreferenceRows(
-                    client: runtime?.loopbackClient,
+                    client: runtime.loopbackClient,
                     runtime: runtime,
                     showDeviceStatus: true,
                     deviceStatuses: discoveryStatuses,
@@ -128,7 +126,7 @@ struct OnboardingSheet: View {
                 )
                 TahoeHair().padding(.vertical, 10)
                 Button {
-                    showCustomProviderEditor = true
+                    customProviderEditorPresentation = CustomProviderEditorPresentation(editingRecord: nil)
                 } label: {
                     HStack(spacing: 6) {
                         TahoeIcon("plus", size: 11, weight: .bold)
@@ -305,11 +303,7 @@ struct OnboardingSheet: View {
         for id in ProviderEnablement.allProviderIds {
             let desired = stagedProviderIDs.contains(id)
             guard desired != ProviderEnablement.isEnabled(id) else { continue }
-            if let runtime {
-                runtime.setProviderEnabled(id, desired)
-            } else {
-                ProviderEnablement.setEnabled(id, desired)
-            }
+            runtime.setProviderEnabled(id, desired)
             // Settings' live toggle seeds Continuum's Claude token on enable;
             // staged apply must do the same or the gauge polls empty (0%).
             if id == "claude", desired {
@@ -360,7 +354,7 @@ struct OnboardingSheet: View {
             return ok
         }.value
         if seeded {
-            runtime?.claudeModel.forcePoll()
+            runtime.claudeModel.forcePoll()
         }
     }
 
