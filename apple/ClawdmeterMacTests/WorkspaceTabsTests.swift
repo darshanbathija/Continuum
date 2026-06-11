@@ -709,17 +709,22 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertLessThanOrEqual(
             WorkspaceTabStrip.estimatedChatTabStripWidth(labelWidth: fourTabLabelWidth, itemCount: 4),
             minimumCenterWidth,
-            "The rendered Code tab strip must not look capped at two tabs on the minimum center pane; four chat tabs plus + should fit before horizontal scrolling is needed."
+            "The rendered Code tab strip must not look capped at two tabs on the minimum center pane; four chat tabs plus + should fit without horizontal scrolling."
         )
 
         let manyTabLabelWidth = WorkspaceTabStrip.adaptiveChatTabLabelWidth(
             availableWidth: minimumCenterWidth,
             itemCount: 50
         )
-        XCTAssertEqual(
+        XCTAssertLessThan(
             manyTabLabelWidth,
             fourTabLabelWidth,
-            "Opening more tabs should keep a stable compact width and rely on scrolling, not shrink to zero or drop tab items."
+            "Opening more tabs should keep shrinking labels to fit the strip instead of enabling horizontal scrolling."
+        )
+        XCTAssertEqual(
+            manyTabLabelWidth,
+            0,
+            "When the strip is over capacity, labels should truncate down to zero width rather than overflow."
         )
 
         let roomyWidth: CGFloat = 900
@@ -727,26 +732,10 @@ final class WorkspaceTabsTests: XCTestCase {
             availableWidth: roomyWidth,
             itemCount: 2
         )
-        let twoTabScrollWidth = WorkspaceTabStrip.scrollableTabContentWidth(
-            availableWidth: roomyWidth,
-            labelWidth: twoTabLabelWidth,
-            itemCount: 2
-        )
         XCTAssertLessThan(
-            twoTabScrollWidth + 36,
+            WorkspaceTabStrip.estimatedChatTabStripWidth(labelWidth: twoTabLabelWidth, itemCount: 2),
             roomyWidth,
             "When tabs fit, the + button should sit immediately after the tab content instead of being pushed to the far right."
-        )
-
-        let manyTabScrollWidth = WorkspaceTabStrip.scrollableTabContentWidth(
-            availableWidth: minimumCenterWidth,
-            labelWidth: manyTabLabelWidth,
-            itemCount: 50
-        )
-        XCTAssertEqual(
-            manyTabScrollWidth,
-            minimumCenterWidth - 36,
-            "When tabs overflow, the scroll region should reserve width for the visible + button."
         )
     }
 
