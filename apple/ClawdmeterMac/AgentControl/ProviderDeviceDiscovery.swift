@@ -32,11 +32,11 @@ public enum ProviderDeviceSetupAction: String, Sendable, Equatable, Identifiable
         switch self {
         case .importClaudeFromClaudeCode: return "Import from Claude Code"
         case .installCodexCLI: return "Install codex CLI"
-        case .runCodexLogin: return "Run codex login"
+        case .runCodexLogin: return "Log In"
         case .installAgyCLI: return "Install agy CLI"
         case .openAntigravityApp: return "Open Antigravity"
         case .installCursorCLI: return "Install cursor-agent"
-        case .runCursorAgentLogin: return "Run cursor-agent login"
+        case .runCursorAgentLogin: return "Log In"
         case .openOpencodeSignIn: return "Sign in to OpenCode"
         case .addOpenRouterKey: return "Add OpenRouter key"
         case .installGrokCLI: return "Install grok CLI"
@@ -90,8 +90,7 @@ public struct ProviderDeviceStatus: Sendable, Equatable, Identifiable {
             // isn't required to turn the provider on.
             return authenticated
         case "cursor":
-            // Passive discovery: binary presence; login deferred to first use.
-            return cliInstalled
+            return cliInstalled && authenticated
         case "grok":
             return cliInstalled
         default:
@@ -185,7 +184,7 @@ public enum ProviderDeviceDiscovery {
                 codex: probeCodex(),
                 gemini: probeGemini(),
                 opencode: await probeOpenCode(),
-                cursor: probeCursor(),
+                cursor: await probeCursor(),
                 grok: probeGrok()
             )
         }.value
@@ -367,25 +366,35 @@ public enum ProviderDeviceDiscovery {
         )
     }
 
-    /// **Cursor** — `cursor-agent` (or legacy `agent`) on PATH. Passive
-    /// discovery avoids Keychain reads; login is deferred to first spawn.
-    private static func probeCursor() -> ProviderDeviceStatus {
+    /// **Cursor** — `cursor-agent` (or legacy `agent`) on PATH plus one of:
+    /// `CURSOR_API_KEY`, Cursor.app / keychain tokens, or `cursor-agent status`.
+    private static func probeCursor() async -> ProviderDeviceStatus {
         let binary = ShellRunner.locateBinary("cursor-agent") ?? ShellRunner.locateBinary("agent")
         let cliInstalled = binary != nil
-        let status: ProviderDeviceAuthStatus = cliInstalled ? .installed : .notInstalled
-        let actions: [ProviderDeviceSetupAction] = cliInstalled
-            ? [.runCursorAgentLogin]
-            : [.installCursorCLI]
-        let message: String? = cliInstalled
-            ? "cursor-agent on PATH — run login before first use"
-            : "Install cursor-agent CLI"
+        let authenticated = await CursorAuthProbeCLI.isAuthenticated(binary: binary)
+        let status = resolveStatus(cliInstalled: cliInstalled, authenticated: authenticated)
+        var actions: [ProviderDeviceSetupAction] = []
+        if !cliInstalled {
+            actions.append(.installCursorCLI)
+        } else if !authenticated {
+            actions.append(.runCursorAgentLogin)
+        }
+        let message: String? = {
+            if authenticated {
+                if CursorAuthProbe.hasEnvironmentAPIKey {
+                    return "Signed in via CURSOR_API_KEY"
+                }
+                if cliInstalled { return "Signed in · cursor-agent on PATH" }
+                return "Signed in via Cursor"
+            }
+            if cliInstalled { return "cursor-agent on PATH — sign in to continue" }
+            return "Install cursor-agent CLI"
+        }()
         return ProviderDeviceStatus(
             providerId: "cursor",
             displayName: "Cursor",
             cliInstalled: cliInstalled,
-            // Passive discovery never probes Cursor's Keychain, so auth is
-            // honestly unknown here; readiness keys off the binary alone.
-            authenticated: false,
+            authenticated: authenticated,
             status: status,
             installedBinary: binary,
             message: message,

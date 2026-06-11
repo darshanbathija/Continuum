@@ -231,12 +231,7 @@ public actor ChatProviderProbe {
         )
         let (cursorAuth, cursorReason) = resolveAuth(
             key: "cursor",
-            // Passive discovery never logs into cursor-agent, so
-            // cursorState.authenticated is always false here — which made an
-            // enabled Cursor permanently un-selectable in the chat picker.
-            // Gate availability on binary presence; a real auth failure still
-            // arrives via the AuthObserver override and surfaces at first send.
-            fallback: probes.cursorState.binaryPath != nil
+            fallback: probes.cursorState.authenticated
         )
         let (grokAuth, grokReason) = resolveAuth(key: "grok", fallback: probes.grokAvailable)
         let opencodeDefaultReason: String? = {
@@ -528,11 +523,18 @@ public actor CursorModelProbe {
 
     public func passiveState() async -> CursorModelProbeState {
         let now = Date()
+        let binary = ShellRunner.locateBinary("cursor-agent") ?? ShellRunner.locateBinary("agent")
+        let authenticated = await CursorAuthProbeCLI.isAuthenticated(binary: binary)
+        let reason: String? = {
+            if binary == nil { return "cursor-agent CLI not on PATH" }
+            if !authenticated { return "Run cursor-agent login" }
+            return nil
+        }()
         return CursorModelProbeState(
-            binaryPath: ShellRunner.locateBinary("cursor-agent") ?? ShellRunner.locateBinary("agent"),
+            binaryPath: binary,
             models: [CursorModelCatalog.autoEntry],
-            authenticated: false,
-            reason: "Cursor auth not checked until explicit Cursor use",
+            authenticated: authenticated,
+            reason: reason,
             probedAt: now
         )
     }
@@ -570,12 +572,11 @@ public actor CursorModelProbe {
             arguments: ["status"],
             timeout: 5
         )
-        let statusOutput = ((status?.stdoutString ?? "") + "\n" + (status?.stderrString ?? ""))
-            .lowercased()
-        let authenticated = status?.exitStatus == 0
-            && !statusOutput.contains("not logged in")
-            && !statusOutput.contains("not authenticated")
-            && !statusOutput.contains("not signed in")
+        let statusOutput = (status?.stdoutString ?? "") + "\n" + (status?.stderrString ?? "")
+        let cliAuthenticated = status?.exitStatus == 0
+            && CursorAuthProbe.isStatusOutputAuthenticated(statusOutput)
+        let authenticated = CursorAuthProbe.hasPassiveAuthentication()
+            || cliAuthenticated
 
         var models = await probeModels(binary: binary, arguments: ["--list-models"])
         if models.count <= 1 {
@@ -617,5 +618,29 @@ public actor CursorModelProbe {
             ? result.stderrString
             : result.stdoutString
         return CursorModelCatalog.parseCLIOutput(output)
+    }
+}
+
+/// Mac-only Cursor auth probe that can run `cursor-agent status` via
+/// `ShellRunner`. Keeps subprocess spawning out of ClawdmeterShared.
+enum CursorAuthProbeCLI {
+
+    static func isCLIStatusAuthenticated(binary: String) async -> Bool {
+        guard let result = try? await ShellRunner.shared.run(
+            executable: binary,
+            arguments: ["status"],
+            timeout: 5
+        ) else { return false }
+        guard result.exitStatus == 0 else { return false }
+        let output = result.stdoutString + "\n" + result.stderrString
+        return CursorAuthProbe.isStatusOutputAuthenticated(output)
+    }
+
+    static func isAuthenticated(binary: String?) async -> Bool {
+        if CursorAuthProbe.hasPassiveAuthentication() {
+            return true
+        }
+        guard let binary else { return false }
+        return await isCLIStatusAuthenticated(binary: binary)
     }
 }
