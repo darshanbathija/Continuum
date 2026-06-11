@@ -49,8 +49,8 @@ struct PermissionModeChip: View {
         // pops the dropdown (ask / accept / plan / bypass) — not just the
         // chevron. Quick-flip-on-click was removed per user feedback; the
         // ⌘⇧1–4 shortcuts (hosted in ComposerInputCore) still switch modes.
-        // The label hugs its text and centers it (no fixed 50pt min slot) so
-        // both short ("Ask") and wide ("Full access") labels read centered.
+        // The label hugs its text and centers it (no fixed min slot) so
+        // "Ask permissions", "Plan mode", "Bypass permissions", etc. read centered.
         HStack(spacing: 4) {
             Text(mode.shortLabel)
                 .font(.system(size: 12, weight: mode == .bypass ? .bold : .semibold))

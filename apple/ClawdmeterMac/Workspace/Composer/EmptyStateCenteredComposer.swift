@@ -156,7 +156,7 @@ struct EmptyStateCenteredComposer: View {
                 )
             }
             launcher.normalize(store)
-            // New-session default = Full access (bypass) per product decision.
+            // New-session default = Bypass permissions per product decision.
             // The per-repo trust gate still applies on first spawn; draft
             // handoffs from iOS keep whatever mode they arrived with.
             if workspaceDraft == nil {

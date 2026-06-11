@@ -685,7 +685,7 @@ public struct ComposerModelPicker: View {
             Image(systemName: "lock")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(t.fg3)
-            Text("Full access")
+            Text(PermissionMode.bypass.displayName)
                 .font(TahoeFont.body(11))
                 .foregroundStyle(t.fg3)
         }
