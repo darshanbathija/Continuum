@@ -170,6 +170,17 @@ struct ChatThreadScroll: View {
                     .animation(SessionsV2Theme.disclosureToggle(reduceMotion: reduceMotion),
                                value: projection.turns.count)
                 }
+                .coordinateSpace(name: "transcriptScroll")
+                .onPreferenceChange(TranscriptMessagePositionKey.self) { positions in
+                    measuredMessagePositions.merge(positions) { _, new in new }
+                }
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentSize.height
+                } action: { _, height in
+                    if height > 0 {
+                        scrollContentHeight = height
+                    }
+                }
                 .onScrollGeometryChange(for: Bool.self) { geometry in
                     let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height
                     return visibleBottom >= geometry.contentSize.height - 120
@@ -181,6 +192,7 @@ struct ChatThreadScroll: View {
                     }
                 }
                 .onChange(of: messagesSlice.updateCounter) { _, counter in
+                    measuredMessagePositions = [:]
                     stickToBottomIfPinned(proxy, updateCounter: counter)
                 }
                 .onChange(of: isReviewPaneVisible) { _, _ in
@@ -278,6 +290,26 @@ struct ChatThreadScroll: View {
                 }
                 // v0.7.16: thinking-indicator overlay removed. It's now
                 // a footer row inside the transcript flow above.
+
+                if !projection.turns.isEmpty {
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        TranscriptMessageGutter(
+                            markers: TranscriptGutterPreview.markers(
+                                turns: projection.turns,
+                                measuredPositions: measuredMessagePositions,
+                                contentHeight: scrollContentHeight
+                            ),
+                            onSelect: { messageId in
+                                jumpToMessage(proxy, messageId: messageId)
+                            }
+                        )
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                    .padding(.top, showingFindBar ? 48 : 8)
+                    .padding(.bottom, userPinnedToBottom ? 8 : 52)
+                    .allowsHitTesting(true)
+                }
             }
         }
         // A9: bridge `presentationStore` into the SwiftUI environment so
@@ -303,6 +335,8 @@ struct ChatThreadScroll: View {
     @State private var autoScrollTask: Task<Void, Never>?
     @State private var isLoadingEarlierHistory: Bool = false
     @State private var suppressBottomGeometryUntil: Date = .distantPast
+    @State private var measuredMessagePositions: [String: CGFloat] = [:]
+    @State private var scrollContentHeight: CGFloat = 1
 
     private var transcriptProjection: TranscriptProjection {
         projectionCache.value(
@@ -461,6 +495,28 @@ struct ChatThreadScroll: View {
             }
         } else {
             scrollTranscript(proxy, to: message.id, anchor: .center)
+        }
+    }
+
+    private func jumpToMessage(_ proxy: ScrollViewProxy, messageId: String) {
+        userPinnedToBottom = false
+        unreadWhileReading = 0
+        if let anchor = transcriptProjection.anchorByMessageId[messageId] {
+            if anchor.isHidden {
+                expanded.insert(anchor.turnId)
+                if let runId = anchor.runId {
+                    expanded.insert("run:\(runId)")
+                }
+                if let pairId = anchor.pairId {
+                    expanded.insert("pair:\(pairId)")
+                }
+            }
+            Task { @MainActor in
+                await Task.yield()
+                scrollTranscript(proxy, to: anchor.itemId, anchor: .top)
+            }
+        } else {
+            scrollTranscript(proxy, to: messageId, anchor: .top)
         }
     }
 
@@ -637,6 +693,7 @@ struct ChatThreadScroll: View {
                 ForEach(turnPromptItems(turn)) { item in
                     rowView(for: item, streamingTailId: streamingTailId)
                         .id(item.id)
+                        .background(messagePositionReporter(for: item))
                 }
                 collapsedDisclosureRow(turn)
                     .id("\(turn.id):disclosure")
@@ -653,6 +710,18 @@ struct ChatThreadScroll: View {
                 turnChipStrip(turn)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func messagePositionReporter(for item: ChatItem) -> some View {
+        if case .message(let message) = item, message.kind == .userText {
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: TranscriptMessagePositionKey.self,
+                    value: [message.id: geo.frame(in: .named("transcriptScroll")).minY]
+                )
+            }
         }
     }
 
