@@ -612,6 +612,93 @@ final class WorkspaceTabsTests: XCTestCase {
                       "Closing the owner while siblings remain must hand ownership to a survivor, not orphan the worktree.")
     }
 
+    func test_endSessionKeepsWorktreeWhenDraftTabsRemain() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("end-session-draft-guard")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        let worktree = repo.appendingPathComponent(".claude/worktrees/tbilisi", isDirectory: true)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+
+        let source = try await registry.create(
+            repoKey: repo.path,
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "source",
+            worktreePath: worktree.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree,
+            ownsWorktree: true
+        )
+        let key = try XCTUnwrap(WorkspaceKey.of(source))
+        model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .claude, modelId: "sonnet", effort: .max, mode: .worktree, planMode: false)
+        )
+        model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .codex, modelId: "gpt-5.5", effort: .max, mode: .worktree, planMode: false)
+        )
+        XCTAssertEqual(model.workspaceDraftTabs(in: key).count, 2)
+
+        await model.endSession(id: source.id)
+
+        XCTAssertNil(registry.session(id: source.id))
+        XCTAssertEqual(model.workspaceDraftTabs(in: key).count, 2)
+        XCTAssertTrue(model.workspaceHasOpenTabs(in: key))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: worktree.path))
+        XCTAssertTrue(model.openWorkspaceTabKeys(inRepo: repo.path).contains(key))
+        XCTAssertNotNil(model.draftWorkspaceTab, "Closing the session tab must promote a surviving draft tab.")
+    }
+
+    func test_closingTwoDraftTabsLeavesSessionForegroundAndWorktreeKeys() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("close-drafts-session-survives")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        let worktree = repo.appendingPathComponent(".claude/worktrees/tbilisi", isDirectory: true)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+
+        let source = try await registry.create(
+            repoKey: repo.path,
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "source",
+            worktreePath: worktree.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree,
+            ownsWorktree: true
+        )
+        let key = try XCTUnwrap(WorkspaceKey.of(source))
+        let first = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .claude, modelId: "sonnet", effort: .max, mode: .worktree, planMode: false)
+        ))
+        let second = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .codex, modelId: "gpt-5.5", effort: .max, mode: .worktree, planMode: false)
+        ))
+
+        model.clearDraftWorkspaceTab(first)
+        model.clearDraftWorkspaceTab(second)
+
+        XCTAssertEqual(model.workspaceDraftTabs(in: key).count, 0)
+        XCTAssertEqual(model.openSessionId, source.id, "Closing the last draft tabs must restore the surviving session tab.")
+        XCTAssertTrue(model.workspaceHasOpenTabs(in: key))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: worktree.path))
+        XCTAssertFalse(model.openWorkspaceTabKeys(inRepo: repo.path).contains(key))
+    }
+
     func test_workspaceTabStripCompactsBeyondTwoTabsOnMinimumCenterWidth() {
         let minimumCenterWidth: CGFloat = 420
         let fourTabLabelWidth = WorkspaceTabStrip.adaptiveChatTabLabelWidth(

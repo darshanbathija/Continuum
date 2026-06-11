@@ -270,23 +270,15 @@ struct WorkspaceTabStrip: View {
         let isActive = activeTerminalTabId == nil
             && activeDocumentTabId == nil
             && session.id == activeSessionId
-        return Button {
-            model.openSession(session)
-        } label: {
-            tabLabel(
-                title: title(for: session),
-                subtitle: workspaceSubtitle(for: session),
-                systemImage: nil,
-                isActive: isActive,
-                labelWidth: labelWidth,
-                closeAction: {
-                    Task {
-                        await model.endSession(id: session.id)
-                    }
-                }
-            )
-        }
-        .buttonStyle(PressableButtonStyle())
+        return tabRow(
+            title: title(for: session),
+            subtitle: workspaceSubtitle(for: session),
+            systemImage: nil,
+            isActive: isActive,
+            labelWidth: labelWidth,
+            selectAction: { model.openSession(session) },
+            closeAction: { Task { await model.endSession(id: session.id) } }
+        )
         .help(session.effectiveCwd)
         .accessibilityIdentifier("code.workspace.tab.session")
         .accessibilityValue("\(isActive ? "selected" : "not selected") \(session.id.uuidString) \(session.agent.rawValue) \(session.model ?? "")")
@@ -309,36 +301,30 @@ struct WorkspaceTabStrip: View {
             && activeDraftTabId == draft.id
             && activeTerminalTabId == nil
             && activeDocumentTabId == nil
-        return Button { model.selectDraftWorkspaceTab(draft) } label: {
-            tabLabel(
-                title: "Untitled",
-                subtitle: "Draft",
-                systemImage: nil,
-                isActive: isActive,
-                labelWidth: labelWidth,
-                closeAction: { model.clearDraftWorkspaceTab(draft) }
-            )
-        }
-        .buttonStyle(PressableButtonStyle())
+        return tabRow(
+            title: "Untitled",
+            subtitle: "Draft",
+            systemImage: nil,
+            isActive: isActive,
+            labelWidth: labelWidth,
+            selectAction: { model.selectDraftWorkspaceTab(draft) },
+            closeAction: { model.clearDraftWorkspaceTab(draft) }
+        )
         .help("Draft chat tab")
         .accessibilityIdentifier("code.workspace.tab.draft")
         .accessibilityValue("\(isActive ? "selected" : "not selected") \(draft.id.uuidString)")
     }
 
     private func terminalButton(_ tab: WorkspaceTerminalTab, session: AgentSession, labelWidth: CGFloat) -> some View {
-        Button {
-            onSelectTerminal(tab)
-        } label: {
-            tabLabel(
-                title: terminalTitle(for: tab, session: session),
-                subtitle: terminalSubtitle(for: session),
-                systemImage: "terminal.fill",
-                isActive: activeTerminalTabId == tab.id,
-                labelWidth: labelWidth,
-                closeAction: { onCloseTerminal(tab) }
-            )
-        }
-        .buttonStyle(PressableButtonStyle())
+        tabRow(
+            title: terminalTitle(for: tab, session: session),
+            subtitle: terminalSubtitle(for: session),
+            systemImage: "terminal.fill",
+            isActive: activeTerminalTabId == tab.id,
+            labelWidth: labelWidth,
+            selectAction: { onSelectTerminal(tab) },
+            closeAction: { onCloseTerminal(tab) }
+        )
         .help("\(terminalTitle(for: tab, session: session))\n\(session.effectiveCwd)")
         .accessibilityIdentifier("code.workspace.tab.terminal")
         .contextMenu {
@@ -349,19 +335,15 @@ struct WorkspaceTabStrip: View {
     }
 
     private func documentButton(_ tab: WorkspaceDocumentTab, labelWidth: CGFloat) -> some View {
-        Button {
-            onSelectDocument(tab)
-        } label: {
-            tabLabel(
-                title: tab.title,
-                subtitle: "Document",
-                systemImage: "doc.richtext",
-                isActive: activeDocumentTabId == tab.id,
-                labelWidth: labelWidth,
-                closeAction: { onCloseDocument(tab) }
-            )
-        }
-        .buttonStyle(PressableButtonStyle())
+        tabRow(
+            title: tab.title,
+            subtitle: "Document",
+            systemImage: "doc.richtext",
+            isActive: activeDocumentTabId == tab.id,
+            labelWidth: labelWidth,
+            selectAction: { onSelectDocument(tab) },
+            closeAction: { onCloseDocument(tab) }
+        )
         .help(tab.path)
         .accessibilityIdentifier("code.workspace.tab.document")
         .contextMenu {
@@ -375,32 +357,41 @@ struct WorkspaceTabStrip: View {
         }
     }
 
-    private func tabLabel(
+    /// Sibling select + close buttons (not nested) so clicking × never also
+    /// selects or closes the wrong tab.
+    private func tabRow(
         title: String,
         subtitle: String,
         systemImage: String?,
         isActive: Bool,
         labelWidth: CGFloat,
+        selectAction: @escaping () -> Void,
         closeAction: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 7) {
-            if let systemImage {
-                Image(systemName: systemImage)
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(isActive ? t.accent : t.fg3)
+            Button(action: selectAction) {
+                HStack(spacing: 7) {
+                    if let systemImage {
+                        Image(systemName: systemImage)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(isActive ? t.accent : t.fg3)
+                    }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(title)
+                            .font(TahoeFont.body(12.5, weight: isActive ? .semibold : .medium))
+                            .foregroundStyle(isActive ? t.fg : t.fg2)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Text(subtitle)
+                            .font(TahoeFont.body(9.5))
+                            .foregroundStyle(t.fg3)
+                            .lineLimit(1)
+                    }
+                    .frame(width: labelWidth, alignment: .leading)
+                }
+                .contentShape(Rectangle())
             }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(TahoeFont.body(12.5, weight: isActive ? .semibold : .medium))
-                    .foregroundStyle(isActive ? t.fg : t.fg2)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text(subtitle)
-                    .font(TahoeFont.body(9.5))
-                    .foregroundStyle(t.fg3)
-                    .lineLimit(1)
-            }
-            .frame(width: labelWidth, alignment: .leading)
+            .buttonStyle(PressableButtonStyle())
             Button(action: closeAction) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
@@ -426,9 +417,6 @@ struct WorkspaceTabStrip: View {
                     .padding(.horizontal, 8)
             }
         }
-        // Whole tab (title + subtitle + dead space) is one hit target that
-        // selects the tab; the nested × button keeps its own click area.
-        .contentShape(Rectangle())
     }
 
     private func title(for session: AgentSession) -> String {
