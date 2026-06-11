@@ -225,6 +225,15 @@ public final class AgentControlServer {
         chatStoreRegistry.snapshotStore(for: session)
     }
 
+    /// Test/diagnostics: is a chat store ALREADY resident for this session,
+    /// without creating one? `chatStore(for:)` is get-or-create, so it can't
+    /// tell a pre-warmed store apart from one it just stood up — use this to
+    /// assert the create path actually warmed the store.
+    @MainActor
+    public func isChatStoreResident(_ sessionId: UUID) -> Bool {
+        chatStoreRegistry.isResident(sessionId)
+    }
+
     /// D4 (v0.17, wire v12): callback that fans the iOS-side per-provider
     /// auto-revive toggle out to the matching AppModel.setAutoReviveEnabled.
     /// AppRuntime injects this at startup; the server just dispatches.
@@ -6152,6 +6161,14 @@ public final class AgentControlServer {
                 tmuxPaneId: nil,
                 mode: .local
             )
+            // Mirror spawnFrontierChild: stand up the JSONL-backed chat
+            // store (sentinel + rollout watcher) BEFORE the client's first
+            // /send lands. Without this, solo create → immediate send races
+            // the UI's first snapshotStore acquire; the sentinel watcher may
+            // not be polling yet when Claude writes its rollout, and the
+            // column can stick on "streaming" with no assistant reply.
+            let warmed = registry.session(id: session.id) ?? updatedSession
+            _ = chatStoreRegistry.snapshotStore(for: warmed)
         } else {
             try? await registry.delete(id: session.id)
             try? ChatCwdManager.remove(for: session.id)
@@ -6924,21 +6941,29 @@ public final class AgentControlServer {
         let sharedText: String
         let perChild: [String: String]?
         let origin: ProviderPromptOrigin
+        let asFollowUp: Bool
         if let frontierReq {
             sharedText = frontierReq.text
             perChild = frontierReq.perChildText
             origin = frontierReq.origin
+            asFollowUp = frontierReq.asFollowUp
         } else if let legacyReq {
             sharedText = legacyReq.text
             perChild = nil
             origin = legacyReq.origin
+            asFollowUp = legacyReq.asFollowUp
         } else {
             sendResponse(.badRequest, on: connection); return
         }
         var results: [FrontierChildSendResult] = []
         for child in children {
             let text = perChild?[child.id.uuidString] ?? sharedText
-            results.append(await forwardFrontierChildSend(session: child, text: text, origin: origin))
+            results.append(await forwardFrontierChildSend(
+                session: child,
+                text: text,
+                asFollowUp: asFollowUp,
+                origin: origin
+            ))
         }
         let response = FrontierSendResponse(groupId: uuid, childCount: children.count, results: results)
         let encoder = JSONEncoder()
@@ -6961,6 +6986,7 @@ public final class AgentControlServer {
     private func forwardFrontierChildSend(
         session: AgentSession,
         text: String,
+        asFollowUp: Bool,
         origin: ProviderPromptOrigin
     ) async -> FrontierChildSendResult {
         let bytes = Array(text.utf8)
@@ -7048,7 +7074,7 @@ public final class AgentControlServer {
             guard await host.submitPrompt(
                 text,
                 isChat: session.kind == .chat,
-                isFollowUp: true,
+                isFollowUp: asFollowUp,
                 origin: origin,
                 allowLiveProviderSpend: Self.allowLiveProviderSpend
             ) else {
