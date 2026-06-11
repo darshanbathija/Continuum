@@ -902,9 +902,40 @@ public struct IOSSessionDetailView: View {
             sessionId: sessionId,
             provider: session?.agent ?? .claude,
             presentationStore: presentationStore,
-            onOpenMarkdownDocument: openMarkdownDocument
+            onOpenMarkdownDocument: openMarkdownDocument,
+            modelFailureRetryPrompt: modelFailureRetryPrompt(for: item),
+            onRetryFailedTurn: isTranscriptReadOnly
+                ? nil
+                : { promptBody in
+                    Task { await performTurnRetry(promptBody: promptBody) }
+                },
+            onRetryFailedTurnInNewChat: isTranscriptReadOnly
+                ? nil
+                : { promptBody in
+                    Task { await performTurnRetryInNewChat(promptBody: promptBody) }
+                }
         )
         .id(item.id)
+    }
+
+    private var isTranscriptReadOnly: Bool {
+        data.isDemo || session == nil || realAgentSession?.archivedAt != nil
+    }
+
+    private func modelFailureRetryPrompt(for item: ChatItem) -> String? {
+        guard case .message(let message) = item else { return nil }
+        let retryPrompt = ModelFailureRecovery.retryPrompt(
+            forErrorMessageId: message.id,
+            in: chatStore.snapshot.items
+        )
+        guard ModelFailureRecovery.shouldOfferRetryActions(
+            message: message,
+            isStreamingTail: false,
+            turnState: chatStore.snapshot.currentTurnState,
+            isReadOnly: isTranscriptReadOnly,
+            retryPrompt: retryPrompt
+        ) else { return nil }
+        return retryPrompt
     }
 
     private func iosPromptItems(_ turn: TranscriptTurn) -> [ChatItem] {
@@ -1325,6 +1356,50 @@ public struct IOSSessionDetailView: View {
         attachments.removeAll()
     }
 
+    @MainActor
+    private func performTurnRetry(promptBody: String) async {
+        guard session != nil, !data.isDemo else { return }
+        guard chatStore.snapshot.currentTurnState != .streaming else { return }
+        let trimmed = promptBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if isSessionRunning {
+            queueDraft(text: trimmed)
+            return
+        }
+        outbox.enqueueSend(sessionId: sessionId, text: trimmed, asFollowUp: true)
+    }
+
+    @MainActor
+    private func performTurnRetryInNewChat(promptBody: String) async {
+        guard let session = realAgentSession,
+              let key = WorkspaceKey.of(session),
+              !data.isDemo
+        else { return }
+        let trimmed = promptBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let goal = String(trimmed.prefix(80))
+        guard let newSession = await agentClient.createSession(
+            NewSessionRequest(
+                repoKey: key.repoKey,
+                agent: session.agent,
+                model: session.model,
+                planMode: session.status == .planning,
+                goal: goal.isEmpty ? nil : goal,
+                useWorktree: session.mode == .worktree,
+                effort: session.effort,
+                providerInstanceId: session.providerInstanceId,
+                existingWorkspacePath: key.workspacePath,
+                customProviderId: session.customProviderId
+            )
+        ) else {
+            lastError = agentClient.lastError ?? "Couldn't start a new chat."
+            return
+        }
+        onOpenSession(newSession.id)
+        outbox.enqueueSend(sessionId: newSession.id, text: trimmed, asFollowUp: false)
+    }
+
     private func composedPrompt(text trimmed: String) -> String {
         let uploadedPaths = attachments.compactMap(\.remotePath)
         let attachmentPrefix = uploadedPaths.map { "@\($0)" }.joined(separator: "\n")
@@ -1534,6 +1609,9 @@ private struct IOSWireChatItemRow: View {
     var provider: TahoeProvider
     @ObservedObject var presentationStore: SessionPresentationStore
     var onOpenMarkdownDocument: (String) -> Void
+    var modelFailureRetryPrompt: String? = nil
+    var onRetryFailedTurn: ((String) -> Void)? = nil
+    var onRetryFailedTurnInNewChat: ((String) -> Void)? = nil
 
     var body: some View {
         switch item {
@@ -1579,18 +1657,22 @@ private struct IOSWireChatItemRow: View {
                     .frame(maxWidth: 320, alignment: .trailing)
                 }
             case .assistantText:
-                HStack(alignment: .top, spacing: 9) {
-                    TahoeProviderGlyph(provider: provider, size: 24)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(message.body)
-                            .font(TahoeFont.body(14))
-                            .foregroundStyle(t.fg)
-                            .fixedSize(horizontal: false, vertical: true)
-                        ForEach(markdownArtifacts(in: message)) { artifact in
-                            markdownArtifactButton(path: artifact.path)
+                if message.isError {
+                    errorAssistantRow(message)
+                } else {
+                    HStack(alignment: .top, spacing: 9) {
+                        TahoeProviderGlyph(provider: provider, size: 24)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(message.body)
+                                .font(TahoeFont.body(14))
+                                .foregroundStyle(t.fg)
+                                .fixedSize(horizontal: false, vertical: true)
+                            ForEach(markdownArtifacts(in: message)) { artifact in
+                                markdownArtifactButton(path: artifact.path)
+                            }
                         }
+                        Spacer()
                     }
-                    Spacer()
                 }
             case .toolCall, .toolResult:
                 VStack(alignment: .leading, spacing: 6) {
@@ -1635,6 +1717,68 @@ private struct IOSWireChatItemRow: View {
                     .split(separator: "\n", omittingEmptySubsequences: false)
                     .map { "> \($0)" }
                     .joined(separator: "\n")
+            }
+        }
+    }
+
+    private func errorAssistantRow(_ message: ChatMessage) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            TahoeProviderGlyph(provider: provider, size: 24)
+            VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(SessionsV2Theme.danger)
+                        Text("Model failed")
+                            .font(TahoeFont.body(11, weight: .semibold))
+                            .foregroundStyle(SessionsV2Theme.danger)
+                    }
+                    Text(message.body)
+                        .font(TahoeFont.body(14))
+                        .foregroundStyle(t.fg)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(SessionsV2Theme.danger.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(SessionsV2Theme.danger.opacity(0.55), lineWidth: 1.25)
+                )
+                .accessibilityLabel("Model failed: \(message.body)")
+
+                if let retryPrompt = modelFailureRetryPrompt {
+                    modelFailureActionRow(retryPrompt: retryPrompt)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private func modelFailureActionRow(retryPrompt: String) -> some View {
+        HStack(spacing: 10) {
+            ForEach(Array(ModelFailureRecovery.actionDescriptors().enumerated()), id: \.offset) { _, descriptor in
+                switch descriptor.kind {
+                case .retry:
+                    Button(descriptor.visibleTitle) {
+                        onRetryFailedTurn?(retryPrompt)
+                    }
+                    .buttonStyle(.plain)
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                    .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+                case .retryInNewChat:
+                    Button(descriptor.visibleTitle) {
+                        onRetryFailedTurnInNewChat?(retryPrompt)
+                    }
+                    .buttonStyle(.plain)
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                    .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+                }
             }
         }
     }
