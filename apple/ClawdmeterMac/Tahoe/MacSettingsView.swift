@@ -174,8 +174,6 @@ public struct MacSettingsView: View {
             externalToolSettings
         case .shortcuts:
             shortcutSettings
-        case .updates:
-            updatesSettings
         }
     }
 
@@ -431,14 +429,6 @@ public struct MacSettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var updatesSettings: some View {
-        SettingsCard(title: "Updates",
-                     sub: "Sparkle appcast status, release notes, and manual recovery.") {
-            UpdateSettingsPanel(coordinator: runtime?.updateCoordinator)
-        }
-    }
-
     private func notificationPreferenceBinding(_ keyPath: WritableKeyPath<NotificationPresentationPreferences, Bool>) -> Binding<Bool> {
         Binding(
             get: { presentationStore.snapshot.notificationPreferences[keyPath: keyPath] },
@@ -532,7 +522,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case notifications
     case externalTools
     case shortcuts
-    case updates
 
     var id: String { rawValue }
 
@@ -548,7 +537,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .notifications: return "Notifications"
         case .externalTools: return "External Tools"
         case .shortcuts: return "Shortcuts"
-        case .updates: return "Updates"
         }
     }
 
@@ -574,8 +562,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             return "Editor, Finder, terminal, GitHub, and file action preferences."
         case .shortcuts:
             return "Searchable shortcut overrides and reset controls."
-        case .updates:
-            return "Appcast checks, automatic downloads, release notes, and fallback links."
         }
     }
 
@@ -591,7 +577,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .notifications: return "bell"
         case .externalTools: return "external"
         case .shortcuts: return "command"
-        case .updates: return "arrow.down.circle"
         }
     }
 
