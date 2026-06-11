@@ -33,7 +33,8 @@ extension Notification.Name {
 
     // MARK: - PR #185 — Code tab hover polish + composer chip shortcuts
     //
-    // Used by `UsageStatusChip`, `PermissionModeChip`, `SessionStatusBadges`,
+    // Used by `UsageStatusChip`, `EffortChip`, `PermissionModeChip`,
+    // `SessionStatusBadges`,
     // and `CodeTabHoverShortcutUITests` to wire keyboard chords directly to
     // the open composer without going through the menu bar.
 

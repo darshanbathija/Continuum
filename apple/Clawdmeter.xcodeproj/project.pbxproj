@@ -242,6 +242,7 @@
 		8F810CE05FE7DB26AD6760E8 /* PlanApprovalStoreRolloverTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DDD96BA101F1AAAD5E6DCAD /* PlanApprovalStoreRolloverTest.swift */; };
 		8FA40B3A1BDFF8D2E6EA2746 /* AgentControlServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9DC6C356E49170FC1FE84C /* AgentControlServer.swift */; };
 		906808FD1730A88D3E1E065A /* PermissionModeChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E0AF7F2D36777237BB36333 /* PermissionModeChip.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* EffortChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* EffortChip.swift */; };
 		912202BEEA9A6B028E79D53D /* PlanQueueLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEE226FC69071781E21A03F9 /* PlanQueueLoaderTests.swift */; };
 		915EBD7C5CDF6BE7C78E185D /* DoneDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1079DC5DFB5709D11EDAACB2 /* DoneDetectorTests.swift */; };
 		91F59FC843FCFADA8995B62C /* AppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC65FE99FD75CA3B6A74A83 /* AppRuntime.swift */; };
@@ -591,6 +592,7 @@
 		38DC91CBDEFE54A4A03CA31D /* PlanQueueSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanQueueSheet.swift; sourceTree = "<group>"; };
 		3AC85897BEF981BD4BAEB79F /* AppearanceMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceMode.swift; sourceTree = "<group>"; };
 		3E0AF7F2D36777237BB36333 /* PermissionModeChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionModeChip.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60718293A4B5C6D /* EffortChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffortChip.swift; sourceTree = "<group>"; };
 		3F1627364A3A4398D5A45B4A /* JSONLTail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONLTail.swift; sourceTree = "<group>"; };
 		3F390A788ACC767845A4786C /* Vendor */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Vendor; path = ClawdmeterMac/Resources/Vendor; sourceTree = SOURCE_ROOT; };
 		412A35101FFC2DBB6623AD83 /* WorkspaceTerminalPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTerminalPane.swift; sourceTree = "<group>"; };
@@ -1167,6 +1169,7 @@
 				A2507332067583B37F56219E /* InheritedContextChips.swift */,
 				A1D3F0399FF3C5DFC23B1532 /* MacComposerSender.swift */,
 				797168CA4C5227800441FD18 /* MentionPicker.swift */,
+				B2C3D4E5F60718293A4B5C6D /* EffortChip.swift */,
 				3E0AF7F2D36777237BB36333 /* PermissionModeChip.swift */,
 				60C622DD99169A6ABCBC6F8C /* UsageStatusChip.swift */,
 			);
@@ -2199,6 +2202,7 @@
 				A9C33C7309E3C6A8B289CEB1 /* PairingSettingsView.swift in Sources */,
 				A570A995C1EE313DE7FA7EC7 /* PairingTokenStore.swift in Sources */,
 				D0FA4EF3B888EFA7C45DBC11 /* PathAllowList.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* EffortChip.swift in Sources */,
 				906808FD1730A88D3E1E065A /* PermissionModeChip.swift in Sources */,
 				CCB83D01841DFB63E28F43C6 /* PermissionModeStore.swift in Sources */,
 				4B4863CAE9854CDB98817D4A /* PlanCompletionSurfaces.swift in Sources */,

@@ -17,11 +17,10 @@ struct UsageStatusInfo: Equatable {
     let cursorQuota: UsageData.CursorQuota?
 }
 
-// MARK: - Model + Effort chip
+// MARK: - Model chip
 
-/// Right-side composer chip that opens a Models / Effort selector.
-/// Kept narrow — the context+usage data lives on its sibling chip
-/// (`ContextUsageChip`) so each surface owns one concern.
+/// Composer chip that opens the rich model picker. Effort selection lives
+/// on the sibling `EffortChip`, mirroring `PermissionModeChip`.
 struct ModelEffortChip: View {
     let info: UsageStatusInfo
     let catalog: ModelCatalog
@@ -89,19 +88,13 @@ struct ModelEffortChip: View {
         .buttonStyle(PressableButtonStyle())
         .fixedSize(horizontal: true, vertical: false)
         .disabled(enabledChoices.isEmpty)
-        .help(enabledChoices.isEmpty ? "Enable a provider in Settings → Providers." : "Change model or effort (⌘⌥M)")
-        .accessibilityLabel("Model and effort")
+        .help(enabledChoices.isEmpty ? "Enable a provider in Settings → Providers." : "Change model (⌘⌥M)")
+        .accessibilityLabel("Model")
         .accessibilityValue(summaryText)
-        .accessibilityIdentifier("code.composer.model-effort")
+        .accessibilityIdentifier("code.composer.model")
         .onHover { isHovered = $0 }
         .onReceive(NotificationCenter.default.publisher(for: .composerOpenModelEffort)) { _ in
             showingPopover = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .composerCycleEffortNext)) { _ in
-            cycleEffort(direction: 1)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .composerCycleEffortPrevious)) { _ in
-            cycleEffort(direction: -1)
         }
         .popover(isPresented: $showingPopover, arrowEdge: .top) {
             // v0.30 — Code now uses the same rich vendor-rail picker as
@@ -131,10 +124,7 @@ struct ModelEffortChip: View {
     }
 
     private var summaryText: String {
-        if let effort = info.effortDisplay, !effort.isEmpty {
-            return "\(info.modelDisplay) · \(effort)"
-        }
-        return info.modelDisplay
+        info.modelDisplay
     }
 
     private var initialPickerChoice: ProviderChoice {
@@ -149,13 +139,6 @@ struct ModelEffortChip: View {
         return enabledChoices.first ?? .builtin(.chatgpt)
     }
 
-    private func cycleEffort(direction: Int) {
-        guard modelSupportsEffort else { return }
-        let values = ReasoningEffort.allCases
-        let currentIndex = selectedEffort.flatMap { values.firstIndex(of: $0) } ?? values.firstIndex(of: .medium) ?? 0
-        let next = (currentIndex + direction + values.count) % values.count
-        selectedEffort = values[next]
-    }
 }
 
 // MARK: - Context + Usage chip
