@@ -1727,6 +1727,8 @@ private struct ComposerBar: View {
     // already instantiate their own stores — the picker does not
     // introduce a new divergence pattern.
     @StateObject private var providerDefaultsStore = ProviderDefaultsStore()
+    @StateObject private var dictation = SpeechDictation()
+    @State private var composerTextBeforeDictation: String = ""
 
     var body: some View {
         composerBody
@@ -1755,6 +1757,16 @@ private struct ComposerBar: View {
                             .font(TahoeFont.body(11))
                             .foregroundStyle(.red)
                             .padding(.horizontal, 14)
+                    } else if case let .denied(reason) = dictation.state {
+                        Text(reason)
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 14)
+                    } else if case let .unavailable(reason) = dictation.state {
+                        Text(reason)
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 14)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1769,9 +1781,7 @@ private struct ComposerBar: View {
                     }
                     attachmentButton
                     Spacer()
-                    Text(estimatedCost)
-                        .font(TahoeFont.body(10.5))
-                        .foregroundStyle(t.fg4)
+                    micButton
                     sendButton
                 }
                 .frame(minHeight: 34, alignment: .center)
@@ -1784,6 +1794,11 @@ private struct ComposerBar: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .frame(height: maxComposerHeight, alignment: .topLeading)
         .onAppear { focused = true }
+        .onReceive(dictation.$partialTranscript) { newPartial in
+            guard dictation.state == .recording, !newPartial.isEmpty else { return }
+            let base = composerTextBeforeDictation
+            sendCtl.text = base.isEmpty ? newPartial : "\(base) \(newPartial)"
+        }
     }
 
     private var maxComposerHeight: CGFloat {
@@ -2160,6 +2175,21 @@ private struct ComposerBar: View {
         .padding(.top, 10)
     }
 
+    private var micButton: some View {
+        Button(action: toggleDictation) {
+            Image(systemName: dictation.state == .recording ? "mic.fill" : "mic")
+                .font(.system(size: 13))
+                .foregroundStyle(dictation.state == .recording ? t.accent : t.fg3)
+                .symbolEffect(.pulse, isActive: dictation.state == .recording)
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(PressableButtonStyle())
+        .disabled(openTarget?.isReadOnlyTranscript == true)
+        .help(dictationTooltip)
+        .accessibilityLabel("Dictate")
+        .accessibilityIdentifier("chat.composer.dictation")
+    }
+
     private var sendButton: some View {
         Button { Task { await dispatchSend() } } label: {
             ZStack {
@@ -2186,13 +2216,25 @@ private struct ComposerBar: View {
         return "Ask anything. Use / for skills, @ for files."
     }
 
-    private var estimatedCost: String {
-        if openTarget?.isReadOnlyTranscript == true { return "read-only" }
-        if case .frontier(let groupId) = openTarget {
-            return "est. \(max(2, client.frontierChildren(groupId: groupId).count))x tokens"
+    private func toggleDictation() {
+        if dictation.state == .recording {
+            dictation.stop()
+        } else if case .denied = dictation.state {
+            dictation.openPrivacySettings()
+        } else {
+            composerTextBeforeDictation = sendCtl.text
+            Task { await dictation.start() }
         }
-        if openTarget != nil { return "est. 1x tokens" }
-        return "est. \(store.selectedChoiceCount)x tokens"
+    }
+
+    private var dictationTooltip: String {
+        switch dictation.state {
+        case .recording: return "Stop dictation"
+        case .requestingPermission: return "Requesting permission…"
+        case .denied(let reason): return "\(reason) Click to open System Settings."
+        case .unavailable(let reason): return reason
+        case .idle: return "Dictate"
+        }
     }
 
     private func dispatchSend() async {
