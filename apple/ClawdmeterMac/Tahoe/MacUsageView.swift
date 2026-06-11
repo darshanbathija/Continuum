@@ -676,6 +676,7 @@ private struct MenuBarCheckbox: View {
                 Capsule(style: .continuous)
                     .fill(t.glassTintHi)
             }
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
     }
