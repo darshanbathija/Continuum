@@ -40,6 +40,10 @@ public struct ContinuumPalette: Equatable, Sendable {
 
     /// Active segmented-control / titlebar tab fill.
     public var segmentActiveFill: Color
+    /// Track (background capsule) of the segmented control. Distinct from surface1 in light mode
+    /// where segmentActiveFill == surface1 == white, making the active pill invisible without a
+    /// separate track token.
+    public var segmentTrack: Color
 
     public var live: Color
     public var warn: Color
@@ -85,6 +89,7 @@ public enum ContinuumTokens {
         primaryFill: white(0.92),
         primaryText: hex(0x0A0A0C),
         segmentActiveFill: white(0.10),
+        segmentTrack: hex(0x0D0E11),
         live: hex(0x3CC07A),
         warn: hex(0xD6A23B),
         error: hex(0xE5534B),
@@ -115,6 +120,7 @@ public enum ContinuumTokens {
         primaryFill: hex(0x0A0A0C),
         primaryText: white(0.98),
         segmentActiveFill: hex(0xFFFFFF),
+        segmentTrack: hex(0xF3F4F7),
         live: hex(0x3CC07A),
         warn: hex(0xD6A23B),
         error: hex(0xE5534B),
