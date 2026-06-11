@@ -186,21 +186,23 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var visualSettings: some View {
-        // Dark-only v1 (Quiet Black Workbench). The appearance / surface /
-        // wallpaper / accent knobs are gone — the palette is a single fixed
-        // dark instrument. A calibrated light variant is a deliberate later
-        // addition (DESIGN.md §Aesthetic Direction).
         SettingsCard(title: "Appearance",
-                     sub: "Continuum is dark-only in v1 — the Quiet Black Workbench palette.") {
-            SettingsRow(label: "Theme", hint: "A calibrated light variant is a deliberate later addition.") {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(ContinuumTokens.live)
-                        .frame(width: 6, height: 6)
-                    Text("Quiet Black · Dark")
-                        .font(ContinuumFont.mono(12, weight: .medium))
-                        .foregroundStyle(ContinuumTokens.fg2)
-                }
+                     sub: "Dark is the default. Switch between the Quiet Black and Quiet White instrument palettes.") {
+            SettingsRow(label: "Theme", hint: "Applies across every tab and window.") {
+                SwatchToggle(
+                    value: theme.appearance.rawValue,
+                    options: [
+                        .init(key: TahoeAppearance.dark.rawValue,
+                              label: TahoeAppearance.dark.label,
+                              swatch: AnyView(ThemeSwatch(dark: true))),
+                        .init(key: TahoeAppearance.light.rawValue,
+                              label: TahoeAppearance.light.label,
+                              swatch: AnyView(ThemeSwatch(dark: false))),
+                    ],
+                    onChange: { raw in
+                        theme.appearance = TahoeAppearance(rawValue: raw) ?? .dark
+                    }
+                )
             }
         }
 

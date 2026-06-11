@@ -3,61 +3,170 @@ import SwiftUI
 
 // MARK: - Continuum design system — "Quiet Black Workbench"
 //
-// Single source of truth for the redesign (see DESIGN.md). Dark-only (v1):
-// every value is a static constant — no per-instance state, no appearance
-// toggle, no glass/wallpaper knobs. SwiftUI views read these via the
-// `@Environment(\.theme)` / `@Environment(\.tahoe)` facade (which forwards to
-// these constants); widgets, AppKit renderers, and other non-environment
-// contexts read `ContinuumTokens` directly.
+// Single source of truth for the redesign (see DESIGN.md). Dark-first with a
+// calibrated light variant; dark remains the default. SwiftUI views read
+// tokens via `@Environment(\.theme)` / `@Environment(\.tahoe)` (derived from
+// `ContinuumPalette` + `TahoeThemeStore.appearance`). Widgets and other
+// non-environment contexts read the static dark `ContinuumTokens` aliases.
 //
 // This replaces the palettes previously scattered across TahoeTokens (glass),
 // SessionsV2Theme (terra-cotta + traffic-light semantics), and ClawdmeterTheme
 // (firmware). Those layers now forward here and are deleted at the end of the
 // migration.
 
-/// The Quiet Black Workbench token palette. All hex values are verbatim from
-/// DESIGN.md. Greyscale by default; color is rationed to provider meter fills,
-/// provider dots/edges/chart segments, and semantic state.
+/// A resolved neutral + semantic palette for one appearance mode.
+public struct ContinuumPalette: Equatable, Sendable {
+    public var bg: Color
+    public var surface1: Color
+    public var surface2: Color
+    public var surface3: Color
+    public var modal: Color
+
+    public var hairline2: Color
+    public var hairline: Color
+    public var focus: Color
+
+    public var fg: Color
+    public var fg2: Color
+    public var fg3: Color
+    public var fg4: Color
+
+    public var hover: Color
+    public var pressed: Color
+    public var selection: Color
+
+    public var primaryFill: Color
+    public var primaryText: Color
+
+    /// Active segmented-control / titlebar tab fill.
+    public var segmentActiveFill: Color
+    /// Track (background capsule) of the segmented control. Distinct from surface1 in light mode
+    /// where segmentActiveFill == surface1 == white, making the active pill invisible without a
+    /// separate track token.
+    public var segmentTrack: Color
+
+    public var live: Color
+    public var warn: Color
+    public var error: Color
+    public var paused: Color
+
+    public var railTrack: Color
+    public var railTrackInset: Color
+    public var railLitEdge: Color
+
+    public func metricColor(percent: Double) -> Color {
+        if percent > 100 { return error }
+        if percent >= ContinuumTokens.warnTickFraction * 100 { return warn }
+        return fg
+    }
+}
+
+/// The Quiet Black Workbench token palette. Dark values are verbatim from
+/// DESIGN.md; the light variant inverts the neutral stack while keeping semantic
+/// + provider colors rationed the same way. Greyscale by default; color is
+/// rationed to provider meter fills, provider dots/edges/chart segments, and
+/// semantic state.
 public enum ContinuumTokens {
 
-    // MARK: Neutrals (dark) — elevation is value + hairline, never shadow.
-    public static let bg       = hex(0x050507) // app interior / page
-    public static let surface1 = hex(0x0D0E11) // primary panels, sidebars, cards
-    public static let surface2 = hex(0x131418) // raised: composer, active row, controls
-    public static let surface3 = hex(0x1A1B1F) // popover, menu, active control
-    public static let modal    = hex(0x202126) // highest: modal / detached window
+    // MARK: Palettes
 
-    // MARK: Hairlines & focus
-    public static let hairline2 = white(0.05)  // faint internal rules
-    public static let hairline  = white(0.085) // structural seams (0.5px)
-    public static let focus     = white(0.20)  // keyboard focus ring (1px)
+    public static let darkPalette = ContinuumPalette(
+        bg: hex(0x050507),
+        surface1: hex(0x0D0E11),
+        surface2: hex(0x131418),
+        surface3: hex(0x1A1B1F),
+        modal: hex(0x202126),
+        hairline2: white(0.05),
+        hairline: white(0.085),
+        focus: white(0.20),
+        fg: white(0.94),
+        fg2: white(0.62),
+        fg3: white(0.40),
+        fg4: white(0.26),
+        hover: white(0.04),
+        pressed: white(0.065),
+        selection: white(0.075),
+        primaryFill: white(0.92),
+        primaryText: hex(0x0A0A0C),
+        segmentActiveFill: white(0.10),
+        segmentTrack: hex(0x0D0E11),
+        live: hex(0x3CC07A),
+        warn: hex(0xD6A23B),
+        error: hex(0xE5534B),
+        paused: hex(0x8A8A8A),
+        railTrack: hex(0x202126),
+        railTrackInset: white(0.05),
+        railLitEdge: white(0.18)
+    )
 
-    // MARK: Foreground stack — the data is the only thing that glows.
-    public static let fg  = white(0.94) // primary text, live numbers, meter highlight
-    public static let fg2 = white(0.62) // secondary text, axis labels
-    public static let fg3 = white(0.40) // etched labels, tertiary
-    public static let fg4 = white(0.26) // disabled / quiet metadata
+    /// "Quiet White Workbench" — cool off-white instrument palette. Semantic +
+    /// provider colors stay identical; neutrals invert with black hairlines.
+    public static let lightPalette = ContinuumPalette(
+        bg: hex(0xF4F6FA),
+        surface1: hex(0xFFFFFF),
+        surface2: hex(0xF3F4F7),
+        surface3: hex(0xECEEF2),
+        modal: hex(0xE4E6EB),
+        hairline2: ink(0.06),
+        hairline: ink(0.10),
+        focus: ink(0.20),
+        fg: ink(0.95),
+        fg2: ink(0.66),
+        fg3: ink(0.46),
+        fg4: ink(0.26),
+        hover: ink(0.04),
+        pressed: ink(0.065),
+        selection: ink(0.075),
+        primaryFill: hex(0x0A0A0C),
+        primaryText: white(0.98),
+        segmentActiveFill: hex(0xFFFFFF),
+        segmentTrack: hex(0xF3F4F7),
+        live: hex(0x3CC07A),
+        warn: hex(0xD6A23B),
+        error: hex(0xE5534B),
+        paused: hex(0x8A8A8A),
+        railTrack: hex(0xE4E6EB),
+        railTrackInset: ink(0.05),
+        railLitEdge: ink(0.12)
+    )
 
-    // MARK: Interaction states (barely-there)
-    public static let hover     = white(0.04)
-    public static let pressed   = white(0.065)
-    public static let selection = white(0.075)
+    public static func palette(for appearance: TahoeAppearance) -> ContinuumPalette {
+        appearance == .light ? lightPalette : darkPalette
+    }
 
-    // MARK: Primary button — the brand accent is neutral, so the primary
-    // action is a light button, not a chromatic one.
-    public static let primaryFill = white(0.92)
-    public static let primaryText = hex(0x0A0A0C)
+    // MARK: Dark aliases (widgets + non-environment contexts stay dark-first)
+    public static let bg       = darkPalette.bg
+    public static let surface1 = darkPalette.surface1
+    public static let surface2 = darkPalette.surface2
+    public static let surface3 = darkPalette.surface3
+    public static let modal    = darkPalette.modal
 
-    // MARK: Semantic state — thin signals only (dot, hairline, text, cap).
-    public static let live   = hex(0x3CC07A) // running / live-now (the only pulsing element)
-    public static let warn   = hex(0xD6A23B) // approaching cap (>= 80%)
-    public static let error  = hex(0xE5534B) // over cap / failed / stop
-    public static let paused = hex(0x8A8A8A) // paused / idle (neutral grey)
+    public static let hairline2 = darkPalette.hairline2
+    public static let hairline  = darkPalette.hairline
+    public static let focus     = darkPalette.focus
+
+    public static let fg  = darkPalette.fg
+    public static let fg2 = darkPalette.fg2
+    public static let fg3 = darkPalette.fg3
+    public static let fg4 = darkPalette.fg4
+
+    public static let hover     = darkPalette.hover
+    public static let pressed   = darkPalette.pressed
+    public static let selection = darkPalette.selection
+
+    public static let primaryFill = darkPalette.primaryFill
+    public static let primaryText = darkPalette.primaryText
+
+    public static let live   = darkPalette.live
+    public static let warn   = darkPalette.warn
+    public static let error  = darkPalette.error
+    public static let paused = darkPalette.paused
+
+    public static let railTrack      = darkPalette.railTrack
+    public static let railTrackInset = darkPalette.railTrackInset
+    public static let railLitEdge    = darkPalette.railLitEdge
 
     // MARK: Rail meter (the signature component) — treatment "T2".
-    public static let railTrack      = modal            // #202126
-    public static let railTrackInset = white(0.05)      // inset 0 0 0 0.5px
-    public static let railLitEdge    = white(0.18)      // inset 0 1px 0
     /// Warn threshold the limit tick sits at (and where the fill begins to cap).
     public static let warnTickFraction: Double = 0.80
     /// Warn fill (>=80% portion) — DESIGN.md meter-fills table.
@@ -66,11 +175,9 @@ public enum ContinuumTokens {
     public static let errorFill: [Color] = [hex(0xEC6A62), hex(0xD2433B)]
 
     /// The big `%` number adopts warn/error past the thresholds; the fill
-    /// before the tick never recolors.
+    /// before the tick never recolors. Uses the dark palette for static call sites.
     public static func metricColor(percent: Double) -> Color {
-        if percent > 100 { return error }
-        if percent >= warnTickFraction * 100 { return warn }
-        return fg
+        darkPalette.metricColor(percent: percent)
     }
 
     // MARK: Radius — tight radii read as engineered.
@@ -103,6 +210,8 @@ public enum ContinuumTokens {
               opacity: opacity)
     }
     public static func white(_ opacity: Double) -> Color { Color(.sRGB, white: 1, opacity: opacity) }
+    /// Ink stack for light mode — rgba(15,17,22, α).
+    public static func ink(_ opacity: Double) -> Color { hex(0x0F1116, opacity) }
 }
 
 // MARK: - Type roles

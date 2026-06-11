@@ -196,6 +196,20 @@ public enum TahoeWallpaper: String, CaseIterable, Sendable, Codable, Identifiabl
 public enum TahoeAppearance: String, CaseIterable, Sendable, Codable, Identifiable {
     case light, dark
     public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .dark:  return "Quiet Black"
+        case .light: return "Quiet White"
+        }
+    }
+
+    public var settingsLabel: String {
+        switch self {
+        case .dark:  return "Quiet Black · Dark"
+        case .light: return "Quiet White · Light"
+        }
+    }
 }
 
 public enum TahoeSurface: String, CaseIterable, Sendable, Codable, Identifiable {

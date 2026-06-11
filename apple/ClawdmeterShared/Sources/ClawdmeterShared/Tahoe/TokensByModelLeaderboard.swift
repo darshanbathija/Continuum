@@ -21,8 +21,6 @@ public struct TokensByModelEntry: Identifiable, Sendable {
 /// the JSX handoff (`rgb(217,119,87)` Claude, `rgb(159,160,171)` Codex, …).
 public enum TokensByModelLeaderboard {
     public static let primaryVisibleCount = 12
-    /// Reference card fill — `rgb(10, 10, 11)` from the design-canvas handoff.
-    public static let panelFill = Color(red: 10 / 255, green: 10 / 255, blue: 11 / 255)
     /// Fixed model-name column width so the volume bars get the wide middle band.
     public static let modelColumnWidth: CGFloat = 200
     public static let rankColumnWidth: CGFloat = 28
@@ -146,8 +144,8 @@ public enum TokensByModelLeaderboard {
 }
 
 /// Range pills for the tokens leaderboard — Today | 7d | 30d | 90d | All time.
-/// Active segment: solid white pill + near-black label (reference PNG).
 public struct TokensByModelRangeSelector: View {
+    @Environment(\.theme) private var t
     @Binding var value: String
     private let items: [(String, String)] = [
         ("today", "Today"), ("7d", "7d"), ("30d", "30d"), ("90d", "90d"), ("all", "All time"),
@@ -164,14 +162,14 @@ public struct TokensByModelRangeSelector: View {
                 Button { value = k } label: {
                     Text(label)
                         .font(ContinuumFont.mono(11, weight: active ? .semibold : .regular))
-                        .foregroundStyle(active ? ContinuumTokens.primaryText : ContinuumTokens.fg2)
+                        .foregroundStyle(active ? t.primaryText : t.fg2)
                         .padding(.horizontal, 10)
                         .frame(height: 22)
                         .background {
                             if active {
                                 Capsule(style: .continuous)
-                                    .fill(Color.white)
-                                    .overlay(Capsule(style: .continuous).strokeBorder(ContinuumTokens.hairline2, lineWidth: 0.5))
+                                    .fill(t.segmentActiveFill)
+                                    .overlay(Capsule(style: .continuous).strokeBorder(t.hair2, lineWidth: 0.5))
                             }
                         }
                         .contentShape(Capsule())
@@ -182,8 +180,8 @@ public struct TokensByModelRangeSelector: View {
         .padding(2)
         .background {
             Capsule(style: .continuous)
-                .fill(ContinuumTokens.surface1)
-                .overlay(Capsule(style: .continuous).strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5))
+                .fill(t.surface1)
+                .overlay(Capsule(style: .continuous).strokeBorder(t.hairline, lineWidth: 0.5))
         }
     }
 }
@@ -246,7 +244,7 @@ public struct TokensByModelLeaderboardView<RangeControl: View>: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            TokensByModelLeaderboard.panelFill,
+            t.surface2,
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
     }
@@ -257,7 +255,7 @@ public struct TokensByModelLeaderboardView<RangeControl: View>: View {
                 Text("Tokens by model")
                     .font(TahoeFont.body(16, weight: .bold))
                     .tracking(-0.2)
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(t.fg)
                 Text(TokensByModelLeaderboard.subtitle(total: grandTotal, range: range, isEmpty: entries.isEmpty))
                     .font(TahoeFont.mono(11))
                     .foregroundStyle(t.fg.opacity(0.42))
@@ -392,7 +390,7 @@ public struct RankedSegmentedVolumeBar: View {
             ZStack(alignment: .leading) {
                 Capsule(style: .continuous)
                     .fill(t.dark ? Color(red: 26 / 255, green: 26 / 255, blue: 26 / 255)
-                                  : Color.black.opacity(0.06))
+                                  : ContinuumTokens.ink(0.06))
                 HStack(spacing: 0) {
                     ForEach(entries) { entry in
                         let clamped = maxTokens > 0
@@ -433,7 +431,7 @@ public struct RankedVolumeBar: View {
             ZStack(alignment: .leading) {
                 Capsule(style: .continuous)
                     .fill(t.dark ? Color(red: 26 / 255, green: 26 / 255, blue: 26 / 255)
-                                  : Color.black.opacity(0.06))
+                                  : ContinuumTokens.ink(0.06))
                 Capsule(style: .continuous)
                     .fill(color)
                     .frame(width: fillWidth)

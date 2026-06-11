@@ -117,6 +117,28 @@ public struct TahoeTokens: Equatable, Sendable {
     public var surfaceSolid: Color
     public var surfaceSolid2: Color
 
+    // Full Continuum palette (appearance-aware)
+    public var bg: Color
+    public var surface1: Color
+    public var surface2: Color
+    public var surface3: Color
+    public var modal: Color
+    public var hairlineToken: Color
+    public var hover: Color
+    public var pressed: Color
+    public var selection: Color
+    public var focus: Color
+    public var primaryFill: Color
+    public var primaryText: Color
+    public var segmentActiveFill: Color
+    public var live: Color
+    public var warn: Color
+    public var error: Color
+    public var paused: Color
+    public var railTrack: Color
+    public var railTrackInset: Color
+    public var railLitEdge: Color
+
     // Glass
     public var glassBlur: Double
     public var glassSaturate: Double  // 0..2 multiplier
@@ -130,33 +152,55 @@ public struct TahoeTokens: Equatable, Sendable {
 
     @MainActor
     public static func make(from store: TahoeThemeStore) -> TahoeTokens {
-        // DARK-ONLY (Quiet Black Workbench): the appearance / surface /
-        // wallpaper / glassIntensity knobs are dead — every value now reads
-        // from `ContinuumTokens`, the single source of truth. Glass is gone, so
-        // the glass* fields collapse to flat values (tint/inner → clear,
-        // blur → 0). `accent*` keeps the Claude terra-cotta OKLCH so legacy
-        // `t.accent` sites resolve to the Claude provider dot; those sites are
-        // rationed away per-surface during the migration.
-        TahoeTokens(
-            dark: true, translucent: false, muted: true,
+        let palette = ContinuumTokens.palette(for: store.appearance)
+        let isDark = store.appearance == .dark
+        return TahoeTokens(
+            dark: isDark, translucent: false, muted: true,
             accentBase: TahoeProvider.claude.base,
             accentDeep: TahoeProvider.claude.deep,
             accentGlow: TahoeProvider.claude.glow,
             provider: store.providerFocus,
             providerColor: store.providerFocus.base,
             providerGlow: store.providerFocus.glow,
-            fg: ContinuumTokens.fg, fg2: ContinuumTokens.fg2,
-            fg3: ContinuumTokens.fg3, fg4: ContinuumTokens.fg4,
-            fgInv: ContinuumTokens.primaryText,
-            hairline: ContinuumTokens.hairline, hair2: ContinuumTokens.hairline2,
-            pageBg: ContinuumTokens.bg,
-            surfaceSolid: ContinuumTokens.surface1,
-            surfaceSolid2: ContinuumTokens.surface2,
+            fg: palette.fg, fg2: palette.fg2,
+            fg3: palette.fg3, fg4: palette.fg4,
+            fgInv: palette.primaryText,
+            hairline: palette.hairline, hair2: palette.hairline2,
+            pageBg: palette.bg,
+            surfaceSolid: palette.surface1,
+            surfaceSolid2: palette.surface2,
+            bg: palette.bg,
+            surface1: palette.surface1,
+            surface2: palette.surface2,
+            surface3: palette.surface3,
+            modal: palette.modal,
+            hairlineToken: palette.hairline,
+            hover: palette.hover,
+            pressed: palette.pressed,
+            selection: palette.selection,
+            focus: palette.focus,
+            primaryFill: palette.primaryFill,
+            primaryText: palette.primaryText,
+            segmentActiveFill: palette.segmentActiveFill,
+            live: palette.live,
+            warn: palette.warn,
+            error: palette.error,
+            paused: palette.paused,
+            railTrack: palette.railTrack,
+            railTrackInset: palette.railTrackInset,
+            railLitEdge: palette.railLitEdge,
             glassBlur: 0, glassSaturate: 1,
             glassTint: Color.clear, glassTintHi: Color.clear,
-            glassRing: ContinuumTokens.hairline, glassInner: Color.clear,
+            glassRing: palette.hairline, glassInner: Color.clear,
             wallpaper: store.wallpaper
         )
+    }
+
+    /// Metric color for quota displays — respects the active palette thresholds.
+    public func metricColor(percent: Double) -> Color {
+        if percent > 100 { return error }
+        if percent >= ContinuumTokens.warnTickFraction * 100 { return warn }
+        return fg
     }
 
     /// Convenience accent color helpers.
@@ -177,26 +221,49 @@ private struct TahoeThemeStoreKey: EnvironmentKey {
 private struct TahoeTokensKey: EnvironmentKey {
     // Plain-value default to avoid main-actor isolation crossing in the
     // protocol conformance. Real values are injected via `.tahoeTheme(_)`.
-    static let defaultValue: TahoeTokens = TahoeTokens(
-        dark: true, translucent: false, muted: true,
-        accentBase: TahoeProvider.claude.base,
-        accentDeep: TahoeProvider.claude.deep,
-        accentGlow: TahoeProvider.claude.glow,
-        provider: .claude,
-        providerColor: TahoeProvider.claude.base,
-        providerGlow: TahoeProvider.claude.glow,
-        fg: ContinuumTokens.fg, fg2: ContinuumTokens.fg2,
-        fg3: ContinuumTokens.fg3, fg4: ContinuumTokens.fg4,
-        fgInv: ContinuumTokens.primaryText,
-        hairline: ContinuumTokens.hairline, hair2: ContinuumTokens.hairline2,
-        pageBg: ContinuumTokens.bg,
-        surfaceSolid: ContinuumTokens.surface1,
-        surfaceSolid2: ContinuumTokens.surface2,
-        glassBlur: 0, glassSaturate: 1.0,
-        glassTint: Color.clear, glassTintHi: Color.clear,
-        glassRing: ContinuumTokens.hairline, glassInner: Color.clear,
-        wallpaper: .graphite
-    )
+    static let defaultValue: TahoeTokens = {
+        let p = ContinuumTokens.darkPalette
+        return TahoeTokens(
+            dark: true, translucent: false, muted: true,
+            accentBase: TahoeProvider.claude.base,
+            accentDeep: TahoeProvider.claude.deep,
+            accentGlow: TahoeProvider.claude.glow,
+            provider: .claude,
+            providerColor: TahoeProvider.claude.base,
+            providerGlow: TahoeProvider.claude.glow,
+            fg: p.fg, fg2: p.fg2,
+            fg3: p.fg3, fg4: p.fg4,
+            fgInv: p.primaryText,
+            hairline: p.hairline, hair2: p.hairline2,
+            pageBg: p.bg,
+            surfaceSolid: p.surface1,
+            surfaceSolid2: p.surface2,
+            bg: p.bg,
+            surface1: p.surface1,
+            surface2: p.surface2,
+            surface3: p.surface3,
+            modal: p.modal,
+            hairlineToken: p.hairline,
+            hover: p.hover,
+            pressed: p.pressed,
+            selection: p.selection,
+            focus: p.focus,
+            primaryFill: p.primaryFill,
+            primaryText: p.primaryText,
+            segmentActiveFill: p.segmentActiveFill,
+            live: p.live,
+            warn: p.warn,
+            error: p.error,
+            paused: p.paused,
+            railTrack: p.railTrack,
+            railTrackInset: p.railTrackInset,
+            railLitEdge: p.railLitEdge,
+            glassBlur: 0, glassSaturate: 1.0,
+            glassTint: Color.clear, glassTintHi: Color.clear,
+            glassRing: p.hairline, glassInner: Color.clear,
+            wallpaper: .graphite
+        )
+    }()
 }
 
 extension EnvironmentValues {
@@ -219,28 +286,8 @@ extension EnvironmentValues {
     }
 }
 
-/// Continuum token convenience accessors on the `\.theme` / `\.tahoe` facade —
-/// the new Quiet Black tokens that the legacy `TahoeTokens` struct didn't
-/// carry. These forward to `ContinuumTokens` so every view reaches the full
-/// palette through `t`.
+/// Provider dot color (rationed color signal).
 extension TahoeTokens {
-    public var bg: Color { ContinuumTokens.bg }
-    public var surface1: Color { ContinuumTokens.surface1 }
-    public var surface2: Color { ContinuumTokens.surface2 }
-    public var surface3: Color { ContinuumTokens.surface3 }
-    public var modal: Color { ContinuumTokens.modal }
-    public var hairlineToken: Color { ContinuumTokens.hairline }
-    public var hover: Color { ContinuumTokens.hover }
-    public var pressed: Color { ContinuumTokens.pressed }
-    public var selection: Color { ContinuumTokens.selection }
-    public var focus: Color { ContinuumTokens.focus }
-    public var primaryFill: Color { ContinuumTokens.primaryFill }
-    public var primaryText: Color { ContinuumTokens.primaryText }
-    public var live: Color { ContinuumTokens.live }
-    public var warn: Color { ContinuumTokens.warn }
-    public var error: Color { ContinuumTokens.error }
-    public var paused: Color { ContinuumTokens.paused }
-    /// Provider dot color (rationed color signal).
     public func providerDot(_ provider: TahoeProvider) -> Color { provider.dot }
 }
 
@@ -257,8 +304,7 @@ public struct TahoeThemeApplied: ViewModifier {
         content
             .environment(\.tahoeTheme, store)
             .environment(\.tahoe, tokens)
-            // Dark-only v1 (Quiet Black Workbench) — the appearance toggle is gone.
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(store.appearance == .dark ? .dark : .light)
     }
 }
 

@@ -12,7 +12,7 @@ public struct TahoeToggleView: View {
     public init(on: Binding<Bool>) { self._on = on }
 
     public var body: some View {
-        let trackColor = on ? ContinuumTokens.live : ContinuumTokens.surface3
+        let trackColor = on ? t.live : t.surface3
         ZStack(alignment: on ? .trailing : .leading) {
             Capsule(style: .continuous)
                 .fill(trackColor)
@@ -39,7 +39,7 @@ public struct TahoeToggleDisplay: View {
     public init(on: Bool) { self.on = on }
 
     public var body: some View {
-        let trackColor = on ? ContinuumTokens.live : ContinuumTokens.surface3
+        let trackColor = on ? t.live : t.surface3
         ZStack(alignment: on ? .trailing : .leading) {
             Capsule(style: .continuous).fill(trackColor)
             Circle()
