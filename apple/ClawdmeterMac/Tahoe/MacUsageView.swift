@@ -435,6 +435,7 @@ private struct WeeklyMeterRow: View {
             }
             TahoePillBar(percent: row.weeklyPercent, provider: provider, height: barHeight)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -629,6 +630,7 @@ private struct CursorMonthlyMeters: View {
             meter(label: "Auto", pct: quota.autoPct)
             meter(label: "API", pct: quota.apiPct)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func meter(label: String, pct: Int?) -> some View {

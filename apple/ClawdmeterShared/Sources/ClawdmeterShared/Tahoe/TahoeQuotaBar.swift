@@ -80,7 +80,9 @@ public struct TahoeQuotaBar: View {
                 }
                 TahoeRailMeter(percent: percent, provider: provider)
             }
-            .frame(maxWidth: size * 1.6, alignment: .leading)
+            // Fill the parent column so rail width stays consistent when
+            // sublabels differ ("resets in 3h 31m" vs "usage limit").
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
