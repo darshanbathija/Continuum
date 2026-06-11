@@ -44,6 +44,8 @@ final class WorkbenchStateTests: XCTestCase {
         state.setReviewPaneVisible(true)
         state.setDensity(.compact)
         state.updateWorkspaceWidth(1216)
+        state.setSidebarWidth(300)
+        state.setReviewWidth(420)
         state.markRefreshStarted()
         state.markRefreshCompleted()
         state.queueSend(QueuedWorkbenchSend(sessionId: sessionId, text: "follow up"))
@@ -54,9 +56,28 @@ final class WorkbenchStateTests: XCTestCase {
         XCTAssertTrue(reloaded.showingReviewPane)
         XCTAssertEqual(reloaded.density, .compact)
         XCTAssertEqual(reloaded.workspaceWidth, 1216)
+        XCTAssertEqual(reloaded.sidebarWidth, 300)
+        XCTAssertEqual(reloaded.storedReviewWidth, 420)
         XCTAssertEqual(reloaded.snapshot.queuedSends.map(\.text), ["follow up"])
         XCTAssertEqual(reloaded.snapshot.refresh.generation, 1)
         XCTAssertNotNil(reloaded.snapshot.refresh.completedAt)
+    }
+
+    func test_paneWidthsClampAgainstWorkspaceMinimums() {
+        let state = WorkbenchState(store: WorkbenchStateStore(storeURL: storeURL))
+        state.updateWorkspaceWidth(1000)
+
+        state.setSidebarWidth(999)
+        XCTAssertEqual(state.sidebarWidth, 276)
+
+        state.setSidebarWidth(120)
+        XCTAssertEqual(state.sidebarWidth, WorkbenchState.minSidebarWidth)
+
+        state.setReviewWidth(999)
+        XCTAssertLessThanOrEqual(state.storedReviewWidth ?? 0, WorkbenchState.maxReviewWidth)
+
+        state.setReviewWidth(100)
+        XCTAssertEqual(state.storedReviewWidth, WorkbenchState.minReviewWidth)
     }
 
     func test_legacySnapshotMissingDensityMigratesToBalanced() throws {

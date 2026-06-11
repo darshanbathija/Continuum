@@ -13,9 +13,10 @@ import ClawdmeterShared
 ///   │  search     │  composer                    │                    │
 ///   └─────────────┴──────────────────────────────┴────────────────────┘
 ///
-/// Uses `HSplitView` so column widths persist and can be dragged. NavSplitView
-/// was tried first; it column-folds on narrow widths and hides the back chrome
-/// (the same bug that caused the pre-G0 blank-detail regression).
+/// Uses a custom three-column `HStack` with draggable resize handles so
+/// sidebar and review widths persist and feel intentional. NavSplitView
+/// was tried first; it column-folds on narrow widths and hides the back
+/// chrome (the same bug that caused the pre-G0 blank-detail regression).
 struct SessionWorkspaceView: View {
     @ObservedObject var model: SessionsModel
     @ObservedObject var presentationStore: SessionPresentationStore
@@ -37,10 +38,10 @@ struct SessionWorkspaceView: View {
     @Environment(\.tahoe) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Minimum width required to render the review pane at its full
-    /// content-respecting width (≥440pt) without crushing sidebar + chat.
-    /// 220 (sidebar min) + 480 (center min) + 440 (review min) + chrome.
-    private static let reviewPaneThreshold: CGFloat = 1200
+    /// Minimum width required to render the review pane without crushing
+    /// sidebar + chat. 180 (sidebar min) + 420 (center min) + 280 (review
+    /// min) + resize handles + chrome.
+    private static let reviewPaneThreshold: CGFloat = 1000
 
     /// Minimum width required to render even the right-edge gutter CTA.
     /// Below this, the workspace is just sidebar + chat — the user can
@@ -63,11 +64,34 @@ struct SessionWorkspaceView: View {
     private var canHostReviewPaneColumn: Bool {
         !isImmersiveBrowserActive
             && workbenchState.workspaceWidth >= Self.reviewPaneThreshold
-            && model.openSession != nil
+            && resolvedReviewPaneSession != nil
+    }
+
+    /// Session backing the review pane. When the foreground tab is a draft
+    /// (openSessionId cleared) we still resolve a sibling session from the
+    /// active workspace so "Expand pane" works from the titlebar menu.
+    private var resolvedReviewPaneSession: AgentSession? {
+        if let session = model.openSession {
+            return session
+        }
+        if let key = model.activeWorkspaceKey {
+            return WorkspaceKey.siblings(of: key, in: model.registry.sessions)
+                .last(where: { $0.archivedAt == nil })
+        }
+        return model.registry.sessions.first(where: { $0.archivedAt == nil })
     }
 
     private var animatedReviewPaneWidth: CGFloat {
-        effectiveShowReviewPane ? reviewPaneWidth : 0
+        effectiveShowReviewPane ? effectiveReviewPaneWidth : 0
+    }
+
+    /// User-resized width wins when set; otherwise fall back to the tab-aware
+    /// default (Diff bumps to ~58% of the workspace).
+    private var effectiveReviewPaneWidth: CGFloat {
+        if let stored = workbenchState.storedReviewWidth {
+            return stored
+        }
+        return calculatedReviewPaneWidth
     }
 
     private var isImmersiveBrowserActive: Bool {
@@ -85,10 +109,10 @@ struct SessionWorkspaceView: View {
     /// Diff needs space — bump the review pane to ~58% of the workspace
     /// width when Diff is the selected tab. Other tabs stay at the
     /// compact 380pt so the center chat keeps its breathing room.
-    private var reviewPaneWidth: CGFloat {
+    private var calculatedReviewPaneWidth: CGFloat {
         let workspace = CGFloat(workbenchState.workspaceWidth)
         let isDiff = workbenchState.selectedRightPane == .diff
-        guard isDiff, workspace > 0 else { return 380 }
+        guard isDiff, workspace > 0 else { return WorkbenchState.defaultReviewWidth }
         // Clamp so even on a narrow window Diff stays usable, and on a
         // huge window it doesn't squeeze the center chat to nothing.
         let target = workspace * 0.58
@@ -103,7 +127,7 @@ struct SessionWorkspaceView: View {
         BodyInvalidationCounter.bump("SessionWorkspaceView")
         return ZStack {
             t.pageBg.opacity(t.dark ? 0.35 : 0.18)
-            HSplitView {
+            HStack(spacing: 0) {
                 TahoeGlass(radius: 8, tone: .panel) {
                     SidebarPane(
                         model: model,
@@ -111,14 +135,23 @@ struct SessionWorkspaceView: View {
                         presentationStore: presentationStore
                     )
                 }
-                .frame(width: 260)
+                .frame(width: workbenchState.sidebarWidth)
+                .padding(.trailing, 5)
+
+                WorkbenchPaneResizeHandle(
+                    getWidth: { workbenchState.sidebarWidth },
+                    setWidth: { workbenchState.setSidebarWidth($0) },
+                    minWidth: WorkbenchState.minSidebarWidth,
+                    maxWidth: WorkbenchState.maxSidebarWidth,
+                    accessibilityIdentifier: "code.workspace.resize.sidebar"
+                )
                 .padding(.trailing, 5)
 
                 // Center pane carries the chat AND, when the review pane is
                 // collapsed, a thin right-edge gutter that doubles as the
                 // expand CTA. Keeping the gutter inside the center column
-                // (instead of as its own HSplitView child) means the user
-                // can't accidentally drag-resize it.
+                // (instead of as its own split child) means the user can't
+                // accidentally drag-resize it.
                 TahoeGlass(radius: 8, tone: .panel) {
                     HStack(spacing: 0) {
                         ZStack(alignment: .bottom) {
@@ -198,7 +231,7 @@ struct SessionWorkspaceView: View {
                             }
                         }
                         .frame(maxWidth: .infinity)
-                        if effectiveShowGutter, model.openSession != nil {
+                        if effectiveShowGutter, resolvedReviewPaneSession != nil {
                             TahoeHairline(vertical: true)
                                 .transition(.opacity)
                             ReviewPaneGutter(
@@ -215,10 +248,22 @@ struct SessionWorkspaceView: View {
                     }
                     .animation(reduceMotion ? nil : Self.reviewPaneToggleAnimation, value: effectiveShowGutter)
                 }
-                .frame(minWidth: 420, idealWidth: 600)
+                .frame(minWidth: WorkbenchState.minCenterWidth, maxWidth: .infinity)
                 .padding(.horizontal, 5)
 
-                if canHostReviewPaneColumn, let session = model.openSession {
+                if effectiveShowReviewPane {
+                    WorkbenchPaneResizeHandle(
+                        getWidth: { effectiveReviewPaneWidth },
+                        setWidth: { workbenchState.setReviewWidth($0) },
+                        minWidth: WorkbenchState.minReviewWidth,
+                        maxWidth: WorkbenchState.maxReviewWidth,
+                        invertDrag: true,
+                        accessibilityIdentifier: "code.workspace.resize.review"
+                    )
+                    .padding(.leading, 5)
+                }
+
+                if canHostReviewPaneColumn, let session = resolvedReviewPaneSession {
                     TahoeGlass(radius: 8, tone: .panel) {
                         if effectiveShowReviewPane {
                             WorkspaceReviewPane(
@@ -275,8 +320,7 @@ struct SessionWorkspaceView: View {
         }
         .background(Color.clear)
         .background(
-            // Measure the actual workspace width. Don't use GeometryReader
-            // as the root because HSplitView misbehaves inside it.
+            // Measure the actual workspace width for responsive pane thresholds.
             GeometryReader { proxy in
                 Color.clear
                     .preference(key: WorkspaceWidthKey.self, value: proxy.size.width)
@@ -324,7 +368,6 @@ struct SessionWorkspaceView: View {
             Task { await handlePreviewIntent() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleCodeReviewPane)) { _ in
-            guard workbenchState.workspaceWidth >= Self.reviewPaneThreshold else { return }
             animateWorkspaceChange(Self.reviewPaneToggleAnimation) {
                 workbenchState.setReviewPaneVisible(!workbenchState.showingReviewPane)
             }
