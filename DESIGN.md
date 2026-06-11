@@ -47,8 +47,9 @@ up.
 - **Decoration level:** Minimal. Structure comes from elevation steps and 0.5px
   hairlines, never from glass, blur, glow, gradients-as-decoration, or
   drop-shadow cards.
-- **Theme:** Dark-first. v1 ships dark only; a light variant is a deliberate
-  later follow-up, not a v1 requirement.
+- **Theme:** Dark-first. **Quiet Black** is the default; a calibrated **Quiet
+  White** light variant is available in Settings → Visual. Both palettes share
+  the same semantic + provider colors and elevation rules.
 - **Color posture:** The UI is greyscale. Saturation is rationed and only ever
   appears as (a) a provider meter fill, (b) a provider dot / 3px row edge / chart
   segment, or (c) a semantic state signal. Nothing else is colored.
@@ -120,7 +121,7 @@ the roles below are explicit and deliberate.
 Dark-first. A slightly cool near-black so the app reads as a screen/instrument,
 not paper. Elevation is value + hairline only — no shadows on inline panels.
 
-### Neutral System (dark)
+### Neutral System (dark) — Quiet Black Workbench
 
 | Token | Value | Usage |
 | --- | --- | --- |
@@ -144,6 +145,36 @@ Elevation must be a *perceptible* jump per step. Test on a real panel at arm's
 length: if the seam between `bg` → `surface-1` → `surface-2` is invisible, the
 step is too small. Hairlines must actually show — `0.085` is the floor; on the
 darkest seams bump to `0.10`.
+
+### Neutral System (light) — Quiet White Workbench
+
+Cool off-white instrument palette. Semantic + provider colors are identical to
+dark; only the neutral stack inverts (dark ink on light surfaces, black
+hairlines). Default remains dark — light is opt-in via Settings → Visual.
+
+| Token | Value | Usage |
+| --- | --- | --- |
+| `bg` | `#F4F6FA` | App interior base / page |
+| `surface-1` | `#FFFFFF` | Primary panels, sidebars, cards |
+| `surface-2` | `#F3F4F7` | Raised: composer, active row, controls |
+| `surface-3` | `#ECEEF2` | Popover, menu, active control |
+| `modal` | `#E4E6EB` | Highest: modal / detached window |
+| `hairline-2` | `rgba(15,17,22,0.06)` | Faint internal rules |
+| `hairline` | `rgba(15,17,22,0.10)` | Structural seams (0.5px) |
+| `focus` | `rgba(15,17,22,0.20)` | Keyboard focus ring (1px) |
+| `fg` | `rgba(15,17,22,0.95)` | Primary text, live numbers, meter highlight |
+| `fg-2` | `rgba(15,17,22,0.66)` | Secondary text, axis labels |
+| `fg-3` | `rgba(15,17,22,0.46)` | Etched labels, tertiary |
+| `fg-4` | `rgba(15,17,22,0.26)` | Disabled / quiet metadata |
+| `hover` | `rgba(15,17,22,0.04)` | Row / control hover |
+| `pressed` | `rgba(15,17,22,0.065)` | Pressed state |
+| `selection` | `rgba(15,17,22,0.075)` | Active selection fill |
+| `primary-fill` | `#0A0A0C` | Primary button fill (dark-on-light) |
+| `primary-text` | `rgba(255,255,255,0.98)` | Primary button label |
+| `segment-active` | `#FFFFFF` | Active segmented-control / titlebar tab fill |
+
+Elevation steps must remain perceptible on light surfaces — test `bg` →
+`surface-1` → `surface-2` at arm's length; hairlines must register at `≥0.10`.
 
 ### Semantic State
 
@@ -226,7 +257,7 @@ window), never inline cards.
   rgba(0,0,0,.6)`.
 - Titlebar 44px, `surface-1`, bottom hairline. Traffic lights `#E5534B` /
   `#D6A23B` / `#3CC07A` (12px). Tabs: Chat, Usage, Code, Settings. Active tab =
-  22px high, 5px radius, `white@10%` fill, weight 700.
+  22px high, 5px radius, `white@10%` fill (dark) / `#FFFFFF` fill (light), weight 700.
 - Content padding 14px, gap 12px.
 
 ### Mac Usage Dashboard (signature surface)
@@ -240,8 +271,15 @@ window), never inline cards.
   the session **rail meter**, a dimmed weekly rail beneath it, and a sub-line
   (`auto-revive` state · `$X today`).
 - Analytics panel below: header (etched `SPEND OVER TIME` + legend + range
-  segmented `24h / 7d / 30d / 90d / All`), a `1.45fr 1fr` grid: stacked spend
+  segmented `24h / 7d / 30d / All`), a `1.45fr 1fr` grid: stacked spend
   chart on the left, spend-by-repo list on the right.
+- **Tokens by model** panel: flat ranked leaderboard (not provider-family
+  groups). Columns: rank · model (8px dot + mono name) · relative-volume bar ·
+  tokens · share. Top 12 rows visible; `+ N smaller models` footer expands the
+  tail. Range pills: Today / 7d / 30d / 90d / All time. Volume bars are 8px
+  solid pills on a dim track (`#1A1A1A` dark / `black@6%` light); model accent
+  colors follow the analytics handoff (Claude `#D97757`, Codex `#9FA0AB`, …).
+  Card fill follows `surface-2` in the active theme.
 
 ### Mac Chat (broadcast)
 
@@ -292,10 +330,33 @@ window), never inline cards.
 - Weekly / secondary meter: same provider fill at `opacity 0.5`.
 - The current `%` is the loudest element on the card (SF Pro Rounded, `fg`).
 
+### Ranked Tokens-by-Model Leaderboard
+
+Shared Mac Usage + iOS Analytics component (`TokensByModelLeaderboardView`).
+
+- Card: `surface-2` fill, 8px radius, 18px padding.
+- Header: bold title + mono subtitle (`fg` at reduced opacity) + range selector
+  on the trailing edge.
+- Column header row: etched mono uppercase (`fg` at ~28% opacity).
+- Data rows: rank (mono, ~34% opacity) · 8px model dot + mono name (~78%) ·
+  8px relative-volume pill · token count (~92%) · share (~34%).
+- Volume track: `#1A1A1A` (dark) / `black@6%` (light); fill is a solid model
+  accent (no gradient).
+- Footer: `+ N smaller models` expands hidden rows; collapsed state shows a
+  segmented aggregate bar built from the hidden entries.
+- Model accent colors (analytics handoff, distinct from provider meter dots):
+  Claude `#D97757`, Codex/GPT `#9FA0AB`, Antigravity `#6395F2`, Composer/Grok
+  `#46C7BE`, default `#9FA0AB`.
+
 ### Buttons
 
-The brand accent is neutral, so the primary action is a light button, not a
-chromatic one.
+The brand accent is neutral, so the primary action is carried by luminance, not
+chromatic color.
+
+| Mode | Primary fill | Primary text |
+| --- | --- | --- |
+| Dark (default) | `rgba(255,255,255,0.92)` | `#0A0A0C` |
+| Light | `#0A0A0C` | `rgba(255,255,255,0.98)` |
 
 - **Primary:** background `rgba(255,255,255,0.92)`, text near-black (`#0A0A0C`),
   5px radius. Used for the single most important action (Send, Approve & run,
@@ -414,11 +475,13 @@ blob. Avoid it by:
 
 ## Implementation Notes
 
-- Map every token here into the shared SwiftUI `Theme` layer; do not scatter
-  hex/blur values per view. Shared primitives must exist for: panel, **rail
-  meter**, primary/ghost button, switch, segmented control, composer chip, chart
-  bar, and provider glyph.
-- Dark-only for v1. A light variant is a later, deliberate addition.
+- Map every token here into the shared SwiftUI `Theme` layer (`ContinuumPalette`
+  → `TahoeTokens`); do not scatter hex/blur values per view. Shared primitives
+  must exist for: panel, **rail meter**, primary/ghost button, switch, segmented
+  control, composer chip, chart bar, ranked leaderboard, and provider glyph.
+- **Dark-first, light opt-in.** Default appearance is Quiet Black; Quiet White
+  is selectable in Mac Settings → Visual and persists via `tahoe.appearance`.
+  Widgets and non-environment contexts stay on the dark static aliases.
 - The standalone prototype uses `gemini` as the internal key for Antigravity;
   product code may keep the key, but user-facing labels say Antigravity.
 - Replace all demo data (`clawdmeter`, `defx-frontend`, `ccwatch`,
@@ -437,3 +500,5 @@ blob. Avoid it by:
 | 2026-06-06 | Rail coloring = treatment T2 (muted provider glow→base gradient + lit edge) | User picked it from a 4-up comparison; reads as a lit instrument while staying restrained. Resolves the flat-grey "mush" risk. |
 | 2026-06-06 | Motion = mechanical instrument physics (settle, odometer roll, 1Hz heartbeat) | Honors the meter heritage in behavior; no agentic IDE moves like hardware. Reduced-motion respected. |
 | 2026-06-06 | Tight radius scale (4/5/6/8) | Engineered, not consumer; a hard break from the old 18–28px glass radii. |
+| 2026-06-11 | Flat ranked **Tokens by model** leaderboard on Usage / Analytics | Replaces provider-family grouping; rank · model · volume bar · tokens · share reads denser and matches the design-canvas handoff (#333). |
+| 2026-06-11 | Ship **Quiet White** light palette alongside Quiet Black (dark default) | Settings → Visual appearance picker; shared Tahoe tokens resolve from `ContinuumPalette` per appearance (#330). |
