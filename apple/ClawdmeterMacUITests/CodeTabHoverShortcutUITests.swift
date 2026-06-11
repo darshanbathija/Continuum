@@ -1040,9 +1040,9 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(permissionChip.waitForExistence(timeout: 10), "Draft composer should expose the permission-mode chip.")
         XCTAssertTrue(
             waitUntil(timeout: 5) {
-                self.accessibilityValue(of: permissionChip).contains("Ask")
+                self.accessibilityValue(of: permissionChip).contains("Ask permissions")
             },
-            "New draft composers should start in Ask permission mode."
+            "New draft composers should start in Ask permissions mode."
         )
 
         // The entire pill is the hit target now: clicking the chip BODY (not
@@ -1052,17 +1052,17 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         clickMenuItem(identifier: "code.composer.permission-mode.plan", title: "Plan mode")
         XCTAssertTrue(
             waitUntil(timeout: 5) {
-                self.accessibilityValue(of: permissionChip).contains("Plan")
+                self.accessibilityValue(of: permissionChip).contains("Plan mode")
             },
-            "Clicking anywhere on the permission pill should open the menu; selecting Plan switches the draft into Plan."
+            "Clicking anywhere on the permission pill should open the menu; selecting Plan mode switches the draft into Plan mode."
         )
 
         app.typeKey("1", modifierFlags: [.command, .shift])
         XCTAssertTrue(
             waitUntil(timeout: 5) {
-                self.accessibilityValue(of: permissionChip).contains("Ask")
+                self.accessibilityValue(of: permissionChip).contains("Ask permissions")
             },
-            "Command-Shift-1 should switch the draft composer back to Ask."
+            "Command-Shift-1 should switch the draft composer back to Ask permissions."
         )
 
         app.typeKey("2", modifierFlags: [.command, .shift])
@@ -1155,9 +1155,9 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         clickMenuItem(identifier: "code.composer.permission-mode.plan", title: "Plan mode")
         XCTAssertTrue(
             waitUntil(timeout: 5) {
-                self.accessibilityValue(of: permissionChip).contains("Plan")
+                self.accessibilityValue(of: permissionChip).contains("Plan mode")
             },
-            "Selecting Plan mode from the menu should update the draft chip."
+            "Selecting Plan mode from the menu should update the draft chip to Plan mode."
         )
 
         menu.click()
@@ -1173,18 +1173,18 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         clickMenuItem(identifier: "code.composer.permission-mode.bypass", title: "Bypass permissions")
         XCTAssertTrue(
             waitUntil(timeout: 5) {
-                self.accessibilityValue(of: permissionChip).contains("Full access")
+                self.accessibilityValue(of: permissionChip).contains("Bypass permissions")
             },
-            "Selecting Bypass permissions from the draft menu should visibly switch the draft to Full access."
+            "Selecting Bypass permissions from the draft menu should visibly switch the draft to Bypass permissions."
         )
 
         menu.click()
         clickMenuItem(identifier: "code.composer.permission-mode.ask", title: "Ask permissions")
         XCTAssertTrue(
             waitUntil(timeout: 5) {
-                self.accessibilityValue(of: permissionChip).contains("Ask")
+                self.accessibilityValue(of: permissionChip).contains("Ask permissions")
             },
-            "Selecting Ask permissions from the menu should restore the draft chip to Ask."
+            "Selecting Ask permissions from the menu should restore the draft chip to Ask permissions."
         )
     }
 

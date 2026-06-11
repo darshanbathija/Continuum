@@ -98,15 +98,8 @@ public enum PermissionMode: String, Codable, Hashable, Sendable, CaseIterable {
         }
     }
 
-    /// Short label used on the chip itself.
-    public var shortLabel: String {
-        switch self {
-        case .ask:         return "Ask"
-        case .acceptEdits: return "Accept edits"
-        case .plan:        return "Plan"
-        case .bypass:      return "Full access"
-        }
-    }
+    /// Chip label — same wording as `displayName` (no abbreviations).
+    public var shortLabel: String { displayName }
 
     /// Whether picking this mode requires a per-repo trust grant
     /// (handled by the existing `AutopilotState.trustRepo` path).

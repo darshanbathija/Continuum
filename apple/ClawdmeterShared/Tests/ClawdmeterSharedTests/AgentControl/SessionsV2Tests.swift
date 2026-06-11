@@ -83,6 +83,9 @@ final class SessionsV2Tests: XCTestCase {
         XCTAssertEqual(PermissionMode.acceptEdits.displayName, "Accept edits")
         XCTAssertEqual(PermissionMode.plan.displayName, "Plan mode")
         XCTAssertEqual(PermissionMode.bypass.displayName, "Bypass permissions")
+        for mode in PermissionMode.allCases {
+            XCTAssertEqual(mode.shortLabel, mode.displayName, "\(mode) chip should show the full mode name")
+        }
         // Bypass is the only trust-gated mode.
         XCTAssertTrue(PermissionMode.bypass.requiresTrust)
         XCTAssertFalse(PermissionMode.ask.requiresTrust)
