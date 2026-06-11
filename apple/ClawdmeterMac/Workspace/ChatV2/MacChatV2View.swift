@@ -1757,35 +1757,39 @@ private struct ComposerBar: View {
         let canSelect = selected || available
         HStack(spacing: 10) {
             Button { toggleProviderRow(choice) } label: {
-                Image(systemName: selected ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(selected ? t.accent : t.fg4)
+                HStack(spacing: 10) {
+                    Image(systemName: selected ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(selected ? t.accent : t.fg4)
+
+                    AnyProviderGlyph(choice: choice, catalog: client.modelCatalog, size: 18)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(choice.displayName(in: client.modelCatalog))
+                            .font(TahoeFont.body(12.5, weight: .semibold))
+                            .foregroundStyle(t.fg)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if let reason = choiceUnavailableReason(choice) {
+                            Text(reason)
+                                .font(TahoeFont.body(9.5))
+                                .foregroundStyle(t.fg4).lineLimit(1).truncationMode(.tail)
+                        } else if case .builtin(let vendor) = choice, vendor == .cursor, let cursorQuota {
+                            Text(cursorQuotaSummary(cursorQuota))
+                                .font(TahoeFont.mono(9.5))
+                                .foregroundStyle(t.fg4)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+                    .layoutPriority(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(!canSelect)
-
-            AnyProviderGlyph(choice: choice, catalog: client.modelCatalog, size: 18)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(choice.displayName(in: client.modelCatalog))
-                    .font(TahoeFont.body(12.5, weight: .semibold))
-                    .foregroundStyle(t.fg)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if let reason = choiceUnavailableReason(choice) {
-                    Text(reason)
-                        .font(TahoeFont.body(9.5))
-                        .foregroundStyle(t.fg4).lineLimit(1).truncationMode(.tail)
-                } else if case .builtin(let vendor) = choice, vendor == .cursor, let cursorQuota {
-                    Text(cursorQuotaSummary(cursorQuota))
-                        .font(TahoeFont.mono(9.5))
-                        .foregroundStyle(t.fg4)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .layoutPriority(1)
+            .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
 
             providerRowModelMenu(choice)
             if modelSupportsEffort(choice) { providerRowEffortMenu(choice) }
@@ -1797,7 +1801,6 @@ private struct ComposerBar: View {
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
             .fill(selected ? Color.white.opacity(0.06) : Color.clear))
         .opacity(canSelect ? 1 : 0.55)
-        .contentShape(Rectangle())
     }
 
     private func toggleProviderRow(_ choice: ProviderChoice) {
