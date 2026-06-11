@@ -15,6 +15,7 @@ enum VendorProvisioningError: Error, LocalizedError, Equatable {
     case noWorkspaces
     case workspaceNotFound(UUID)
     case emptyEnvPayload
+    case noInstallTargets
 
     var errorDescription: String? {
         switch self {
@@ -30,8 +31,43 @@ enum VendorProvisioningError: Error, LocalizedError, Equatable {
             return "Repository workspace not found: \(id.uuidString)"
         case .emptyEnvPayload:
             return "No environment variables were provided."
+        case .noInstallTargets:
+            return "No vendor CLIs need installation."
         }
     }
+}
+
+struct VendorInstallProgressUpdate: Sendable {
+    enum Phase: Sendable, Equatable {
+        case queued
+        case installing
+        case succeeded
+        case failed(String)
+    }
+
+    let vendorId: String
+    let phase: Phase
+    let completedCount: Int
+    let totalCount: Int
+
+    var overallProgress: Double {
+        guard totalCount > 0 else { return 0 }
+        let base = Double(completedCount) / Double(totalCount)
+        switch phase {
+        case .queued:
+            return base
+        case .installing:
+            return base + (0.5 / Double(totalCount))
+        case .succeeded, .failed:
+            return Double(completedCount) / Double(totalCount)
+        }
+    }
+}
+
+struct VendorProvisioningInstallAllResult: Sendable, Equatable {
+    let succeededVendorIds: [String]
+    let failedVendorIds: [String: String]
+    let message: String
 }
 
 @MainActor
@@ -63,6 +99,7 @@ public final class VendorProvisioningService: ObservableObject {
     private let shellRunner: ShellRunner
     private let openURL: (URL) -> Bool
     private let launchTerminalCommand: (String) async -> TerminalLaunchResult
+    private let runBackgroundInstall: (String) async throws -> ShellRunner.Result
     private let deviceProbe: ((VendorProvisioningVendor, [PluginInfo]) async -> VendorProvisioningStatus)?
 
     init(
@@ -74,6 +111,7 @@ public final class VendorProvisioningService: ObservableObject {
         shellRunner: ShellRunner = .shared,
         openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
         launchTerminalCommand: ((String) async -> TerminalLaunchResult)? = nil,
+        runBackgroundInstall: ((String) async throws -> ShellRunner.Result)? = nil,
         deviceProbe: ((VendorProvisioningVendor, [PluginInfo]) async -> VendorProvisioningStatus)? = nil
     ) {
         self.workspaceStore = workspaceStore
@@ -85,6 +123,17 @@ public final class VendorProvisioningService: ObservableObject {
         self.openURL = openURL
         self.launchTerminalCommand = launchTerminalCommand ?? { command in
             await DirectTerminalCommandLauncher.launch(command)
+        }
+        let runner = shellRunner
+        self.runBackgroundInstall = runBackgroundInstall ?? { command in
+            let env = SpawnPathResolver.merged(into: ProcessInfo.processInfo.environment)
+            return try await runner.run(
+                executable: "/bin/zsh",
+                arguments: ["-lc", command],
+                cwd: NSHomeDirectory(),
+                environment: env,
+                timeout: Self.installTimeout(for: command)
+            )
         }
         self.deviceProbe = deviceProbe
     }
@@ -212,6 +261,140 @@ public final class VendorProvisioningService: ObservableObject {
         vendor.actions.contains { action in
             (action.kind == .install || action.kind == .authenticate) && action.command == command
         }
+    }
+
+    static func vendorsNeedingInstall(
+        catalog: [VendorProvisioningVendor],
+        statuses: [VendorProvisioningStatus]
+    ) -> [VendorProvisioningVendor] {
+        let statusById = Dictionary(uniqueKeysWithValues: statuses.map { ($0.vendorId, $0.cliStatus) })
+        return catalog.filter { vendor in
+            guard let installAction = vendor.actions.first(where: { $0.kind == .install }),
+                  let command = installAction.command,
+                  !command.isEmpty
+            else { return false }
+            switch statusById[vendor.id] ?? .unknown {
+            case .notInstalled, .unknown:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    func installAllMissing(
+        statuses: [VendorProvisioningStatus],
+        vendors vendorsScope: [VendorProvisioningVendor]? = nil,
+        onProgress: @Sendable (VendorInstallProgressUpdate) -> Void = { _ in }
+    ) async throws -> VendorProvisioningInstallAllResult {
+        let scope = vendorsScope ?? catalog
+        let targets = Self.vendorsNeedingInstall(catalog: scope, statuses: statuses)
+        guard !targets.isEmpty else {
+            throw VendorProvisioningError.noInstallTargets
+        }
+
+        let total = targets.count
+        var completed = 0
+        var succeededVendorIds: [String] = []
+        var failedVendorIds: [String: String] = [:]
+
+        for vendor in targets {
+            try Task.checkCancellation()
+            onProgress(
+                VendorInstallProgressUpdate(
+                    vendorId: vendor.id,
+                    phase: .installing,
+                    completedCount: completed,
+                    totalCount: total
+                )
+            )
+
+            guard let installAction = vendor.actions.first(where: { $0.kind == .install }),
+                  let command = installAction.command,
+                  isAllowlisted(command: command, vendor: vendor)
+            else {
+                let message = "Install command is not allowlisted."
+                failedVendorIds[vendor.id] = message
+                completed += 1
+                onProgress(
+                    VendorInstallProgressUpdate(
+                        vendorId: vendor.id,
+                        phase: .failed(message),
+                        completedCount: completed,
+                        totalCount: total
+                    )
+                )
+                continue
+            }
+
+            do {
+                let result = try await runBackgroundInstall(command)
+                completed += 1
+                if result.exitStatus == 0 {
+                    succeededVendorIds.append(vendor.id)
+                    onProgress(
+                        VendorInstallProgressUpdate(
+                            vendorId: vendor.id,
+                            phase: .succeeded,
+                            completedCount: completed,
+                            totalCount: total
+                        )
+                    )
+                } else {
+                    let message = Self.safeMessage(
+                        result.stderrString.isEmpty ? result.stdoutString : result.stderrString,
+                        fallback: "Install command exited with status \(result.exitStatus)."
+                    )
+                    failedVendorIds[vendor.id] = message
+                    onProgress(
+                        VendorInstallProgressUpdate(
+                            vendorId: vendor.id,
+                            phase: .failed(message),
+                            completedCount: completed,
+                            totalCount: total
+                        )
+                    )
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                completed += 1
+                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                failedVendorIds[vendor.id] = message
+                onProgress(
+                    VendorInstallProgressUpdate(
+                        vendorId: vendor.id,
+                        phase: .failed(message),
+                        completedCount: completed,
+                        totalCount: total
+                    )
+                )
+            }
+        }
+
+        let message: String
+        if failedVendorIds.isEmpty {
+            message = "Installed \(succeededVendorIds.count) vendor CLI\(succeededVendorIds.count == 1 ? "" : "s")."
+        } else if succeededVendorIds.isEmpty {
+            message = "Failed to install \(failedVendorIds.count) vendor CLI\(failedVendorIds.count == 1 ? "" : "s")."
+        } else {
+            message = "Installed \(succeededVendorIds.count), failed \(failedVendorIds.count)."
+        }
+        return VendorProvisioningInstallAllResult(
+            succeededVendorIds: succeededVendorIds,
+            failedVendorIds: failedVendorIds,
+            message: message
+        )
+    }
+
+    static func installTimeout(for command: String) -> TimeInterval {
+        if command.contains("--cask") {
+            return 1_800
+        }
+        if command.hasPrefix("brew ") || command.contains("npm i -g") {
+            return 900
+        }
+        return 600
     }
 
     private func vendor(id: String) throws -> VendorProvisioningVendor {
@@ -553,10 +736,12 @@ public final class VendorProvisioningService: ObservableObject {
 private enum DirectTerminalCommandLauncher {
     static func launch(_ command: String) async -> VendorProvisioningService.TerminalLaunchResult {
         do {
+            let env = SpawnPathResolver.merged(into: ProcessInfo.processInfo.environment)
             let host = try await TerminalPtyRegistry.shared.spawnCommand(
                 wrappedShellScript(for: command),
                 cwd: NSHomeDirectory(),
-                title: "Vendor Provisioning"
+                title: "Vendor Provisioning",
+                env: env
             )
             let paneId = host.id.uuidString
             return .init(

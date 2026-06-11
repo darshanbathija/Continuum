@@ -119,6 +119,170 @@ final class VendorProvisioningServiceTests: XCTestCase {
         XCTAssertEqual(status.mcpMatches.map(\.name), ["supabase"])
     }
 
+    func testVendorsNeedingInstallIncludesOnlyMissingOrUncheckedStatuses() throws {
+        let vendors = [
+            makeVendor(id: "missing", cliName: "missing-cli"),
+            makeVendor(id: "installed", cliName: "installed-cli"),
+            makeVendor(id: "unchecked", cliName: "unchecked-cli"),
+        ]
+        let statuses = [
+            VendorProvisioningStatus(vendorId: "missing", cliStatus: .notInstalled),
+            VendorProvisioningStatus(vendorId: "installed", cliStatus: .installed),
+        ]
+
+        let targets = VendorProvisioningService.vendorsNeedingInstall(
+            catalog: vendors,
+            statuses: statuses
+        )
+
+        XCTAssertEqual(Set(targets.map(\.id)), Set(["missing", "unchecked"]))
+    }
+
+    func testInstallAllMissingRunsAllowlistedCommandsInBackgroundAndReportsProgress() async throws {
+        let temp = try makeTempDirectory()
+        let vendors = [
+            makeVendor(id: "alpha", cliName: "alpha-cli", installCommand: "printf 'ALPHA_OK\\n'"),
+            makeVendor(id: "beta", cliName: "beta-cli", installCommand: "printf 'BETA_OK\\n' && exit 2"),
+        ]
+        var progress: [VendorInstallProgressUpdate] = []
+        let service = makeService(
+            temp: temp,
+            catalog: vendors,
+            runBackgroundInstall: { command in
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+                process.arguments = ["-lc", command]
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = pipe
+                try process.run()
+                process.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                return ShellRunner.Result(
+                    exitStatus: process.terminationStatus,
+                    stdout: data,
+                    stderr: Data()
+                )
+            }
+        )
+
+        let result = try await service.installAllMissing(
+            statuses: [
+                VendorProvisioningStatus(vendorId: "alpha", cliStatus: .notInstalled),
+                VendorProvisioningStatus(vendorId: "beta", cliStatus: .notInstalled),
+            ],
+            onProgress: { update in
+                progress.append(update)
+            }
+        )
+
+        XCTAssertEqual(result.succeededVendorIds, ["alpha"])
+        XCTAssertEqual(result.failedVendorIds.keys, Set(["beta"]))
+        XCTAssertTrue(progress.contains { $0.vendorId == "alpha" && $0.phase == .installing })
+        XCTAssertTrue(progress.contains { $0.vendorId == "alpha" && $0.phase == .succeeded })
+        XCTAssertTrue(progress.contains { $0.vendorId == "beta" && ifCaseFailed($0.phase) })
+        XCTAssertEqual(progress.last?.completedCount, 2)
+    }
+
+    func testVendorsNeedingInstallExcludesAuthenticatedAndInstalledStatuses() throws {
+        let vendors = [
+            makeVendor(id: "missing", cliName: "missing-cli"),
+            makeVendor(id: "needs-auth", cliName: "needs-auth-cli"),
+            makeVendor(id: "installed", cliName: "installed-cli"),
+        ]
+        let statuses = [
+            VendorProvisioningStatus(vendorId: "missing", cliStatus: .notInstalled),
+            VendorProvisioningStatus(vendorId: "needs-auth", cliStatus: .unauthenticated),
+            VendorProvisioningStatus(vendorId: "installed", cliStatus: .installed),
+        ]
+
+        let targets = VendorProvisioningService.vendorsNeedingInstall(
+            catalog: vendors,
+            statuses: statuses
+        )
+
+        XCTAssertEqual(targets.map(\.id), ["missing"])
+    }
+
+    func testInstallAllMissingRespectsVendorScope() async throws {
+        let temp = try makeTempDirectory()
+        let vendors = [
+            makeVendor(id: "alpha", cliName: "alpha-cli", installCommand: "printf 'ALPHA\\n'"),
+            makeVendor(id: "beta", cliName: "beta-cli", installCommand: "printf 'BETA\\n'"),
+        ]
+        var installed: [String] = []
+        let service = makeService(
+            temp: temp,
+            catalog: vendors,
+            runBackgroundInstall: { command in
+                installed.append(command)
+                return ShellRunner.Result(exitStatus: 0, stdout: Data(), stderr: Data())
+            }
+        )
+
+        _ = try await service.installAllMissing(
+            statuses: [
+                VendorProvisioningStatus(vendorId: "alpha", cliStatus: .notInstalled),
+                VendorProvisioningStatus(vendorId: "beta", cliStatus: .notInstalled),
+            ],
+            vendors: [vendors[0]]
+        )
+
+        XCTAssertEqual(installed.count, 1)
+        XCTAssertEqual(installed[0], "printf 'ALPHA\\n'")
+    }
+
+    func testInstallTimeoutUsesLongerBudgetForCasks() {
+        XCTAssertEqual(
+            VendorProvisioningService.installTimeout(for: "brew install --cask google-cloud-sdk"),
+            1_800
+        )
+        XCTAssertEqual(
+            VendorProvisioningService.installTimeout(for: "brew install flyctl"),
+            900
+        )
+        XCTAssertEqual(
+            VendorProvisioningService.installTimeout(for: "printf ok"),
+            600
+        )
+    }
+
+    func testInstallAllMissingPropagatesCancellation() async throws {
+        let temp = try makeTempDirectory()
+        let vendor = makeVendor(id: "alpha", cliName: "alpha-cli")
+        let service = makeService(
+            temp: temp,
+            catalog: [vendor],
+            runBackgroundInstall: { _ in
+                throw CancellationError()
+            }
+        )
+
+        do {
+            _ = try await service.installAllMissing(
+                statuses: [VendorProvisioningStatus(vendorId: vendor.id, cliStatus: .notInstalled)]
+            )
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            XCTAssertTrue(true)
+        }
+    }
+
+    func testInstallAllMissingThrowsWhenNothingNeedsInstallation() async throws {
+        let temp = try makeTempDirectory()
+        let vendor = makeVendor(id: "ready", cliName: "ready-cli")
+        let service = makeService(temp: temp, catalog: [vendor])
+
+        do {
+            _ = try await service.installAllMissing(
+                statuses: [VendorProvisioningStatus(vendorId: vendor.id, cliStatus: .authenticated)]
+            )
+            XCTFail("Expected noInstallTargets")
+        } catch VendorProvisioningError.noInstallTargets {
+            XCTAssertEqual(error.localizedDescription, "No vendor CLIs need installation.")
+        }
+    }
+
     func testCheckDeviceRunsVendorProbesConcurrently() async throws {
         let temp = try makeTempDirectory()
         let vendors = (0..<4).map { index in
@@ -284,10 +448,34 @@ final class VendorProvisioningServiceTests: XCTestCase {
         XCTAssertTrue(response.previews.first?.message.contains("selected repo targets") == true)
     }
 
+    private func makeVendor(
+        id: String,
+        cliName: String,
+        installCommand: String = "printf 'installed\\n'"
+    ) -> VendorProvisioningVendor {
+        VendorProvisioningVendor(
+            id: id,
+            displayName: id,
+            category: .computeHosting,
+            cliNames: [cliName],
+            mcpAliases: [],
+            actions: [
+                .init(id: "install", kind: .install, label: "Install CLI", command: installCommand)
+            ],
+            envTemplates: [.init(key: "\(id.uppercased())_TOKEN", label: "Token")]
+        )
+    }
+
+    private func ifCaseFailed(_ phase: VendorInstallProgressUpdate.Phase) -> Bool {
+        if case .failed = phase { return true }
+        return false
+    }
+
     private func makeService(
         temp: URL,
         catalog: [VendorProvisioningVendor] = VendorProvisioningCatalog.vendors,
         pluginDiscovery: @escaping () -> [PluginInfo] = { [] },
+        runBackgroundInstall: ((String) async throws -> ShellRunner.Result)? = nil,
         deviceProbe: ((VendorProvisioningVendor, [PluginInfo]) async -> VendorProvisioningStatus)? = nil
     ) -> VendorProvisioningService {
         let workspaceStore = WorkspaceStore(
@@ -304,6 +492,7 @@ final class VendorProvisioningServiceTests: XCTestCase {
             repoEnvResolver: RepoEnvRuntimeResolver(workspaceStore: workspaceStore, envStore: envStore),
             catalog: catalog,
             pluginDiscovery: pluginDiscovery,
+            runBackgroundInstall: runBackgroundInstall,
             deviceProbe: deviceProbe
         )
     }
