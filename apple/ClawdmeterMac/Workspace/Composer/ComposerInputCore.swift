@@ -59,7 +59,7 @@ struct ComposerInputCore: View {
     /// a live pane.
     var isReadOnly: Bool = false
     /// Collapse the composer to the reference single-row bar
-    /// (+ · access · model+effort · send) for the centered empty-state.
+    /// (+ · access · model · effort · send) for the centered empty-state.
     /// The in-session composer keeps the full chrome (defaults false).
     var minimalChrome: Bool = false
 
@@ -547,6 +547,8 @@ struct ComposerInputCore: View {
     private var chipRow: some View {
         HStack(spacing: 8) {
             let resolvedInfo = usageStatus ?? Self.placeholderUsage(modelId: store.modelId, effort: store.effort, catalog: catalog)
+            composerToolsMenu
+            micButton
             ModelEffortChip(
                 info: resolvedInfo,
                 catalog: catalog,
@@ -597,8 +599,6 @@ struct ComposerInputCore: View {
                 )
                 .layoutPriority(1)
             }
-            composerToolsMenu
-            micButton
             queueFollowUpButton
 
             switch store.modeKind {
@@ -627,7 +627,7 @@ struct ComposerInputCore: View {
     }
 
     /// Reference single-row composer bar for the centered empty-state:
-    /// + (attach) · access · ……… · model+effort · send. Drops the
+    /// + (attach) · access · ……… · model · effort · send. Drops the
     /// history/saved/strip/expand/mic/usage chrome the bound composer carries.
     @ViewBuilder
     private var minimalChipRow: some View {
@@ -642,13 +642,6 @@ struct ComposerInputCore: View {
             }
             Spacer(minLength: 8)
             let resolvedInfo = usageStatus ?? Self.placeholderUsage(modelId: store.modelId, effort: store.effort, catalog: catalog)
-            if modelSupportsEffort {
-                EffortChip(
-                    effort: store.effort,
-                    supportsEffort: modelSupportsEffort,
-                    onChange: { store.effort = $0 }
-                )
-            }
             ModelEffortChip(
                 info: resolvedInfo,
                 catalog: catalog,
@@ -673,6 +666,13 @@ struct ComposerInputCore: View {
                     onSelectModelConfiguration?(choice, modelId, effort)
                 }
             )
+            if modelSupportsEffort {
+                EffortChip(
+                    effort: store.effort,
+                    supportsEffort: modelSupportsEffort,
+                    onChange: { store.effort = $0 }
+                )
+            }
             sendOrStopButton
         }
     }
@@ -786,7 +786,7 @@ struct ComposerInputCore: View {
 
     /// Claude-Desktop-style "+" overflow menu. Consolidates the former
     /// attach / history / saved-prompts / strip-ANSI / expand icon cluster
-    /// into one bottom-left button, so the footer reads as `+  mic  …  send`.
+    /// into one bottom-left button, so the footer reads as `+  mic  model  effort  …  send`.
     /// Each row keeps its old action + accessibilityIdentifier (UI tests pin
     /// them); ⌥↑ stays on the history row so the shortcut still works. ⌘U
     /// attach arrives via the `.composerAttach` notification, independent of
