@@ -26,7 +26,7 @@ struct WorkspaceTabStrip: View {
     private static let stripHorizontalPadding: CGFloat = 20
     private static let tabSpacing: CGFloat = 6
     private static let newTabButtonWidth: CGFloat = 26
-    private static let chatTabChromeWidth: CGFloat = 41
+    private static let chatTabChromeWidth: CGFloat = 49
     private static let compactLabelWidth: CGFloat = 44
     private static let idealLabelWidth: CGFloat = 118
     private static let expandedLabelWidth: CGFloat = 170
@@ -404,12 +404,17 @@ struct WorkspaceTabStrip: View {
             Button(action: closeAction) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
-                    .frame(width: 14, height: 14)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(PressableButtonStyle())
             .foregroundStyle(t.fg3)
-            .help("Close tab")
-            .accessibilityIdentifier("code.workspace.tab.close")
+            .codeHoverChrome(
+                cornerRadius: 6,
+                help: "Close tab",
+                accessibilityLabel: "Close tab",
+                accessibilityIdentifier: "code.workspace.tab.close"
+            )
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
