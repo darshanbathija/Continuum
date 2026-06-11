@@ -1261,25 +1261,25 @@ struct MacTitlebar: View {
 
     @ViewBuilder
     private var codeBreadcrumb: some View {
-        if let session = runtime?.sessionsModel.openSession {
+        if let context = runtime?.sessionsModel.titlebarWorkspaceContext {
             HStack(spacing: 7) {
                 TahoeIcon("folder", size: 11)
                     .foregroundStyle(t.fg3)
-                Text(session.repoDisplayName)
+                Text(context.repoDisplayName)
                     .font(TahoeFont.body(12, weight: .semibold))
                     .foregroundStyle(t.fg)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 TahoeIcon("chevR", size: 9)
                     .foregroundStyle(t.fg4)
-                Text(session.workspaceBranchLabel)
+                Text(context.branchLabel)
                     .font(TahoeFont.body(12))
                     .foregroundStyle(t.fg2)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
             .frame(maxWidth: 420)
-            .help("\(session.repoDisplayName)\n\(session.workspaceBranchLabel)")
+            .help("\(context.repoDisplayName)\n\(context.branchLabel)")
         }
     }
 

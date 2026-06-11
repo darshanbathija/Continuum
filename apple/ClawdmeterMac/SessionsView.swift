@@ -554,6 +554,100 @@ public final class SessionsModel: ObservableObject {
         return nil
     }
 
+    /// Repo + branch labels for the Code titlebar breadcrumb. Resolves from the
+    /// foreground session when one is open, otherwise from the active workspace
+    /// key so draft/terminal/document tabs still show where you are.
+    var titlebarWorkspaceContext: (repoDisplayName: String, branchLabel: String)? {
+        if let session = openSession {
+            return (session.repoDisplayName, session.workspaceBranchLabel)
+        }
+        if let key = activeWorkspaceKey {
+            let branch = (key.workspacePath as NSString).lastPathComponent
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (
+                RepoIdentity.displayName(for: key.repoKey),
+                branch.isEmpty ? RepoIdentity.displayName(for: key.repoKey) : branch
+            )
+        }
+        return nil
+    }
+
+    /// A live session in the active workspace, used when the foreground tab is
+    /// not a chat session but sibling sessions still exist (e.g. review pane).
+    func representativeSession(for key: WorkspaceKey) -> AgentSession? {
+        WorkspaceKey.siblings(of: key, in: registry.sessions)
+            .last(where: { $0.archivedAt == nil })
+    }
+
+    /// Session backing the review pane (Plan/Diff/Sources/…). Prefers the open
+    /// session, then a live sibling in the active workspace, then a lightweight
+    /// anchor synthesized from the workspace key so draft-only tabs still get
+    /// the right gutter and Git diff.
+    func reviewPaneSession() -> AgentSession? {
+        if let session = openSession {
+            return session
+        }
+        if let key = activeWorkspaceKey {
+            if let live = representativeSession(for: key) {
+                return live
+            }
+            return workspaceReviewAnchor(for: key)
+        }
+        return registry.sessions.first(where: { $0.archivedAt == nil })
+    }
+
+    /// Lightweight stand-in session for workspace-only foreground tabs (draft
+    /// with no live chat session). Not in the registry — just enough cwd/repo
+    /// context for Git diff and the review-pane gutter.
+    private var workspaceReviewAnchorSessions: [WorkspaceKey: AgentSession] = [:]
+
+    private func workspaceReviewAnchor(for key: WorkspaceKey) -> AgentSession {
+        let draft = draftWorkspaceTab?.workspaceKey == key
+            ? draftWorkspaceTab
+            : workspaceDraftTabs(in: key).last
+        let agent = draft?.agent ?? .codex
+        let modelId = draft?.modelId
+        let effort = draft?.effort
+        let mode = draft?.mode ?? .worktree
+
+        if let cached = workspaceReviewAnchorSessions[key],
+           cached.agent == agent,
+           cached.model == modelId,
+           cached.effort == effort,
+           cached.mode == mode,
+           cached.worktreePath == key.workspacePath,
+           cached.repoKey == key.repoKey {
+            return cached
+        }
+
+        let anchor = AgentSession(
+            id: workspaceReviewAnchorSessions[key]?.id ?? UUID(),
+            repoKey: key.repoKey,
+            repoDisplayName: RepoIdentity.displayName(for: key.repoKey),
+            agent: agent,
+            model: modelId,
+            goal: nil,
+            worktreePath: key.workspacePath,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            status: .running,
+            planText: nil,
+            createdAt: Date(),
+            lastEventAt: Date(),
+            lastEventSeq: 0,
+            mode: mode,
+            runtimeCwd: key.workspacePath,
+            effort: effort,
+            ownsWorktree: false
+        )
+        workspaceReviewAnchorSessions[key] = anchor
+        return anchor
+    }
+
+    private func dropWorkspaceReviewAnchor(for key: WorkspaceKey) {
+        workspaceReviewAnchorSessions.removeValue(forKey: key)
+    }
+
     public func openOutsideSession(recent: RecentSession, repoKey: String, repoDisplayName: String) {
         let url = URL(fileURLWithPath: recent.path)
         let path = recent.path
@@ -1642,7 +1736,10 @@ public final class SessionsModel: ObservableObject {
         return Array(keys)
     }
 
-    private func promoteWorkspaceForegroundSelection(in key: WorkspaceKey?) {
+    private func promoteWorkspaceForegroundSelection(
+        in key: WorkspaceKey?,
+        excludingSessionId: UUID? = nil
+    ) {
         guard let key else { return }
         if openSessionId != nil
             || selectedWorkspaceDraftTabId != nil
@@ -1650,7 +1747,11 @@ public final class SessionsModel: ObservableObject {
             || selectedWorkspaceDocumentTabId != nil {
             return
         }
-        if let session = WorkspaceKey.siblings(of: key, in: registry.sessions).last {
+        if let session = WorkspaceKey.siblings(
+            of: key,
+            in: registry.sessions,
+            excluding: excludingSessionId
+        ).last {
             openSession(session)
             return
         }
@@ -1669,6 +1770,7 @@ public final class SessionsModel: ObservableObject {
 
     private func finalizeWorkspaceIfEmpty(in key: WorkspaceKey) async {
         guard !workspaceHasOpenTabs(in: key) else { return }
+        dropWorkspaceReviewAnchor(for: key)
         _ = try? await WorktreeManager.shared.delete(
             repoRoot: key.repoKey,
             worktreePath: key.workspacePath,
@@ -2737,7 +2839,7 @@ public final class SessionsModel: ObservableObject {
             // last foreground tab in the workspace closes.
         }
         if openSessionId == id { openSessionId = nil }
-        promoteWorkspaceForegroundSelection(in: workspaceKey)
+        promoteWorkspaceForegroundSelection(in: workspaceKey, excludingSessionId: id)
         closeChatStore(for: id)
         try? await registry.delete(id: id)
     }
