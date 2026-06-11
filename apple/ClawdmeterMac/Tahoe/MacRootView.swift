@@ -1272,14 +1272,14 @@ struct MacTitlebar: View {
                     .truncationMode(.middle)
                 TahoeIcon("chevR", size: 9)
                     .foregroundStyle(t.fg4)
-                Text(session.displayLabel)
+                Text(session.workspaceBranchLabel)
                     .font(TahoeFont.body(12))
                     .foregroundStyle(t.fg2)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
             .frame(maxWidth: 420)
-            .help("\(session.repoDisplayName)\n\(session.displayLabel)")
+            .help("\(session.repoDisplayName)\n\(session.workspaceBranchLabel)")
         }
     }
 

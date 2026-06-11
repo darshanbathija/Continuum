@@ -535,6 +535,24 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         return repoDisplayName
     }
 
+    /// Workspace folder / branch label for repo → branch breadcrumbs.
+    /// Uses the worktree path slug (e.g. `oslo` in Conductor's
+    /// `~/conductor/workspaces/<repo>/<branch>` layout), not
+    /// `displayLabel` which prefers customName and falls back to repo name.
+    public var workspaceBranchLabel: String {
+        if let slug = provisioning?.workspaceSlug?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !slug.isEmpty {
+            return slug
+        }
+        if let branchName = provisioning?.branchName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !branchName.isEmpty {
+            return branchName
+        }
+        let path = WorkspaceKey.workspacePath(for: self)
+        let branch = (path as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        return branch.isEmpty ? repoDisplayName : branch
+    }
+
     /// The session's effective working directory — what every filesystem,
     /// git, tmux, and JSONL operation needs. For code sessions: the
     /// worktree if `useWorktree` was on at create, else the repo root.
