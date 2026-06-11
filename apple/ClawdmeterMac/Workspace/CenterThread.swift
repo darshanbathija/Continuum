@@ -32,15 +32,11 @@ struct CenterThread: View {
     /// flips go through `PermissionModeStore.setBypass` below so this one
     /// observer is enough.
     @ObservedObject private var permissionModeStore = PermissionModeStore.shared
-    @State private var showingScheduler = false
     @State private var showingTerminalOverlay = false
     @State private var showingAutopilotConfirm = false
     @State private var isDispatchingQueuedSend = false
     @State private var dispatchedQueuedTurnForCurrentIdle = false
     @State private var checkpointStatusText: String?
-    @State private var restorePlan: CheckpointRestorePlan?
-    @State private var isPreparingCheckpointRestore = false
-    @State private var isRestoringCheckpoint = false
     /// Captured target mode for the bypass-mode trust-grant confirm sheet.
     /// When the user picks `.bypass` from the chip we stash it here and
     /// surface the existing autopilot confirm sheet, then commit on
@@ -137,22 +133,11 @@ struct CenterThread: View {
             else { return }
             Task { await changePermissionMode(to: mode) }
         }
-        .sheet(isPresented: $showingScheduler) {
-            FollowUpSchedulerSheet(session: session, registry: model.registry)
-        }
         .sheet(isPresented: $showingTerminalOverlay) {
             terminalOverlay
         }
         .sheet(isPresented: $showingAutopilotConfirm) {
             autopilotConfirm
-        }
-        .sheet(item: $restorePlan) { plan in
-            CheckpointRestoreSheet(
-                plan: plan,
-                isRestoring: isRestoringCheckpoint,
-                onCancel: { restorePlan = nil },
-                onRestore: { Task { await restoreCheckpoint(plan) } }
-            )
         }
         .onChange(of: session.status) { _, newValue in
             if newValue == .running {
@@ -175,13 +160,9 @@ struct CenterThread: View {
         // hand here. The composer/transcript/prMirror are already keyed per
         // session via caches, so they don't need this.
         .onChange(of: session.id) { _, _ in
-            showingScheduler = false
             showingTerminalOverlay = false
             showingAutopilotConfirm = false
             pendingBypassMode = false
-            restorePlan = nil
-            isPreparingCheckpointRestore = false
-            isRestoringCheckpoint = false
             checkpointStatusText = nil
             isDispatchingQueuedSend = false
             dispatchedQueuedTurnForCurrentIdle = false
@@ -282,72 +263,6 @@ struct CenterThread: View {
                         .accessibilityLabel("Selected density \(densityLabel(density))")
                         .accessibilityIdentifier("code.header.density.selected.\(density.rawValue)")
                 }
-                Menu {
-                    Button("Open terminal tab (⇧⌘T)") {
-                        Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
-                    }
-                        .keyboardShortcut("t", modifiers: [.command, .shift])
-                        .disabled(!model.canOpenWorkspaceTerminalTab(from: session))
-                        .accessibilityIdentifier("code.header.more-actions.terminal")
-                    Button("Schedule follow-up…", systemImage: "clock") {
-                        showingScheduler = true
-                    }
-                    .accessibilityIdentifier("code.header.more-actions.schedule-follow-up")
-                    Button("Create checkpoint", systemImage: "bookmark") {
-                        Task { await createCheckpoint() }
-                    }
-                    .accessibilityIdentifier("code.header.more-actions.create-checkpoint")
-                    if let latest = workbenchState.latestCheckpoint(for: session.id) {
-                        Button("Restore latest checkpoint…", systemImage: "arrow.uturn.backward") {
-                            Task { await prepareCheckpointRestore(latest) }
-                        }
-                        .accessibilityIdentifier("code.header.more-actions.restore-latest-checkpoint")
-                    }
-                    Button("Pop out window", systemImage: "rectangle.portrait.on.rectangle.portrait") {
-                        NotificationCenter.default.post(
-                            name: .popOutSession,
-                            object: nil,
-                            userInfo: ["sessionId": session.id]
-                        )
-                    }
-                    .keyboardShortcut("n", modifiers: [.command, .option])
-                    .accessibilityIdentifier("code.header.more-actions.pop-out")
-                    Divider()
-                    if session.archivedAt == nil {
-                        Button("Archive") {
-                            Task { @MainActor in
-                                try? await model.registry.archive(id: session.id)
-                            }
-                            postArchiveUndoToast(for: session)
-                            workbenchState.clearSessionState(sessionId: session.id)
-                            AttachmentStaging.cleanup(sessionId: session.id)
-                            if let wt = session.worktreePath {
-                                AttachmentStaging.cleanupWorktree(at: wt, sessionId: session.id)
-                            }
-                        }
-                        .accessibilityIdentifier("code.header.more-actions.archive")
-                    }
-                    Button("End session", role: .destructive) {
-                        Task {
-                            await model.endSession(id: session.id)
-                            workbenchState.clearSessionState(sessionId: session.id)
-                            AttachmentStaging.cleanup(sessionId: session.id)
-                            if let wt = session.worktreePath {
-                                AttachmentStaging.cleanupWorktree(at: wt, sessionId: session.id)
-                            }
-                        }
-                    }
-                    .accessibilityIdentifier("code.header.more-actions.end-session")
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 14))
-                        .frame(width: 30, height: 30)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .frame(width: 30)
-                .accessibilityLabel("More actions")
-                .accessibilityIdentifier("code.header.more-actions")
             }
         }
         .padding(.horizontal, 22)
@@ -355,9 +270,9 @@ struct CenterThread: View {
         .padding(.bottom, 10)
         // Containment is required here: a bare container identifier
         // propagates onto every child AX element and overwrote
-        // `code.header.density` / `code.header.more-actions` (and their
-        // selected-state markers), breaking AX addressability for the
-        // header controls. Same bug class as the WorkspaceReviewPane
+        // `code.header.density` (and its selected-state markers), breaking
+        // AX addressability for the header controls. Same bug class as the
+        // WorkspaceReviewPane
         // `code.review.pane` fix. The session/provider/model value
         // assertions ride the dedicated `code.center.header.state`
         // overlay marker below.
@@ -556,8 +471,8 @@ struct CenterThread: View {
                 queuedSendsPanel
             }
             // The inline "Checkpoint · <date> · <summary> · Restore" strip was
-            // removed per user feedback. Checkpoints are still created/restored
-            // from the header More-actions menu and the header status text.
+            // removed per user feedback. Checkpoints are still created on
+            // lifecycle events and surfaced via the header status text.
             // Setup Trail — animated, non-blocking provisioning ribbon for an
             // optimistic "+" session. Sits just above the composer (which stays
             // usable the whole time) and confirms each step with a fact.
@@ -926,48 +841,6 @@ struct CenterThread: View {
         } catch {
             composerStore.endSend(error: .daemonError(message: error.localizedDescription))
             if !manual { dispatchedQueuedTurnForCurrentIdle = false }
-        }
-    }
-
-    private func createCheckpoint() async {
-        let service = CheckpointService()
-        do {
-            let checkpoint = try await service.createCheckpoint(
-                session: session,
-                summary: "Manual checkpoint"
-            )
-            workbenchState.recordCheckpoint(checkpoint)
-            checkpointStatusText = "checkpoint saved"
-        } catch {
-            checkpointStatusText = error.localizedDescription
-        }
-    }
-
-    private func prepareCheckpointRestore(_ checkpoint: CheckpointStateSnapshot) async {
-        let service = CheckpointService()
-        isPreparingCheckpointRestore = true
-        checkpointStatusText = "preparing restore preview"
-        defer { isPreparingCheckpointRestore = false }
-        do {
-            let plan = try await service.prepareRestore(checkpoint, session: session)
-            workbenchState.recordCheckpoint(plan.safety)
-            restorePlan = plan
-            checkpointStatusText = plan.isBlocked ? "restore blocked" : "restore preview ready"
-        } catch {
-            checkpointStatusText = error.localizedDescription
-        }
-    }
-
-    private func restoreCheckpoint(_ plan: CheckpointRestorePlan) async {
-        let service = CheckpointService()
-        isRestoringCheckpoint = true
-        defer { isRestoringCheckpoint = false }
-        do {
-            try await service.restore(plan, in: session.effectiveCwd)
-            restorePlan = nil
-            checkpointStatusText = "checkpoint restored"
-        } catch {
-            checkpointStatusText = error.localizedDescription
         }
     }
 
