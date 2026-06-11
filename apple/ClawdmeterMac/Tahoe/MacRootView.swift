@@ -716,7 +716,6 @@ struct MacRootView: View {
             .init(id: "code.workspaceSwitcher", title: "Open Workspace Switcher", subtitle: "Switch workspace or session", keywords: ["repo", "session", "switch"], scope: .code, kind: .navigation, shortcutID: "code.workspaceSwitcher"),
             .init(id: "code.reviewPane", title: "Toggle Review Pane", subtitle: "Show or hide Plan/Diff/PR/Terminal", keywords: ["plan", "diff", "terminal"], scope: .code, kind: .action, shortcutID: "code.reviewPane"),
             .init(id: "settings.pairIPhone", title: "Pair Or Manage iPhone", subtitle: "Open Settings for desktop sync", keywords: ["phone", "sync", "qr"], scope: .settings, kind: .setting),
-            .init(id: "settings.updates", title: "Updates", subtitle: "Check for app updates", keywords: ["release", "sparkle", "changelog"], scope: .settings, kind: .setting),
         ])
         var registry = ClawdmeterCommandRegistry(commands: commands)
         if let session = sessionsModel.openSession {
@@ -786,11 +785,9 @@ struct MacRootView: View {
             tab = .usage
         case "nav.code":
             tab = .code
-        case "nav.settings", "settings.pairIPhone", "settings.updates":
+        case "nav.settings", "settings.pairIPhone":
             if command.id.rawValue == "settings.pairIPhone" {
                 requestedSettingsSection = "devices"
-            } else if command.id.rawValue == "settings.updates" {
-                requestedSettingsSection = "updates"
             }
             visitedTabs.insert(.settings)
             tab = .settings

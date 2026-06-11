@@ -21,8 +21,7 @@ extension Notification.Name {
     /// needed and re-emits to the Sidebar via FocusState binding.
     static let clawdmeterFocusCodeSearch = Notification.Name("clawdmeter.focusCodeSearch")
     static let clawdmeterOpenGlobalPalette = Notification.Name("clawdmeter.openGlobalPalette")
-    /// Carries `userInfo["section"]` for settings deep links such as
-    /// "updates" and "devices".
+    /// Carries `userInfo["section"]` for settings deep links such as "devices".
     static let clawdmeterOpenSettingsSection = Notification.Name("clawdmeter.openSettingsSection")
     static let clawdmeterOpenShortcutSheet = Notification.Name("clawdmeter.openShortcutSheet")
     static let clawdmeterOpenFilePicker = Notification.Name("clawdmeter.openFilePicker")
