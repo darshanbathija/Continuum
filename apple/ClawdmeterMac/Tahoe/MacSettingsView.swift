@@ -1210,25 +1210,117 @@ private struct AccentPicker: View {
 
 // MARK: - Providers
 
-/// Settings → Providers wrapper that runs device discovery once per
-/// appearance so the same status badges/messages from onboarding show here
-/// (design-doc "Future" item). Status-only: no setup actions in Settings.
+/// Settings → Providers wrapper that runs device discovery and hosts the
+/// same install / Log In setup actions as first-run onboarding.
 struct SettingsProviderRowsWithDeviceStatus: View {
+    @Environment(\.tahoe) private var t
     var runtime: AppRuntime?
     @State private var deviceStatuses: [String: ProviderDeviceStatus] = [:]
+    @State private var isRefreshingDiscovery = false
+    @State private var setupTerminal: SetupTerminalSession?
+    @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
 
     var body: some View {
-        ProviderPreferenceRows(
-            client: runtime?.loopbackClient,
-            runtime: runtime,
-            showDeviceStatus: !deviceStatuses.isEmpty,
-            deviceStatuses: deviceStatuses
-        )
-        .task {
-            let result = await ProviderDeviceDiscovery.discover()
-            deviceStatuses = Dictionary(
-                uniqueKeysWithValues: result.statuses.map { ($0.providerId, $0) }
+        VStack(alignment: .leading, spacing: 10) {
+            ProviderPreferenceRows(
+                client: runtime?.loopbackClient,
+                runtime: runtime,
+                showDeviceStatus: !deviceStatuses.isEmpty,
+                deviceStatuses: deviceStatuses,
+                onSetupAction: { providerId, action in
+                    Task { await performSetup(providerId: providerId, action: action) }
+                }
             )
+            if !deviceStatuses.isEmpty {
+                Button {
+                    Task { await refreshDiscovery() }
+                } label: {
+                    HStack(spacing: 6) {
+                        TahoeIcon("refresh", size: 11, weight: .bold)
+                        Text(isRefreshingDiscovery ? "Checking…" : "Re-check device")
+                    }
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                }
+                .buttonStyle(.plain)
+                .disabled(isRefreshingDiscovery)
+            }
+        }
+        .task { await refreshDiscovery() }
+        .sheet(item: $opencodeSetupCommand) { command in
+            OpencodeSetupSheet(command: command) {
+                Task { await refreshDiscovery() }
+            }
+        }
+        .sheet(item: $setupTerminal) { terminal in
+            SetupTerminalSheet(terminal: terminal) {
+                setupTerminal = nil
+                Task { await refreshDiscovery() }
+            }
+        }
+    }
+
+    private func refreshDiscovery() async {
+        isRefreshingDiscovery = true
+        defer { isRefreshingDiscovery = false }
+        let result = await ProviderDeviceDiscovery.discover()
+        deviceStatuses = Dictionary(
+            uniqueKeysWithValues: result.statuses.map { ($0.providerId, $0) }
+        )
+        await ChatProviderProbe.shared.invalidate()
+        await CursorModelProbe.shared.invalidate()
+    }
+
+    private func performSetup(providerId: String, action: ProviderDeviceSetupAction) async {
+        switch action {
+        case .importClaudeFromClaudeCode:
+            await importClaudeFromClaudeCode()
+            await refreshDiscovery()
+        case .openAntigravityApp:
+            let url = URL(fileURLWithPath: "/Applications/Antigravity.app")
+            if FileManager.default.fileExists(atPath: url.path) {
+                NSWorkspace.shared.open(url)
+            } else {
+                NSWorkspace.shared.open(URL(string: "https://antigravity.google")!)
+            }
+        case .openOpencodeSignIn:
+            await MainActor.run { opencodeSetupCommand = .signIn }
+        case .addOpenRouterKey:
+            break
+        case .runCodexLogin, .runCursorAgentLogin, .installCodexCLI, .installCursorCLI,
+             .installAgyCLI, .installGrokCLI:
+            guard let command = action.shellCommand else { return }
+            await launchSetupTerminal(title: action.label, command: command)
+        }
+        _ = providerId
+    }
+
+    private func importClaudeFromClaudeCode() async {
+        let seeded = await Task.detached(priority: .userInitiated) {
+            guard let token = KeychainTokenProvider(allowsUserInteraction: true).currentAccessToken,
+                  !token.isEmpty else { return false }
+            let ok = PastedAnthropicTokenProvider.shared().setToken(token)
+            UserDefaults.standard.set(true, forKey: "clawdmeter.claude.autoImportFromClaudeCode")
+            return ok
+        }.value
+        if seeded {
+            runtime?.claudeModel.forcePoll()
+        }
+    }
+
+    @MainActor
+    private func launchSetupTerminal(title: String, command: String) async {
+        let wrapped = "\(command); echo ''; echo 'Press Done when finished.'"
+        do {
+            let host = try await TerminalPtyRegistry.shared.spawnCommand(
+                wrapped,
+                cwd: NSHomeDirectory(),
+                title: title
+            )
+            setupTerminal = SetupTerminalSession(id: host.id.uuidString, title: title, host: host)
+        } catch {
+            let script = "tell application \"Terminal\" to do script \"\(command.replacingOccurrences(of: "\"", with: "\\\""))\""
+            NSAppleScript(source: script)?.executeAndReturnError(nil)
         }
     }
 }
@@ -1529,7 +1621,11 @@ private struct ProviderPreferenceRow: View {
 
     private func shouldShowSetupActions(_ status: ProviderDeviceStatus) -> Bool {
         guard onSetupAction != nil else { return false }
-        return !status.isReady && !status.setupActions.isEmpty
+        guard !status.setupActions.isEmpty else { return false }
+        if !status.authenticated {
+            return true
+        }
+        return !status.isReady
     }
 
     private var modelMenu: some View {

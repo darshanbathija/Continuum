@@ -82,28 +82,49 @@ final class ProviderDeviceDiscoveryTests: XCTestCase {
         XCTAssertNil(ProviderDeviceSetupAction.importClaudeFromClaudeCode.shellCommand)
     }
 
-    /// Passive providers (binary-only signal) pre-select off the binary but
-    /// must not claim authentication they never probed.
-    func test_providerDeviceStatus_isReady_passiveProvidersKeyOffBinary() {
-        for id in ["cursor", "grok"] {
-            let installed = ProviderDeviceStatus(
-                providerId: id,
-                displayName: id.capitalized,
-                cliInstalled: true,
-                authenticated: false,
-                status: .installed
-            )
-            XCTAssertTrue(installed.isReady, "\(id) with binary should be ready")
+    func test_providerDeviceStatus_isReady_cursorRequiresCLIAndAuth() {
+        XCTAssertTrue(ProviderDeviceStatus(
+            providerId: "cursor",
+            displayName: "Cursor",
+            cliInstalled: true,
+            authenticated: true,
+            status: .authenticated
+        ).isReady)
 
-            let missing = ProviderDeviceStatus(
-                providerId: id,
-                displayName: id.capitalized,
-                cliInstalled: false,
-                authenticated: false,
-                status: .notInstalled
-            )
-            XCTAssertFalse(missing.isReady, "\(id) without binary should not be ready")
-        }
+        XCTAssertFalse(ProviderDeviceStatus(
+            providerId: "cursor",
+            displayName: "Cursor",
+            cliInstalled: true,
+            authenticated: false,
+            status: .unauthenticated
+        ).isReady)
+    }
+
+    /// Grok pre-selects off the binary but must not claim authentication it
+    /// never probed.
+    func test_providerDeviceStatus_isReady_grokKeysOffBinaryOnly() {
+        let installed = ProviderDeviceStatus(
+            providerId: "grok",
+            displayName: "Grok",
+            cliInstalled: true,
+            authenticated: false,
+            status: .installed
+        )
+        XCTAssertTrue(installed.isReady)
+
+        let missing = ProviderDeviceStatus(
+            providerId: "grok",
+            displayName: "Grok",
+            cliInstalled: false,
+            authenticated: false,
+            status: .notInstalled
+        )
+        XCTAssertFalse(missing.isReady)
+    }
+
+    func test_setupAction_loginLabels() {
+        XCTAssertEqual(ProviderDeviceSetupAction.runCodexLogin.label, "Log In")
+        XCTAssertEqual(ProviderDeviceSetupAction.runCursorAgentLogin.label, "Log In")
     }
 
     func test_discover_returnsAllProviders() async {
