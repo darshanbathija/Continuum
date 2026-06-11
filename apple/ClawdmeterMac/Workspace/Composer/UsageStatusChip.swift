@@ -69,6 +69,7 @@ struct ModelEffortChip: View {
                 // fixed 128–220pt slot (which clipped "Model · Effort" with an
                 // ellipsis and left short labels off-center). The outer button
                 // is `.fixedSize(horizontal:)` so the capsule grows to fit.
+                AnyProviderGlyph(choice: currentPickerChoice, catalog: catalog, size: 14)
                 Text(summaryText)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.primary)
@@ -106,7 +107,7 @@ struct ModelEffortChip: View {
             // "Effort" footer button below so users can still re-pick
             // effort without re-picking model.
             ComposerModelPicker(
-                initialChoice: initialPickerChoice,
+                initialChoice: currentPickerChoice,
                 store: pickerScratchStore,
                 defaultsStore: providerDefaults,
                 catalog: catalog,
@@ -127,7 +128,7 @@ struct ModelEffortChip: View {
         info.modelDisplay
     }
 
-    private var initialPickerChoice: ProviderChoice {
+    private var currentPickerChoice: ProviderChoice {
         if let customProviderId,
            enabledChoices.contains(.custom(customProviderId)) {
             return .custom(customProviderId)
