@@ -23,28 +23,28 @@ struct PairingQRCornerBracket: View {
                 p.addLine(to: CGPoint(x: r, y: 0))
                 p.addArc(center: CGPoint(x: r, y: r), radius: r,
                          startAngle: .degrees(-90), endAngle: .degrees(180),
-                         clockwise: true)
+                         clockwise: false)
                 p.addLine(to: CGPoint(x: 0, y: s))
             case .topRight:
                 p.move(to: CGPoint(x: 0, y: 0))
                 p.addLine(to: CGPoint(x: s - r, y: 0))
                 p.addArc(center: CGPoint(x: s - r, y: r), radius: r,
                          startAngle: .degrees(-90), endAngle: .degrees(0),
-                         clockwise: false)
+                         clockwise: true)
                 p.addLine(to: CGPoint(x: s, y: s))
             case .bottomLeft:
                 p.move(to: CGPoint(x: 0, y: 0))
                 p.addLine(to: CGPoint(x: 0, y: s - r))
                 p.addArc(center: CGPoint(x: r, y: s - r), radius: r,
                          startAngle: .degrees(180), endAngle: .degrees(90),
-                         clockwise: true)
+                         clockwise: false)
                 p.addLine(to: CGPoint(x: s, y: s))
             case .bottomRight:
                 p.move(to: CGPoint(x: s, y: 0))
                 p.addLine(to: CGPoint(x: s, y: s - r))
                 p.addArc(center: CGPoint(x: s - r, y: s - r), radius: r,
                          startAngle: .degrees(0), endAngle: .degrees(90),
-                         clockwise: false)
+                         clockwise: true)
                 p.addLine(to: CGPoint(x: 0, y: s))
             }
         }
