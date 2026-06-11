@@ -94,6 +94,9 @@ struct ChatItemRowPayload: Equatable {
     /// `ChatItemRowView` at turn boundary (when the same item id
     /// transitions from streaming to committed).
     let isStreamingTail: Bool
+    /// When set, the assistant error row shows Retry / Retry in new chat
+    /// affordances wired to the preceding user prompt body.
+    let modelFailureRetryPrompt: String?
 
     /// Markdown find-bar highlight projection. Three discrete states
     /// so the row's `Equatable` doesn't have to compare the full match
@@ -134,6 +137,10 @@ struct ChatItemRowActions {
     let onToggleBookmark: (_ messageId: String) -> Void
     /// Open a generated Markdown document in the Code workspace tab strip.
     let onOpenMarkdownDocument: (_ path: String) -> Void
+    /// Re-send the failed turn's user prompt in the current session.
+    let onRetryFailedTurn: (_ promptBody: String) -> Void
+    /// Spawn a sibling chat tab and re-send the failed prompt there.
+    let onRetryFailedTurnInNewChat: (_ promptBody: String) -> Void
 }
 
 // MARK: - Equatable row view (historical rows)
@@ -406,27 +413,93 @@ struct ChatItemRowContent: View {
             TahoeProviderGlyph(provider: payload.providerGlyph, size: 26)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 4) {
-                // Perf: while THIS row is the actively-streaming tail, render the
-                // (growing) body as plain `Text` instead of `MarkdownRenderer`.
-                // The renderer re-kicks a detached whole-body markdown parse on
-                // every `source` change, so a streaming burst parsed the full
-                // body once per token. The parse runs once at turn completion,
-                // when `isStreamingTail` flips false and the row routes back
-                // through `ChatItemRowView` → `MarkdownRenderer`.
-                if payload.isStreamingTail {
-                    Text(msg.body)
-                        .font(.system(size: 13, design: .serif))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                if msg.isError {
+                    errorAssistantBubble(msg)
+                    if let retryPrompt = payload.modelFailureRetryPrompt {
+                        modelFailureActionRow(retryPrompt: retryPrompt)
+                    }
                 } else {
-                    MarkdownRenderer(source: msg.body, syntaxTheme: payload.syntaxTheme)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // Perf: while THIS row is the actively-streaming tail, render the
+                    // (growing) body as plain `Text` instead of `MarkdownRenderer`.
+                    // The renderer re-kicks a detached whole-body markdown parse on
+                    // every `source` change, so a streaming burst parsed the full
+                    // body once per token. The parse runs once at turn completion,
+                    // when `isStreamingTail` flips false and the row routes back
+                    // through `ChatItemRowView` → `MarkdownRenderer`.
+                    if payload.isStreamingTail {
+                        Text(msg.body)
+                            .font(.system(size: 13, design: .serif))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        MarkdownRenderer(source: msg.body, syntaxTheme: payload.syntaxTheme)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    pathLinkStripIfAny(body: msg.body)
                 }
-                pathLinkStripIfAny(body: msg.body)
             }
             Spacer(minLength: 64)
         }
+    }
+
+    private func errorAssistantBubble(_ msg: SessionChatStore.ChatMessage) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(SessionsV2Theme.danger)
+                Text("Model failed")
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(SessionsV2Theme.danger)
+            }
+            if payload.isStreamingTail {
+                Text(msg.body)
+                    .font(.system(size: 13, design: .serif))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                MarkdownRenderer(source: msg.body, syntaxTheme: payload.syntaxTheme)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: 640, alignment: .leading)
+        .background(SessionsV2Theme.danger.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(SessionsV2Theme.danger.opacity(0.55), lineWidth: 1.25)
+        )
+        .accessibilityLabel("Model failed: \(msg.body)")
+    }
+
+    private func modelFailureActionRow(retryPrompt: String) -> some View {
+        let actionDescriptors = ComposerInputCore.modelFailureActionDescriptors()
+        return HStack(spacing: 10) {
+            ForEach(Array(actionDescriptors.enumerated()), id: \.offset) { _, descriptor in
+                switch descriptor.kind {
+                case .retry:
+                    Button(descriptor.visibleTitle) {
+                        actions.onRetryFailedTurn(retryPrompt)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                    .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+                case .retryInNewChat:
+                    Button(descriptor.visibleTitle) {
+                        actions.onRetryFailedTurnInNewChat(retryPrompt)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                    .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+                }
+            }
+        }
+        .padding(.top, 2)
     }
 
     /// v0.29.x: the path-link strip needs a `presentationStore` to
