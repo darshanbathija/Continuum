@@ -491,6 +491,10 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         menu.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         clickMenuItem(identifier: "code.titlebar.right-pane.collapse", title: "Collapse pane")
         XCTAssertTrue(waitForNonExistence(element("code.review.pane"), timeout: 5), "Collapse pane should hide the review pane.")
+
+        menu.click()
+        clickMenuItem(identifier: "code.titlebar.right-pane.expand", title: "Expand pane")
+        XCTAssertTrue(element("code.review.pane").waitForExistence(timeout: 5), "Expand pane should reveal the review pane again.")
     }
 
     func testCenterHeaderDensityAndMoreActionsMenusExposeSafeActions() throws {
