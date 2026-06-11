@@ -1177,7 +1177,7 @@ struct ComposerInputCore: View {
             if sessionIsRunning && onQueue != nil {
                 return "Queue a follow-up while this turn runs   (↩)"
             }
-            return "Continue the session here   (↩ to send · ⇧↩ for newline)"
+            return "What would you like to build today?"
         case .emptyState:
             return "Do anything"
         }
