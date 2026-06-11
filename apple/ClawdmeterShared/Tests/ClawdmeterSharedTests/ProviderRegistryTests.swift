@@ -80,9 +80,12 @@ final class ProviderRegistryTests: XCTestCase {
             ["claude", "codex", "opencode"]
         )
         XCTAssertEqual(ProviderRegistry.firstEnabledProvider(for: .code)?.id, "claude")
-        XCTAssertEqual(ProviderEnablement.enabledProviderIDs(for: .widget), ["claude", "codex"])
+        // OpenCode Go is now a first-class provider with the full capability set
+        // (live usage gauge + menu-bar + widget), so it appears alongside
+        // claude/codex for widget visibility.
+        XCTAssertEqual(ProviderEnablement.enabledProviderIDs(for: .widget), ["claude", "codex", "opencode"])
         XCTAssertTrue(ProviderRegistry.isVisible(id: "claude/personal", capability: .code))
-        XCTAssertFalse(ProviderRegistry.isVisible(id: "opencode", capability: .widget))
+        XCTAssertTrue(ProviderRegistry.isVisible(id: "opencode", capability: .widget))
     }
 
     @MainActor

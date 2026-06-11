@@ -19,7 +19,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
         case .claude: return "Claude"
         case .antigravity: return "Antigravity"
         case .cursor: return "Cursor"
-        case .openrouter: return "OpenRouter"
+        case .openrouter: return "OpenCode"
         case .grok: return "Grok"
         }
     }
@@ -37,15 +37,15 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
 
     public var billingProvider: String? {
         switch self {
-        case .openrouter: return "openrouter"
+        case .openrouter: return "opencode-go"
         default: return nil
         }
     }
 
     public var defaultEffort: ReasoningEffort? {
         switch self {
-        case .chatgpt, .claude, .openrouter: return .high
-        case .antigravity, .cursor, .grok: return nil
+        case .chatgpt, .claude: return .high
+        case .openrouter, .antigravity, .cursor, .grok: return nil
         }
     }
 

@@ -24,6 +24,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
     public var supportsAutoRevive: Bool
     public var hasWeekly: Bool
     public var cursorQuota: UsageData.CursorQuota?
+    public var opencodeGoQuota: UsageData.OpenCodeGoQuota?
     /// v0.22.18: true when this row's numbers came from a fallback /
     /// cached source rather than a live API poll. Today the only path
     /// that sets this is CodexSource's JSONL fallback (when the wham
@@ -44,6 +45,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
         supportsAutoRevive: Bool = false,
         hasWeekly: Bool = true,
         cursorQuota: UsageData.CursorQuota? = nil,
+        opencodeGoQuota: UsageData.OpenCodeGoQuota? = nil,
         stale: Bool = false
     ) {
         self.sessionPercent = sessionPercent
@@ -56,6 +58,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
         self.supportsAutoRevive = supportsAutoRevive
         self.hasWeekly = hasWeekly
         self.cursorQuota = cursorQuota
+        self.opencodeGoQuota = opencodeGoQuota
         self.stale = stale
     }
 
@@ -88,7 +91,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
                 // auth (whichever provider they ran `opencode auth login`
                 // for). Demo defaults to anthropic so the chip reads
                 // meaningfully in Previews.
-                case .opencode: return "via opencode"
+                case .opencode: return "Kimi K2.6"
                 case .cursor: return "Cursor Auto"
                 case .grok: return "grok-build"
                 }

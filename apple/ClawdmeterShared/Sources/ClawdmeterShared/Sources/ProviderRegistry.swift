@@ -16,12 +16,9 @@ public extension ProviderDescriptor {
     var usageProvider: UsageRecord.Provider? { analyticsProvider }
 
     var capabilities: Set<ProviderCapability> {
-        switch id {
-        case "opencode":
-            return [.chat, .code, .historicalUsage, .mobileMirror]
-        default:
-            return [.chat, .code, .liveUsage, .historicalUsage, .menuBar, .mobileMirror, .widget]
-        }
+        // OpenCode Go is now a full live-usage provider, identical to every
+        // other kind — no per-id divergence to special-case.
+        [.chat, .code, .liveUsage, .historicalUsage, .menuBar, .mobileMirror, .widget]
     }
 }
 

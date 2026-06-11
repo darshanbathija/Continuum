@@ -34,6 +34,40 @@ public struct UsageData: Codable, Equatable, Sendable {
         }
     }
 
+    /// OpenCode Go exposes rolling 5h + weekly on the standard session/weekly
+    /// fields; monthly lives here for the third meter on the Usage tab.
+    ///
+    /// `monthlyPct` is optional and `weeklyAvailable` is explicit so the UI can
+    /// HIDE a window the source didn't actually return, rather than mirroring a
+    /// sibling window's number (which read as fabricated usage).
+    public struct OpenCodeGoQuota: Codable, Equatable, Sendable {
+        /// True only when the weekly window was actually fetched. Drives whether
+        /// the weekly row renders for OpenCode (vs. a misleading 0%/copied value).
+        public let weeklyAvailable: Bool
+        /// nil when the monthly window wasn't fetched — the meter is hidden.
+        public let monthlyPct: Int?
+        public let monthlyResetMins: Int
+        public let monthlyResetEpoch: Int
+
+        public init(weeklyAvailable: Bool, monthlyPct: Int?, monthlyResetMins: Int, monthlyResetEpoch: Int) {
+            self.weeklyAvailable = weeklyAvailable
+            self.monthlyPct = monthlyPct.map(UsageData.clampPercent)
+            self.monthlyResetMins = monthlyResetMins
+            self.monthlyResetEpoch = monthlyResetEpoch
+        }
+
+        // Custom decode so a snapshot written by an earlier build of this
+        // branch (monthlyPct as a bare Int, no weeklyAvailable) still parses
+        // instead of throwing and dropping the whole UsageData.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.weeklyAvailable = try c.decodeIfPresent(Bool.self, forKey: .weeklyAvailable) ?? false
+            self.monthlyPct = (try c.decodeIfPresent(Int.self, forKey: .monthlyPct)).map(UsageData.clampPercent)
+            self.monthlyResetMins = try c.decodeIfPresent(Int.self, forKey: .monthlyResetMins) ?? 0
+            self.monthlyResetEpoch = try c.decodeIfPresent(Int.self, forKey: .monthlyResetEpoch) ?? 0
+        }
+    }
+
     public enum Status: String, Codable, Sendable {
         case allowed
         case limited
@@ -82,6 +116,8 @@ public struct UsageData: Codable, Equatable, Sendable {
     /// Cursor's billing period is monthly and exposes Total / Auto / API
     /// buckets. Optional so older provider payloads decode unchanged.
     public let cursorQuota: CursorQuota?
+    /// OpenCode Go monthly window (rolling + weekly use session/weekly fields).
+    public let opencodeGoQuota: OpenCodeGoQuota?
 
     public init(
         sessionPct: Int,
@@ -97,7 +133,8 @@ public struct UsageData: Codable, Equatable, Sendable {
         antigravityModel: String? = nil,
         sdkModeActive: Bool? = nil,
         codexSDKModeActive: Bool? = nil,
-        cursorQuota: CursorQuota? = nil
+        cursorQuota: CursorQuota? = nil,
+        opencodeGoQuota: OpenCodeGoQuota? = nil
     ) {
         self.sessionPct = Self.clampPercent(sessionPct)
         self.sessionResetMins = sessionResetMins
@@ -113,6 +150,7 @@ public struct UsageData: Codable, Equatable, Sendable {
         self.sdkModeActive = sdkModeActive
         self.codexSDKModeActive = codexSDKModeActive
         self.cursorQuota = cursorQuota
+        self.opencodeGoQuota = opencodeGoQuota
     }
 
     // MARK: - Custom Codable (back-compat with v6/v7)
@@ -125,6 +163,7 @@ public struct UsageData: Codable, Equatable, Sendable {
         case antigravityModel, sdkModeActive
         case codexSDKModeActive
         case cursorQuota
+        case opencodeGoQuota
     }
 
     public init(from decoder: Decoder) throws {
@@ -147,6 +186,7 @@ public struct UsageData: Codable, Equatable, Sendable {
         // v8 field — decodeIfPresent so v6/v7 payloads still parse.
         self.codexSDKModeActive = try c.decodeIfPresent(Bool.self, forKey: .codexSDKModeActive)
         self.cursorQuota = try c.decodeIfPresent(CursorQuota.self, forKey: .cursorQuota)
+        self.opencodeGoQuota = try c.decodeIfPresent(OpenCodeGoQuota.self, forKey: .opencodeGoQuota)
     }
 
     private static func clampPercent(_ value: Int) -> Int {
@@ -169,6 +209,7 @@ public struct UsageData: Codable, Equatable, Sendable {
         try c.encodeIfPresent(sdkModeActive, forKey: .sdkModeActive)
         try c.encodeIfPresent(codexSDKModeActive, forKey: .codexSDKModeActive)
         try c.encodeIfPresent(cursorQuota, forKey: .cursorQuota)
+        try c.encodeIfPresent(opencodeGoQuota, forKey: .opencodeGoQuota)
     }
 
     /// Mood derived from session usage. Drives gauge color and animation cadence.
