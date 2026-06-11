@@ -21,6 +21,7 @@ The relay is intentionally dumb. It does THREE things and nothing else:
 | Method | Path                                           | Notes                                                                                                                         |
 | ------ | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | GET    | `/healthz`                                     | 200 ok JSON; CF health probe + smoke test                                                                                     |
+| POST   | `/v1/relay/provision/grant-token`              | Auto-provision a per-install creation-grant bearer for shipped Mac apps (client provisioning HMAC + rate limit).             |
 | GET    | `/v1/relay/sessions/:sid/connect`              | WebSocket upgrade. Auth via `Authorization: Bearer <tok>` OR `?token=<tok>` OR `Sec-WebSocket-Protocol: bearer.<tok>`. First peer MUST supply a signed `?bundle=<base64-json-bundle>`. |
 | GET    | `/v1/relay/sessions/:sid/stats`                | Bearer-gated JSON aggregate counts (sender role + type + bytes). NEVER body content. For audit + tests.                      |
 
@@ -147,7 +148,7 @@ bun install
 bun run dev     # wrangler dev — http://localhost:8787
 ```
 
-The dev env uses in-memory DOs and dummy KV namespaces; secrets are placeholders. Suitable for integration testing against a local Mac/iOS simulator. Staging/production must set `RELAY_OPERATOR_SIGNING_KEY` and `RELAY_CREATION_GRANT_TOKEN` with `wrangler secret put`; Macs that call the grant endpoint need the matching `CLAWDMETER_RELAY_CREATION_GRANT_TOKEN`. Local operator Macs may instead set `CLAWDMETER_RELAY_OPERATOR_SIGNING_KEY` to sign directly when the grant endpoint is unavailable.
+The dev env uses in-memory DOs and dummy KV namespaces; secrets are placeholders. Suitable for integration testing against a local Mac/iOS simulator. Staging/production must set `RELAY_OPERATOR_SIGNING_KEY`, `RELAY_CREATION_GRANT_TOKEN`, and `RELAY_CLIENT_PROVISIONING_KEY` with `wrangler secret put`; Macs that call the grant endpoint need the matching `CLAWDMETER_RELAY_CREATION_GRANT_TOKEN` for manual overrides, or auto-provision via the client provisioning key. Local operator Macs may instead set `CLAWDMETER_RELAY_OPERATOR_SIGNING_KEY` to sign directly when the grant endpoint is unavailable.
 
 ## Test
 

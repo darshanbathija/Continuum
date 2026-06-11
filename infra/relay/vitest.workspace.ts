@@ -10,6 +10,7 @@ export default [
       include: [
         "test/auth.test.ts",
         "test/envelope.test.ts",
+        "test/provision.test.ts",
         "test/relay.integration.test.ts",
       ],
       poolOptions: {

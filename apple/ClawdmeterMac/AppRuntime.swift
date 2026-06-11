@@ -133,6 +133,17 @@ final class AppRuntime: ObservableObject {
         // taps "Pair iPhone" in Settings to mint a fresh bundle.
         self.relayPairingService = RelayPairingService()
 
+        if !Self.deferProviderSideEffectsForTesting {
+            Task.detached(priority: .utility) {
+                let ok = await RelayGrantProvisioner().ensureConfigured()
+                if ok {
+                    runtimeLogger.info("Relay grant token auto-provisioned at launch")
+                } else {
+                    runtimeLogger.info("Relay grant auto-provision deferred until pairing or Settings")
+                }
+            }
+        }
+
         // Claude polling reads from Continuum's own Keychain entry. The
         // first-party token is loaded in one of two ways:
         //

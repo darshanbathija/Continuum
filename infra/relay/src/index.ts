@@ -23,6 +23,13 @@ import {
   validateCreationGrantAuthorization,
   type SessionCreationGrantResponse,
 } from "./auth";
+import {
+  checkProvisionRateLimit,
+  isValidGrantProvisionRequest,
+  issueDeviceGrantToken,
+  validateDeviceGrantToken,
+  validateGrantProvisionAuthorization,
+} from "./provision";
 
 export { RelaySession };
 
@@ -35,6 +42,10 @@ export default {
     // ----- /healthz -----
     if (url.pathname === "/healthz" && request.method === "GET") {
       return jsonResponse({ ok: true, env: env.ENVIRONMENT }, 200);
+    }
+
+    if (url.pathname === "/v1/relay/provision/grant-token") {
+      return handleGrantProvision(request, env);
     }
 
     // ----- /v1/relay/sessions/:sid/connect | /stats | /creation-grant -----
@@ -77,7 +88,11 @@ async function handleCreationGrant(request: Request, env: RelayEnv, sid: string)
   }
   const grantAuth = await validateCreationGrantAuthorization(
     env.RELAY_CREATION_GRANT_TOKEN,
-    request.headers.get("authorization")
+    request.headers.get("authorization"),
+    {
+      provisioningKeyBase64: env.RELAY_CLIENT_PROVISIONING_KEY,
+      validateDeviceGrantToken,
+    }
   );
   if (!grantAuth.ok) {
     return textResponse(grantAuth.reason, grantAuth.status);
@@ -110,6 +125,37 @@ async function handleCreationGrant(request: Request, env: RelayEnv, sid: string)
     );
   }
   return jsonResponse(response, 201);
+}
+
+async function handleGrantProvision(request: Request, env: RelayEnv): Promise<Response> {
+  if (request.method !== "POST") {
+    return textResponse("method not allowed", 405);
+  }
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return textResponse("invalid json body", 400);
+  }
+  if (!isValidGrantProvisionRequest(body)) {
+    return textResponse("invalid grant provision request", 400);
+  }
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const auth = await validateGrantProvisionAuthorization(
+    env.RELAY_CLIENT_PROVISIONING_KEY,
+    request.headers.get("authorization"),
+    body,
+    nowSeconds
+  );
+  if (!auth.ok) {
+    return textResponse(auth.reason, auth.status);
+  }
+  const rate = await checkProvisionRateLimit(env.RELAY_RATE_LIMIT, body.installId, nowSeconds);
+  if (!rate.ok) {
+    return textResponse(rate.reason, rate.status);
+  }
+  const grantToken = await issueDeviceGrantToken(env.RELAY_CLIENT_PROVISIONING_KEY!, body.installId);
+  return jsonResponse({ grantToken }, 201);
 }
 
 function jsonResponse(body: unknown, status: number): Response {

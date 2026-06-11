@@ -23,6 +23,8 @@ struct PairingSettingsView: View {
     @State private var grantTokenInput: String = ""
     @State private var grantTokenIsStored: Bool = RelayGrantTokenStore.shared.isConfigured
     @State private var didSaveGrantToken: Bool = false
+    @State private var isProvisioningGrantToken: Bool = false
+    @State private var grantProvisionFailed: Bool = false
     /// Live ticker so the "expires in N:NN" label re-renders without a state
     /// change from the pairing service.
     @State private var now: Date = Date()
@@ -51,7 +53,11 @@ struct PairingSettingsView: View {
             relayGrantTokenSection
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear { refreshRelayQR() }
+        .onAppear {
+            refreshRelayQR()
+            refreshGrantTokenState()
+            Task { await autoProvisionGrantTokenIfNeeded() }
+        }
         .onReceive(ticker) { if controlActiveState != .inactive { now = $0 } }
         .onChange(of: pairingService.bundleURL) { _, _ in refreshRelayQR() }
     }
@@ -103,17 +109,16 @@ struct PairingSettingsView: View {
 
     // MARK: - Relay grant token
 
-    /// One-time paste of the relay creation-grant token. It's required to mint
-    /// pairing QRs against the production relay and is stored in the Keychain —
-    /// never embedded in the app (see infra/SECRETS.md).
+    /// Advanced override for operator/dev grant tokens. Normal installs auto-
+    /// provision a per-Mac token in the background on first launch.
     private var relayGrantTokenSection: some View {
         tahoeSection(
             "Relay access token",
-            footer: "Paste the relay grant token once. It's stored in your Mac's Keychain and lets this Mac mint pairing codes. Leave blank if you don't have one."
+            footer: "Clawdmeter auto-provisions a relay grant token for this Mac. Paste a custom token only if you run your own relay or need to replace the auto-provisioned one."
         ) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    SecureField(grantTokenIsStored ? "Token saved — paste to replace" : "Relay grant token", text: $grantTokenInput)
+                    SecureField(grantTokenIsStored ? "Token saved — paste to replace" : "Relay grant token (optional override)", text: $grantTokenInput)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 360)
                     Button("Save", action: saveGrantToken)
@@ -123,20 +128,42 @@ struct PairingSettingsView: View {
                     }
                 }
                 HStack(spacing: 6) {
-                    if didSaveGrantToken {
+                    if isProvisioningGrantToken {
+                        ProgressView().controlSize(.small)
+                        Text("Provisioning relay access…").foregroundStyle(.secondary)
+                    } else if didSaveGrantToken {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                         Text("Saved").foregroundStyle(.green)
                     } else if grantTokenIsStored {
                         Image(systemName: "checkmark.shield.fill").foregroundStyle(t.accent)
-                        Text("A token is stored in your Keychain.").foregroundStyle(.secondary)
-                    } else {
+                        Text("Relay access is ready for pairing.").foregroundStyle(.secondary)
+                    } else if grantProvisionFailed {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                        Text("No token stored — pairing QRs can't be minted yet.").foregroundStyle(.secondary)
+                        Text("Auto-provision failed — paste a relay grant token or retry Pair iPhone.").foregroundStyle(.secondary)
+                    } else {
+                        Image(systemName: "clock.fill").foregroundStyle(.secondary)
+                        Text("Setting up relay access…").foregroundStyle(.secondary)
                     }
                 }
                 .font(.caption)
             }
         }
+    }
+
+    private func refreshGrantTokenState() {
+        grantTokenIsStored = RelayGrantTokenStore.shared.isConfigured
+    }
+
+    private func autoProvisionGrantTokenIfNeeded() async {
+        guard !RelayGrantTokenStore.shared.isConfigured else {
+            grantProvisionFailed = false
+            return
+        }
+        isProvisioningGrantToken = true
+        defer { isProvisioningGrantToken = false }
+        let ok = await RelayGrantProvisioner().ensureConfigured()
+        grantTokenIsStored = ok
+        grantProvisionFailed = !ok
     }
 
     private func saveGrantToken() {
@@ -145,6 +172,7 @@ struct PairingSettingsView: View {
         if RelayGrantTokenStore.shared.setToken(trimmed) {
             grantTokenInput = ""
             grantTokenIsStored = true
+            grantProvisionFailed = false
             didSaveGrantToken = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { didSaveGrantToken = false }
         }
@@ -155,6 +183,7 @@ struct PairingSettingsView: View {
         grantTokenInput = ""
         grantTokenIsStored = false
         didSaveGrantToken = false
+        grantProvisionFailed = false
     }
 
     @ViewBuilder

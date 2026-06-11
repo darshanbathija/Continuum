@@ -8,13 +8,10 @@ private let relayGrantStoreLogger = Logger(subsystem: "com.clawdmeter.mac", cate
 /// presents to the relay Worker's `POST /sessions/:id/creation-grant` endpoint
 /// so a fresh pairing QR can mint a server-signed session-creation proof.
 ///
-/// Why Keychain, not the app bundle: `infra/SECRETS.md` is explicit — the
-/// grant token must never be embedded in the shipped binary (anyone could
-/// extract it and mint pairings against our relay). Instead the user pastes it
-/// once into Settings → Pair iPhone; it lives in the login Keychain, gated by
-/// the user's session. `RelayPairingCreationGrantClient` reads it here first,
-/// falling back to the `CLAWDMETER_RELAY_CREATION_GRANT_TOKEN` env var for dev
-/// builds running under `wrangler dev`.
+/// Shipped apps auto-provision this token via `RelayGrantProvisioner` on launch
+/// and before pairing. Manual paste remains available as an operator override.
+/// The operator `RELAY_CREATION_GRANT_TOKEN` itself must never be embedded in
+/// the app bundle (see `infra/SECRETS.md`).
 public final class RelayGrantTokenStore {
     public static let shared = RelayGrantTokenStore()
 

@@ -300,11 +300,15 @@ export async function validateSessionCreationProof(
 
 export async function validateCreationGrantAuthorization(
   configuredToken: string | undefined,
-  authHeader: string | null
-): Promise<CreationGrantAuthorizationResult> {
-  if (!configuredToken) {
-    return { ok: false, status: 500, reason: "relay creation grant auth is not configured" };
+  authHeader: string | null,
+  options?: {
+    provisioningKeyBase64?: string;
+    validateDeviceGrantToken?: (
+      provisioningKeyBase64: string | undefined,
+      presentedToken: string
+    ) => Promise<boolean>;
   }
+): Promise<CreationGrantAuthorizationResult> {
   if (!authHeader) {
     return { ok: false, status: 401, reason: "missing Authorization header" };
   }
@@ -316,14 +320,29 @@ export async function validateCreationGrantAuthorization(
   if (!presented) {
     return { ok: false, status: 401, reason: "empty bearer token" };
   }
-  const [presentedHash, configuredHash] = await Promise.all([
-    hashToken(presented),
-    hashToken(configuredToken),
-  ]);
-  if (!constantTimeEqual(presentedHash, configuredHash)) {
-    return { ok: false, status: 403, reason: "creation grant token mismatch" };
+
+  if (configuredToken) {
+    const [presentedHash, configuredHash] = await Promise.all([
+      hashToken(presented),
+      hashToken(configuredToken),
+    ]);
+    if (constantTimeEqual(presentedHash, configuredHash)) {
+      return { ok: true };
+    }
   }
-  return { ok: true };
+
+  const validateDevice = options?.validateDeviceGrantToken;
+  if (
+    validateDevice &&
+    (await validateDevice(options?.provisioningKeyBase64, presented))
+  ) {
+    return { ok: true };
+  }
+
+  if (!configuredToken && !options?.provisioningKeyBase64) {
+    return { ok: false, status: 500, reason: "relay creation grant auth is not configured" };
+  }
+  return { ok: false, status: 403, reason: "creation grant token mismatch" };
 }
 
 /** Sanity-check the shape of the auth bundle the first peer uploads. */
