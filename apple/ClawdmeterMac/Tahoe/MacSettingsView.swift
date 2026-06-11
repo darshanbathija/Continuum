@@ -20,6 +20,7 @@ public struct MacSettingsView: View {
     @ObservedObject var geminiModel: AppModel
     @ObservedObject var presentationStore: SessionPresentationStore
     @Binding private var requestedSection: String?
+    @Binding private var requestedEnvWorkspaceId: UUID?
     @StateObject private var chimePlayer = ChimeAudioPlayer.shared
     /// v0.22.9: runtime threaded in so the consolidated settings page
     /// can embed PairingSettingsView (needs AppRuntime for the daemon
@@ -46,7 +47,8 @@ public struct MacSettingsView: View {
         geminiModel: AppModel,
         runtime: AppRuntime? = nil,
         presentationStore: SessionPresentationStore,
-        requestedSection: Binding<String?> = .constant(nil)
+        requestedSection: Binding<String?> = .constant(nil),
+        requestedEnvWorkspaceId: Binding<UUID?> = .constant(nil)
     ) {
         self.theme = theme
         self.claudeModel = claudeModel
@@ -55,6 +57,7 @@ public struct MacSettingsView: View {
         self.runtime = runtime
         self.presentationStore = presentationStore
         _requestedSection = requestedSection
+        _requestedEnvWorkspaceId = requestedEnvWorkspaceId
     }
 
     /// Composite auto-revive state. True when any provider that supports
@@ -117,9 +120,15 @@ public struct MacSettingsView: View {
         .onChange(of: settingsSearch) { _, _ in
             syncSelectedSectionToSearch()
         }
-        .onAppear(perform: applyRequestedSection)
+        .onAppear {
+            applyRequestedSection()
+            applyRequestedEnvWorkspace()
+        }
         .onChange(of: requestedSection) { _, _ in
             applyRequestedSection()
+        }
+        .onChange(of: requestedEnvWorkspaceId) { _, _ in
+            applyRequestedEnvWorkspace()
         }
     }
 
@@ -158,6 +167,12 @@ public struct MacSettingsView: View {
         settingsSearch = ""
         selectedSectionRaw = section.rawValue
         self.requestedSection = nil
+    }
+
+    private func applyRequestedEnvWorkspace() {
+        guard requestedEnvWorkspaceId != nil else { return }
+        settingsSearch = ""
+        selectedSectionRaw = SettingsSection.envVariables.rawValue
     }
 
     @ViewBuilder
@@ -291,8 +306,15 @@ public struct MacSettingsView: View {
         RepoEnvVariablesSettingsView(
             workspaceStore: runtime?.workspaceStore,
             envStore: runtime?.repoEnvStore,
-            resolver: runtime?.repoEnvRuntimeResolver
+            resolver: runtime?.repoEnvRuntimeResolver,
+            preferredWorkspaceId: requestedEnvWorkspaceId
         )
+        .onAppear {
+            guard requestedEnvWorkspaceId != nil else { return }
+            DispatchQueue.main.async {
+                requestedEnvWorkspaceId = nil
+            }
+        }
     }
 
     @ViewBuilder

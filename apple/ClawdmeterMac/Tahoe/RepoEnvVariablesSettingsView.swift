@@ -8,6 +8,10 @@ struct RepoEnvVariablesSettingsView: View {
     let workspaceStore: WorkspaceStore?
     let envStore: RepoEnvStore?
     let resolver: RepoEnvRuntimeResolver?
+    /// When set (e.g. from the repo settings sheet), prefer this workspace on load.
+    var preferredWorkspaceId: UUID? = nil
+    /// Hide the repo picker and keep the view scoped to one repository.
+    var lockRepositorySelection: Bool = false
 
     @State private var workspaces: [CodeWorkspaceRecord] = []
     @State private var selectedWorkspaceId: UUID?
@@ -72,6 +76,7 @@ struct RepoEnvVariablesSettingsView: View {
             }
         }
         .task { refresh(selectFirstIfNeeded: true) }
+        .onChange(of: preferredWorkspaceId) { _, _ in refresh(selectFirstIfNeeded: true) }
         .onChange(of: selectedWorkspaceId) { _, _ in refresh(selectFirstIfNeeded: false) }
         .sheet(isPresented: $isAddingVariable) {
             RepoEnvAddVariableSheet(
@@ -236,14 +241,16 @@ struct RepoEnvVariablesSettingsView: View {
                         .truncationMode(.middle)
                 }
             }
-            Spacer(minLength: 0)
-            Picker("Repository", selection: $selectedWorkspaceId) {
-                ForEach(workspaces) { workspace in
-                    Text(workspace.repoDisplayName).tag(Optional(workspace.id))
+            if !lockRepositorySelection {
+                Spacer(minLength: 0)
+                Picker("Repository", selection: $selectedWorkspaceId) {
+                    ForEach(workspaces) { workspace in
+                        Text(workspace.repoDisplayName).tag(Optional(workspace.id))
+                    }
                 }
+                .labelsHidden()
+                .frame(width: 220)
             }
-            .labelsHidden()
-            .frame(width: 220)
         }
     }
 
@@ -838,7 +845,10 @@ struct RepoEnvVariablesSettingsView: View {
     private func refresh(selectFirstIfNeeded: Bool) {
         workspaces = workspaceStore?.all()
             .sorted { $0.repoDisplayName.localizedCaseInsensitiveCompare($1.repoDisplayName) == .orderedAscending } ?? []
-        if selectFirstIfNeeded || selectedWorkspaceId == nil || !workspaces.contains(where: { $0.id == selectedWorkspaceId }) {
+        if let preferredWorkspaceId,
+           workspaces.contains(where: { $0.id == preferredWorkspaceId }) {
+            selectedWorkspaceId = preferredWorkspaceId
+        } else if selectFirstIfNeeded || selectedWorkspaceId == nil || !workspaces.contains(where: { $0.id == selectedWorkspaceId }) {
             selectedWorkspaceId = workspaces.first?.id
         }
         guard let workspace = selectedWorkspace, let envStore else {
