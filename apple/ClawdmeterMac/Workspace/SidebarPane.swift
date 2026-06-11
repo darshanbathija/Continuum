@@ -778,6 +778,23 @@ struct SidebarPane: View {
         var id: String { path }
     }
 
+    /// Fixed trailing-slot geometry for worktree rows. Each accessory is
+    /// absolutely positioned from the trailing edge so the live-status dot
+    /// stays aligned across idle, hover, and selected states.
+    private enum WorktreeRowChromeLayout {
+        static let trailingInset: CGFloat = 18
+        static let archiveWidth: CGFloat = 22
+        static let accessorySpacing: CGFloat = 6
+        static let statusWidth: CGFloat = 14
+        static let countWidth: CGFloat = 30
+        static let diffWidth: CGFloat = 52
+
+        static let statusTrailingOffset: CGFloat = trailingInset + archiveWidth + accessorySpacing
+        static let countTrailingOffset: CGFloat = statusTrailingOffset + statusWidth + accessorySpacing
+        static let diffTrailingOffset: CGFloat = countTrailingOffset + countWidth + accessorySpacing
+        static let labelTrailingPadding: CGFloat = diffTrailingOffset + diffWidth
+    }
+
     /// Group a repo's sessions by their worktree (branch), newest-active first.
     /// Also surfaces worktrees that only have open draft/terminal/document tabs
     /// so closing every session tab doesn't hide the branch from the sidebar.
@@ -818,14 +835,14 @@ struct SidebarPane: View {
         let isHovered = hoveredWorktreePath == wt.path
         let provisioning = wt.sessions.contains { model.isProvisioning($0.id) }
         let isActive = wt.sessions.contains { $0.status == .running }
-        let showsArchiveAction = isHovered
+        let showsArchiveAction = isHovered || isOpen
         let diffStat = worktreeDiffs.stat(for: wt.path)
         let showsDiff = !isHovered && diffStat.map { !$0.isEmpty } == true
         let showsSessionCount = !isHovered && wt.sessions.count > 1
-        let reservesTrailingChrome = isActive
+        let usesTrailingLane = isActive
             || provisioning
-            || showsSessionCount
-            || showsDiff
+            || wt.sessions.count > 1
+            || diffStat.map { !$0.isEmpty } == true
             || showsArchiveAction
         Button {
             // openSession() keeps any in-progress draft alive (don't clear it).
@@ -851,41 +868,14 @@ struct SidebarPane: View {
                         .lineLimit(1).truncationMode(.tail)
                 }
                 Spacer(minLength: 4)
-                if isActive {
-                    StatusPulseDot(color: .green, isLive: true)
-                        .help("AI session running in this worktree")
-                } else if provisioning {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.6)
-                        .frame(width: 14, height: 14)
-                        .help("Setting up this worktree")
-                }
-                if showsSessionCount {
-                    Text("\(wt.sessions.count)")
-                        .font(TahoeFont.body(9.5, weight: .semibold))
-                        .foregroundStyle(t.fg3)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(t.hair2, in: Capsule())
-                        .help("\(wt.sessions.count) models on this branch — open to switch via tabs")
-                }
-                if let diffStat, showsDiff {
-                    WorktreeDiffBadge(stat: diffStat, emphasized: isOpen)
-                        .help("Diff against default branch — \(diffStat.additions) additions, \(diffStat.deletions) deletions")
-                }
-                if isOpen {
-                    Text("Selected worktree")
-                        .font(.system(size: 1))
-                        .frame(width: 1, height: 1)
-                        .opacity(0.001)
-                        .accessibilityIdentifier("code.worktree.row.selected")
-                }
             }
             .padding(.leading, 48)
-            // Reserve trailing space when inline accessories are present so the
-            // live dot and diff badge stay put when the hover archive affordance
-            // replaces them. Archive is 22pt wide with an 18pt trailing inset.
-            .padding(.trailing, reservesTrailingChrome ? 44 : 8)
+            .padding(
+                .trailing,
+                usesTrailingLane
+                    ? WorktreeRowChromeLayout.labelTrailingPadding
+                    : 8
+            )
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
@@ -904,21 +894,26 @@ struct SidebarPane: View {
         .accessibilityIdentifier("code.worktree.row")
         .accessibilityValue(isOpen ? "selected" : "not selected")
         .overlay(alignment: .trailing) {
-            if showsArchiveAction {
-                SessionHoverActions(
-                    onArchive: {
-                        let sessions = wt.sessions
-                        let ids = sessions.map(\.id)
-                        Task { @MainActor in
-                            try? await model.registry.archive(ids: ids)
-                        }
-                        if let primary = sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
-                            postArchiveUndoToast(for: primary)
-                        }
+            worktreeTrailingChrome(
+                isActive: isActive,
+                provisioning: provisioning,
+                showsArchive: showsArchiveAction,
+                showsSessionCount: showsSessionCount,
+                sessionCount: wt.sessions.count,
+                diffStat: diffStat,
+                showsDiff: showsDiff,
+                emphasizedDiff: isOpen,
+                onArchive: {
+                    let sessions = wt.sessions
+                    let ids = sessions.map(\.id)
+                    Task { @MainActor in
+                        try? await model.registry.archive(ids: ids)
                     }
-                )
-                .padding(.trailing, 18)
-            }
+                    if let primary = sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
+                        postArchiveUndoToast(for: primary)
+                    }
+                }
+            )
         }
         .onHover { inside in
             if inside {
@@ -931,6 +926,72 @@ struct SidebarPane: View {
             worktreeContextMenu(wt)
         }
         .padding(.horizontal, 10)
+    }
+
+    @ViewBuilder
+    private func worktreeTrailingChrome(
+        isActive: Bool,
+        provisioning: Bool,
+        showsArchive: Bool,
+        showsSessionCount: Bool,
+        sessionCount: Int,
+        diffStat: WorktreeDiffStat?,
+        showsDiff: Bool,
+        emphasizedDiff: Bool,
+        onArchive: @escaping () -> Void
+    ) -> some View {
+        ZStack(alignment: .trailing) {
+            Group {
+                if let diffStat, showsDiff {
+                    WorktreeDiffBadge(stat: diffStat, emphasized: emphasizedDiff)
+                        .help("Diff against default branch — \(diffStat.additions) additions, \(diffStat.deletions) deletions")
+                }
+            }
+            .frame(width: WorktreeRowChromeLayout.diffWidth, alignment: .trailing)
+            .padding(.trailing, WorktreeRowChromeLayout.diffTrailingOffset)
+
+            Group {
+                if showsSessionCount {
+                    Text("\(sessionCount)")
+                        .font(TahoeFont.body(9.5, weight: .semibold))
+                        .foregroundStyle(t.fg3)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(t.hair2, in: Capsule())
+                        .help("\(sessionCount) models on this branch — open to switch via tabs")
+                }
+            }
+            .frame(width: WorktreeRowChromeLayout.countWidth, alignment: .trailing)
+            .padding(.trailing, WorktreeRowChromeLayout.countTrailingOffset)
+
+            Group {
+                if isActive {
+                    StatusPulseDot(color: .green, isLive: true)
+                        .help("AI session running in this worktree")
+                } else if provisioning {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.6)
+                        .frame(width: 14, height: 14)
+                        .help("Setting up this worktree")
+                }
+            }
+            .frame(
+                width: WorktreeRowChromeLayout.statusWidth,
+                height: WorktreeRowChromeLayout.statusWidth
+            )
+            .padding(.trailing, WorktreeRowChromeLayout.statusTrailingOffset)
+
+            Group {
+                if showsArchive {
+                    SessionHoverActions(onArchive: onArchive)
+                }
+            }
+            .frame(
+                width: WorktreeRowChromeLayout.archiveWidth,
+                height: WorktreeRowChromeLayout.archiveWidth
+            )
+            .padding(.trailing, WorktreeRowChromeLayout.trailingInset)
+        }
     }
 
     @ViewBuilder
