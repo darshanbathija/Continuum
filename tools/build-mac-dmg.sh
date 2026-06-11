@@ -143,14 +143,18 @@ fi
 # ────────────────────────────────────────────────────────────────────────
 
 if [[ "$SIGN_MODE" == "developerid" ]]; then
-  if command -v bundle >/dev/null 2>&1 && [[ -f apple/Gemfile ]]; then
+  # Prefer Homebrew Ruby's bundle (system Ruby ships an old bundler version
+  # incompatible with the Gemfile.lock BUNDLED WITH constraint).
+  BUNDLE_BIN="${CLAWDMETER_BUNDLE_BIN:-/opt/homebrew/opt/ruby/bin/bundle}"
+  [[ -x "$BUNDLE_BIN" ]] || BUNDLE_BIN="$(command -v bundle || true)"
+  if [[ -x "$BUNDLE_BIN" ]] && [[ -f apple/Gemfile ]]; then
     echo "▸ Setting manual Developer ID signing on the Mac targets…"
     (
       cd apple
       export BUNDLE_PATH="${BUNDLE_PATH:-$HOME/.continuum-fastlane}"
       for pair in "ClawdmeterMac:$MAC_PROFILE" "ClawdmeterMacWidgets:$MAC_WIDGETS_PROFILE"; do
         tgt="${pair%%:*}"; prof="${pair#*:}"
-        bundle exec fastlane run update_code_signing_settings \
+        "$BUNDLE_BIN" exec fastlane run update_code_signing_settings \
           path:"Clawdmeter.xcodeproj" use_automatic_signing:false team_id:"$DEV_TEAM" \
           targets:"$tgt" code_sign_identity:"Developer ID Application" \
           profile_name:"$prof" >/dev/null 2>&1
