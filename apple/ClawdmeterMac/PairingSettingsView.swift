@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import CoreImage.CIFilterBuiltins
 import ClawdmeterShared
 
 /// Mac Settings → Pair iPhone. One QR the iPhone scans (relay-based): the Mac
@@ -25,6 +24,8 @@ struct PairingSettingsView: View {
     @State private var didSaveGrantToken: Bool = false
     @State private var isProvisioningGrantToken: Bool = false
     @State private var grantProvisionFailed: Bool = false
+    /// Step 1 of pairing: download QR before minting the relay auth bundle.
+    @State private var confirmedAppInstall: Bool = ContinuumIOSAppStore.hasConfirmedInstall
     /// Live ticker so the "expires in N:NN" label re-renders without a state
     /// change from the pairing service.
     @State private var now: Date = Date()
@@ -54,6 +55,7 @@ struct PairingSettingsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
+            confirmedAppInstall = ContinuumIOSAppStore.hasConfirmedInstall
             refreshRelayQR()
             refreshGrantTokenState()
             Task { await autoProvisionGrantTokenIfNeeded() }
@@ -89,11 +91,28 @@ struct PairingSettingsView: View {
 
     // MARK: - Pair section
 
+    private var pairSectionFooter: String {
+        if confirmedAppInstall {
+            return "Open Continuum Console on your iPhone and scan the QR. The code is valid for 30 days; regenerate any time to rotate the keys."
+        }
+        return "Install Continuum Console on your iPhone first, then scan the pairing QR to connect."
+    }
+
+    private func confirmAppInstallAndBeginPairing() {
+        ContinuumIOSAppStore.markInstallConfirmed()
+        confirmedAppInstall = true
+        Task { await pairingService.beginPairing() }
+    }
+
     private var relayPairSection: some View {
-        tahoeSection("Pair with iPhone", footer: "Open Clawdmeter on your iPhone and scan the QR. The code is valid for 30 days; regenerate any time to rotate the keys.") {
+        tahoeSection("Pair with iPhone", footer: pairSectionFooter) {
             switch pairingService.phase {
             case .unpaired:
-                relayUnpairedRow
+                if confirmedAppInstall {
+                    relayUnpairedRow
+                } else {
+                    PairingDownloadAppStep(layout: .settings, onConfirmInstall: confirmAppInstallAndBeginPairing)
+                }
             case .generatingBundle:
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -216,7 +235,7 @@ struct PairingSettingsView: View {
         if let bundle = pairingService.bundle, let urlString = pairingService.bundleURL {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("Scan with your iPhone's camera", systemImage: "iphone.gen3")
+                    Label("Scan with Continuum Console on your iPhone", systemImage: "iphone.gen3")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     LabeledContent("Expires in") {
@@ -300,21 +319,7 @@ struct PairingSettingsView: View {
             qrImage = nil
             return
         }
-        qrImage = generateQR(from: urlString)
-    }
-
-    private func generateQR(from string: String) -> NSImage? {
-        let context = CIContext()
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(string.utf8)
-        // Relay bundle URLs are ~280 chars — error correction "M" gives ~15%
-        // recovery which is enough at the screen sizes the iPhone scanner sees.
-        filter.correctionLevel = "M"
-        guard let outputImage = filter.outputImage else { return nil }
-        let scaleFactor: CGFloat = 8
-        let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: scaleFactor, y: scaleFactor))
-        guard let cg = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: 224, height: 224))
+        qrImage = PairingQRGenerator.makeImage(from: urlString)
     }
 
     // MARK: - TTL helpers
