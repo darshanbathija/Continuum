@@ -95,6 +95,41 @@ struct AttentionBadge: View {
 /// in the right-click menu). Sized 22×22 — at or below the row's natural
 /// content height — so revealing it on hover does NOT grow the row.
 /// Pure-closure surface; the parent owns the side-effect.
+/// Conductor-style `+N -M` badge for a worktree's diff against the default branch.
+struct WorktreeDiffBadge: View {
+    @Environment(\.tahoe) private var t
+    let stat: WorktreeDiffStat
+    /// Selected/open rows tint the deltas; idle rows stay muted.
+    let emphasized: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if stat.additions > 0 {
+                Text("+\(WorktreeDiffFormatting.compactCount(stat.additions))")
+                    .foregroundStyle(emphasized ? Self.additionsTint : t.fg3)
+            }
+            if stat.deletions > 0 {
+                Text("-\(WorktreeDiffFormatting.compactCount(stat.deletions))")
+                    .foregroundStyle(emphasized ? Self.deletionsTint : t.fg3)
+            }
+        }
+        .font(TahoeFont.body(9.5, weight: .semibold))
+        .monospacedDigit()
+        .accessibilityIdentifier("code.worktree.diff")
+        .accessibilityLabel(diffAccessibilityLabel)
+    }
+
+    private var diffAccessibilityLabel: String {
+        var parts: [String] = []
+        if stat.additions > 0 { parts.append("\(stat.additions) additions") }
+        if stat.deletions > 0 { parts.append("\(stat.deletions) deletions") }
+        return parts.isEmpty ? "No diff" : parts.joined(separator: ", ")
+    }
+
+    private static let additionsTint = Color(red: 0x52 / 255.0, green: 0xC4 / 255.0, blue: 0x1A / 255.0)
+    private static let deletionsTint = Color(red: 0xE6 / 255.0, green: 0x4B / 255.0, blue: 0x4B / 255.0)
+}
+
 struct SessionHoverActions: View {
     let onArchive: () -> Void
 

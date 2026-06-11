@@ -65,6 +65,7 @@ struct SidebarPane: View {
     @State private var comparisonPair: SessionComparisonPair?
     @State private var externalActivityNow: Date = Date()
     @State private var requestedRepoIdentityKeys: Set<String> = []
+    @StateObject private var worktreeDiffs = WorktreeDiffTracker()
 
     /// A11: single-slot cache for the sidebar projection. Persists across
     /// body re-evals (reference type held via @State) so SwiftUI ticking
@@ -194,8 +195,12 @@ struct SidebarPane: View {
             // hidden-tab gating needs an active-tab flag from MacRootView;
             // see cross-file note.)
             guard controlActiveState != .inactive else { return }
+            worktreeDiffs.scheduleRefresh(paths: visibleWorktreePaths)
             guard model.repos.contains(where: { !$0.recentSessions.isEmpty }) else { return }
             externalActivityNow = now
+        }
+        .onChange(of: visibleWorktreePaths) { _, paths in
+            worktreeDiffs.scheduleRefresh(paths: paths)
         }
     }
 
@@ -484,6 +489,15 @@ struct SidebarPane: View {
     /// for repo grouping we still want to honour it by post-filtering.
     private var filteredReposForGrouping: [AgentRepo] {
         model.filteredRepos
+    }
+
+    /// Worktree leaf paths currently rendered in managed workspace sections.
+    private var visibleWorktreePaths: [String] {
+        currentProjection.workspaceSections.flatMap { section in
+            let sectionID = "workspace:\(section.id)"
+            guard isPrioritySectionExpanded(sectionID) else { return [String]() }
+            return worktreeGroups(section.sessions, repoKey: section.repo.key).map(\.path)
+        }
     }
 
     /// A11: cache-backed sidebar projection. Reads upstream state once
@@ -785,7 +799,15 @@ struct SidebarPane: View {
         let isHovered = hoveredWorktreePath == wt.path
         let provisioning = wt.sessions.contains { model.isProvisioning($0.id) }
         let isActive = wt.sessions.contains { $0.status == .running }
-        let showsHoverActions = isHovered || isOpen
+        let showsArchiveAction = isHovered
+        let diffStat = worktreeDiffs.stat(for: wt.path)
+        let showsDiff = !isHovered && diffStat.map { !$0.isEmpty } == true
+        let showsSessionCount = !isHovered && wt.sessions.count > 1
+        let reservesTrailingChrome = isActive
+            || provisioning
+            || showsSessionCount
+            || showsDiff
+            || showsArchiveAction
         Button {
             // openSession() keeps any in-progress draft alive (don't clear it).
             if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
@@ -820,13 +842,17 @@ struct SidebarPane: View {
                         .frame(width: 14, height: 14)
                         .help("Setting up this worktree")
                 }
-                if wt.sessions.count > 1 {
+                if showsSessionCount {
                     Text("\(wt.sessions.count)")
                         .font(TahoeFont.body(9.5, weight: .semibold))
                         .foregroundStyle(t.fg3)
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(t.hair2, in: Capsule())
                         .help("\(wt.sessions.count) models on this branch — open to switch via tabs")
+                }
+                if let diffStat, showsDiff {
+                    WorktreeDiffBadge(stat: diffStat, emphasized: isOpen)
+                        .help("Diff against default branch — \(diffStat.additions) additions, \(diffStat.deletions) deletions")
                 }
                 if isOpen {
                     Text("Selected worktree")
@@ -837,10 +863,10 @@ struct SidebarPane: View {
                 }
             }
             .padding(.leading, 48)
-            // Always reserve trailing space when inline accessories are present
-            // so the live dot stays put when the archive affordance appears on
-            // hover/selection. Archive is 22pt wide with an 18pt trailing inset.
-            .padding(.trailing, (isActive || provisioning || wt.sessions.count > 1) ? 44 : 8)
+            // Reserve trailing space when inline accessories are present so the
+            // live dot and diff badge stay put when the hover archive affordance
+            // replaces them. Archive is 22pt wide with an 18pt trailing inset.
+            .padding(.trailing, reservesTrailingChrome ? 44 : 8)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
@@ -859,7 +885,7 @@ struct SidebarPane: View {
         .accessibilityIdentifier("code.worktree.row")
         .accessibilityValue(isOpen ? "selected" : "not selected")
         .overlay(alignment: .trailing) {
-            if showsHoverActions {
+            if showsArchiveAction {
                 SessionHoverActions(
                     onArchive: {
                         let sessions = wt.sessions
