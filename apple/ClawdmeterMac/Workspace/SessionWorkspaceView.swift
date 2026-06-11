@@ -64,21 +64,15 @@ struct SessionWorkspaceView: View {
     private var canHostReviewPaneColumn: Bool {
         !isImmersiveBrowserActive
             && workbenchState.workspaceWidth >= Self.reviewPaneThreshold
-            && resolvedReviewPaneSession != nil
+            && model.activeWorkspaceKey != nil
     }
 
     /// Session backing the review pane. When the foreground tab is a draft
     /// (openSessionId cleared) we still resolve a sibling session from the
-    /// active workspace so "Expand pane" works from the titlebar menu.
+    /// active workspace, or synthesize a workspace anchor when only drafts
+    /// remain, so the right gutter (Plan/Diff/Sources/…) stays visible.
     private var resolvedReviewPaneSession: AgentSession? {
-        if let session = model.openSession {
-            return session
-        }
-        if let key = model.activeWorkspaceKey {
-            return WorkspaceKey.siblings(of: key, in: model.registry.sessions)
-                .last(where: { $0.archivedAt == nil })
-        }
-        return model.registry.sessions.first(where: { $0.archivedAt == nil })
+        model.reviewPaneSession()
     }
 
     private var animatedReviewPaneWidth: CGFloat {
@@ -231,7 +225,7 @@ struct SessionWorkspaceView: View {
                             }
                         }
                         .frame(maxWidth: .infinity)
-                        if effectiveShowGutter, resolvedReviewPaneSession != nil {
+                        if effectiveShowGutter, model.activeWorkspaceKey != nil {
                             TahoeHairline(vertical: true)
                                 .transition(.opacity)
                             ReviewPaneGutter(
@@ -590,6 +584,8 @@ struct SessionWorkspaceView: View {
                 onSelectDocument: { model.selectWorkspaceDocumentTab($0) },
                 onCloseDocument: { model.closeWorkspaceDocumentTab($0) }
             )
+            WorkspaceContextHeader(draft: draft, catalog: launcher.modelCatalog)
+            Divider()
             EmptyStateCenteredComposer(
                 model: model,
                 launcher: launcher,
@@ -780,6 +776,107 @@ struct SessionWorkspaceView: View {
 // `TahoeHairline` lives in `TahoeHairline.swift`, and
 // `QuietDisclosure` lives in `QuietDisclosure.swift`
 // (A6 foundation extraction).
+
+// MARK: - Workspace context header (draft / non-session foreground tabs)
+
+/// Repo title, provider/model/effort row, and branch chip shown below the
+/// workspace tab strip. Session chat tabs render the same chrome via
+/// `CenterThread.header`; draft tabs were missing it, which made closing the
+/// last session tab feel like the branch disappeared even though it didn't.
+struct WorkspaceContextHeader: View {
+    let provider: TahoeProvider
+    let title: String
+    let configurationSummary: String
+    let branchLabel: String?
+
+    @Environment(\.tahoe) private var t
+
+    init(draft: WorkspaceDraftTab, catalog: ModelCatalog) {
+        provider = draft.agent.tahoeProvider
+        title = RepoIdentity.displayName(for: draft.workspaceKey.repoKey)
+        configurationSummary = Self.configurationSummary(
+            agent: draft.agent,
+            modelId: draft.modelId,
+            effort: draft.effort,
+            catalog: catalog
+        )
+        branchLabel = Self.branchLabel(for: draft.workspaceKey)
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            TahoeProviderGlyph(provider: provider, size: 26)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(TahoeFont.body(15, weight: .bold))
+                    .foregroundStyle(t.fg)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("code.center.header.title")
+                Text(configurationSummary)
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg3)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("code.center.header.configuration")
+            }
+            Spacer()
+            if let branchLabel {
+                TahoePill(tone: .chip) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(branchLabel)
+                            .font(TahoeFont.mono(11))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .foregroundStyle(SessionsV2Theme.accent)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                }
+                .frame(maxWidth: 190)
+                .help("Worktree: \(branchLabel)")
+            }
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("code.center.header")
+    }
+
+    private static func branchLabel(for key: WorkspaceKey) -> String? {
+        let branch = (key.workspacePath as NSString).lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return branch.isEmpty ? nil : branch
+    }
+
+    private static func configurationSummary(
+        agent: AgentKind,
+        modelId: String?,
+        effort: ReasoningEffort?,
+        catalog: ModelCatalog
+    ) -> String {
+        let modelText: String
+        if let id = modelId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+            modelText = catalog.entry(forId: id)?.displayName ?? id
+        } else {
+            modelText = "default model"
+        }
+        let effortText = effort.map(effortLabel) ?? "Default effort"
+        return "\(agent.tahoeProvider.displayName) · \(modelText) · \(effortText)"
+    }
+
+    private static func effortLabel(_ effort: ReasoningEffort) -> String {
+        switch effort {
+        case .minimal: return "Minimal"
+        case .low:     return "Low"
+        case .medium:  return "Medium"
+        case .high:    return "High"
+        case .xhigh:   return "Extra high"
+        case .max:     return "Max"
+        }
+    }
+}
 
 // MARK: - Review pane (right)
 

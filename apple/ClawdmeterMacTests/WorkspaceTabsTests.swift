@@ -656,6 +656,120 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertNotNil(model.draftWorkspaceTab, "Closing the session tab must promote a surviving draft tab.")
     }
 
+    func test_titlebarWorkspaceContextResolvesFromDraftForeground() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("titlebar-draft-context")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        let worktree = repo.appendingPathComponent(".claude/worktrees/bergen", isDirectory: true)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+
+        let source = try await registry.create(
+            repoKey: repo.path,
+            repoDisplayName: "Clawdmeter",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "source",
+            worktreePath: worktree.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree,
+            ownsWorktree: true
+        )
+        _ = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .codex, modelId: "gpt-5.5", effort: .xhigh, mode: .worktree, planMode: false)
+        ))
+
+        XCTAssertNil(model.openSessionId)
+        let context = try XCTUnwrap(model.titlebarWorkspaceContext)
+        XCTAssertEqual(context.repoDisplayName, "repo")
+        XCTAssertEqual(context.branchLabel, "bergen")
+    }
+
+    func test_endSessionPromotesSurvivingSiblingNotClosingTab() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("end-session-promote-sibling")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        let worktree = repo.appendingPathComponent(".claude/worktrees/bergen", isDirectory: true)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+
+        let older = try await registry.create(
+            repoKey: repo.path,
+            repoDisplayName: "repo",
+            agent: .claude,
+            model: "sonnet",
+            goal: "older",
+            worktreePath: worktree.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let newer = try await registry.create(
+            repoKey: repo.path,
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "newer",
+            worktreePath: worktree.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+
+        model.openSession(newer)
+        await model.endSession(id: newer.id)
+
+        XCTAssertNil(registry.session(id: newer.id))
+        XCTAssertEqual(model.openSessionId, older.id, "Closing the selected tab must foreground a surviving sibling, not the tab being torn down.")
+    }
+
+    func test_reviewPaneSessionSynthesizesAnchorWhenOnlyDraftTabsRemain() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("review-pane-draft-anchor")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        let worktree = repo.appendingPathComponent(".claude/worktrees/bergen", isDirectory: true)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+
+        let source = try await registry.create(
+            repoKey: repo.path,
+            repoDisplayName: "Clawdmeter",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "source",
+            worktreePath: worktree.path,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree,
+            ownsWorktree: true
+        )
+        _ = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .codex, modelId: "gpt-5.5", effort: .xhigh, mode: .worktree, planMode: false)
+        ))
+
+        await model.endSession(id: source.id)
+
+        XCTAssertNil(model.openSessionId)
+        XCTAssertNotNil(model.draftWorkspaceTab)
+        let anchor = try XCTUnwrap(model.reviewPaneSession())
+        XCTAssertEqual(anchor.effectiveCwd, worktree.path)
+        XCTAssertEqual(anchor.agent, .codex)
+        XCTAssertNil(registry.session(id: anchor.id), "Review anchor must not be registered as a live session.")
+    }
+
     func test_closingTwoDraftTabsLeavesSessionForegroundAndWorktreeKeys() async throws {
         let (model, registry, directory) = try Self.makeIsolatedModel("close-drafts-session-survives")
         addTeardownBlock {
