@@ -155,19 +155,132 @@ struct SessionHoverActions: View {
     }
 }
 
-/// Placeholder shown when a session transcript is empty or not yet wired.
-/// Matches the refreshed Code-tab empty state (0.33) — no connecting spinner.
-struct TranscriptEmptyState: View {
+/// Hairline corner brackets framing the empty workspace — reads as a blank
+/// canvas without reusing the app icon.
+private struct TranscriptCanvasBracketShape: Shape {
+    let inset: CGFloat
+    let leg: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let x0 = rect.minX + inset
+        let y0 = rect.minY + inset
+        let x1 = rect.maxX - inset
+        let y1 = rect.maxY - inset
+
+        path.move(to: CGPoint(x: x0, y: y0 + leg))
+        path.addLine(to: CGPoint(x: x0, y: y0))
+        path.addLine(to: CGPoint(x: x0 + leg, y: y0))
+
+        path.move(to: CGPoint(x: x1 - leg, y: y0))
+        path.addLine(to: CGPoint(x: x1, y: y0))
+        path.addLine(to: CGPoint(x: x1, y: y0 + leg))
+
+        path.move(to: CGPoint(x: x1, y: y1 - leg))
+        path.addLine(to: CGPoint(x: x1, y: y1))
+        path.addLine(to: CGPoint(x: x1 - leg, y: y1))
+
+        path.move(to: CGPoint(x: x0 + leg, y: y1))
+        path.addLine(to: CGPoint(x: x0, y: y1))
+        path.addLine(to: CGPoint(x: x0, y: y1 - leg))
+
+        return path
+    }
+}
+
+/// Custom empty-canvas glyph — bracket frame + bold plus. Scales in once on
+/// appear; no app-logo recycling.
+private struct TranscriptCanvasMark: View {
+    let size: CGFloat
+    @Environment(\.tahoe) private var t
+
+    private var inset: CGFloat { size * 0.06 }
+    private var leg: CGFloat { size * 0.22 }
+
     var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "hammer")
-                .font(.system(size: 22))
-                .foregroundStyle(.secondary)
-            Text("Build something great")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+        ZStack {
+            TranscriptCanvasBracketShape(inset: inset, leg: leg)
+                .stroke(t.fg3, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+
+            Text("+")
+                .font(TahoeFont.rounded(size * 0.42, weight: .light))
+                .foregroundStyle(t.fg)
+                .offset(y: -size * 0.02)
         }
-        .frame(maxWidth: .infinity)
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Bold canvas placeholder for an empty session transcript — the center
+/// thread before the first turn lands. Custom bracket mark scales in once;
+/// headline reads bright against dim chrome.
+struct TranscriptEmptyState: View {
+    enum Style {
+        /// Centered hero overlay — full session canvas.
+        case canvas
+        /// Compact row under "Load earlier" when history exists off-screen.
+        case inline
+    }
+
+    var style: Style = .canvas
+
+    @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var markAppeared = false
+    @State private var copyAppeared = false
+
+    var body: some View {
+        switch style {
+        case .canvas:
+            canvasBody
+        case .inline:
+            inlineBody
+        }
+    }
+
+    private var canvasBody: some View {
+        VStack(spacing: 32) {
+            canvasMark(size: 96)
+            Text("Build something great")
+                .font(TahoeFont.rounded(40, weight: .bold))
+                .foregroundStyle(t.fg)
+                .multilineTextAlignment(.center)
+                .opacity(copyAppeared ? 1 : 0)
+                .offset(y: (copyAppeared || reduceMotion) ? 0 : 14)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { runCanvasEntrance() }
+    }
+
+    private var inlineBody: some View {
+        VStack(spacing: 10) {
+            canvasMark(size: 44)
+            Text("Build something great")
+                .font(TahoeFont.rounded(20, weight: .semibold))
+                .foregroundStyle(t.fg2)
+                .multilineTextAlignment(.center)
+        }
         .padding(.vertical, 36)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func canvasMark(size: CGFloat) -> some View {
+        TranscriptCanvasMark(size: size)
+            .scaleEffect(markAppeared || style == .inline ? 1 : (reduceMotion ? 1 : 0.68))
+            .opacity(markAppeared || style == .inline ? 1 : 0)
+    }
+
+    private func runCanvasEntrance() {
+        guard style == .canvas else { return }
+        withAnimation(SessionsV2Theme.bannerSlideUp(reduceMotion: reduceMotion)) {
+            markAppeared = true
+        }
+        let textDelay = reduceMotion ? 0 : 0.14
+        DispatchQueue.main.asyncAfter(deadline: .now() + textDelay) {
+            withAnimation(SessionsV2Theme.bannerSlideUp(reduceMotion: reduceMotion)) {
+                copyAppeared = true
+            }
+        }
     }
 }
