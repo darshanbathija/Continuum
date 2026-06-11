@@ -5,6 +5,7 @@ import ClawdmeterShared
 private struct MacRootNotificationHandlers: ViewModifier {
     var handleSwitchTab: (Notification) -> Void
     var handleOpenSettingsSection: (Notification) -> Void
+    var handleOpenRepoSettings: (Notification) -> Void
     var handleFocusCodeSearch: (Notification) -> Void
     var handleOpenGlobalPalette: (Notification) -> Void
     var handleOpenShortcutSheet: (Notification) -> Void
@@ -18,6 +19,7 @@ private struct MacRootNotificationHandlers: ViewModifier {
         content
             .onReceive(NotificationCenter.default.publisher(for: .clawdmeterSwitchTab), perform: handleSwitchTab)
             .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenSettingsSection), perform: handleOpenSettingsSection)
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenRepoSettings), perform: handleOpenRepoSettings)
             .onReceive(NotificationCenter.default.publisher(for: .clawdmeterFocusCodeSearch), perform: handleFocusCodeSearch)
             .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenGlobalPalette), perform: handleOpenGlobalPalette)
             .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenShortcutSheet), perform: handleOpenShortcutSheet)
@@ -106,6 +108,8 @@ struct MacRootView: View {
     /// `opacity: 0` while inactive.
     @State private var visitedTabs: Set<Tab> = []
     @State private var requestedSettingsSection: String? = nil
+    @State private var requestedEnvWorkspaceId: UUID? = nil
+    @State private var repoSettingsContext: RepoSettingsContext? = nil
 
     /// AppRuntime — drives the live Usage / Menu-bar surfaces via the
     /// `tahoeLive` adapter in `MacTahoeAdapter.swift`. Other surfaces
@@ -307,7 +311,8 @@ struct MacRootView: View {
                             geminiModel: geminiModel,
                             runtime: runtime,
                             presentationStore: presentationStore,
-                            requestedSection: $requestedSettingsSection
+                            requestedSection: $requestedSettingsSection,
+                            requestedEnvWorkspaceId: $requestedEnvWorkspaceId
                         )
                         .modifier(TabSlotVisibility(active: tab == .settings))
                     }
@@ -350,6 +355,7 @@ struct MacRootView: View {
         .modifier(MacRootNotificationHandlers(
             handleSwitchTab: handleSwitchTab,
             handleOpenSettingsSection: handleOpenSettingsSection,
+            handleOpenRepoSettings: handleOpenRepoSettings,
             handleFocusCodeSearch: handleFocusCodeSearch,
             handleOpenGlobalPalette: handleOpenGlobalPalette,
             handleOpenShortcutSheet: handleOpenShortcutSheet,
@@ -375,6 +381,15 @@ struct MacRootView: View {
         // v0.29.32: first-run welcome — turn on the providers you use.
         .sheet(isPresented: $showOnboarding) {
             OnboardingSheet(runtime: runtime, onDone: { showOnboarding = false })
+        }
+        .sheet(item: $repoSettingsContext) { context in
+            RepoSettingsSheet(
+                context: context,
+                workspaceStore: runtime.workspaceStore,
+                envStore: runtime.repoEnvStore,
+                resolver: runtime.repoEnvRuntimeResolver,
+                onOpenFullSettings: openFullSettingsForRepo(workspaceId:)
+            )
         }
         .onChange(of: handoffToast) { _, newValue in
             guard newValue != nil else { return }
@@ -589,6 +604,27 @@ struct MacRootView: View {
 
     private func handleOpenSettingsSection(_ note: Notification) {
         requestedSettingsSection = note.userInfo?["section"] as? String
+        visitedTabs.insert(.settings)
+        tab = .settings
+    }
+
+    private func handleOpenRepoSettings(_ note: Notification) {
+        guard let repoKey = note.userInfo?["repoKey"] as? String,
+              let repoDisplayName = note.userInfo?["repoDisplayName"] as? String,
+              let repoRoot = note.userInfo?["repoRoot"] as? String
+        else { return }
+        let workspaceId = (note.userInfo?["workspaceId"] as? String).flatMap(UUID.init(uuidString:))
+        repoSettingsContext = RepoSettingsContext(
+            repoKey: repoKey,
+            repoDisplayName: repoDisplayName,
+            repoRoot: repoRoot,
+            workspaceId: workspaceId
+        )
+    }
+
+    private func openFullSettingsForRepo(workspaceId: UUID?) {
+        requestedEnvWorkspaceId = workspaceId
+        requestedSettingsSection = "envVariables"
         visitedTabs.insert(.settings)
         tab = .settings
     }

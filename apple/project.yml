@@ -12,15 +12,22 @@ options:
   bundleIdPrefix: ai.continuum
   deploymentTarget:
     macOS: "26.0"
+    iOS: "26.0"
+    watchOS: "10.0"
   developmentLanguage: en
   generateEmptyDirectories: true
   createIntermediateGroups: true
+  postGenCommand: chmod +x tools/build-ios.sh tools/open-ios-xcode.sh 2>/dev/null || true
+
+configFiles:
+  Debug: Config/Shared.xcconfig
+  Release: Config/Shared.xcconfig
 
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.33.0"
-    CURRENT_PROJECT_VERSION: "231"
+    MARKETING_VERSION: "0.33.1"
+    CURRENT_PROJECT_VERSION: "232"
 
 packages:
   ClawdmeterShared:

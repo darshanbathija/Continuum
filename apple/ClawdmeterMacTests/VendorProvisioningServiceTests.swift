@@ -279,7 +279,11 @@ final class VendorProvisioningServiceTests: XCTestCase {
             )
             XCTFail("Expected noInstallTargets")
         } catch VendorProvisioningError.noInstallTargets {
-            XCTAssertEqual(VendorProvisioningError.noInstallTargets.localizedDescription, "No vendor CLIs need installation.")
+            // A pattern `catch` doesn't bind `error`; reference the case directly.
+            XCTAssertEqual(
+                VendorProvisioningError.noInstallTargets.localizedDescription,
+                "No vendor CLIs need installation."
+            )
         }
     }
 

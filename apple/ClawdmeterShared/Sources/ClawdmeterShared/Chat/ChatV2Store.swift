@@ -283,6 +283,10 @@ public final class ChatV2Store: ObservableObject {
         effort(forChoice: primaryChoice)
     }
 
+    /// Broadcast mode picks 2-3 providers (Chat V3). Enforced on both the
+    /// live toggle path and the persisted-selection restore path.
+    public static let maxBroadcastVendors = 3
+
     public static let defaultChatVendorOrder: [ChatVendor] = ProviderDescriptor.chatOrder
     public static let broadcastCapableProviders: Set<AgentKind> = Set(defaultChatVendorOrder.map(\.backingProvider))
     public static let defaultBroadcastProviderOrder: [AgentKind] = defaultChatVendorOrder.map(\.backingProvider)
@@ -386,6 +390,10 @@ public final class ChatV2Store: ObservableObject {
             guard selectedChoices.count > 1 else { return }
             selectedChoices.removeAll { $0 == choice }
         } else {
+            // Broadcast caps at 3 vendors (Chat V3: "pick 2-3 providers"),
+            // matching the restore-path cap. Without this, the UI could
+            // select a 4th that restore would silently drop.
+            guard selectedChoices.count < Self.maxBroadcastVendors else { return }
             selectedChoices.append(choice)
         }
         selectedChoices = normalizedChoicesForEnabledProviders(selectedChoices)
@@ -800,7 +808,7 @@ public final class ChatV2Store: ObservableObject {
         for vendor in vendors {
             guard !out.contains(vendor) else { continue }
             out.append(vendor)
-            if out.count == 3 { break }
+            if out.count == maxBroadcastVendors { break }
         }
         return out
     }

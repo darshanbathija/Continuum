@@ -12,6 +12,7 @@ import ClawdmeterShared
 final class ChatV2StoreTests: XCTestCase {
     private var defaults: UserDefaults!
     private let suiteName = "clawdmeter.chatv2.tests.\(UUID().uuidString)"
+    private var savedEnablement: [String: Bool] = [:]
 
     override func setUp() async throws {
         try await super.setUp()
@@ -19,26 +20,59 @@ final class ChatV2StoreTests: XCTestCase {
         // restore-after-init assertions don't see persisted state from
         // a sibling test.
         defaults = UserDefaults(suiteName: suiteName)!
+        // ChatV2Store derives its default vendor from GLOBAL ProviderEnablement
+        // (opt-in onboarding contract: default = first-enabled chat provider),
+        // which the injected `defaults` suite can't isolate. Snapshot the
+        // machine's real enablement and start every test from a known
+        // all-disabled baseline so each test can enable exactly the providers
+        // it needs and the "default = first-enabled" assertions are
+        // deterministic on any machine (not just a CI box with nothing enabled).
+        savedEnablement = Dictionary(uniqueKeysWithValues:
+            ProviderRegistry.allProviderIDs.map { ($0, ProviderEnablement.isEnabled($0)) })
+        for id in ProviderRegistry.allProviderIDs { ProviderEnablement.setEnabled(id, false) }
     }
 
     override func tearDown() async throws {
+        for (id, on) in savedEnablement { ProviderEnablement.setEnabled(id, on) }
+        savedEnablement = [:]
         defaults.removePersistentDomain(forName: suiteName)
         try await super.tearDown()
     }
 
+    /// Enable specific chat vendors (by their backing provider) so the
+    /// opt-in default + choice-normalization logic keeps them.
+    private func enable(_ vendors: ChatVendor...) {
+        for vendor in vendors { ProviderEnablement.setEnabled(vendor.backingProvider.rawValue, true) }
+    }
+
     // MARK: - Defaults
 
-    func test_init_defaults_to_chatgpt_latest_high_effort() {
+    func test_init_defaultsToFirstEnabledVendor_chatgpt() {
+        // Opt-in contract: with ChatGPT the only enabled chat provider, a
+        // fresh store defaults to it (no persisted picks).
+        enable(.chatgpt)
         let store = ChatV2Store(defaults: defaults)
         XCTAssertEqual(store.selectedVendors, [.chatgpt])
         XCTAssertEqual(store.selectedProvider, .codex)
         XCTAssertEqual(store.selectedVendorCount, 1)
         XCTAssertFalse(store.broadcastReady)
         XCTAssertEqual(store.selectedReplyProvider, .codex)
-        XCTAssertEqual(store.selectedModel, "gpt-5.5")
+        XCTAssertEqual(store.selectedModel, ModelCatalog.bundled.codex.first?.id)
         XCTAssertEqual(store.selectedEffort, .high)
         XCTAssertFalse(store.deepResearch)
         XCTAssertTrue(store.attachments.isEmpty)
+    }
+
+    func test_init_defaultsToFirstEnabledVendor_claude() {
+        // Same contract, different enabled provider: the default tracks
+        // whichever chat provider is enabled, not a hardcoded vendor.
+        enable(.claude)
+        let store = ChatV2Store(defaults: defaults)
+        XCTAssertEqual(store.selectedVendors, [.claude])
+        XCTAssertEqual(store.selectedProvider, .claude)
+        XCTAssertEqual(store.selectedVendorCount, 1)
+        XCTAssertEqual(store.selectedReplyProvider, .claude)
+        XCTAssertEqual(store.selectedModel, ModelCatalog.bundled.claude.first?.id)
     }
 
     func test_selectedModel_falls_back_to_bundled_catalog_first_entry() {
@@ -53,6 +87,9 @@ final class ChatV2StoreTests: XCTestCase {
     // MARK: - Persistence
 
     func test_persist_then_reload_restores_picks() {
+        // All three vendors must be enabled or choice-normalization drops the
+        // not-enabled ones on persist/reload.
+        enable(.chatgpt, .claude, .openrouter)
         let store = ChatV2Store(defaults: defaults)
         store.selectedChoices = [.builtin(.chatgpt), .builtin(.claude), .builtin(.openrouter)]
         store.selectedReplyProvider = .claude
@@ -72,7 +109,11 @@ final class ChatV2StoreTests: XCTestCase {
         XCTAssertEqual(reloaded.selectedModelByVendor[.openrouter], "anthropic/claude-sonnet-4.6")
     }
 
-    func test_legacyProviderDefaults_doNotOverrideNewChatGPTDefault() {
+    func test_legacyProviderDefaults_doNotOverrideEnabledDefault() {
+        // Legacy single-provider keys (pre-vendors schema) must not override
+        // the opt-in default. With only ChatGPT enabled, the default stays
+        // ChatGPT even though legacy keys name Claude.
+        enable(.chatgpt)
         defaults.set(ChatV2Mode.solo.rawValue, forKey: "clawdmeter.chatv2.mode")
         defaults.set(AgentKind.claude.rawValue, forKey: "clawdmeter.chatv2.provider")
         defaults.set([AgentKind.claude.rawValue: "claude-opus-4-7-1m"], forKey: "clawdmeter.chatv2.modelByProvider")
@@ -81,12 +122,17 @@ final class ChatV2StoreTests: XCTestCase {
 
         XCTAssertEqual(store.selectedVendors, [.chatgpt])
         XCTAssertEqual(store.selectedProvider, .codex)
-        XCTAssertEqual(store.selectedModel, "gpt-5.5")
+        XCTAssertEqual(store.selectedModel, ModelCatalog.bundled.codex.first?.id)
         XCTAssertEqual(store.selectedEffort, .high)
     }
 
     func test_vendor_toggle_allows_one_to_three_only() {
+        // Init with only ChatGPT enabled so the starting default is [chatgpt],
+        // then enable the toggle targets so they survive normalization (the
+        // already-initialized store keeps its [chatgpt] selection).
+        enable(.chatgpt)
         let store = ChatV2Store(defaults: defaults)
+        enable(.claude, .antigravity, .cursor)
 
         store.toggleVendor(.claude)
         XCTAssertEqual(store.selectedVendors, [.chatgpt, .claude])
@@ -107,6 +153,8 @@ final class ChatV2StoreTests: XCTestCase {
     }
 
     func test_frontierSlots_carry_provider_model_effort_backend_and_deepResearch() {
+        // All three vendors enabled so none is filtered out of the slots.
+        enable(.claude, .chatgpt, .openrouter)
         let store = ChatV2Store(defaults: defaults)
         store.selectedChoices = [.builtin(.claude), .builtin(.chatgpt), .builtin(.openrouter)]
         store.deepResearch = true

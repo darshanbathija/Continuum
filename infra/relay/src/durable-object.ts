@@ -52,6 +52,7 @@ export interface RelayEnv {
   RELAY_OPERATOR_SIGNING_KEY?: string;
   RELAY_BEARER_SIGNING_KEY?: string;
   RELAY_CREATION_GRANT_TOKEN?: string;
+  RELAY_CLIENT_PROVISIONING_KEY?: string;
   SESSION_TTL_SECONDS: string;
   LOG_LEVEL: string;
   ENVIRONMENT: string;

@@ -1,5 +1,4 @@
 import SwiftUI
-import BackgroundTasks
 import ClawdmeterShared
 
 @main
@@ -61,49 +60,10 @@ struct ClawdmeteriOSApp: App {
         #endif
         _agentClient = StateObject(wrappedValue: client)
         _outbox = StateObject(wrappedValue: MobileCommandOutbox(client: client))
-
-        // E4: spin up the outbound relay client if a pairing record
-        // exists. This runs side-by-side with the existing Tailscale
-        // `AgentControlClient` path — the relay is the "second
-        // transport" the design doc §1 promised, and stays in fallback
-        // until E3 lands the Mac-side relay sender. When no pairing
-        // exists this is a no-op; callers can still use Tailscale
-        // unchanged.
-        IOSRelayClientCoordinator.shared.start()
-        // Track B (B1): bind the shared client so its `relayMux` tracks the
-        // coordinator's mux client → the events + frontier streams route over
-        // the relay when relayDefault is on (nil ⇒ direct, byte-identical).
-        IOSRelayClientCoordinator.shared.bindAgentClient(client)
-        // Register the BGAppRefreshTask handler at launch (D15 fallback for
-        // APNS). The actual scheduling + ack/send happens inside
-        // iOSNotificationManager; this just plants the dispatch handler.
-        BGTaskScheduler.shared.register(
-            forTaskWithIdentifier: iOSNotificationManager.taskIdentifier,
-            using: nil
-        ) { task in
-            guard let task = task as? BGAppRefreshTask else { return }
-            // Use a transient client for the refresh; the persistent
-            // instance in ContentView shares UserDefaults state.
-            let client = AgentControlClient()
-            let manager = iOSNotificationManager(client: client)
-            // P2-iOS-6 + codex-5: BGTask lifecycle hazards.
-            // - iOS hard-kills the app if BGTask runs past its budget
-            //   without responding to the expiration signal.
-            // - iOS treats double setTaskCompleted as a violation. Earlier
-            //   patch had a race: expirationHandler completed (false) but
-            //   the still-running refreshTask could complete (ok) a second
-            //   time. Single-shot guard ensures the first caller wins.
-            let completionGuard = BGTaskCompletionGuard()
-            let refreshTask = Task { @MainActor in
-                let ok = await manager.performRefresh()
-                manager.scheduleBackgroundRefresh()
-                completionGuard.complete(task: task, success: ok)
-            }
-            task.expirationHandler = {
-                refreshTask.cancel()
-                completionGuard.complete(task: task, success: false)
-            }
-        }
+        // Relay + BGTask registration run once from `IOSAppBootstrap.finishLaunching()`
+        // in `iOSAppDelegate` — not here. `App.init()` can run twice on device
+        // (iOS 18.4+/27), and duplicate `BGTaskScheduler.register` crashes instantly.
+        IOSAppBootstrap.attachAgentClient(client)
     }
 
     var body: some Scene {
@@ -120,16 +80,5 @@ struct ClawdmeteriOSApp: App {
                 // to a concrete scheme — legacy pin > Tahoe > .dark.
                 .preferredColorScheme(resolvedColorScheme)
         }
-    }
-}
-
-/// v0.7.7: BGTaskCompletionGuard replaced by shared `FireOnce` +
-/// inline call-site closure. Behaviour identical: setTaskCompleted
-/// runs exactly once for the first caller, regardless of whether the
-/// expirationHandler or the in-flight refresh wins the race.
-private final class BGTaskCompletionGuard: @unchecked Sendable {
-    private let fireOnce = FireOnce()
-    func complete(task: BGTask, success: Bool) {
-        fireOnce.run { task.setTaskCompleted(success: success) }
     }
 }

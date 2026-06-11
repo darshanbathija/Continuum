@@ -20,6 +20,7 @@ public struct MacSettingsView: View {
     @ObservedObject var geminiModel: AppModel
     @ObservedObject var presentationStore: SessionPresentationStore
     @Binding private var requestedSection: String?
+    @Binding private var requestedEnvWorkspaceId: UUID?
     @StateObject private var chimePlayer = ChimeAudioPlayer.shared
     /// v0.22.9: runtime threaded in so the consolidated settings page
     /// can embed PairingSettingsView (needs AppRuntime for the daemon
@@ -31,6 +32,7 @@ public struct MacSettingsView: View {
     /// off whichever provider supports it (Claude is the canonical one
     /// today). Setter fans out to every provider that supports auto-revive.
     @SceneStorage("clawdmeter.mac.settings.selectedSection") private var selectedSectionRaw: String = SettingsSection.visual.rawValue
+    @SceneStorage("clawdmeter.mac.settings.providerTab") private var providerTabRaw: String = ProviderSettingsTab.providers.rawValue
     @State private var settingsSearch: String = ""
 
     // v0.22.9: dropped to `internal` because the `runtime` parameter
@@ -45,7 +47,8 @@ public struct MacSettingsView: View {
         geminiModel: AppModel,
         runtime: AppRuntime? = nil,
         presentationStore: SessionPresentationStore,
-        requestedSection: Binding<String?> = .constant(nil)
+        requestedSection: Binding<String?> = .constant(nil),
+        requestedEnvWorkspaceId: Binding<UUID?> = .constant(nil)
     ) {
         self.theme = theme
         self.claudeModel = claudeModel
@@ -54,6 +57,7 @@ public struct MacSettingsView: View {
         self.runtime = runtime
         self.presentationStore = presentationStore
         _requestedSection = requestedSection
+        _requestedEnvWorkspaceId = requestedEnvWorkspaceId
     }
 
     /// Composite auto-revive state. True when any provider that supports
@@ -102,7 +106,7 @@ public struct MacSettingsView: View {
                             noMatchingSettings
                         }
                     }
-                    .frame(maxWidth: 920)
+                    .frame(maxWidth: contentMaxWidth)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .padding(.bottom, 20)
                 }
@@ -116,14 +120,28 @@ public struct MacSettingsView: View {
         .onChange(of: settingsSearch) { _, _ in
             syncSelectedSectionToSearch()
         }
-        .onAppear(perform: applyRequestedSection)
+        .onAppear {
+            applyRequestedSection()
+            applyRequestedEnvWorkspace()
+        }
         .onChange(of: requestedSection) { _, _ in
             applyRequestedSection()
+        }
+        .onChange(of: requestedEnvWorkspaceId) { _, _ in
+            applyRequestedEnvWorkspace()
         }
     }
 
     private var selectedSection: SettingsSection {
         SettingsSection(rawValue: selectedSectionRaw) ?? .visual
+    }
+
+    private var providerTab: ProviderSettingsTab {
+        ProviderSettingsTab(rawValue: providerTabRaw) ?? .providers
+    }
+
+    private var contentMaxWidth: CGFloat? {
+        selectedSection == .providers && providerTab == .skills ? nil : 920
     }
 
     private var matchingSections: [SettingsSection] {
@@ -149,6 +167,12 @@ public struct MacSettingsView: View {
         settingsSearch = ""
         selectedSectionRaw = section.rawValue
         self.requestedSection = nil
+    }
+
+    private func applyRequestedEnvWorkspace() {
+        guard requestedEnvWorkspaceId != nil else { return }
+        settingsSearch = ""
+        selectedSectionRaw = SettingsSection.envVariables.rawValue
     }
 
     @ViewBuilder
@@ -238,6 +262,20 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var providerSettings: some View {
+        ProviderSettingsTabBar(selection: providerTab) { tab in
+            providerTabRaw = tab.rawValue
+        }
+
+        switch providerTab {
+        case .providers:
+            providerConfigurationSettings
+        case .skills:
+            SkillsSettingsView()
+        }
+    }
+
+    @ViewBuilder
+    private var providerConfigurationSettings: some View {
         SettingsCard(title: "Providers", sub: nil) {
             SettingsProviderRowsWithDeviceStatus(runtime: runtime)
         }
@@ -268,8 +306,15 @@ public struct MacSettingsView: View {
         RepoEnvVariablesSettingsView(
             workspaceStore: runtime?.workspaceStore,
             envStore: runtime?.repoEnvStore,
-            resolver: runtime?.repoEnvRuntimeResolver
+            resolver: runtime?.repoEnvRuntimeResolver,
+            preferredWorkspaceId: requestedEnvWorkspaceId
         )
+        .onAppear {
+            guard requestedEnvWorkspaceId != nil else { return }
+            DispatchQueue.main.async {
+                requestedEnvWorkspaceId = nil
+            }
+        }
     }
 
     @ViewBuilder
@@ -503,6 +548,57 @@ public struct MacSettingsView: View {
     }
 }
 
+private enum ProviderSettingsTab: String, CaseIterable, Identifiable {
+    case providers
+    case skills
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .providers: return "Providers"
+        case .skills: return "Skills"
+        }
+    }
+}
+
+private struct ProviderSettingsTabBar: View {
+    @Environment(\.tahoe) private var t
+    var selection: ProviderSettingsTab
+    var onSelect: (ProviderSettingsTab) -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(ProviderSettingsTab.allCases) { tab in
+                let isSelected = tab == selection
+                Button {
+                    onSelect(tab)
+                } label: {
+                    Text(tab.title)
+                        .font(TahoeFont.body(12.5, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(isSelected ? t.fg : t.fg3)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(
+                            isSelected ? t.hair2 : .clear,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        )
+                        .overlay {
+                            if isSelected {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .stroke(t.hairline, lineWidth: 0.8)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("settings.providers.tab.\(tab.rawValue)")
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 2)
+    }
+}
+
 private enum SettingsSection: String, CaseIterable, Identifiable {
     case visual
     case providers
@@ -535,7 +631,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .visual:
             return "Theme, glass surface, wallpaper, and accent color."
         case .providers:
-            return "Choose providers and default models."
+            return "Choose providers, default models, and manage skills."
         case .workspaces:
             return "Worktree setup, copied local files, and branch isolation."
         case .envVariables:

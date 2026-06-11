@@ -184,9 +184,10 @@ public actor OrchestrationEventStore {
     /// Default path: `~/Library/Application Support/Clawdmeter/orchestration-
     /// events.sqlite`. Creates the directory if it doesn't exist.
     public nonisolated static func defaultStoreURL() -> URL {
-        let appSupport = FileManager.default.urls(
+        let appSupport = (FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!.appendingPathComponent("Clawdmeter", isDirectory: true)
+        ).first ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("Clawdmeter", isDirectory: true)
         try? FileManager.default.createDirectory(
             at: appSupport, withIntermediateDirectories: true
         )

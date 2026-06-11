@@ -226,6 +226,17 @@ public final class RelayPairingService: ObservableObject {
         lastError = nil
         relayPairingLogger.info("Beginning relay pairing bundle generation")
 
+        let relayUrl = RelayEnvironment.resolvedRelayURL(env: environment, processEnv: processEnv)
+        if !RelayGrantTokenStore.shared.isConfigured {
+            let provisioned = await RelayGrantProvisioner(processEnv: processEnv).ensureConfigured(relayURL: relayUrl)
+            if !provisioned {
+                relayPairingLogger.error("Relay grant token is not configured and auto-provision failed")
+                self.lastError = RelayPairingCreationGrantError.missingGrantAuthorization.localizedDescription
+                self.phase = .unpaired
+                return
+            }
+        }
+
         let pair = RelayPairingKeyPair()
         let sid = RelayPairingMint.randomBase64URLToken()
         let macTok = RelayPairingMint.randomBase64URLToken()
@@ -240,7 +251,6 @@ public final class RelayPairingService: ObservableObject {
         // hardening (CB-P0a-rotation); this is the pragmatic durable default.
         let relaySessionTTLSeconds: UInt64 = 30 * 24 * 60 * 60  // 30 days
         let ttl = UInt64(Date().timeIntervalSince1970) + relaySessionTTLSeconds
-        let relayUrl = RelayEnvironment.resolvedRelayURL(env: environment, processEnv: processEnv)
         let macTokenHash = MacRelayClientConfig.sha256Hex(macTok)
         let iosTokenHash = MacRelayClientConfig.sha256Hex(iosTok)
         let senderFingerprint = APNSSenderFingerprint.compute(macPublicKeyBase64URL: pair.publicKeyBase64URL)

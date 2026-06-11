@@ -1061,11 +1061,22 @@ struct SidebarPane: View {
         }
     }
 
-    /// Open the app's Settings window (Env Variables + every other setting
-    /// live there). Standard AppKit action so we don't need cross-scene
-    /// navigation plumbing from the sidebar.
-    private func openSettingsWindow() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+    /// Open the repo-scoped settings sheet (env variables + worktree defaults).
+    private func openRepoSettings(for section: SidebarWorkspaceSection) {
+        let workspace = managedWorkspace(for: section)
+        var userInfo: [String: Any] = [
+            "repoKey": section.repo.key,
+            "repoDisplayName": workspace?.repoDisplayName ?? section.repo.displayName,
+            "repoRoot": workspace?.repoRoot ?? section.repo.key,
+        ]
+        if let workspace {
+            userInfo["workspaceId"] = workspace.id.uuidString
+        }
+        NotificationCenter.default.post(
+            name: .clawdmeterOpenRepoSettings,
+            object: nil,
+            userInfo: userInfo
+        )
     }
 
     @ViewBuilder
@@ -1106,7 +1117,7 @@ struct SidebarPane: View {
         }
         .accessibilityIdentifier("code.repo.settings.archive-repo")
         Divider()
-        Button { openSettingsWindow() } label: {
+        Button { openRepoSettings(for: section) } label: {
             Label("Settings & Env Variables…", systemImage: "gearshape")
         }
         .accessibilityIdentifier("code.repo.settings.open-settings")

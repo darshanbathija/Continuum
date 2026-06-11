@@ -23,6 +23,9 @@ extension Notification.Name {
     static let clawdmeterOpenGlobalPalette = Notification.Name("clawdmeter.openGlobalPalette")
     /// Carries `userInfo["section"]` for settings deep links such as "devices".
     static let clawdmeterOpenSettingsSection = Notification.Name("clawdmeter.openSettingsSection")
+    /// Carries repo metadata for the repo-scoped settings sheet from the Code sidebar.
+    /// Keys: `repoKey`, `repoDisplayName`, `repoRoot`, optional `workspaceId`.
+    static let clawdmeterOpenRepoSettings = Notification.Name("clawdmeter.openRepoSettings")
     static let clawdmeterOpenShortcutSheet = Notification.Name("clawdmeter.openShortcutSheet")
     static let clawdmeterOpenFilePicker = Notification.Name("clawdmeter.openFilePicker")
     static let clawdmeterExportSession = Notification.Name("clawdmeter.exportSession")

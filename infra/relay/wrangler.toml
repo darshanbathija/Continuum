@@ -81,6 +81,10 @@ RELAY_BEARER_SIGNING_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 # present the matching `CLAWDMETER_RELAY_CREATION_GRANT_TOKEN` before the relay
 # signs a first-connect creation proof.
 RELAY_CREATION_GRANT_TOKEN = "test-relay-grant-token"
+# Development/test only. Staging and production set this via
+# `wrangler secret put RELAY_CLIENT_PROVISIONING_KEY --env <env>`. Shipped Mac
+# apps use the matching client key to auto-provision per-install grant tokens.
+RELAY_CLIENT_PROVISIONING_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
 # ---- Per-env overrides ----
 # Wrangler picks one via --env <name>. Each env MUST re-declare

@@ -68,6 +68,7 @@ public final class IOSRelayClientCoordinator: ObservableObject {
     /// streams (events + frontier-via-client) route over the relay without
     /// reaching across the module boundary into iOS-only relay types.
     private weak var boundAgentClient: AgentControlClient?
+    private var didStart = false
 
     /// Register the shared AgentControlClient so its `relayMux` tracks the
     /// coordinator's mux client. Call once at app startup.
@@ -85,9 +86,11 @@ public final class IOSRelayClientCoordinator: ObservableObject {
         self.store = store
     }
 
-    /// Wire up the pairing-service observer. Call from the app's `init`
-    /// once.
+    /// Wire up the pairing-service observer. Call once at launch
+    /// (`IOSAppBootstrap.finishLaunching`).
     public func start() {
+        guard !didStart else { return }
+        didStart = true
         // If a pairing already exists at app launch, spin up immediately.
         if pairingService.hasActivePairing {
             spinUpFromPersistedRecord()
@@ -109,6 +112,7 @@ public final class IOSRelayClientCoordinator: ObservableObject {
     /// Tear down the coordinator. Used by `RelayPairingStore.clear()`
     /// callers ("Forget pairing" in iOS Settings).
     public func stop() {
+        didStart = false
         cancellables.removeAll()
         client?.stop()
         client = nil

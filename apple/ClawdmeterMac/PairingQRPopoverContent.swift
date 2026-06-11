@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import CoreImage.CIFilterBuiltins
 import ClawdmeterShared
 
 /// Compact pairing UI used by the dashboard toolbar's Pair with iPhone
@@ -20,6 +19,8 @@ struct PairingQRPopoverContent: View {
     @ObservedObject var pairingService: RelayPairingService
     @State private var qrImage: NSImage?
     @State private var didCopy: Bool = false
+    /// Step 1 of pairing: download QR before minting the relay auth bundle.
+    @State private var confirmedAppInstall: Bool = ContinuumIOSAppStore.hasConfirmedInstall
     @State private var now: Date = Date()
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     /// Active Tahoe accent (Halo blue by default; tracks the user's theme).
@@ -42,7 +43,11 @@ struct PairingQRPopoverContent: View {
 
             switch pairingService.phase {
             case .unpaired:
-                unpairedContent
+                if confirmedAppInstall {
+                    unpairedContent
+                } else {
+                    PairingDownloadAppStep(layout: .popover, onConfirmInstall: confirmAppInstallAndBeginPairing)
+                }
             case .generatingBundle:
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -58,12 +63,21 @@ struct PairingQRPopoverContent: View {
         }
         .padding(16)
         .frame(width: 300)
-        .onAppear { refreshQR() }
+        .onAppear {
+            confirmedAppInstall = ContinuumIOSAppStore.hasConfirmedInstall
+            refreshQR()
+        }
         .onChange(of: pairingService.bundleURL) { _, _ in refreshQR() }
         .onReceive(ticker) { if controlActiveState != .inactive { now = $0 } }
     }
 
     // MARK: - Empty / unpaired state
+
+    private func confirmAppInstallAndBeginPairing() {
+        ContinuumIOSAppStore.markInstallConfirmed()
+        confirmedAppInstall = true
+        Task { await pairingService.beginPairing() }
+    }
 
     private var unpairedContent: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -100,7 +114,7 @@ struct PairingQRPopoverContent: View {
                 qrTile.frame(maxWidth: .infinity)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Scan with Clawdmeter on your iPhone")
+                    Text("Scan with Continuum Console on your iPhone")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                     Text("or paste the URL after copying.")
@@ -170,7 +184,7 @@ struct PairingQRPopoverContent: View {
             // Corner brackets — TL/BR get one asymmetric radius pattern,
             // TR/BL get the mirror. 3px stroke + accent glow shadow.
             ForEach(cornerSpecs, id: \.self) { spec in
-                CornerBracket(spec: spec, color: t.accent)
+                PairingQRCornerBracket(spec: spec, color: t.accent)
             }
         }
         .frame(width: 280, height: 280)
@@ -238,19 +252,7 @@ struct PairingQRPopoverContent: View {
             qrImage = nil
             return
         }
-        qrImage = generateQR(from: urlString)
-    }
-
-    private func generateQR(from string: String) -> NSImage? {
-        let context = CIContext()
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(string.utf8)
-        filter.correctionLevel = "M"
-        guard let outputImage = filter.outputImage else { return nil }
-        let scaleFactor: CGFloat = 8
-        let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: scaleFactor, y: scaleFactor))
-        guard let cg = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: 200, height: 200))
+        qrImage = PairingQRGenerator.makeImage(from: urlString)
     }
 
     private func formatTTLCountdown(ttl: UInt64) -> String {
@@ -259,73 +261,5 @@ struct PairingQRPopoverContent: View {
         let minutes = remaining / 60
         let seconds = remaining % 60
         return String(format: "%d:%02d", minutes, seconds)
-    }
-}
-
-// MARK: - QR corner bracket
-
-/// Four L-shaped accent brackets that frame the QR tile, mirroring the
-/// iOS `IOSPairingView` spec. Each bracket is 32×32, 3px stroke, with an
-/// asymmetric corner radius that bends inward toward the QR.
-struct QRCornerBracketSpec: Hashable {
-    enum Corner { case topLeft, topRight, bottomLeft, bottomRight }
-    let corner: Corner
-}
-
-private struct CornerBracket: View {
-    let spec: QRCornerBracketSpec
-    let color: Color
-
-    var body: some View {
-        let s: CGFloat = 32
-        let stroke: CGFloat = 3
-        let r: CGFloat = 10
-        Path { p in
-            switch spec.corner {
-            case .topLeft:
-                p.move(to: CGPoint(x: s, y: 0))
-                p.addLine(to: CGPoint(x: r, y: 0))
-                p.addArc(center: CGPoint(x: r, y: r), radius: r,
-                         startAngle: .degrees(-90), endAngle: .degrees(180),
-                         clockwise: true)
-                p.addLine(to: CGPoint(x: 0, y: s))
-            case .topRight:
-                p.move(to: CGPoint(x: 0, y: 0))
-                p.addLine(to: CGPoint(x: s - r, y: 0))
-                p.addArc(center: CGPoint(x: s - r, y: r), radius: r,
-                         startAngle: .degrees(-90), endAngle: .degrees(0),
-                         clockwise: false)
-                p.addLine(to: CGPoint(x: s, y: s))
-            case .bottomLeft:
-                p.move(to: CGPoint(x: 0, y: 0))
-                p.addLine(to: CGPoint(x: 0, y: s - r))
-                p.addArc(center: CGPoint(x: r, y: s - r), radius: r,
-                         startAngle: .degrees(180), endAngle: .degrees(90),
-                         clockwise: true)
-                p.addLine(to: CGPoint(x: s, y: s))
-            case .bottomRight:
-                p.move(to: CGPoint(x: s, y: 0))
-                p.addLine(to: CGPoint(x: s, y: s - r))
-                p.addArc(center: CGPoint(x: s - r, y: s - r), radius: r,
-                         startAngle: .degrees(0), endAngle: .degrees(90),
-                         clockwise: false)
-                p.addLine(to: CGPoint(x: 0, y: s))
-            }
-        }
-        .stroke(color, style: StrokeStyle(lineWidth: stroke, lineCap: .round, lineJoin: .round))
-        .frame(width: s, height: s)
-        .shadow(color: color.opacity(0.5), radius: 5)
-        .offset(offset(for: spec.corner))
-        .accessibilityHidden(true)
-    }
-
-    private func offset(for corner: QRCornerBracketSpec.Corner) -> CGSize {
-        let inset: CGFloat = 280 / 2 - 16 + 6  // tile half - bracket half + 6 outward
-        switch corner {
-        case .topLeft:     return CGSize(width: -inset, height: -inset)
-        case .topRight:    return CGSize(width: inset,  height: -inset)
-        case .bottomLeft:  return CGSize(width: -inset, height: inset)
-        case .bottomRight: return CGSize(width: inset,  height: inset)
-        }
     }
 }
