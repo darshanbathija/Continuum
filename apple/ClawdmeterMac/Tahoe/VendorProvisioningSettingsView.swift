@@ -13,6 +13,10 @@ struct VendorProvisioningSettingsView: View {
     @State private var statuses: [String: VendorProvisioningStatus] = [:]
     @State private var filter: VendorProvisioningFilter = .all
     @State private var isChecking = false
+    @State private var isInstallingAll = false
+    @State private var installAllTask: Task<Void, Never>?
+    @State private var installProgressByVendor: [String: VendorInstallProgressUpdate.Phase] = [:]
+    @State private var overallInstallProgress: Double = 0
     @State private var message: String?
     @State private var importVendor: VendorProvisioningVendor?
     @State private var actionTerminal: VendorProvisioningActionTerminal?
@@ -34,6 +38,28 @@ struct VendorProvisioningSettingsView: View {
         }
     }
 
+    private var scopedVendorsNeedingInstall: [VendorProvisioningVendor] {
+        VendorProvisioningService.vendorsNeedingInstall(
+            catalog: filteredVendors,
+            statuses: Array(statuses.values)
+        )
+    }
+
+    private var canInstallAll: Bool {
+        !scopedVendorsNeedingInstall.isEmpty
+    }
+
+    private var installAllButtonTitle: String {
+        let count = scopedVendorsNeedingInstall.count
+        if isInstallingAll {
+            return "Installing..."
+        }
+        if count > 0 {
+            return "Install All (\(count))"
+        }
+        return "Install All"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             panel(
@@ -46,6 +72,9 @@ struct VendorProvisioningSettingsView: View {
                         .foregroundStyle(t.fg3)
                 } else {
                     headerControls
+                    if isInstallingAll {
+                        installAllProgressBar
+                    }
                     TahoeHair().padding(.vertical, 12)
                     filterBar
                     VStack(spacing: 10) {
@@ -53,7 +82,9 @@ struct VendorProvisioningSettingsView: View {
                             VendorProvisioningRow(
                                 vendor: vendor,
                                 status: statuses[vendor.id],
+                                installPhase: installProgressByVendor[vendor.id],
                                 hasWorkspaces: !workspaces.isEmpty,
+                                actionsDisabled: isInstallingAll,
                                 onAction: { action in
                                     Task { await perform(action: action, vendor: vendor) }
                                 },
@@ -105,6 +136,19 @@ struct VendorProvisioningSettingsView: View {
             }
             Spacer(minLength: 0)
             Button {
+                installAllTask?.cancel()
+                installAllTask = Task { await installAll() }
+            } label: {
+                HStack(spacing: 6) {
+                    TahoeIcon("terminal", size: 11, weight: .bold)
+                    Text(installAllButtonTitle)
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(isChecking || isInstallingAll || !canInstallAll)
+            .help(installAllHelpText)
+            .accessibilityIdentifier("settings.provisioning.install-all")
+            Button {
                 Task { await checkDevice() }
             } label: {
                 HStack(spacing: 6) {
@@ -113,9 +157,60 @@ struct VendorProvisioningSettingsView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(isChecking)
+            .disabled(isChecking || isInstallingAll)
             .accessibilityIdentifier("settings.provisioning.check-device")
         }
+    }
+
+    private var installAllHelpText: String {
+        if canInstallAll {
+            let scope = filter == .all ? "missing" : "missing in \(filter.title)"
+            return "Install \(scopedVendorsNeedingInstall.count) \(scope) vendor CLI\(scopedVendorsNeedingInstall.count == 1 ? "" : "s") in the background."
+        }
+        return "Run Check Device first or install CLIs individually."
+    }
+
+    private var installAllProgressBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                ProgressView(value: overallInstallProgress)
+                    .progressViewStyle(.linear)
+                Text("Installing vendor CLIs")
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                Spacer(minLength: 0)
+                Button("Cancel") {
+                    installAllTask?.cancel()
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("settings.provisioning.install-all-cancel")
+            }
+            Text(installAllProgressLabel)
+                .font(TahoeFont.body(11))
+                .foregroundStyle(t.fg3)
+        }
+        .padding(.top, 10)
+        .accessibilityIdentifier("settings.provisioning.install-all-progress")
+    }
+
+    private var installAllProgressLabel: String {
+        let active = installProgressByVendor.first { _, phase in
+            if case .installing = phase { return true }
+            return false
+        }
+        if let active {
+            let vendor = vendors.first { $0.id == active.key }
+            return "Installing \(vendor?.displayName ?? active.key)..."
+        }
+        let completed = installProgressByVendor.values.filter {
+            if case .succeeded = $0 { return true }
+            if case .failed = $0 { return true }
+            return false
+        }.count
+        if completed > 0 {
+            return "Finished \(completed) of \(scopedVendorsNeedingInstall.count) installs."
+        }
+        return "Preparing installs..."
     }
 
     private var filterBar: some View {
@@ -161,7 +256,62 @@ struct VendorProvisioningSettingsView: View {
         let response = await service.checkDevice()
         vendors = response.vendors
         statuses = Dictionary(uniqueKeysWithValues: response.statuses.map { ($0.vendorId, $0) })
+        installProgressByVendor = [:]
         message = "Checked \(response.statuses.count) vendors."
+    }
+
+    private func installAll() async {
+        guard let service else { return }
+        if statuses.isEmpty {
+            await checkDevice()
+        }
+        guard canInstallAll else {
+            message = VendorProvisioningError.noInstallTargets.localizedDescription
+            return
+        }
+
+        let targets = scopedVendorsNeedingInstall
+        isInstallingAll = true
+        overallInstallProgress = 0
+        for vendor in targets {
+            installProgressByVendor.removeValue(forKey: vendor.id)
+        }
+        defer {
+            isInstallingAll = false
+            installAllTask = nil
+            if overallInstallProgress < 1 {
+                overallInstallProgress = 1
+            }
+        }
+
+        do {
+            let result = try await service.installAllMissing(
+                statuses: Array(statuses.values),
+                vendors: targets
+            ) { update in
+                installProgressByVendor[update.vendorId] = update.phase
+                overallInstallProgress = update.overallProgress
+            }
+            for (vendorId, failureMessage) in result.failedVendorIds {
+                installProgressByVendor[vendorId] = .failed(failureMessage)
+            }
+            message = result.message
+            let response = await service.checkDevice()
+            vendors = response.vendors
+            statuses = Dictionary(uniqueKeysWithValues: response.statuses.map { ($0.vendorId, $0) })
+            for vendorId in result.succeededVendorIds {
+                installProgressByVendor.removeValue(forKey: vendorId)
+            }
+        } catch is CancellationError {
+            for (vendorId, phase) in installProgressByVendor {
+                if case .installing = phase {
+                    installProgressByVendor[vendorId] = .failed("Install cancelled.")
+                }
+            }
+            message = "Install cancelled."
+        } catch {
+            message = error.localizedDescription
+        }
     }
 
     private func perform(action: VendorProvisioningAction, vendor: VendorProvisioningVendor) async {
@@ -247,7 +397,9 @@ private struct VendorProvisioningRow: View {
 
     let vendor: VendorProvisioningVendor
     let status: VendorProvisioningStatus?
+    let installPhase: VendorInstallProgressUpdate.Phase?
     let hasWorkspaces: Bool
+    let actionsDisabled: Bool
     let onAction: (VendorProvisioningAction) -> Void
     let onImport: () -> Void
 
@@ -276,6 +428,12 @@ private struct VendorProvisioningRow: View {
                         .font(TahoeFont.body(12))
                         .foregroundStyle(t.fg3)
                         .lineLimit(2)
+                    if showsInstallProgress {
+                        ProgressView()
+                            .progressViewStyle(.linear)
+                            .frame(maxWidth: 220)
+                            .accessibilityIdentifier("settings.provisioning.install-progress.\(vendor.id)")
+                    }
                 }
                 Spacer(minLength: 0)
                 HStack(spacing: 8) {
@@ -289,6 +447,7 @@ private struct VendorProvisioningRow: View {
                             }
                         }
                         .buttonStyle(.bordered)
+                        .disabled(actionsDisabled && action.kind != .signup)
                         .help(action.command ?? action.url?.absoluteString ?? action.label)
                     }
                     Button {
@@ -300,7 +459,7 @@ private struct VendorProvisioningRow: View {
                         }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(!hasWorkspaces)
+                    .disabled(actionsDisabled || !hasWorkspaces)
                     .help(hasWorkspaces ? "Import env variables into repo env sets" : "Add a repository first")
                     .accessibilityIdentifier("settings.provisioning.import.\(vendor.id)")
                 }
@@ -328,9 +487,35 @@ private struct VendorProvisioningRow: View {
         .accessibilityIdentifier("settings.provisioning.vendor.\(vendor.id)")
     }
 
+    private var showsInstallProgress: Bool {
+        guard let installPhase else { return false }
+        if case .installing = installPhase {
+            return true
+        }
+        return false
+    }
+
     private var statusPill: some View {
         let text: String
         let color: Color
+        if let installPhase {
+            switch installPhase {
+            case .installing:
+                text = "Installing"
+                color = .blue
+                return Badge(text: text, color: color)
+            case .queued:
+                break
+            case .succeeded:
+                text = "Installed"
+                color = .green
+                return Badge(text: text, color: color)
+            case .failed:
+                text = "Install Failed"
+                color = .red
+                return Badge(text: text, color: color)
+            }
+        }
         switch status?.cliStatus {
         case .authenticated:
             text = "Authenticated"
@@ -355,6 +540,9 @@ private struct VendorProvisioningRow: View {
     }
 
     private var subtitle: String {
+        if case .failed(let message) = installPhase {
+            return message
+        }
         var parts: [String] = []
         if let binary = status?.installedBinary {
             parts.append((binary as NSString).lastPathComponent)
