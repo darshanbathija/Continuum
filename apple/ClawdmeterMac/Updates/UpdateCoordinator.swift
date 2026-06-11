@@ -100,8 +100,8 @@ final class UpdateCoordinator: ObservableObject {
 
     @Published private(set) var state: AppUpdateState = .idle
     @Published private(set) var lastCheckedAt: Date?
-    @Published private(set) var automaticChecksEnabled: Bool = false
-    @Published private(set) var automaticDownloadsEnabled: Bool = false
+    @Published private(set) var automaticChecksEnabled: Bool = true
+    @Published private(set) var automaticDownloadsEnabled: Bool = true
     @Published private(set) var isTranslocated: Bool = false
     @Published private(set) var isInstalledInApplications: Bool = false
     @Published private(set) var releaseNotes: String?
@@ -285,6 +285,7 @@ final class UpdateCoordinator: ObservableObject {
             self.driver = driver
             try driver.start()
             syncDriverPreferences()
+            applyDefaultUpdatePreferences()
             updateLogger.info("Sparkle updater started with feed \(ReleaseUpdateConfig.appcastURL.absoluteString, privacy: .public)")
         } catch {
             state = .setupBlocked(reason: error.localizedDescription, fallbackURL: fallbackURL)
@@ -300,6 +301,13 @@ final class UpdateCoordinator: ObservableObject {
         if !automaticChecksEnabled, case .idle = state {
             state = .automaticChecksDisabled
         }
+    }
+
+    /// The Settings toggles for automatic checks/downloads were removed, so
+    /// every launch re-enables Sparkle's background check + download path.
+    private func applyDefaultUpdatePreferences() {
+        setAutomaticChecksEnabled(true)
+        setAutomaticDownloadsEnabled(true)
     }
 
     private enum ManualCheckMode {

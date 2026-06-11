@@ -59,13 +59,17 @@ final class UpdateCoordinatorTests: XCTestCase {
         XCTAssertTrue(driver.didStart)
         XCTAssertEqual(coordinator.state, .idle)
         XCTAssertTrue(coordinator.automaticChecksEnabled)
+        XCTAssertTrue(coordinator.automaticDownloadsEnabled)
     }
 
-    func testAutomaticChecksDisabledInitialState() {
+    func testStartupEnablesAutomaticChecksWhenDriverPreferenceWasOff() {
         let driver = FakeSparkleUpdateDriver()
         driver.automaticallyChecksForUpdates = false
+        driver.automaticallyDownloadsUpdates = false
         let (coordinator, _) = makeCoordinator(driver: driver)
-        XCTAssertEqual(coordinator.state, .automaticChecksDisabled)
+        XCTAssertEqual(coordinator.state, .idle)
+        XCTAssertTrue(coordinator.automaticChecksEnabled)
+        XCTAssertTrue(coordinator.automaticDownloadsEnabled)
     }
 
     func testTranslocationBlocksSparkle() {
