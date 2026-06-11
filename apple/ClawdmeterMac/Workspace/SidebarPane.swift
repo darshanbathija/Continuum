@@ -785,78 +785,81 @@ struct SidebarPane: View {
         let isHovered = hoveredWorktreePath == wt.path
         let provisioning = wt.sessions.contains { model.isProvisioning($0.id) }
         let isActive = wt.sessions.contains { $0.status == .running }
-        ZStack(alignment: .trailing) {
-            Button {
-                // openSession() keeps any in-progress draft alive (don't clear it).
-                if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
-                    model.openSession(primary)
-                } else if let draft = model.workspaceDraftTabs(in: worktreeKey).last {
-                    model.selectDraftWorkspaceTab(draft)
-                } else if let terminal = model.workspaceTerminalTabs(in: worktreeKey).last {
-                    model.selectWorkspaceTerminalTab(terminal)
-                } else if let document = model.workspaceDocumentTabs(in: worktreeKey).last {
-                    model.selectWorkspaceDocumentTab(document)
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(wt.branch)
-                            .font(TahoeFont.body(12.5, weight: .medium))
-                            .foregroundStyle(t.fg)
-                            .lineLimit(1).truncationMode(.middle)
-                        Text(worktreeSubtitle(wt))
-                            .font(TahoeFont.body(9.5))
-                            .foregroundStyle(t.fg4)
-                            .lineLimit(1).truncationMode(.tail)
-                    }
-                    Spacer(minLength: 4)
-                    if isActive {
-                        StatusPulseDot(color: .green, isLive: true)
-                            .help("AI session running in this worktree")
-                    } else if provisioning {
-                        ProgressView()
-                            .controlSize(.small)
-                            .scaleEffect(0.6)
-                            .frame(width: 14, height: 14)
-                            .help("Setting up this worktree")
-                    }
-                    if wt.sessions.count > 1 {
-                        Text("\(wt.sessions.count)")
-                            .font(TahoeFont.body(9.5, weight: .semibold))
-                            .foregroundStyle(t.fg3)
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(t.hair2, in: Capsule())
-                            .help("\(wt.sessions.count) models on this branch — open to switch via tabs")
-                    }
-                    if isOpen {
-                        Text("Selected worktree")
-                            .font(.system(size: 1))
-                            .frame(width: 1, height: 1)
-                            .opacity(0.001)
-                            .accessibilityIdentifier("code.worktree.row.selected")
-                    }
-                }
-                .padding(.leading, 48)
-                .padding(.trailing, 8)
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    isOpen
-                        ? t.accent.opacity(0.12)
-                        : (isHovered ? t.hair2.opacity(colorScheme == .dark ? 1.0 : 1.35) : Color.clear),
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(isOpen ? t.accentAlpha(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
-                )
-                .contentShape(Rectangle())
+        let showsHoverActions = isHovered || isOpen
+        Button {
+            // openSession() keeps any in-progress draft alive (don't clear it).
+            if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
+                model.openSession(primary)
+            } else if let draft = model.workspaceDraftTabs(in: worktreeKey).last {
+                model.selectDraftWorkspaceTab(draft)
+            } else if let terminal = model.workspaceTerminalTabs(in: worktreeKey).last {
+                model.selectWorkspaceTerminalTab(terminal)
+            } else if let document = model.workspaceDocumentTabs(in: worktreeKey).last {
+                model.selectWorkspaceDocumentTab(document)
             }
-            .buttonStyle(PressableButtonStyle())
-            .accessibilityIdentifier("code.worktree.row")
-            .accessibilityValue(isOpen ? "selected" : "not selected")
-
-            if isHovered || isOpen {
+        } label: {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(wt.branch)
+                        .font(TahoeFont.body(12.5, weight: .medium))
+                        .foregroundStyle(t.fg)
+                        .lineLimit(1).truncationMode(.middle)
+                    Text(worktreeSubtitle(wt))
+                        .font(TahoeFont.body(9.5))
+                        .foregroundStyle(t.fg4)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+                Spacer(minLength: 4)
+                if isActive {
+                    StatusPulseDot(color: .green, isLive: true)
+                        .help("AI session running in this worktree")
+                } else if provisioning {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.6)
+                        .frame(width: 14, height: 14)
+                        .help("Setting up this worktree")
+                }
+                if wt.sessions.count > 1 {
+                    Text("\(wt.sessions.count)")
+                        .font(TahoeFont.body(9.5, weight: .semibold))
+                        .foregroundStyle(t.fg3)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(t.hair2, in: Capsule())
+                        .help("\(wt.sessions.count) models on this branch — open to switch via tabs")
+                }
+                if isOpen {
+                    Text("Selected worktree")
+                        .font(.system(size: 1))
+                        .frame(width: 1, height: 1)
+                        .opacity(0.001)
+                        .accessibilityIdentifier("code.worktree.row.selected")
+                }
+            }
+            .padding(.leading, 48)
+            // Always reserve trailing space when inline accessories are present
+            // so the live dot stays put when the archive affordance appears on
+            // hover/selection. Archive is 22pt wide with an 18pt trailing inset.
+            .padding(.trailing, (isActive || provisioning || wt.sessions.count > 1) ? 44 : 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                isOpen
+                    ? t.accent.opacity(0.12)
+                    : (isHovered ? t.hair2.opacity(colorScheme == .dark ? 1.0 : 1.35) : Color.clear),
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(isOpen ? t.accentAlpha(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .accessibilityIdentifier("code.worktree.row")
+        .accessibilityValue(isOpen ? "selected" : "not selected")
+        .overlay(alignment: .trailing) {
+            if showsHoverActions {
                 SessionHoverActions(
                     onArchive: {
                         let sessions = wt.sessions
@@ -870,7 +873,6 @@ struct SidebarPane: View {
                     }
                 )
                 .padding(.trailing, 18)
-                .zIndex(1)
             }
         }
         .onHover { inside in
