@@ -103,6 +103,8 @@ struct ChatThreadScroll: View {
         let _ = BodyInvalidationCounter.bump("ChatThreadScroll")
         let streamingTailId = streamingTailItemId
         let projection = transcriptProjection
+        let showEmptyState = projection.turns.isEmpty && !liveStatusSlice.isLoading
+        let showCenteredEmpty = showEmptyState && !liveStatusSlice.hasOlderHistory
         return ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
@@ -112,10 +114,11 @@ struct ChatThreadScroll: View {
                                 .padding(.top, 10)
                                 .padding(.bottom, 4)
                         }
-                        if projection.turns.isEmpty && !liveStatusSlice.isLoading {
-                            TranscriptEmptyState()
-                                .frame(maxWidth: .infinity)
-                        } else {
+                        if showEmptyState && liveStatusSlice.hasOlderHistory {
+                            TranscriptEmptyState(style: .inline)
+                                .frame(maxWidth: .infinity, alignment: .top)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else if !showEmptyState {
                             ForEach(projection.turns) { turn in
                                 collapsedTurnView(turn, streamingTailId: streamingTailId)
                                     .id(turn.id)
@@ -229,6 +232,11 @@ struct ChatThreadScroll: View {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .transcriptLastUser)) { _ in
                     jumpToLastUserMessage(proxy)
+                }
+
+                if showCenteredEmpty {
+                    TranscriptEmptyState()
+                        .allowsHitTesting(false)
                 }
 
                 if showingFindBar {
