@@ -128,6 +128,7 @@
 		453B70AABD9A8921BA9706FB /* PathValidatorMacTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98E6E75C4550204AE0288EB6 /* PathValidatorMacTests.swift */; };
 		457E68D990E7B761C11DF6CC /* AgentSpawner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60F7916F41AB5EC1B7B2D265 /* AgentSpawner.swift */; };
 		462ED418D83A3251EDBB6147 /* WorkbenchState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3DBEBE9BF592FA1BC71A42 /* WorkbenchState.swift */; };
+		2D5F9B3E0C4E6789F0123BCD /* WorkbenchPaneResizeHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C4E8A2F9B3D5678E9012ABC /* WorkbenchPaneResizeHandle.swift */; };
 		474D533A51C9F590F650920A /* VendorProvisioningSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FE36F4B9D0C20CEBC060E31 /* VendorProvisioningSettingsView.swift */; };
 		478FB511877975AA262E0C5E /* InAppBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5CD2911F13424CC9F9FF23C /* InAppBrowser.swift */; };
 		47D3761AA7684853334F6E0E /* FollowUpSchedulerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF6A097860132AA047706A47 /* FollowUpSchedulerSheet.swift */; };
@@ -759,6 +760,7 @@
 		9B3AA024217929E481D26844 /* MacUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUsageView.swift; sourceTree = "<group>"; };
 		9BE24F0540974DFD90D7CBDE /* iOSChatStore+ChatSnapshotSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "iOSChatStore+ChatSnapshotSource.swift"; sourceTree = "<group>"; };
 		9D3DBEBE9BF592FA1BC71A42 /* WorkbenchState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchState.swift; sourceTree = "<group>"; };
+		1C4E8A2F9B3D5678E9012ABC /* WorkbenchPaneResizeHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchPaneResizeHandle.swift; sourceTree = "<group>"; };
 		9DB7B4BC345E5F6343D8BACD /* RepoEnvImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoEnvImportSheet.swift; sourceTree = "<group>"; };
 		9DE1CE873A7036C2A2D196B5 /* MenuBarGaugeViewCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarGaugeViewCacheTests.swift; sourceTree = "<group>"; };
 		9E060671BC14646C0E01CDD7 /* TahoeReviewPlanPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TahoeReviewPlanPane.swift; sourceTree = "<group>"; };
@@ -1271,6 +1273,7 @@
 				F74E71DC38B9A26A9521EF00 /* TahoeSourcesPreviewPane.swift */,
 				689B78BE553EFF9A09127D91 /* TerminalTabContainer.swift */,
 				87DB105B08B1AE734AF7FF4B /* TranscriptPathLinks.swift */,
+				1C4E8A2F9B3D5678E9012ABC /* WorkbenchPaneResizeHandle.swift */,
 				9D3DBEBE9BF592FA1BC71A42 /* WorkbenchState.swift */,
 				C77ADCCCF27A10F5786160F6 /* WorkspaceFeedback.swift */,
 				AD697059E985101A941510A3 /* WorkspaceHoverControls.swift */,
@@ -2324,6 +2327,7 @@
 				474D533A51C9F590F650920A /* VendorProvisioningSettingsView.swift in Sources */,
 				490356C50E6D9478834E1622 /* WSChannel.swift in Sources */,
 				63B6862C7101C88DCC150054 /* WireInspector.swift in Sources */,
+				2D5F9B3E0C4E6789F0123BCD /* WorkbenchPaneResizeHandle.swift in Sources */,
 				462ED418D83A3251EDBB6147 /* WorkbenchState.swift in Sources */,
 				AB559B28BC1872C9A27D51B0 /* WorkspaceFeedback.swift in Sources */,
 				05E2D9E727F1FEDC2AEB856C /* WorkspaceHoverControls.swift in Sources */,

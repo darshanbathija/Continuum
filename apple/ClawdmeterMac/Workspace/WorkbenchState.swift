@@ -450,6 +450,40 @@ final class WorkbenchState: ObservableObject {
     var workspaceWidth: CGFloat { CGFloat(snapshot.workspaceWidth) }
     var queuedSends: [QueuedWorkbenchSend] { snapshot.queuedSends }
 
+    static let defaultSidebarWidth: CGFloat = 260
+    static let defaultReviewWidth: CGFloat = 380
+    static let minSidebarWidth: CGFloat = 180
+    static let maxSidebarWidth: CGFloat = 420
+    static let minReviewWidth: CGFloat = 280
+    static let maxReviewWidth: CGFloat = 900
+    static let minCenterWidth: CGFloat = 420
+
+    var sidebarWidth: CGFloat {
+        CGFloat(snapshot.sidebarWidth ?? Double(Self.defaultSidebarWidth))
+    }
+
+    var storedReviewWidth: CGFloat? {
+        snapshot.reviewWidth.map { CGFloat($0) }
+    }
+
+    func setSidebarWidth(_ width: CGFloat) {
+        let maxAllowed = max(
+            Self.minSidebarWidth,
+            workspaceWidth - Self.minCenterWidth - Self.minReviewWidth - 24
+        )
+        let clamped = min(max(width, Self.minSidebarWidth), min(Self.maxSidebarWidth, maxAllowed))
+        update { $0.sidebarWidth = Double(clamped) }
+    }
+
+    func setReviewWidth(_ width: CGFloat) {
+        let maxAllowed = max(
+            Self.minReviewWidth,
+            workspaceWidth - sidebarWidth - Self.minCenterWidth - 24
+        )
+        let clamped = min(max(width, Self.minReviewWidth), min(Self.maxReviewWidth, maxAllowed))
+        update { $0.reviewWidth = Double(clamped) }
+    }
+
     func selectSession(_ id: UUID?) {
         update {
             $0.selectedSessionId = id
