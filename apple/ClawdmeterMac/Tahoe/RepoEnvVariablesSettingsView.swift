@@ -121,6 +121,9 @@ struct RepoEnvVariablesSettingsView: View {
                 workspaces: workspaces,
                 sets: sets,
                 defaultWorkspaceId: selectedWorkspaceId,
+                repoRootProvider: { workspaceId in
+                    workspaces.first { $0.id == workspaceId }?.repoRoot
+                },
                 previewProvider: { text, workspaceId in
                     envStore?.previewImport(text, workspaceId: workspaceId) ?? []
                 },
@@ -1145,22 +1148,34 @@ struct RepoEnvVariablesSettingsView: View {
     }
 
     private func importVariables(_ draft: RepoEnvImportDraft) -> Bool {
-        guard let envStore, let workspace = selectedWorkspace else { return false }
+        guard let envStore else { return false }
+        let targetIds = Array(draft.workspaceIds)
+        guard !targetIds.isEmpty else { return false }
+        // Set selection (draft.setIds) applies to the "current" workspace, and we
+        // materialize what we imported into — both come from the sheet's targets, not the
+        // settings page's selected repo. The sheet can target a different repo (and the
+        // vendor flow always does single-workspace), so keying off selectedWorkspace would
+        // write the .env to the wrong repo.
+        let currentWorkspaceId = selectedWorkspaceId
+            .flatMap { draft.workspaceIds.contains($0) ? $0 : nil } ?? targetIds[0]
         do {
             let batch = try envStore.importVariables(
                 previews: draft.previews,
-                workspaceIds: Array(draft.workspaceIds),
+                workspaceIds: targetIds,
                 selectedSetIds: draft.setIds,
-                currentWorkspaceId: workspace.id,
+                currentWorkspaceId: currentWorkspaceId,
                 conflictStrategy: draft.conflictStrategy,
                 kind: draft.kind,
                 actor: NSUserName()
             )
-            let materialized = materializeSelectedRepo()
+            // Import has persisted. Materialize each target repo's .env; a materialize
+            // failure surfaces via errorText but is NOT reported as an import failure —
+            // the records are already saved, so retrying would duplicate/overwrite them.
+            materializeRepos(targetIds)
             lastImportSummary = "Imported \(batch.importedCount), overwrote \(batch.overwrittenCount), skipped \(batch.skippedCount)."
             isImportingVariables = false
             refresh(selectFirstIfNeeded: false)
-            return materialized
+            return true
         } catch {
             errorText = error.localizedDescription
             return false
@@ -1202,6 +1217,22 @@ struct RepoEnvVariablesSettingsView: View {
             errorText = error.localizedDescription
             return false
         }
+    }
+
+    /// Materialize the active set into each given workspace's .env. Used by import, which
+    /// can target repos other than the currently-selected one. Sets errorText to the first
+    /// failure (or clears it when every target succeeds).
+    private func materializeRepos(_ workspaceIds: [UUID]) {
+        var firstError: String?
+        for id in workspaceIds {
+            guard let repoRoot = workspaces.first(where: { $0.id == id })?.repoRoot else { continue }
+            do {
+                _ = try resolver?.materializeActiveSet(repoRoot: repoRoot)
+            } catch {
+                if firstError == nil { firstError = error.localizedDescription }
+            }
+        }
+        errorText = firstError
     }
 
     private func adoptManual(_ conflict: RepoEnvConflict) {

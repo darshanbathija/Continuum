@@ -22,6 +22,39 @@ final class ChatV2StoreCursorTests: XCTestCase {
         super.tearDown()
     }
 
+    // Fine-grained per-defaults-store helpers used by tests that write directly
+    // into specific UserDefaults suites (e.g. test_restoredCursorAndOpenRouterVendorsPersist).
+    private struct SavedProviderFlag {
+        let defaults: UserDefaults
+        let key: String
+        let value: Any?
+    }
+
+    private func providerDefaultStores() -> [UserDefaults] {
+        var stores = [UserDefaults.standard]
+        stores.append(contentsOf: UsageStore.appGroups.compactMap { UserDefaults(suiteName: $0) })
+        return stores
+    }
+
+    private func saveProviderFlags() -> [SavedProviderFlag] {
+        providerDefaultStores().flatMap { defaults in
+            ProviderRegistry.allProviderIDs.map { id in
+                let key = ProviderEnablement.key(for: id)
+                return SavedProviderFlag(defaults: defaults, key: key, value: defaults.object(forKey: key))
+            }
+        }
+    }
+
+    private func restoreProviderFlags(_ saved: [SavedProviderFlag]) {
+        for item in saved {
+            if let value = item.value {
+                item.defaults.set(value, forKey: item.key)
+            } else {
+                item.defaults.removeObject(forKey: item.key)
+            }
+        }
+    }
+
     @MainActor
     func test_cursorAndOpenRouterAreSelectableChatVendors() async {
         XCTAssertTrue(ChatV2Store.defaultChatVendorOrder.contains(.cursor))
@@ -32,6 +65,15 @@ final class ChatV2StoreCursorTests: XCTestCase {
 
     @MainActor
     func test_restoredCursorAndOpenRouterVendorsPersist() async {
+        // Restoration consults ProviderEnablement (global, opt-in OFF by default). Force all
+        // providers off — restoring the machine's real flags afterward — so init restores no
+        // vendors regardless of which providers the dev has enabled locally.
+        let savedFlags = saveProviderFlags()
+        defer { restoreProviderFlags(savedFlags) }
+        for id in ProviderRegistry.allProviderIDs {
+            ProviderEnablement.setEnabled(id, false)
+        }
+
         let suiteName = "ChatV2StoreCursorTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
