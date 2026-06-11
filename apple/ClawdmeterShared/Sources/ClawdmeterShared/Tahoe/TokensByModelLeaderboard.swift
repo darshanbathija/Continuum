@@ -143,9 +143,9 @@ public enum TokensByModelLeaderboard {
     }
 }
 
-/// Range pills for the tokens leaderboard — Today | 7d | 30d | 90d | All time.
+/// Range selector for analytics — matches primary nav (`TahoeDashTab` inside
+/// `TahoeGlass`). Today | 7d | 30d | 90d | All time.
 public struct TokensByModelRangeSelector: View {
-    @Environment(\.theme) private var t
     @Binding var value: String
     private let items: [(String, String)] = [
         ("today", "Today"), ("7d", "7d"), ("30d", "30d"), ("90d", "90d"), ("all", "All time"),
@@ -156,33 +156,18 @@ public struct TokensByModelRangeSelector: View {
     }
 
     public var body: some View {
-        HStack(spacing: 2) {
-            ForEach(items, id: \.0) { (k, label) in
-                let active = k == value
-                Button { value = k } label: {
-                    Text(label)
-                        .font(ContinuumFont.mono(11, weight: active ? .semibold : .regular))
-                        .foregroundStyle(active ? t.primaryText : t.fg2)
-                        .padding(.horizontal, 10)
-                        .frame(height: 22)
-                        .background {
-                            if active {
-                                Capsule(style: .continuous)
-                                    .fill(t.segmentActiveFill)
-                                    .overlay(Capsule(style: .continuous).strokeBorder(t.hair2, lineWidth: 0.5))
-                            }
-                        }
-                        .contentShape(Capsule())
+        TahoeGlass(radius: 6, tone: .chip) {
+            HStack(spacing: 10) {
+                ForEach(items, id: \.0) { (k, label) in
+                    TahoeDashTab(label, active: k == value) {
+                        value = k
+                    }
                 }
-                .buttonStyle(.plain)
             }
+            .padding(.horizontal, 14)
+            .frame(height: 30)
         }
-        .padding(2)
-        .background {
-            Capsule(style: .continuous)
-                .fill(t.surface1)
-                .overlay(Capsule(style: .continuous).strokeBorder(t.hairline, lineWidth: 0.5))
-        }
+        .fixedSize()
     }
 }
 
