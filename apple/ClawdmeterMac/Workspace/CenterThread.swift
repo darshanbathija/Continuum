@@ -700,7 +700,8 @@ struct CenterThread: View {
                     store.setPlanText(newValue)
                 }
         } else {
-            ConnectingTranscriptState(session: session)
+            TranscriptEmptyState()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

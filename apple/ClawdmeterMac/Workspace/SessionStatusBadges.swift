@@ -4,7 +4,7 @@ import ClawdmeterShared
 /// Small leaf views used across the sidebar + workspace switcher to
 /// surface per-session status: pulse dots for live sessions, attention
 /// badges for "agent needs you", hover-action buttons (pin/mute/archive),
-/// and the connecting-spinner state.
+/// and the transcript empty-state placeholder.
 ///
 /// Lifted out of `SessionWorkspaceView.swift` by **A6 (foundation)** —
 /// see .claude/plans/study-this-codebase-crystalline-shore.md. Every
@@ -155,42 +155,19 @@ struct SessionHoverActions: View {
     }
 }
 
-/// Placeholder state shown while the daemon is wiring up a new session's
-/// transcript stream. Renders only static props (session metadata) plus
-/// one decorative `StatusPulseDot` — fully independent of the parent.
-struct ConnectingTranscriptState: View {
-    let session: AgentSession
-
+/// Placeholder shown when a session transcript is empty or not yet wired.
+/// Matches the refreshed Code-tab empty state (0.33) — no connecting spinner.
+struct TranscriptEmptyState: View {
     var body: some View {
-        VStack(spacing: 10) {
-            ZStack {
-                StatusPulseDot(color: .green, isLive: true)
-                    .scaleEffect(1.8)
-                Image(systemName: "sparkle")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(width: 48, height: 48)
-            Text("Connecting to \(session.agent.rawValue.capitalized)")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.primary)
-            Text(session.effectiveCwd)
-                .font(.system(size: 10, design: .monospaced))
+        VStack(spacing: 8) {
+            Image(systemName: "hammer")
+                .font(.system(size: 22))
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 440)
-            // The composer below is already live — encourage the user to start
-            // writing while the agent finishes booting; the first send queues and
-            // delivers as soon as it's ready.
-            Text("Go ahead and type your prompt below — it'll send the moment \(session.agent.rawValue.capitalized) is ready.")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 380)
-                .padding(.top, 2)
+            Text("Build something great")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 36)
     }
 }
