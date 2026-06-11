@@ -1185,6 +1185,61 @@ public final class AgentSessionRegistry: ObservableObject {
         update(id: id) { _ in projected }
     }
 
+    /// Move every session bound to `oldWorkspacePath` onto `newWorktreePath`
+    /// after a workspace/worktree rename. Updates cwd fields and provisioning
+    /// metadata while preserving files-to-copy summaries.
+    public func relocateWorktreeSessions(
+        oldWorkspacePath: String,
+        renameResult: WorktreeManager.RenamedWorktree
+    ) async throws {
+        let oldCanonical = WorkspaceKey.canonicalPath(oldWorkspacePath)
+        let newCanonical = WorkspaceKey.canonicalPath(renameResult.newPath)
+        guard oldCanonical != newCanonical
+            || renameResult.oldBranchName != renameResult.newBranchName
+        else { return }
+
+        for session in sessions where sessionMatchesWorkspace(session, canonicalPath: oldCanonical) {
+            let provisioningOverride: WorktreeProvisioningMetadata?? = {
+                guard let prov = session.provisioning else { return nil }
+                return .some(WorktreeProvisioningMetadata(
+                    ownershipMarkerId: prov.ownershipMarkerId,
+                    branchName: renameResult.newBranchName,
+                    worktreePath: newCanonical,
+                    storageRoot: prov.storageRoot,
+                    projectSlug: prov.projectSlug,
+                    workspaceSlug: renameResult.workspaceSlug,
+                    branchAliasPath: renameResult.branchAliasPath,
+                    filesToCopy: prov.filesToCopy,
+                    createdAt: prov.createdAt
+                ))
+            }()
+            let projected = with(
+                session,
+                worktreePath: relocatedPath(session.worktreePath, from: oldCanonical, to: newCanonical),
+                provisioning: provisioningOverride,
+                runtimeCwd: relocatedPath(session.runtimeCwd, from: oldCanonical, to: newCanonical),
+                chatCwd: relocatedPath(session.chatCwd, from: oldCanonical, to: newCanonical)
+            )
+            try await writeReceipt(
+                kind: .sessionMetadataUpdated,
+                sessionId: session.id,
+                session: projected
+            )
+            update(id: session.id) { _ in projected }
+        }
+    }
+
+    private func sessionMatchesWorkspace(_ session: AgentSession, canonicalPath: String) -> Bool {
+        let candidates = [session.worktreePath, session.runtimeCwd, session.chatCwd]
+        return candidates.compactMap { $0 }
+            .contains { WorkspaceKey.canonicalPath($0) == canonicalPath }
+    }
+
+    private func relocatedPath(_ path: String?, from old: String, to new: String) -> String?? {
+        guard let path else { return nil }
+        return WorkspaceKey.canonicalPath(path) == old ? .some(new) : nil
+    }
+
     /// v6 (Track A): persist the Claude CLI session id for `--resume`. No-op if
     /// unchanged so the per-turn re-capture doesn't churn the registry / receipts.
     public func setClaudeSessionId(id: UUID, value: String?) async throws {

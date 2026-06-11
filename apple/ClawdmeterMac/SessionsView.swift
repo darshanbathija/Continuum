@@ -996,6 +996,71 @@ public final class SessionsModel: ObservableObject {
         }
     }
 
+    /// Rename a sidebar worktree row: updates the on-disk folder, git branch,
+    /// registry session cwd fields, and any open workspace tabs bound to the path.
+    @discardableResult
+    func renameWorkspace(
+        repoKey: String,
+        workspacePath: String,
+        newName: String
+    ) async -> Bool {
+        do {
+            let result = try await WorktreeManager.shared.renameWorktree(
+                repoRoot: repoKey,
+                worktreePath: workspacePath,
+                newDisplayName: newName
+            )
+            try await registry.relocateWorktreeSessions(
+                oldWorkspacePath: workspacePath,
+                renameResult: result
+            )
+            let oldKey = WorkspaceKey(repoKey: repoKey, workspacePath: workspacePath)
+            let newKey = WorkspaceKey(repoKey: repoKey, workspacePath: result.newPath)
+            relocateWorkspaceTabs(from: oldKey, to: newKey)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func relocateWorkspaceTabs(from oldKey: WorkspaceKey, to newKey: WorkspaceKey) {
+        guard oldKey != newKey else { return }
+        workspaceDraftTabs = workspaceDraftTabs.map { tab in
+            guard tab.workspaceKey == oldKey else { return tab }
+            return WorkspaceDraftTab(
+                id: tab.id,
+                workspaceKey: newKey,
+                mode: tab.mode,
+                agent: tab.agent,
+                modelId: tab.modelId,
+                effort: tab.effort,
+                createdAt: tab.createdAt
+            )
+        }
+        workspaceTerminalTabs = workspaceTerminalTabs.map { tab in
+            guard tab.workspaceKey == oldKey else { return tab }
+            return WorkspaceTerminalTab(
+                id: tab.id,
+                sessionId: tab.sessionId,
+                workspaceKey: newKey,
+                paneRefId: tab.paneRefId,
+                isPendingDirectShell: tab.isPendingDirectShell,
+                pendingTitle: tab.pendingTitle,
+                createdAt: tab.createdAt
+            )
+        }
+        workspaceDocumentTabs = workspaceDocumentTabs.map { tab in
+            guard tab.workspaceKey == oldKey else { return tab }
+            return WorkspaceDocumentTab(
+                id: tab.id,
+                sessionId: tab.sessionId,
+                workspaceKey: newKey,
+                path: tab.path,
+                createdAt: tab.createdAt
+            )
+        }
+    }
+
     func queueFirstSendRecovery(
         sessionId: UUID,
         text: String,

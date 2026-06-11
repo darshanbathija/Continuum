@@ -542,6 +542,56 @@ final class WorkspaceStoreTests: XCTestCase {
         )
     }
 
+    func test_renamedBranchNamePreservesSlashPrefix() {
+        XCTAssertEqual(
+            WorktreeManager.renamedBranchName(
+                currentBranch: "darshanbathija/kampala",
+                newDisplayName: "Berlin"
+            ),
+            "darshanbathija/berlin"
+        )
+        XCTAssertEqual(
+            WorktreeManager.renamedBranchName(currentBranch: "kampala", newDisplayName: "Berlin"),
+            "berlin"
+        )
+    }
+
+    func test_renameWorktreeMovesFolderAndRenamesBranch() async throws {
+        let repo = try makeGitRepo(name: "rename-repo")
+        try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
+        try git(["add", "tracked.txt"], cwd: repo)
+        try git(["commit", "-m", "initial"], cwd: repo)
+
+        let manager = WorktreeManager(workspaceStorageRoot: workspaceStorageRoot.path)
+        let provisioned = try await manager.provision(
+            repoRoot: repo.path,
+            slug: "kampala",
+            branchName: "user/kampala",
+            filesToCopy: WorkspaceFilesToCopySettings(enabled: false)
+        )
+
+        let renamed = try await manager.renameWorktree(
+            repoRoot: repo.path,
+            worktreePath: provisioned.path,
+            newDisplayName: "Berlin"
+        )
+
+        XCTAssertEqual(renamed.oldBranchName, "user/kampala")
+        XCTAssertEqual(renamed.newBranchName, "user/berlin")
+        XCTAssertTrue(renamed.newPath.hasSuffix("/berlin"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: provisioned.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: renamed.newPath))
+
+        let branch = try gitOutput(["branch", "--show-current"], cwd: URL(fileURLWithPath: renamed.newPath))
+        XCTAssertEqual(branch, "user/berlin")
+
+        _ = try await manager.cleanupProvisionedWorktree(
+            repoRoot: repo.path,
+            worktreePath: renamed.newPath,
+            expectedMarkerId: provisioned.metadata.ownershipMarkerId
+        )
+    }
+
     func test_worktreeProvisionCreatesBranchAliasWhenBranchDiffersFromCity() async throws {
         let repo = try makeGitRepo(name: "alias-repo")
         try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
@@ -667,24 +717,46 @@ final class WorkspaceStoreTests: XCTestCase {
     }
 
     private func git(_ args: [String], cwd: URL) throws {
+        let status = try runGit(args, cwd: cwd)
+        guard status == 0 else {
+            throw NSError(
+                domain: "WorkspaceStoreTests.git",
+                code: Int(status),
+                userInfo: [NSLocalizedDescriptionKey: "git \(args.joined(separator: " ")) failed"]
+            )
+        }
+    }
+
+    private func gitOutput(_ args: [String], cwd: URL) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + args
         process.currentDirectoryURL = cwd
         let stdout = Pipe()
-        let stderr = Pipe()
         process.standardOutput = stdout
-        process.standardError = stderr
+        process.standardError = Pipe()
         try process.run()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
-            let out = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            let err = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             throw NSError(
                 domain: "WorkspaceStoreTests.git",
                 code: Int(process.terminationStatus),
-                userInfo: [NSLocalizedDescriptionKey: "git \(args.joined(separator: " ")) failed: \(out)\(err)"]
+                userInfo: [NSLocalizedDescriptionKey: "git \(args.joined(separator: " ")) failed"]
             )
         }
+        return String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func runGit(_ args: [String], cwd: URL) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + args
+        process.currentDirectoryURL = cwd
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
     }
 }

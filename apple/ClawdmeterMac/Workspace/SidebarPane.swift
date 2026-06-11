@@ -52,6 +52,9 @@ struct SidebarPane: View {
     @State private var renameJSONLTarget: RecentSession?
     @State private var renameJSONLInput: String = ""
     @State private var showingRenameJSONLAlert: Bool = false
+    @State private var renameWorktreeTarget: WorktreeGroup?
+    @State private var renameWorktreeInput: String = ""
+    @State private var showingRenameWorktreeAlert: Bool = false
     @State private var collapsedStatusGroupIDs: Set<String> = []
     @State private var collapsedPrioritySectionIDs: Set<String> = []
     @State private var sidebarViewportHeight: CGFloat = 0
@@ -152,6 +155,22 @@ struct SidebarPane: View {
             }
         } message: { target in
             Text("Currently: \(recentTitle(target))")
+        }
+        .alert(
+            "Rename workspace",
+            isPresented: $showingRenameWorktreeAlert,
+            presenting: renameWorktreeTarget
+        ) { target in
+            TextField("Name", text: $renameWorktreeInput)
+                .textFieldStyle(.roundedBorder)
+            Button("Save") {
+                commitWorktreeRename(target, name: renameWorktreeInput)
+            }
+            Button("Cancel", role: .cancel) {
+                resetWorktreeRenameState()
+            }
+        } message: { target in
+            Text("Renames the workspace folder and git branch. Currently: \(target.branch)")
         }
         .alert(
             "Color tag",
@@ -908,7 +927,28 @@ struct SidebarPane: View {
                 hoveredWorktreePath = nil
             }
         }
+        .contextMenu {
+            worktreeContextMenu(wt)
+        }
         .padding(.horizontal, 10)
+    }
+
+    @ViewBuilder
+    private func worktreeContextMenu(_ wt: WorktreeGroup) -> some View {
+        Button("Rename…", systemImage: "pencil") {
+            renameWorktreeTarget = wt
+            renameWorktreeInput = wt.branch
+            showingRenameWorktreeAlert = true
+        }
+        .accessibilityIdentifier("code.worktree.rename")
+        if !wt.sessions.isEmpty {
+            Button("Archive all sessions", systemImage: "archivebox") {
+                let ids = wt.sessions.map(\.id)
+                Task { @MainActor in
+                    try? await model.registry.archive(ids: ids)
+                }
+            }
+        }
     }
 
     /// The models running on a worktree, oldest→newest (the handoff chain) with
@@ -2096,6 +2136,35 @@ struct SidebarPane: View {
         showingRenameAlert = false
         renameTarget = nil
         renameInput = ""
+    }
+
+    private func commitWorktreeRename(_ worktree: WorktreeGroup, name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            resetWorktreeRenameState()
+            return
+        }
+        Task { @MainActor in
+            let ok = await model.renameWorkspace(
+                repoKey: worktree.repoKey,
+                workspacePath: worktree.path,
+                newName: trimmed
+            )
+            if !ok {
+                NotificationCenter.default.post(
+                    name: .clawdmeterShowTransientToast,
+                    object: nil,
+                    userInfo: ["toast": TransientToast(title: "Couldn't rename workspace")]
+                )
+            }
+            resetWorktreeRenameState()
+        }
+    }
+
+    private func resetWorktreeRenameState() {
+        showingRenameWorktreeAlert = false
+        renameWorktreeTarget = nil
+        renameWorktreeInput = ""
     }
 
     private func latestAssistantSummary(for session: AgentSession) -> String? {
