@@ -88,6 +88,7 @@ public struct IOSSessionDetailView: View {
     /// session and surfaces as a `.failed` envelope. Local flag
     /// closes the window.
     @State private var approving: Bool = false
+    @State private var isRetrying: Bool = false
     @State private var refineAlertShown: Bool = false
     @State private var refineText: String = ""
     @State private var lastError: String?
@@ -1360,8 +1361,11 @@ public struct IOSSessionDetailView: View {
     private func performTurnRetry(promptBody: String) async {
         guard session != nil, !data.isDemo else { return }
         guard chatStore.snapshot.currentTurnState != .streaming else { return }
+        guard !isRetrying else { return }
         let trimmed = promptBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        isRetrying = true
+        defer { isRetrying = false }
         if isSessionRunning {
             queueDraft(text: trimmed)
             return

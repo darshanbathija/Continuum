@@ -2032,8 +2032,12 @@ private enum ChatV2TurnRecovery {
         sessionId: UUID,
         promptBody: String
     ) async {
+        let liveDraft = sendCtl.text
         sendCtl.text = promptBody
         await sendCtl.send(via: .solo(sessionId: sessionId))
+        if !liveDraft.isEmpty && liveDraft != promptBody {
+            sendCtl.text = liveDraft
+        }
     }
 
     static func retryInNewChat(
@@ -2043,6 +2047,7 @@ private enum ChatV2TurnRecovery {
         promptBody: String,
         openTarget: Binding<ChatOpenTarget?>
     ) async {
+        let liveDraft = sendCtl.text
         sendCtl.text = promptBody
         await sendCtl.sendCustomOptimistic { trimmed in
             guard let newSession = await client.createChatSession(
@@ -2063,6 +2068,9 @@ private enum ChatV2TurnRecovery {
                 asFollowUp: false
             )
             return ok ? nil : (client.lastError ?? "Couldn't send prompt.")
+        }
+        if !liveDraft.isEmpty && liveDraft != promptBody {
+            sendCtl.text = liveDraft
         }
     }
 }

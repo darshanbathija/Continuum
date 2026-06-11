@@ -851,6 +851,7 @@ struct ChatThreadScroll: View {
 
     private func modelFailureRetryPrompt(for item: ChatItem, isStreamingTail: Bool) -> String? {
         guard case .message(let message) = item else { return nil }
+        guard message.isError else { return nil }
         let retryPrompt = ModelFailureRecovery.retryPrompt(
             forErrorMessageId: message.id,
             in: messagesSlice.items

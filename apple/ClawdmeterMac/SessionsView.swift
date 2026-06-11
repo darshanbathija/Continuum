@@ -1804,7 +1804,7 @@ public final class SessionsModel: ObservableObject {
                     acceptEdits: permissionMode == .acceptEdits,
                     autopilot: permissionMode == .bypass,
                     providerInstanceId: parent.providerInstanceId,
-                    initialMessage: promptBody,
+                    initialMessage: nil,
                     customProviderId: parent.customProviderId
                 )
             } else if parent.kind == .chat,
@@ -1821,7 +1821,7 @@ public final class SessionsModel: ObservableObject {
                     acceptEdits: permissionMode == .acceptEdits,
                     autopilot: permissionMode == .bypass,
                     providerInstanceId: parent.providerInstanceId,
-                    initialMessage: promptBody,
+                    initialMessage: nil,
                     customProviderId: parent.customProviderId
                 )
             } else {
