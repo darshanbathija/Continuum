@@ -33,6 +33,7 @@
 
 #if canImport(SwiftUI)
 import SwiftUI
+import UniformTypeIdentifiers
 import ClawdmeterShared
 
 @MainActor
@@ -90,6 +91,7 @@ public struct ComposerModelPicker: View {
     @State private var activeRail: RailKey
     @State private var searchQuery: String = ""
     @State private var focusedRowIndex: Int? = nil
+    @State private var draggingFavoriteId: String? = nil
     @FocusState private var searchFocused: Bool
 
     public init(
@@ -413,17 +415,32 @@ public struct ComposerModelPicker: View {
 
     @ViewBuilder
     private func modelRow(entry: VisibleRowEntry, index: Int) -> some View {
-        let isSelected = isCurrentlySelected(entry: entry)
+        // Starred rail aggregates defaults across providers — highlighting
+        // every vendor's current model reads as "all selected". Only the
+        // keyboard-focused row gets accent chrome there.
+        let showsProviderSelection = activeRail != .favorites
+        let isSelected = showsProviderSelection && isCurrentlySelected(entry: entry)
         let isFav = entry.choice.chatVendor.map {
             defaultsStore.isFavorite(modelId: entry.model.id, vendor: $0)
         } ?? false
+        let isFavoritesRail = activeRail == .favorites
         // ⌘N is suppressed during search to avoid binding shortcuts to a
         // cross-provider list (would be surprising for the user).
         let shortcut: Character? = (searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && index < 9)
             ? Character("\(index + 1)") : nil
         let isFocused = (focusedRowIndex == index)
+        let isDragging = draggingFavoriteId == entry.compositeId
 
         HStack(spacing: 10) {
+            if isFavoritesRail {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(t.fg4)
+                    .frame(width: 12)
+                    .help("Drag to reorder shortcuts")
+                    .accessibilityHidden(true)
+            }
+
             Button {
                 if let vendor = entry.choice.chatVendor {
                     defaultsStore.toggleFavoriteModel(entry.model.id, for: vendor)
@@ -472,6 +489,7 @@ public struct ComposerModelPicker: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(isDragging ? 0.45 : 1.0)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isSelected ? Color.white.opacity(0.10) : Color.clear)
@@ -483,6 +501,28 @@ public struct ComposerModelPicker: View {
                     : (isSelected ? t.accent.opacity(0.30) : Color.clear),
                     lineWidth: isFocused ? 1.0 : 0.5
                 )
+        )
+        .onDrag {
+            guard isFavoritesRail else {
+                return NSItemProvider()
+            }
+            draggingFavoriteId = entry.compositeId
+            return NSItemProvider(object: entry.compositeId as NSString)
+        }
+        .onDrop(
+            of: [.plainText],
+            delegate: FavoriteReorderDropDelegate(
+                targetIndex: index,
+                entries: visibleEntries,
+                draggingId: $draggingFavoriteId,
+                onMove: { dragId, destinationIndex in
+                    defaultsStore.moveFavorite(
+                        dragId: dragId,
+                        to: destinationIndex,
+                        enabledVendors: enabledVendors
+                    )
+                }
+            )
         )
     }
 
@@ -711,6 +751,12 @@ public struct ComposerModelPicker: View {
 
     private func currentlySelectedRowIndex() -> Int? {
         guard !visibleEntries.isEmpty else { return nil }
+        if activeRail == .favorites {
+            if let i = visibleEntries.firstIndex(where: { $0.choice == initialChoice && isCurrentlySelected(entry: $0) }) {
+                return i
+            }
+            return 0
+        }
         if let i = visibleEntries.firstIndex(where: { isCurrentlySelected(entry: $0) }) {
             return i
         }
@@ -805,16 +851,17 @@ public struct ComposerModelPicker: View {
     private func entries(for key: RailKey) -> [VisibleRowEntry] {
         switch key {
         case .favorites:
-            var seen = Set<String>()
             var out: [VisibleRowEntry] = []
-            for vendor in enabledVendors {
-                for id in defaultsStore.favoriteModelIds(for: vendor) {
-                    guard let model = catalog.entry(forId: id) else { continue }
-                    let row = VisibleRowEntry(choice: .builtin(vendor), model: model)
-                    if seen.insert(row.compositeId).inserted {
-                        out.append(row)
-                    }
+            for compositeId in defaultsStore.resolvedFavoriteOrder(enabledVendors: enabledVendors) {
+                guard let parsed = ProviderDefaultsSnapshot.parseFavoriteCompositeId(compositeId),
+                      let choice = ProviderChoice.decode(parsed.choiceId),
+                      enabledChoices.contains(choice),
+                      let vendor = choice.chatVendor,
+                      defaultsStore.isFavorite(modelId: parsed.modelId, vendor: vendor),
+                      let model = catalog.entry(forId: parsed.modelId) else {
+                    continue
                 }
+                out.append(VisibleRowEntry(choice: choice, model: model))
             }
             return out
         case .vendor(let vendor):
@@ -887,7 +934,38 @@ private struct RailEntry: Identifiable {
 struct VisibleRowEntry: Hashable {
     let choice: ProviderChoice
     let model: ModelCatalogEntry
-    var compositeId: String { "\(choice.id)|\(model.id)" }
+    var compositeId: String {
+        ProviderDefaultsSnapshot.favoriteCompositeId(choiceId: choice.id, modelId: model.id)
+    }
+}
+
+private struct FavoriteReorderDropDelegate: DropDelegate {
+    let targetIndex: Int
+    let entries: [VisibleRowEntry]
+    @Binding var draggingId: String?
+    let onMove: (String, Int) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        draggingId != nil
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard let dragId = draggingId,
+              let sourceIndex = entries.firstIndex(where: { $0.compositeId == dragId }),
+              sourceIndex != targetIndex else {
+            return
+        }
+        onMove(dragId, targetIndex)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggingId = nil
+        return true
+    }
 }
 
 #endif

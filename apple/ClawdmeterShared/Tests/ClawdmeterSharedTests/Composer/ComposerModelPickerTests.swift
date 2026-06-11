@@ -69,6 +69,76 @@ final class ComposerModelPickerTests: XCTestCase {
         XCTAssertEqual(store.favoriteModelIds(for: .chatgpt), [])
     }
 
+    func test_favoriteOrder_tracksGlobalShortcutOrder() {
+        let defaults = makeIsolatedDefaults()
+        let store = ProviderDefaultsStore(defaults: defaults)
+        let vendors: [ChatVendor] = [.antigravity, .chatgpt, .claude, .cursor]
+
+        _ = store.toggleFavoriteModel("gemini-3.5-flash-thinking", for: .antigravity)
+        _ = store.toggleFavoriteModel("gpt-5.5", for: .chatgpt)
+        _ = store.toggleFavoriteModel("claude-opus-4-7", for: .claude)
+        _ = store.toggleFavoriteModel("composer-2.5-fast", for: .cursor)
+
+        XCTAssertEqual(
+            store.resolvedFavoriteOrder(enabledVendors: vendors),
+            [
+                "antigravity|gemini-3.5-flash-thinking",
+                "chatgpt|gpt-5.5",
+                "claude|claude-opus-4-7",
+                "cursor|composer-2.5-fast",
+            ]
+        )
+    }
+
+    func test_moveFavorite_reordersShortcutBindings() {
+        let defaults = makeIsolatedDefaults()
+        let store = ProviderDefaultsStore(defaults: defaults)
+        let vendors: [ChatVendor] = [.antigravity, .chatgpt, .claude, .cursor]
+
+        _ = store.toggleFavoriteModel("gemini-3.5-flash-thinking", for: .antigravity)
+        _ = store.toggleFavoriteModel("gpt-5.5", for: .chatgpt)
+        _ = store.toggleFavoriteModel("claude-opus-4-7", for: .claude)
+
+        _ = store.moveFavorite(
+            dragId: "claude|claude-opus-4-7",
+            to: 0,
+            enabledVendors: vendors
+        )
+
+        XCTAssertEqual(
+            store.resolvedFavoriteOrder(enabledVendors: vendors),
+            [
+                "claude|claude-opus-4-7",
+                "antigravity|gemini-3.5-flash-thinking",
+                "chatgpt|gpt-5.5",
+            ]
+        )
+
+        let reopened = ProviderDefaultsStore(defaults: defaults)
+        XCTAssertEqual(
+            reopened.resolvedFavoriteOrder(enabledVendors: vendors),
+            [
+                "claude|claude-opus-4-7",
+                "antigravity|gemini-3.5-flash-thinking",
+                "chatgpt|gpt-5.5",
+            ]
+        )
+    }
+
+    func test_toggleFavoriteModel_removesFromGlobalOrder() {
+        let store = ProviderDefaultsStore(defaults: makeIsolatedDefaults())
+        let vendors: [ChatVendor] = [.chatgpt, .claude]
+
+        _ = store.toggleFavoriteModel("gpt-5.5", for: .chatgpt)
+        _ = store.toggleFavoriteModel("claude-opus-4-7", for: .claude)
+        _ = store.toggleFavoriteModel("gpt-5.5", for: .chatgpt)
+
+        XCTAssertEqual(
+            store.resolvedFavoriteOrder(enabledVendors: vendors),
+            ["claude|claude-opus-4-7"]
+        )
+    }
+
     // MARK: - 2. Cross-provider search
 
     func test_searchFiltersAcrossAllProviders() {
