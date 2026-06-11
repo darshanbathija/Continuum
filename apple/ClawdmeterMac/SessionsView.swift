@@ -1771,6 +1771,93 @@ public final class SessionsModel: ObservableObject {
         return draft?.workspaceKey == key ? draft?.id : nil
     }
 
+    /// Spawn a sibling chat tab in the same workspace and replay the failed
+    /// user prompt against a fresh runtime.
+    @MainActor
+    func retryFailedTurnInNewChat(from parent: AgentSession, promptBody: String) async {
+        let trimmed = promptBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let runtime = AppDelegate.runtime else {
+            WorkspaceFeedback.failure(
+                "Couldn't start a new chat",
+                detail: "Local control server is unavailable."
+            )
+            return
+        }
+
+        let permissionMode = PermissionModeStore.shared.currentMode(for: parent)
+        let goal = String(trimmed.prefix(80))
+        let intentId = UUID().uuidString
+
+        do {
+            let session: AgentSession
+            if let key = WorkspaceKey.of(parent) {
+                session = try await spawnSessionInExistingWorkspace(
+                    repoPath: key.repoKey,
+                    workspacePath: key.workspacePath,
+                    agent: parent.agent,
+                    planMode: permissionMode == .plan,
+                    goal: goal.isEmpty ? nil : goal,
+                    mode: parent.mode,
+                    model: parent.model,
+                    effort: parent.effort,
+                    acceptEdits: permissionMode == .acceptEdits,
+                    autopilot: permissionMode == .bypass,
+                    providerInstanceId: parent.providerInstanceId,
+                    initialMessage: promptBody,
+                    customProviderId: parent.customProviderId
+                )
+            } else if parent.kind == .chat,
+                      let chatCwd = parent.worktreePath ?? parent.runtimeCwd,
+                      !chatCwd.isEmpty {
+                session = try await spawnSession(
+                    repoPath: chatCwd,
+                    agent: parent.agent,
+                    planMode: permissionMode == .plan,
+                    goal: goal.isEmpty ? nil : goal,
+                    mode: parent.mode,
+                    model: parent.model,
+                    effort: parent.effort,
+                    acceptEdits: permissionMode == .acceptEdits,
+                    autopilot: permissionMode == .bypass,
+                    providerInstanceId: parent.providerInstanceId,
+                    initialMessage: promptBody,
+                    customProviderId: parent.customProviderId
+                )
+            } else {
+                WorkspaceFeedback.failure(
+                    "Couldn't start a new chat",
+                    detail: "This session has no workspace to spawn into."
+                )
+                return
+            }
+
+            selectedWorkspaceDraftTabId = nil
+            openSessionId = session.id
+            await refresh()
+
+            guard let port = runtime.agentControlServer.boundPort else { return }
+            let sender = MacComposerSender(
+                port: Int(port),
+                token: runtime.agentControlServer.localLoopbackToken
+            )
+            let body = promptBody.hasSuffix("\n") ? promptBody : promptBody + "\n"
+            try await sender.send(
+                sessionId: session.id,
+                body: body,
+                asFollowUp: false,
+                origin: .userComposerFirstTurn,
+                idempotencyKey: "retry-new-chat:\(session.id.uuidString):\(intentId)",
+                clientIntentId: intentId
+            )
+        } catch {
+            WorkspaceFeedback.failure(
+                "Couldn't start a new chat",
+                detail: error.localizedDescription
+            )
+        }
+    }
+
     /// #185-named convenience around `openOrCreateWorkspaceTerminalTab(from:)`.
     /// Resolves the parent session by id, validates the worktree-terminal gate,
     /// and forwards. Returns true iff the spawn was actually issued.

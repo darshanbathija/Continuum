@@ -87,6 +87,17 @@ struct ComposerInputCore: View {
         let accessibilityIdentifier: String
     }
 
+    struct ModelFailureActionDescriptor: Equatable {
+        enum Kind: Equatable {
+            case retry
+            case retryInNewChat
+        }
+
+        let kind: Kind
+        let visibleTitle: String
+        let accessibilityIdentifier: String
+    }
+
     struct PromptHistoryRowDescriptor: Equatable, Identifiable {
         enum Kind: Equatable {
             case saved(UUID)
@@ -172,6 +183,21 @@ struct ComposerInputCore: View {
                 )
             ]
         }
+    }
+
+    static func modelFailureActionDescriptors() -> [ModelFailureActionDescriptor] {
+        [
+            ModelFailureActionDescriptor(
+                kind: .retry,
+                visibleTitle: "Retry",
+                accessibilityIdentifier: "transcript.modelFailure.retry"
+            ),
+            ModelFailureActionDescriptor(
+                kind: .retryInNewChat,
+                visibleTitle: "Retry in new chat",
+                accessibilityIdentifier: "transcript.modelFailure.retryInNewChat"
+            )
+        ]
     }
 
     static func textAfterPastingTerminalText(existing: String, rawClipboard: String) -> String {

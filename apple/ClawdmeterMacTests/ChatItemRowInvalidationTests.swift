@@ -282,7 +282,8 @@ final class ChatItemRowInvalidationTests: XCTestCase {
             isToolRunOpen: false,
             toolPairsOpen: [:],
             askSelections: [:],
-            isStreamingTail: isStreamingTail
+            isStreamingTail: isStreamingTail,
+            modelFailureRetryPrompt: nil
         )
     }
 
@@ -295,7 +296,9 @@ final class ChatItemRowInvalidationTests: XCTestCase {
             onCopy: { _ in },
             onQuoteReply: { _ in },
             onToggleBookmark: { _ in },
-            onOpenMarkdownDocument: onOpenMarkdownDocument
+            onOpenMarkdownDocument: onOpenMarkdownDocument,
+            onRetryFailedTurn: { _ in },
+            onRetryFailedTurnInNewChat: { _ in }
         )
     }
 }
@@ -430,7 +433,8 @@ private struct ChatTranscriptBurstHarness: View {
             isToolRunOpen: false,
             toolPairsOpen: [:],
             askSelections: [:],
-            isStreamingTail: isStreamingTail
+            isStreamingTail: isStreamingTail,
+            modelFailureRetryPrompt: nil
         )
     }
 
@@ -443,7 +447,9 @@ private struct ChatTranscriptBurstHarness: View {
             onCopy: { _ in },
             onQuoteReply: { _ in },
             onToggleBookmark: { _ in },
-            onOpenMarkdownDocument: { _ in }
+            onOpenMarkdownDocument: { _ in },
+            onRetryFailedTurn: { _ in },
+            onRetryFailedTurnInNewChat: { _ in }
         )
     }
 }

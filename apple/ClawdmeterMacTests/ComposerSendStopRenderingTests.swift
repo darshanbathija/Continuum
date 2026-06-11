@@ -147,6 +147,24 @@ final class ComposerSendStopRenderingTests: XCTestCase {
         )
     }
 
+    func test_modelFailureActionsExposeRetryAndRetryInNewChat() {
+        XCTAssertEqual(
+            ComposerInputCore.modelFailureActionDescriptors(),
+            [
+                ComposerInputCore.ModelFailureActionDescriptor(
+                    kind: .retry,
+                    visibleTitle: "Retry",
+                    accessibilityIdentifier: "transcript.modelFailure.retry"
+                ),
+                ComposerInputCore.ModelFailureActionDescriptor(
+                    kind: .retryInNewChat,
+                    visibleTitle: "Retry in new chat",
+                    accessibilityIdentifier: "transcript.modelFailure.retryInNewChat"
+                )
+            ]
+        )
+    }
+
     func test_contextUsageRingUsesContextWindowOnly() {
         let info = usageInfo(
             contextUsedTokens: 500_000,

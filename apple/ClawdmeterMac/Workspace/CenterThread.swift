@@ -680,6 +680,7 @@ struct CenterThread: View {
                 // scroll view kept its absolute offset and the user
                 // landed mid-history every time they toggled the pane.
                 isReviewPaneVisible: workbenchState.showingReviewPane,
+                isReadOnly: isReadOnly,
                 onPlanRefine: primePlanRefinement,
                 onPlanApprove: {
                     Task {
@@ -687,7 +688,13 @@ struct CenterThread: View {
                         await model.approvePlan(id: session.id)
                     }
                 },
-                onPreviewTurn: onPreviewRequested
+                onPreviewTurn: onPreviewRequested,
+                onRetryFailedTurn: { promptBody in
+                    Task { await performTurnRetry(promptBody: promptBody) }
+                },
+                onRetryFailedTurnInNewChat: { promptBody in
+                    Task { await model.retryFailedTurnInNewChat(from: session, promptBody: promptBody) }
+                }
             )
                 .id(session.id)
                 .onAppear {
@@ -1107,16 +1114,6 @@ struct CenterThread: View {
         }
     }
 
-    /// A13 — Retry handler for the failed/queued pending bubble in the
-    /// composer. Flips the chat store's pending slot back to `.sending`
-    /// (no flicker) and re-runs the regular send path against the
-    /// existing pending body. When the bubble is in `.failed` we don't
-    /// have the composer text anymore (the user already cleared it on
-    /// the first send) — but `performBoundSend` reads from
-    /// `composerStore.text`. We re-seed the composer with the pending
-    /// body so the existing pipeline can replay it, then restore the
-    /// user's in-flight draft if they typed something new during the
-    /// failure window.
     @MainActor
     private func performPendingRetry() async {
         guard let chatStore = model.chatStore(for: session),
@@ -1148,6 +1145,41 @@ struct CenterThread: View {
         // already populated by something other than the pending body.
         let trimmedLive = liveDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         if !liveDraftMatchesPending && (!trimmedLive.isEmpty || !liveDraftBrowserComments.isEmpty) {
+            composerStore.restoreDraft(
+                text: liveDraft,
+                attachments: liveDraftAttachments,
+                browserComments: liveDraftBrowserComments
+            )
+        }
+    }
+
+    /// Re-send the user prompt that preceded a model-failure row in the
+    /// current session. Mirrors the pending-send retry path: re-seed the
+    /// composer with the captured prompt body, then run the normal send
+    /// pipeline so attachments/checkpoints/idempotency stay consistent.
+    @MainActor
+    private func performTurnRetry(promptBody: String) async {
+        guard !isReadOnly else { return }
+        guard currentTurnState != .streaming else { return }
+
+        let liveDraft = composerStore.text
+        let liveDraftAttachments = composerStore.attachments
+        let liveDraftBrowserComments = composerStore.browserComments
+        let liveDraftPayload = ComposerDraftPayload(
+            text: liveDraft,
+            attachmentPaths: liveDraftAttachments.map(\.sourceURL.path),
+            browserComments: liveDraftBrowserComments
+        )
+        let liveDraftMatchesRetry = liveDraftPayload
+            .render()
+            .trimmingCharacters(in: .whitespacesAndNewlines) == promptBody.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        composerStore.text = promptBody
+        composerStore.clearBrowserComments()
+        await performBoundSend()
+
+        let trimmedLive = liveDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !liveDraftMatchesRetry && (!trimmedLive.isEmpty || !liveDraftBrowserComments.isEmpty) {
             composerStore.restoreDraft(
                 text: liveDraft,
                 attachments: liveDraftAttachments,

@@ -25,9 +25,12 @@ struct ChatThreadScroll: View {
     /// new width, item heights shift, and the absolute content offset
     /// the scroll view kept now points mid-history.
     let isReviewPaneVisible: Bool
+    let isReadOnly: Bool
     let onPlanRefine: () -> Void
     let onPlanApprove: () -> Void
     let onPreviewTurn: () -> Void
+    let onRetryFailedTurn: (_ promptBody: String) -> Void
+    let onRetryFailedTurnInNewChat: (_ promptBody: String) -> Void
     @Environment(\.tahoe) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -40,9 +43,12 @@ struct ChatThreadScroll: View {
         showPlanHalo: Bool,
         canApprovePlan: Bool,
         isReviewPaneVisible: Bool,
+        isReadOnly: Bool,
         onPlanRefine: @escaping () -> Void,
         onPlanApprove: @escaping () -> Void,
-        onPreviewTurn: @escaping () -> Void = {}
+        onPreviewTurn: @escaping () -> Void = {},
+        onRetryFailedTurn: @escaping (_ promptBody: String) -> Void = { _ in },
+        onRetryFailedTurnInNewChat: @escaping (_ promptBody: String) -> Void = { _ in }
     ) {
         self.store = store
         _messagesSlice = ObservedObject(wrappedValue: store.messagesSlice)
@@ -54,9 +60,12 @@ struct ChatThreadScroll: View {
         self.showPlanHalo = showPlanHalo
         self.canApprovePlan = canApprovePlan
         self.isReviewPaneVisible = isReviewPaneVisible
+        self.isReadOnly = isReadOnly
         self.onPlanRefine = onPlanRefine
         self.onPlanApprove = onPlanApprove
         self.onPreviewTurn = onPreviewTurn
+        self.onRetryFailedTurn = onRetryFailedTurn
+        self.onRetryFailedTurnInNewChat = onRetryFailedTurnInNewChat
     }
 
     /// IDs of expanded disclosure groups. Per-row `@State` would be ideal
@@ -835,8 +844,25 @@ struct ChatThreadScroll: View {
             isToolRunOpen: isToolRunOpen,
             toolPairsOpen: pairsOpen,
             askSelections: askForRow,
-            isStreamingTail: isStreamingTail
+            isStreamingTail: isStreamingTail,
+            modelFailureRetryPrompt: modelFailureRetryPrompt(for: item, isStreamingTail: isStreamingTail)
         )
+    }
+
+    private func modelFailureRetryPrompt(for item: ChatItem, isStreamingTail: Bool) -> String? {
+        guard case .message(let message) = item else { return nil }
+        let retryPrompt = ModelFailureRecovery.retryPrompt(
+            forErrorMessageId: message.id,
+            in: messagesSlice.items
+        )
+        guard ModelFailureRecovery.shouldOfferRetryActions(
+            message: message,
+            isStreamingTail: isStreamingTail,
+            turnState: liveStatusSlice.currentTurnState,
+            isReadOnly: isReadOnly,
+            retryPrompt: retryPrompt
+        ) else { return nil }
+        return retryPrompt
     }
 
     /// Closures the row fires for user interactions. We bind to the
@@ -898,7 +924,9 @@ struct ChatThreadScroll: View {
             },
             onOpenMarkdownDocument: { path in
                 model.openWorkspaceDocumentTab(from: session, path: path)
-            }
+            },
+            onRetryFailedTurn: onRetryFailedTurn,
+            onRetryFailedTurnInNewChat: onRetryFailedTurnInNewChat
         )
     }
 

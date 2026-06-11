@@ -156,7 +156,13 @@ private struct ChatRoot: View {
                             // swap and leaks A's transcript/scroll state into B. Key on
                             // session.id to force a clean remount — mirrors the sibling
                             // BroadcastTranscript's .id(groupId) below.
-                            SoloTranscript(session: session, runtime: runtime)
+                            SoloTranscript(
+                                session: session,
+                                runtime: runtime,
+                                client: client,
+                                sendCtl: sendCtl,
+                                openTarget: $openTarget
+                            )
                                 .id(session.id)
                         } else {
                             ChatEmptyState(title: "Conversation not loaded", subtitle: "Refresh chat history and try again.")
@@ -168,6 +174,8 @@ private struct ChatRoot: View {
                             failedColumns: failedBroadcastColumns,
                             runtime: runtime,
                             client: client,
+                            sendCtl: sendCtl,
+                            openTarget: $openTarget,
                             onContinueWinner: { winner in
                                 // P1 fix (v0.23.9): server promoted the
                                 // winner out of the broadcast group;
@@ -709,6 +717,9 @@ private struct StartPanel: View {
 private struct SoloTranscript: View {
     let session: AgentSession
     weak var runtime: AppRuntime?
+    @ObservedObject var client: AgentControlClient
+    @ObservedObject var sendCtl: ComposerSendController
+    @Binding var openTarget: ChatOpenTarget?
 
     var body: some View {
         TahoeGlass(radius: 8, tone: .panel) {
@@ -717,7 +728,29 @@ private struct SoloTranscript: View {
                     items: store.snapshot.items,
                     updateCounter: store.snapshot.updateCounter,
                     pathRoot: Self.transcriptPathRoot(for: session),
-                    turnState: store.snapshot.currentTurnState
+                    turnState: store.snapshot.currentTurnState,
+                    recoveryActions: ChatV2TranscriptRecoveryActions(
+                        onRetryFailedTurn: { promptBody in
+                            Task {
+                                await ChatV2TurnRecovery.retryInSession(
+                                    sendCtl: sendCtl,
+                                    sessionId: session.id,
+                                    promptBody: promptBody
+                                )
+                            }
+                        },
+                        onRetryFailedTurnInNewChat: { promptBody in
+                            Task {
+                                await ChatV2TurnRecovery.retryInNewChat(
+                                    sendCtl: sendCtl,
+                                    client: client,
+                                    from: session,
+                                    promptBody: promptBody,
+                                    openTarget: $openTarget
+                                )
+                            }
+                        }
+                    )
                 )
             } else {
                 ProgressView().controlSize(.small)
@@ -754,7 +787,8 @@ private struct ReadOnlyTranscript: View {
                     pathRoot: nil,
                     hasOlderHistory: envelope.truncated,
                     isLoadingOlder: isLoadingOlder,
-                    onLoadOlder: loadOlder
+                    onLoadOlder: loadOlder,
+                    recoveryActions: ChatV2TranscriptRecoveryActions(isReadOnly: true)
                 )
             } else if failed {
                 ChatEmptyState(title: "Transcript unavailable", subtitle: "The archived JSONL could not be loaded.")
@@ -803,6 +837,8 @@ private struct BroadcastTranscript: View {
     let failedColumns: [FailedBroadcastColumn]
     weak var runtime: AppRuntime?
     @ObservedObject var client: AgentControlClient
+    @ObservedObject var sendCtl: ComposerSendController
+    @Binding var openTarget: ChatOpenTarget?
     let onContinueWinner: (AgentSession) -> Void
     @StateObject private var frontierStore: FrontierSnapshotStore
 
@@ -812,6 +848,8 @@ private struct BroadcastTranscript: View {
         failedColumns: [FailedBroadcastColumn] = [],
         runtime: AppRuntime?,
         client: AgentControlClient,
+        sendCtl: ComposerSendController,
+        openTarget: Binding<ChatOpenTarget?>,
         onContinueWinner: @escaping (AgentSession) -> Void
     ) {
         self.groupId = groupId
@@ -819,6 +857,8 @@ private struct BroadcastTranscript: View {
         self.failedColumns = failedColumns
         self.runtime = runtime
         self.client = client
+        self.sendCtl = sendCtl
+        _openTarget = openTarget
         self.onContinueWinner = onContinueWinner
         _frontierStore = StateObject(wrappedValue: FrontierSnapshotStore(groupId: groupId, client: client))
     }
@@ -893,6 +933,8 @@ private struct BroadcastTranscript: View {
             winner: winner(for: child),
             runtime: runtime,
             client: client,
+            sendCtl: sendCtl,
+            openTarget: $openTarget,
             onContinueWinner: onContinueWinner
         )
     }
@@ -915,6 +957,8 @@ private struct ProviderColumn: View {
     let winner: FrontierTurnWinner?
     weak var runtime: AppRuntime?
     @ObservedObject var client: AgentControlClient
+    @ObservedObject var sendCtl: ComposerSendController
+    @Binding var openTarget: ChatOpenTarget?
     let onContinueWinner: (AgentSession) -> Void
     // v0.23.9 adversarial-review fix: double-tap on the continue
     // button used to fire two /pick-winner POSTs (the second hits
@@ -989,14 +1033,16 @@ private struct ProviderColumn: View {
                         items: snapshot.items,
                         updateCounter: snapshot.updateCounter,
                         pathRoot: Self.transcriptPathRoot(for: session),
-                        turnState: frontierChild?.currentTurnState ?? .idle
+                        turnState: frontierChild?.currentTurnState ?? .idle,
+                        recoveryActions: recoveryActions
                     )
                 } else if let runtime, let store = runtime.agentControlServer.chatStore(for: session) {
                     TranscriptScroll(
                         items: store.snapshot.items,
                         updateCounter: store.snapshot.updateCounter,
                         pathRoot: Self.transcriptPathRoot(for: session),
-                        turnState: store.snapshot.currentTurnState
+                        turnState: store.snapshot.currentTurnState,
+                        recoveryActions: recoveryActions
                     )
                 } else {
                     ProgressView().controlSize(.small)
@@ -1004,6 +1050,31 @@ private struct ProviderColumn: View {
                 }
             }
         }
+    }
+
+    private var recoveryActions: ChatV2TranscriptRecoveryActions {
+        ChatV2TranscriptRecoveryActions(
+            onRetryFailedTurn: { promptBody in
+                Task {
+                    await ChatV2TurnRecovery.retryInSession(
+                        sendCtl: sendCtl,
+                        sessionId: session.id,
+                        promptBody: promptBody
+                    )
+                }
+            },
+            onRetryFailedTurnInNewChat: { promptBody in
+                Task {
+                    await ChatV2TurnRecovery.retryInNewChat(
+                        sendCtl: sendCtl,
+                        client: client,
+                        from: session,
+                        promptBody: promptBody,
+                        openTarget: $openTarget
+                    )
+                }
+            }
+        )
     }
 
     private static func transcriptPathRoot(for session: AgentSession) -> URL? {
@@ -1156,6 +1227,13 @@ private struct PendingBroadcastView: View {
 }
 
 @available(macOS 14, *)
+private struct ChatV2TranscriptRecoveryActions {
+    var isReadOnly: Bool = false
+    var onRetryFailedTurn: ((String) -> Void)?
+    var onRetryFailedTurnInNewChat: ((String) -> Void)?
+}
+
+@available(macOS 14, *)
 private struct TranscriptScroll: View {
     let items: [ChatItem]
     let updateCounter: UInt64
@@ -1167,6 +1245,7 @@ private struct TranscriptScroll: View {
     /// thinking indicator renders so the user sees the model is working in the
     /// gap between sending and the first streamed token (every provider).
     var turnState: TurnState = .idle
+    var recoveryActions: ChatV2TranscriptRecoveryActions = ChatV2TranscriptRecoveryActions()
     @State private var pinned = true
     @State private var expandedTurns: Set<String> = []
     @State private var projectionCache = SingleSlotProjectionCache<TranscriptProjectionCacheKey, TranscriptProjection>()
@@ -1279,25 +1358,50 @@ private struct TranscriptScroll: View {
     private func collapsedTurnRow(_ turn: TranscriptTurn) -> some View {
         if turn.prompt == nil {
             ForEach(turn.visibleItems) { item in
-                MessageRow(item: item).id(item.id)
+                messageRow(for: item).id(item.id)
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(promptItems(turn)) { item in
-                    MessageRow(item: item).id(item.id)
+                    messageRow(for: item).id(item.id)
                 }
                 disclosureButton(turn)
                 if turn.hasCollapsedContent, expandedTurns.contains(turn.id) {
                     ForEach(turn.hiddenItems) { item in
-                        MessageRow(item: item).id(item.id)
+                        messageRow(for: item).id(item.id)
                     }
                 }
                 ForEach(finalItems(turn)) { item in
-                    MessageRow(item: item).id(item.id)
+                    messageRow(for: item).id(item.id)
                 }
                 compactChipStrip(turn)
             }
         }
+    }
+
+    private func messageRow(for item: ChatItem) -> some View {
+        MessageRow(
+            item: item,
+            modelFailureRetryPrompt: modelFailureRetryPrompt(for: item),
+            onRetryFailedTurn: recoveryActions.onRetryFailedTurn,
+            onRetryFailedTurnInNewChat: recoveryActions.onRetryFailedTurnInNewChat
+        )
+    }
+
+    private func modelFailureRetryPrompt(for item: ChatItem) -> String? {
+        guard case .message(let message) = item else { return nil }
+        let retryPrompt = ModelFailureRecovery.retryPrompt(
+            forErrorMessageId: message.id,
+            in: items
+        )
+        guard ModelFailureRecovery.shouldOfferRetryActions(
+            message: message,
+            isStreamingTail: false,
+            turnState: turnState,
+            isReadOnly: recoveryActions.isReadOnly,
+            retryPrompt: retryPrompt
+        ) else { return nil }
+        return retryPrompt
     }
 
     private func promptItems(_ turn: TranscriptTurn) -> [ChatItem] {
@@ -1441,6 +1545,9 @@ private struct ThinkingDotsRow: View {
 private struct MessageRow: View {
     @Environment(\.tahoe) private var t
     let item: ChatItem
+    var modelFailureRetryPrompt: String? = nil
+    var onRetryFailedTurn: ((String) -> Void)? = nil
+    var onRetryFailedTurnInNewChat: ((String) -> Void)? = nil
 
     var body: some View {
         switch item {
@@ -1458,23 +1565,27 @@ private struct MessageRow: View {
                         .textSelection(.enabled)
                 }
             case .assistantText:
-                VStack(alignment: .leading, spacing: 7) {
-                    if !message.title.isEmpty {
-                        Text(message.title.uppercased())
-                            .font(TahoeFont.body(9.5, weight: .bold))
-                            .foregroundStyle(t.fg4)
+                if message.isError {
+                    errorAssistantRow(message)
+                } else {
+                    VStack(alignment: .leading, spacing: 7) {
+                        if !message.title.isEmpty {
+                            Text(message.title.uppercased())
+                                .font(TahoeFont.body(9.5, weight: .bold))
+                                .foregroundStyle(t.fg4)
+                        }
+                        // Assistant bodies are Markdown; plain Text rendered the raw
+                        // source (## headings, **bold**, fenced code as literal text).
+                        // Reuse the same renderer the Code tab uses for parity.
+                        MarkdownRenderer(source: message.body)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
                     }
-                    // Assistant bodies are Markdown; plain Text rendered the raw
-                    // source (## headings, **bold**, fenced code as literal text).
-                    // Reuse the same renderer the Code tab uses for parity.
-                    MarkdownRenderer(source: message.body)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.hairline, lineWidth: 0.5))
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.hairline, lineWidth: 0.5))
             case .toolCall, .toolResult:
                 HStack(alignment: .top, spacing: 7) {
                     TahoeIcon("terminal", size: 10).foregroundStyle(t.fg3)
@@ -1522,6 +1633,69 @@ private struct MessageRow: View {
                 }
             }
         }
+    }
+
+    private func errorAssistantRow(_ message: ChatMessage) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(SessionsV2Theme.danger)
+                    Text("Model failed")
+                        .font(TahoeFont.body(11, weight: .semibold))
+                        .foregroundStyle(SessionsV2Theme.danger)
+                }
+                if !message.title.isEmpty {
+                    Text(message.title.uppercased())
+                        .font(TahoeFont.body(9.5, weight: .bold))
+                        .foregroundStyle(t.fg4)
+                }
+                MarkdownRenderer(source: message.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(SessionsV2Theme.danger.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(SessionsV2Theme.danger.opacity(0.55), lineWidth: 1.25)
+            )
+            .accessibilityLabel("Model failed: \(message.body)")
+
+            if let retryPrompt = modelFailureRetryPrompt {
+                modelFailureActionRow(retryPrompt: retryPrompt)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func modelFailureActionRow(retryPrompt: String) -> some View {
+        let actionDescriptors = ComposerInputCore.modelFailureActionDescriptors()
+        HStack(spacing: 10) {
+            ForEach(Array(actionDescriptors.enumerated()), id: \.offset) { _, descriptor in
+                switch descriptor.kind {
+                case .retry:
+                    Button(descriptor.visibleTitle) {
+                        onRetryFailedTurn?(retryPrompt)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                    .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+                case .retryInNewChat:
+                    Button(descriptor.visibleTitle) {
+                        onRetryFailedTurnInNewChat?(retryPrompt)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                    .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+                }
+            }
+        }
+        .padding(.leading, 2)
     }
 }
 
@@ -2434,6 +2608,50 @@ private struct ChatEmptyState: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(24)
+        }
+    }
+}
+
+@available(macOS 14, *)
+@MainActor
+private enum ChatV2TurnRecovery {
+    static func retryInSession(
+        sendCtl: ComposerSendController,
+        sessionId: UUID,
+        promptBody: String
+    ) async {
+        sendCtl.text = promptBody
+        await sendCtl.send(via: .solo(sessionId: sessionId))
+    }
+
+    static func retryInNewChat(
+        sendCtl: ComposerSendController,
+        client: AgentControlClient,
+        from session: AgentSession,
+        promptBody: String,
+        openTarget: Binding<ChatOpenTarget?>
+    ) async {
+        sendCtl.text = promptBody
+        await sendCtl.sendCustomOptimistic { trimmed in
+            guard let newSession = await client.createChatSession(
+                provider: session.agent,
+                model: session.model,
+                codexBackend: session.codexChatBackend,
+                effort: session.effort,
+                deepResearch: session.deepResearch,
+                providerInstanceId: session.providerInstanceId,
+                customProviderId: session.customProviderId
+            ) else {
+                return client.lastError ?? "Couldn't create chat."
+            }
+            openTarget.wrappedValue = .solo(newSession.id)
+            ChatTitleStore.set(newSession.id, ChatTitleStore.firstWords(trimmed))
+            let ok = await client.sendPrompt(
+                sessionId: newSession.id,
+                text: trimmed,
+                asFollowUp: false
+            )
+            return ok ? nil : (client.lastError ?? "Couldn't send prompt.")
         }
     }
 }
