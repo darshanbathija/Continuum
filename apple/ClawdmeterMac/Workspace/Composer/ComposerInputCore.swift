@@ -368,7 +368,7 @@ struct ComposerInputCore: View {
             if showingPalette {
                 CommandPaletteView(
                     catalog: skillCatalog,
-                    agent: store.agent,
+                    agent: paletteAgent,
                     query: $paletteQuery,
                     onSelect: applyPaletteSelection,
                     onDismiss: { showingPalette = false }
@@ -411,6 +411,12 @@ struct ComposerInputCore: View {
         .onChange(of: store.text) { _, new in
             updatePaletteTriggers(text: new)
             persistDraft(new)
+        }
+        .onChange(of: skillCatalog.commands) { _, _ in
+            updatePaletteTriggers(text: store.text)
+        }
+        .onChange(of: store.agent) { _, _ in
+            updatePaletteTriggers(text: store.text)
         }
         .onAppear {
             skillCatalog.projectSkillsRoot = projectSkillsRoot
@@ -473,13 +479,24 @@ struct ComposerInputCore: View {
 
     // MARK: - Palette/mention trigger detection
 
+    private var paletteAgent: AgentKind {
+        if case .bound = store.modeKind { return agentForModelPicker } else { return store.agent }
+    }
+
+    private func paletteCommands(matching query: String) -> [PaletteCommand] {
+        skillCatalog.filter(query: query, forAgent: paletteAgent)
+    }
+
     private func updatePaletteTriggers(text: String) {
         // Slash command palette: line starts with '/'.
         if let lastLine = text.split(separator: "\n", omittingEmptySubsequences: false).last,
            lastLine.hasPrefix("/") {
             let query = String(lastLine.dropFirst())
             paletteQuery = query
-            showingPalette = true
+            // Agents like Cursor/Grok/OpenCode have no discovered slash
+            // commands yet — keep the palette collapsed instead of showing
+            // an empty "Slash commands · 0" box.
+            showingPalette = !paletteCommands(matching: query).isEmpty
             showingMentions = false
             return
         }
