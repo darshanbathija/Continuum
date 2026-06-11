@@ -15,6 +15,8 @@ public struct ProviderDescriptor: Sendable, Identifiable {
     public let accentRGB: (r: Int, g: Int, b: Int)
     public let settingsRank: Int
     public let chatRank: Int
+    /// Code/Chat model-picker rail fallback when 30d usage is tied or absent.
+    public let modelPickerRank: Int
     public let analyticsRank: Int
     public let costStackRank: Int?
 
@@ -30,6 +32,7 @@ public struct ProviderDescriptor: Sendable, Identifiable {
             accentRGB: (0xD9, 0x77, 0x57),
             settingsRank: 0,
             chatRank: 1,
+            modelPickerRank: 0,
             analyticsRank: 0,
             costStackRank: 0
         ),
@@ -44,6 +47,7 @@ public struct ProviderDescriptor: Sendable, Identifiable {
             accentRGB: (0x8A, 0x90, 0x99),
             settingsRank: 1,
             chatRank: 0,
+            modelPickerRank: 1,
             analyticsRank: 1,
             costStackRank: 1
         ),
@@ -58,6 +62,7 @@ public struct ProviderDescriptor: Sendable, Identifiable {
             accentRGB: (0x5C, 0x9D, 0xFF),
             settingsRank: 2,
             chatRank: 2,
+            modelPickerRank: 5,
             analyticsRank: 2,
             costStackRank: nil
         ),
@@ -72,6 +77,7 @@ public struct ProviderDescriptor: Sendable, Identifiable {
             accentRGB: (0x7F, 0xA8, 0xB5),
             settingsRank: 3,
             chatRank: 3,
+            modelPickerRank: 2,
             analyticsRank: 4,
             costStackRank: 3
         ),
@@ -86,6 +92,7 @@ public struct ProviderDescriptor: Sendable, Identifiable {
             accentRGB: (0x9B, 0x87, 0xD4),
             settingsRank: 4,
             chatRank: 4,
+            modelPickerRank: 3,
             analyticsRank: 3,
             costStackRank: 2
         ),
@@ -100,6 +107,7 @@ public struct ProviderDescriptor: Sendable, Identifiable {
             accentRGB: (0x70, 0x74, 0x7C),
             settingsRank: 5,
             chatRank: 5,
+            modelPickerRank: 4,
             analyticsRank: 5,
             costStackRank: 4
         ),
@@ -123,6 +131,10 @@ public struct ProviderDescriptor: Sendable, Identifiable {
 
     public static var chatOrder: [ChatVendor] {
         all.sorted { $0.chatRank < $1.chatRank }.map(\.chatVendor)
+    }
+
+    public static var modelPickerOrder: [ChatVendor] {
+        all.sorted { $0.modelPickerRank < $1.modelPickerRank }.map(\.chatVendor)
     }
 
     public static var analyticsDisplayOrder: [UsageRecord.Provider] {

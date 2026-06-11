@@ -295,12 +295,41 @@ public final class ChatV2Store: ObservableObject {
         }
     }
 
-    public static func enabledChatChoices(from providerIDs: [String]?, catalog: ModelCatalog) -> [ProviderChoice] {
+    public static func enabledChatChoices(
+        from providerIDs: [String]?,
+        catalog: ModelCatalog,
+        usageSnapshot: UsageHistorySnapshot? = nil
+    ) -> [ProviderChoice] {
         var choices = enabledChatVendors(from: providerIDs).map(ProviderChoice.builtin)
         if AgentControlWireVersion.supportsCustomProviders(serverWireVersion: AgentControlWireVersion.current) {
             choices.append(contentsOf: catalog.customProviders.filter(\.enabled).map { .custom($0.id) })
         }
-        return choices.sorted { $0.displayName(in: catalog).localizedCaseInsensitiveCompare($1.displayName(in: catalog)) == .orderedAscending }
+        return sortModelPickerChoices(choices, usageSnapshot: usageSnapshot, catalog: catalog)
+    }
+
+    /// Orders the model-picker rail by trailing-30d token usage (descending),
+    /// then by the canonical fallback order (Claude → Codex → Cursor →
+    /// OpenRouter → Grok → Antigravity), then display name for custom providers.
+    nonisolated public static func sortModelPickerChoices(
+        _ choices: [ProviderChoice],
+        usageSnapshot: UsageHistorySnapshot?,
+        catalog: ModelCatalog
+    ) -> [ProviderChoice] {
+        func past30dTokenUsage(for choice: ProviderChoice) -> Int {
+            guard let snapshot = usageSnapshot,
+                  let provider = choice.usageProvider,
+                  let totals = snapshot.byProvider[provider]
+            else { return 0 }
+            return totals.past30d.totals.totalTokens
+        }
+
+        return choices.sorted { lhs, rhs in
+            let usageDelta = past30dTokenUsage(for: lhs) - past30dTokenUsage(for: rhs)
+            if usageDelta != 0 { return usageDelta > 0 }
+            let rankDelta = lhs.modelPickerDefaultRank - rhs.modelPickerDefaultRank
+            if rankDelta != 0 { return rankDelta < 0 }
+            return lhs.displayName(in: catalog).localizedCaseInsensitiveCompare(rhs.displayName(in: catalog)) == .orderedAscending
+        }
     }
 
     public var primaryChoice: ProviderChoice {
