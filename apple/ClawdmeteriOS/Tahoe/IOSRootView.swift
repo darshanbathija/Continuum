@@ -116,7 +116,7 @@ public struct IOSRootView: View {
             }
         }
         .ignoresSafeArea(.container, edges: .bottom)
-        .background(activeTokens.dark ? Color.black : Color(.sRGB, red: 244.0/255, green: 246.0/255, blue: 250.0/255))
+        .background(activeTokens.pageBg)
         .tahoeTheme(activeTheme)
         // P1 fix: pull live session data on first appearance and whenever
         // we return to the foreground. Without this, the daemon-mirrored

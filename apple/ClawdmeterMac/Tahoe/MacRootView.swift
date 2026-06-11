@@ -393,7 +393,7 @@ struct MacRootView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: transientToast)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: modalOverlayKey)
         .tahoeTheme(theme)
-        .background(theme.appearance == .dark ? Color.black : Color(.sRGB, red: 0.94, green: 0.97, blue: 0.98))
+        .background(ContinuumTokens.palette(for: theme.appearance).bg)
         .background(
             ShortcutOverrideMonitor(
                 shortcuts: shortcutRegistry,

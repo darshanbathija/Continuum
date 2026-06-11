@@ -2,10 +2,11 @@
 import SwiftUI
 
 /// Pill segmented control (DESIGN.md "Segmented Controls"): pill track
-/// (`surface-1` + hairline), active segment `white@10%` fill + a 0.5px inner
-/// seam, SF Mono labels, 160ms matched-geometry slide. Used for range
-/// (24h/7d/30d/90d/All), mode (Broadcast/Solo), and provider selection.
+/// (`surface-1` + hairline), active segment fill + a 0.5px inner seam, SF Mono
+/// labels, 160ms matched-geometry slide. Used for range (24h/7d/30d/90d/All),
+/// mode (Broadcast/Solo), and provider selection.
 public struct TahoeSegmentedControl<T: Hashable>: View {
+    @Environment(\.theme) private var t
     public var items: [T]
     public var label: (T) -> String
     @Binding public var selection: T
@@ -24,37 +25,46 @@ public struct TahoeSegmentedControl<T: Hashable>: View {
     public var body: some View {
         HStack(spacing: 2) {
             ForEach(items, id: \.self) { item in
-                let isSel = item == selection
-                Button {
-                    withAnimation(ContinuumMotion.segmented(reduceMotion: reduceMotion)) { selection = item }
-                } label: {
-                    HStack(spacing: 5) {
-                        if let leading { leading(item) }
-                        Text(label(item))
-                            .font(ContinuumFont.mono(11, weight: isSel ? .semibold : .regular))
-                    }
-                    .foregroundStyle(isSel ? ContinuumTokens.fg : ContinuumTokens.fg2)
-                    .padding(.horizontal, 10)
-                    .frame(height: 22)
-                    .background {
-                        if isSel {
-                            Capsule(style: .continuous)
-                                .fill(ContinuumTokens.white(0.10))
-                                .overlay(Capsule(style: .continuous).strokeBorder(ContinuumTokens.hairline2, lineWidth: 0.5))
-                                .matchedGeometryEffect(id: "seg", in: ns)
-                        }
-                    }
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
+                segmentButton(for: item)
             }
         }
         .padding(2)
         .background {
             Capsule(style: .continuous)
-                .fill(ContinuumTokens.surface1)
-                .overlay(Capsule(style: .continuous).strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5))
+                .fill(t.surface1)
+                .overlay(Capsule(style: .continuous).strokeBorder(t.hairline, lineWidth: 0.5))
         }
+    }
+
+    private func segmentButton(for item: T) -> some View {
+        let isSel = item == selection
+        return Button {
+            withAnimation(ContinuumMotion.segmented(reduceMotion: reduceMotion)) { selection = item }
+        } label: {
+            segmentLabel(for: item, selected: isSel)
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func segmentLabel(for item: T, selected isSel: Bool) -> some View {
+        HStack(spacing: 5) {
+            if let leading { leading(item) }
+            Text(label(item))
+                .font(ContinuumFont.mono(11, weight: isSel ? .semibold : .regular))
+        }
+        .foregroundStyle(isSel ? t.fg : t.fg2)
+        .padding(.horizontal, 10)
+        .frame(height: 22)
+        .background {
+            if isSel {
+                Capsule(style: .continuous)
+                    .fill(t.segmentActiveFill)
+                    .overlay(Capsule(style: .continuous).strokeBorder(t.hair2, lineWidth: 0.5))
+                    .matchedGeometryEffect(id: "seg", in: ns)
+            }
+        }
+        .contentShape(Capsule())
     }
 }
 #endif

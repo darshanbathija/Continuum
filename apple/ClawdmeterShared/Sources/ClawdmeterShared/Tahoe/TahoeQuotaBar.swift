@@ -32,7 +32,7 @@ public struct TahoeQuotaBar: View {
 
     /// The current `%` is the loudest element on the card; it adopts warn/error
     /// past the thresholds.
-    private var metricColor: Color { ContinuumTokens.metricColor(percent: percent) }
+    private var metricColor: Color { t.metricColor(percent: percent) }
 
     public var body: some View {
         if dense {
@@ -44,7 +44,7 @@ public struct TahoeQuotaBar: View {
                         .foregroundStyle(metricColor)
                     Text("%")
                         .font(ContinuumFont.body(11, weight: .semibold))
-                        .foregroundStyle(ContinuumTokens.fg3)
+                        .foregroundStyle(t.fg3)
                 }
                 TahoeRailMeter(percent: percent, provider: provider)
             }
@@ -61,7 +61,7 @@ public struct TahoeQuotaBar: View {
                             .foregroundStyle(metricColor)
                         Text("%")
                             .font(ContinuumFont.display(numSize * 0.5, weight: .semibold))
-                            .foregroundStyle(ContinuumTokens.fg3)
+                            .foregroundStyle(t.fg3)
                     }
                     Spacer(minLength: 8)
                     if let label {
@@ -69,11 +69,11 @@ public struct TahoeQuotaBar: View {
                             Text(label.uppercased())
                                 .font(ContinuumFont.etched(10.5))
                                 .tracking(0.95)               // ~0.09em at 10.5px
-                                .foregroundStyle(ContinuumTokens.fg3)
+                                .foregroundStyle(t.fg3)
                             if let sublabel {
                                 Text(sublabel)
                                     .font(ContinuumFont.mono(10.5))
-                                    .foregroundStyle(ContinuumTokens.fg4)
+                                    .foregroundStyle(t.fg4)
                             }
                         }
                     }
@@ -92,6 +92,7 @@ public struct TahoeQuotaBar: View {
 /// the signal; the fill before the tick never recolors. Settles like a
 /// galvanometer needle.
 public struct TahoeRailMeter: View {
+    @Environment(\.theme) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     public var percent: Double
     public var provider: TahoeProvider
@@ -122,7 +123,7 @@ public struct TahoeRailMeter: View {
             let filledW = max(providerW, percent > ContinuumTokens.warnTickFraction * 100 ? capEndX : providerW)
 
             ZStack(alignment: .leading) {
-                Rectangle().fill(ContinuumTokens.railTrack)
+                Rectangle().fill(t.railTrack)
                 Rectangle()
                     .fill(ProviderFill.gradient(for: provider))
                     .opacity(secondary ? 0.5 : 1)
@@ -136,14 +137,14 @@ public struct TahoeRailMeter: View {
                 // 1px lit top edge over the filled region.
                 if filledW > 0 {
                     Rectangle()
-                        .fill(ContinuumTokens.railLitEdge)
+                        .fill(t.railLitEdge)
                         .frame(width: filledW, height: 1)
                         .frame(maxHeight: .infinity, alignment: .top)
                 }
                 // 80% limit tick.
                 if !secondary {
                     Rectangle()
-                        .fill(ContinuumTokens.fg3)
+                        .fill(t.fg3)
                         .frame(width: 1)
                         .offset(x: tickX)
                 }
@@ -152,7 +153,7 @@ public struct TahoeRailMeter: View {
             .clipShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.rail, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: ContinuumTokens.Radius.rail, style: .continuous)
-                    .strokeBorder(ContinuumTokens.railTrackInset, lineWidth: 0.5)
+                    .strokeBorder(t.railTrackInset, lineWidth: 0.5)
             )
             .animation(ContinuumMotion.settle(reduceMotion: reduceMotion), value: percent)
         }
@@ -215,16 +216,16 @@ public struct TahoeMenuBarMeter: View {
                 ProviderDot(provider, size: 6)
                 Text(label)
                     .font(ContinuumFont.body(11, weight: .semibold))
-                    .foregroundStyle(ContinuumTokens.fg2)
+                    .foregroundStyle(t.fg2)
                 if stale {
                     Text("STALE")
                         .font(ContinuumFont.etched(8.5))
                         .tracking(0.6)
-                        .foregroundStyle(ContinuumTokens.warn)
+                        .foregroundStyle(t.warn)
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .overlay {
                             Capsule(style: .continuous)
-                                .strokeBorder(ContinuumTokens.warn.opacity(0.40), lineWidth: 0.5)
+                                .strokeBorder(t.warn.opacity(0.40), lineWidth: 0.5)
                         }
                         .help("Underlying source is using cached / fallback data — value may not match the provider's live count.")
                 }
@@ -232,13 +233,13 @@ public struct TahoeMenuBarMeter: View {
                 Text("\(Int(percent))%")
                     .font(ContinuumFont.mono(11))
                     .monospacedDigit()
-                    .foregroundStyle(ContinuumTokens.metricColor(percent: percent))
+                    .foregroundStyle(t.metricColor(percent: percent))
             }
             TahoeRailMeter(percent: percent, provider: provider, height: 7)
             if let hint {
                 Text(hint)
                     .font(ContinuumFont.mono(10))
-                    .foregroundStyle(ContinuumTokens.fg3)
+                    .foregroundStyle(t.fg3)
                     .padding(.top, 2)
             }
         }

@@ -84,6 +84,36 @@ final class ContinuumTokenTests: XCTestCase {
         XCTAssertNotNil(ContinuumMotion.heartbeat(reduceMotion: false))
     }
 
+    func test_lightPalette_invertsNeutralStack() {
+        let light = ContinuumTokens.lightPalette
+        XCTAssertEqual(light.bg, ContinuumTokens.hex(0xF4F6FA))
+        XCTAssertEqual(light.surface1, ContinuumTokens.hex(0xFFFFFF))
+        XCTAssertEqual(light.surface2, ContinuumTokens.hex(0xF3F4F7))
+        XCTAssertEqual(light.fg, ContinuumTokens.ink(0.95))
+        XCTAssertEqual(light.fg2, ContinuumTokens.ink(0.66))
+        XCTAssertEqual(light.hairline, ContinuumTokens.ink(0.10))
+        XCTAssertEqual(light.primaryFill, ContinuumTokens.hex(0x0A0A0C))
+        XCTAssertEqual(light.primaryText, ContinuumTokens.white(0.98))
+        // Semantic + provider colors stay identical across appearances.
+        XCTAssertEqual(light.live, ContinuumTokens.live)
+        XCTAssertEqual(light.warn, ContinuumTokens.warn)
+        XCTAssertEqual(light.error, ContinuumTokens.error)
+    }
+
+    func test_paletteResolver_defaultsToDark() {
+        XCTAssertEqual(ContinuumTokens.palette(for: .dark).bg, ContinuumTokens.bg)
+        XCTAssertEqual(ContinuumTokens.palette(for: .light).bg, ContinuumTokens.lightPalette.bg)
+    }
+
+    @MainActor
+    func test_tahoeTokens_make_respectsAppearance() {
+        let store = TahoeThemeStore(appearance: .light)
+        let tokens = TahoeTokens.make(from: store)
+        XCTAssertFalse(tokens.dark)
+        XCTAssertEqual(tokens.pageBg, ContinuumTokens.lightPalette.bg)
+        XCTAssertEqual(tokens.fg, ContinuumTokens.lightPalette.fg)
+        XCTAssertEqual(tokens.metricColor(percent: 50), ContinuumTokens.lightPalette.fg)
+    }
     func test_crossCuttingAccentRGB_isRecolored() {
         XCTAssertEqual(AgentKindUI.accentRGB(for: .claude).r, 0xD9)
         let codex = AgentKindUI.accentRGB(for: .codex)

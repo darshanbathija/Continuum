@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 
-/// Surface elevation "tone" — which Quiet Black surface step a panel sits at.
+/// Surface elevation "tone" — which Continuum surface step a panel sits at.
 /// (Names preserved from the old glass system so call sites compile; the glass
 /// is gone — these now select a flat surface fill.)
 public enum TahoeGlassTone: String, Sendable, CaseIterable {
@@ -83,9 +83,9 @@ public struct TahoeGlass<Content: View>: View {
 
     private var surfaceFill: Color {
         switch tone {
-        case .panel, .floor:  return ContinuumTokens.surface1
-        case .chip, .raised:  return ContinuumTokens.surface2
-        case .inset:          return ContinuumTokens.bg
+        case .panel, .floor:  return t.surface1
+        case .chip, .raised:  return t.surface2
+        case .inset:          return t.bg
         }
     }
 
@@ -97,25 +97,26 @@ public struct TahoeGlass<Content: View>: View {
                     shape.fill(surfaceFill)
                     if ring {
                         // Hairline-as-structure: the 0.5px seam is the divider.
-                        shape.strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5)
+                        shape.strokeBorder(t.hairline, lineWidth: 0.5)
                     }
                 }
             }
             .clipShape(shape)
-            .modifier(TahoeShadow(style: shadowStyle))
+            .modifier(TahoeShadow(style: shadowStyle, dark: t.dark))
     }
 }
 
 private struct TahoeShadow: ViewModifier {
     let style: TahoeGlassShadow
+    let dark: Bool
 
     func body(content: Content) -> some View {
         switch style {
         case .none, .subtle:
             return AnyView(content)
         case .prominent:
-            // Floating surfaces only (popover / modal / window).
-            return AnyView(content.shadow(color: Color.black.opacity(0.55), radius: 24, x: 0, y: 12))
+            let opacity = dark ? 0.55 : 0.10
+            return AnyView(content.shadow(color: Color.black.opacity(opacity), radius: 24, x: 0, y: 12))
         }
     }
 }
@@ -148,11 +149,11 @@ public struct TahoePill<Content: View>: View {
         content
             .background {
                 Capsule(style: .continuous)
-                    .fill(accent ? ContinuumTokens.selection : ContinuumTokens.surface2)
+                    .fill(accent ? t.selection : t.surface2)
             }
             .overlay {
                 Capsule(style: .continuous)
-                    .strokeBorder(accent ? ContinuumTokens.focus : ContinuumTokens.hairline, lineWidth: 0.5)
+                    .strokeBorder(accent ? t.focus : t.hairline, lineWidth: 0.5)
             }
     }
 }
@@ -187,10 +188,10 @@ public struct TahoeAccentButton<Label: View>: View {
                 .font(ContinuumFont.body(fontSize, weight: .semibold))
                 .padding(.horizontal, height * 0.5)
                 .frame(height: height)
-                .foregroundStyle(ContinuumTokens.primaryText)
+                .foregroundStyle(t.primaryText)
                 .background {
                     RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
-                        .fill(ContinuumTokens.primaryFill)
+                        .fill(t.primaryFill)
                 }
         }
         .buttonStyle(PressableButtonStyle())
@@ -227,14 +228,14 @@ public struct TahoeGhostButton<Label: View>: View {
                 .font(ContinuumFont.body(fontSize, weight: .medium))
                 .padding(.horizontal, height * 0.5)
                 .frame(height: height)
-                .foregroundStyle(active ? ContinuumTokens.fg : ContinuumTokens.fg2)
+                .foregroundStyle(active ? t.fg : t.fg2)
                 .background {
                     RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
-                        .fill(isHovered ? ContinuumTokens.hover : Color.clear)
+                        .fill(isHovered ? t.hover : Color.clear)
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
-                        .strokeBorder(active ? ContinuumTokens.focus : ContinuumTokens.hairline, lineWidth: 0.5)
+                        .strokeBorder(active ? t.focus : t.hairline, lineWidth: 0.5)
                 }
         }
         .buttonStyle(PressableButtonStyle())
@@ -247,13 +248,14 @@ public struct TahoeGhostButton<Label: View>: View {
 // MARK: - Hair (separator)
 
 public struct TahoeHair: View {
+    @Environment(\.theme) private var t
     public var vertical: Bool
     public init(vertical: Bool = false) { self.vertical = vertical }
     public var body: some View {
         if vertical {
-            Rectangle().fill(ContinuumTokens.hairline).frame(width: 0.5)
+            Rectangle().fill(t.hairline).frame(width: 0.5)
         } else {
-            Rectangle().fill(ContinuumTokens.hairline).frame(height: 0.5)
+            Rectangle().fill(t.hairline).frame(height: 0.5)
         }
     }
 }
