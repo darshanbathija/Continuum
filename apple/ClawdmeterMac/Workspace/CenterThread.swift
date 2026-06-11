@@ -1349,7 +1349,7 @@ struct CenterThread: View {
             modelText = "default model"
         }
         let effortText = effectiveEffort(forModelId: effectiveModelId).map(effortLabel) ?? "Default effort"
-        return "\(session.agent.tahoeProvider.displayName) · \(modelText) · \(effortText) · \(session.mode.rawValue) mode"
+        return "\(session.agent.tahoeProvider.displayName) · \(modelText) · \(effortText)"
     }
 
     static func effectiveModelId(for session: AgentSession, catalog: ModelCatalog) -> String? {
