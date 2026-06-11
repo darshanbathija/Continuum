@@ -8,6 +8,10 @@
 	       (b) request a shared iCloud Keychain access group with Claude Code. -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
+	<!-- Composer dictation (AVAudioEngine) — required for the mic TCC prompt
+	     when sandbox is re-enabled. Harmless while sandbox is off. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
 	<!-- Shared container with the widget extension. App Group is prefixed
