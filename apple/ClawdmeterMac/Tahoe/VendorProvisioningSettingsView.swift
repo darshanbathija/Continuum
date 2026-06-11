@@ -15,6 +15,7 @@ struct VendorProvisioningSettingsView: View {
     @State private var isChecking = false
     @State private var isInstallingAll = false
     @State private var installAllTask: Task<Void, Never>?
+    @State private var installAllTargetCount = 0
     @State private var installProgressByVendor: [String: VendorInstallProgressUpdate.Phase] = [:]
     @State private var overallInstallProgress: Double = 0
     @State private var message: String?
@@ -207,8 +208,8 @@ struct VendorProvisioningSettingsView: View {
             if case .failed = $0 { return true }
             return false
         }.count
-        if completed > 0 {
-            return "Finished \(completed) of \(scopedVendorsNeedingInstall.count) installs."
+        if completed > 0, installAllTargetCount > 0 {
+            return "Finished \(completed) of \(installAllTargetCount) installs."
         }
         return "Preparing installs..."
     }
@@ -221,6 +222,7 @@ struct VendorProvisioningSettingsView: View {
         }
         .pickerStyle(.segmented)
         .frame(width: 520)
+        .disabled(isInstallingAll)
         .accessibilityIdentifier("settings.provisioning.category-filter")
     }
 
@@ -271,6 +273,7 @@ struct VendorProvisioningSettingsView: View {
         }
 
         let targets = scopedVendorsNeedingInstall
+        installAllTargetCount = targets.count
         isInstallingAll = true
         overallInstallProgress = 0
         for vendor in targets {
@@ -316,6 +319,9 @@ struct VendorProvisioningSettingsView: View {
 
     private func perform(action: VendorProvisioningAction, vendor: VendorProvisioningVendor) async {
         guard let service else { return }
+        if isInstallingAll, action.kind != .signup {
+            return
+        }
         do {
             let response = try await service.performAction(vendorId: vendor.id, actionId: action.id)
             message = response.message
