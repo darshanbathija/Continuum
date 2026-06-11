@@ -40,6 +40,16 @@ final class SessionsV2Tests: XCTestCase {
         XCTAssertEqual(ReasoningEffort.max.codexConfigValue, "xhigh")
     }
 
+    func testReasoningEffortDisplayLabels() {
+        XCTAssertEqual(ReasoningEffort.minimal.displayName, "Minimal")
+        XCTAssertEqual(ReasoningEffort.low.displayName, "Low")
+        XCTAssertEqual(ReasoningEffort.medium.displayName, "Medium")
+        XCTAssertEqual(ReasoningEffort.high.displayName, "High")
+        XCTAssertEqual(ReasoningEffort.xhigh.displayName, "Extra high")
+        XCTAssertEqual(ReasoningEffort.max.displayName, "Max")
+        XCTAssertEqual(ReasoningEffort.high.shortLabel, "High")
+    }
+
     func testReasoningEffortLenientDecode() throws {
         // Older Macs that wrote a `max` value should round-trip into the
         // new case; future unknown values fall back to `xhigh` rather

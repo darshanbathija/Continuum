@@ -104,7 +104,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             row.click()
         }
 
-        XCTAssertTrue(element("code.composer.model-effort").waitForExistence(timeout: 10), "Model/effort selector should expose a stable hover/shortcut target.")
+        XCTAssertTrue(element("code.composer.model").waitForExistence(timeout: 10), "Model selector should expose a stable hover/shortcut target.")
         XCTAssertTrue(element("code.composer.permission-mode").waitForExistence(timeout: 10), "Plan/permission selector should expose a stable hover/shortcut target.")
         XCTAssertTrue(element("code.composer.context-usage").waitForExistence(timeout: 10), "Context display should expose a stable hover/shortcut target.")
         XCTAssertTrue(element("code.composer.dictation").waitForExistence(timeout: 10), "Dictation should expose a stable Code composer target.")
@@ -904,7 +904,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         newTab.click()
         XCTAssertTrue(element("code.workspace.tab.draft").waitForExistence(timeout: 5), "Clicking + should open a draft workspace tab.")
 
-        let modelChip = element("code.composer.model-effort")
+        let modelChip = element("code.composer.model")
         XCTAssertTrue(modelChip.waitForExistence(timeout: 10), "Draft composer should expose the model picker chip.")
         modelChip.click()
 
@@ -951,8 +951,10 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         newTab.click()
         XCTAssertTrue(element("code.workspace.tab.draft").waitForExistence(timeout: 5), "Clicking + should open a draft workspace tab.")
 
-        let modelChip = element("code.composer.model-effort")
+        let modelChip = element("code.composer.model")
+        let effortChip = element("code.composer.effort")
         XCTAssertTrue(modelChip.waitForExistence(timeout: 10), "Draft composer should expose the model picker chip.")
+        XCTAssertTrue(effortChip.waitForExistence(timeout: 10), "Draft composer should expose the effort chip.")
         modelChip.click()
         XCTAssertTrue(element("code.composer.model-picker.search").waitForExistence(timeout: 5), "Clicking the chip should open the rich model picker.")
 
@@ -964,31 +966,28 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             "Command-1 in the picker should select the first visible model row and update the draft chip."
         )
 
-        modelChip.click()
-        let effortMenu = element("code.composer.model-picker.effort.claude")
-        XCTAssertTrue(effortMenu.waitForExistence(timeout: 5), "Effort-capable Claude models should expose the picker effort menu.")
-        effortMenu.click()
+        effortChip.click()
         XCTAssertTrue(app.menuItems["Minimal"].waitForExistence(timeout: 5), "Effort menu should expose Minimal.")
         app.menuItems["Minimal"].click()
         XCTAssertTrue(
             waitUntil(timeout: 5) {
-                self.accessibilityValue(of: modelChip).contains("Minimal")
+                self.accessibilityValue(of: effortChip).contains("Minimal")
             },
-            "Selecting Minimal from the picker effort menu should update the draft chip."
+            "Selecting Minimal from the effort chip menu should update the draft effort chip."
         )
         app.typeKey("e", modifierFlags: [.command, .option])
         XCTAssertTrue(
             waitUntil(timeout: 5) {
-                self.accessibilityValue(of: modelChip).contains("Low")
+                self.accessibilityValue(of: effortChip).contains("Low")
             },
-            "Command-Option-E should cycle effort up and update the draft chip without leaving Code."
+            "Command-Option-E should cycle effort up and update the draft effort chip without leaving Code."
         )
         app.typeKey("e", modifierFlags: [.command, .option, .shift])
         XCTAssertTrue(
             waitUntil(timeout: 5) {
-                self.accessibilityValue(of: modelChip).contains("Minimal")
+                self.accessibilityValue(of: effortChip).contains("Minimal")
             },
-            "Command-Option-Shift-E should cycle effort down and update the draft chip without leaving Code."
+            "Command-Option-Shift-E should cycle effort down and update the draft effort chip without leaving Code."
         )
 
         let search = element("code.composer.model-picker.search")
@@ -1014,13 +1013,13 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
 
         XCTAssertTrue(
             waitUntil(timeout: 5) {
-                let value = self.accessibilityValue(of: modelChip)
-                return value.contains("Haiku 4.5")
-                    && !value.contains("Minimal")
-                    && !value.contains("High")
-                    && !value.contains("Max")
+                self.accessibilityValue(of: modelChip).contains("Haiku 4.5")
             },
-            "Selecting an unsupported-effort model should update the draft chip and clear stale effort."
+            "Selecting an unsupported-effort model should update the draft model chip."
+        )
+        XCTAssertFalse(
+            effortChip.waitForExistence(timeout: 1),
+            "Unsupported-effort models should hide the effort chip."
         )
         XCTAssertTrue(element("code.workspace.tab.draft").exists, "Picker search/favorite/effort actions should keep the active workspace tab on the draft.")
     }

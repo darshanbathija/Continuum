@@ -87,7 +87,7 @@ public struct ClawdmeterShortcutRegistry: Codable, Hashable, Sendable {
         .init(id: "transcript.latest", label: "Jump to latest message", key: "Down", modifiers: [.command], scope: .chat, commandID: "transcript.latest"),
         .init(id: "transcript.lastUser", label: "Jump to last user message", key: "Up", modifiers: [.command, .shift], scope: .chat, commandID: "transcript.lastUser"),
         .init(id: "composer.attach", label: "Add attachment", key: "U", modifiers: [.command], scope: .composer, commandID: "composer.attach"),
-        .init(id: "composer.modelEffort", label: "Open model and effort selector", key: "M", modifiers: [.command, .option], scope: .composer, commandID: "composer.modelEffort"),
+        .init(id: "composer.modelEffort", label: "Open model selector", key: "M", modifiers: [.command, .option], scope: .composer, commandID: "composer.modelEffort"),
         .init(id: "composer.context", label: "Open context usage", key: "C", modifiers: [.command, .option], scope: .composer, commandID: "composer.context"),
         .init(id: "composer.effortNext", label: "Increase effort", key: "E", modifiers: [.command, .option], scope: .composer, commandID: "composer.effortNext"),
         .init(id: "composer.effortPrevious", label: "Decrease effort", key: "E", modifiers: [.command, .option, .shift], scope: .composer, commandID: "composer.effortPrevious"),

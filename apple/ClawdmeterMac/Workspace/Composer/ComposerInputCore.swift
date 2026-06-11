@@ -572,6 +572,14 @@ struct ComposerInputCore: View {
                 }
             )
             .layoutPriority(2)
+            if modelSupportsEffort {
+                EffortChip(
+                    effort: store.effort,
+                    supportsEffort: modelSupportsEffort,
+                    onChange: { store.effort = $0 }
+                )
+                .layoutPriority(2)
+            }
             if !isReadOnly, onChangePermissionMode != nil {
                 // v0.7.12 revert: `PermissionModeChip` Menu (matches
                 // Claude Code's compact "Auto ▾" pattern — single
@@ -634,6 +642,13 @@ struct ComposerInputCore: View {
             }
             Spacer(minLength: 8)
             let resolvedInfo = usageStatus ?? Self.placeholderUsage(modelId: store.modelId, effort: store.effort, catalog: catalog)
+            if modelSupportsEffort {
+                EffortChip(
+                    effort: store.effort,
+                    supportsEffort: modelSupportsEffort,
+                    onChange: { store.effort = $0 }
+                )
+            }
             ModelEffortChip(
                 info: resolvedInfo,
                 catalog: catalog,

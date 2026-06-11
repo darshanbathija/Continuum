@@ -22,11 +22,8 @@
 // shortcuts are suppressed so they aren't bound to surprising cross-
 // provider rows.
 //
-// Bottom bar (v1): visual-only summary of the current selection (model,
-// effort, mode, permission). No chevrons rendered — those would be
-// affordance lies until v0.29.9 wires real mutation here. Today, mutation
-// continues to flow through the existing composer chips outside this
-// picker.
+// Bottom bar: visual-only summary of the current selection (model, mode,
+// permission). Effort mutation lives on the composer's `EffortChip`.
 //
 // Deferred to v0.29.9 (intentionally out of scope, called out in PR body):
 //   • Bottom-bar chips become interactive (drive effort/mode/permission)
@@ -552,7 +549,6 @@ public struct ComposerModelPicker: View {
             }
             HStack(spacing: 6) {
                 bottomChip { selectedModelChipContent }
-                effortMenuChip
                 if mode == .single {
                     bottomChip { modeChipContent }
                     bottomChip { permissionChipContent }
@@ -626,77 +622,6 @@ public struct ComposerModelPicker: View {
             Text(preview.modelDisplay)
                 .font(TahoeFont.body(11.5, weight: .semibold))
                 .foregroundStyle(t.fg2)
-        }
-    }
-
-    /// Interactive effort selector for the previewed/focused vendor. Replaces
-    /// the old visual-only effort chip; writes through `store.selectEffort`, and
-    /// in `.single` mode also mirrors the change to the host via `onSelectModel`
-    /// so the running Code session updates without re-picking the model.
-    @ViewBuilder
-    private var effortMenuChip: some View {
-        let choice = bottomBarPreview.choice
-        let modelId = choice.flatMap {
-            store.model(forChoice: $0, catalog: catalog) ?? defaultsStore.modelId(forChoice: $0, catalog: catalog)
-        }
-        let supports = choice.map {
-            ProviderModelPickerSupport.supportsEffort(choice: $0, modelId: modelId, catalog: catalog)
-        } ?? false
-        let current = choice.flatMap {
-            store.effort(forChoice: $0, catalog: catalog)
-                ?? $0.chatVendor.flatMap { defaultsStore.effort(for: $0, catalog: catalog) }
-        }
-        if supports, let choice {
-            Menu {
-                ForEach(ReasoningEffort.allCases, id: \.self) { effort in
-                    Button {
-                        applyEffort(effort, choice: choice)
-                    } label: {
-                        if current == effort {
-                            Label(effort.displayLabel, systemImage: "checkmark")
-                        } else {
-                            Text(effort.displayLabel)
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(current?.displayLabel ?? "Effort")
-                        .font(TahoeFont.body(11))
-                        .foregroundStyle(t.fg3)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(t.fg4)
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .padding(.horizontal, 8)
-            .frame(height: 26)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.white.opacity(0.04)))
-            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(t.hairline, lineWidth: 0.5))
-            .accessibilityLabel("Effort")
-            .accessibilityValue(current?.displayLabel ?? "Default")
-            .accessibilityIdentifier("code.composer.model-picker.effort.\(choice.id)")
-        } else {
-            bottomChip {
-                Text("Auto")
-                    .font(TahoeFont.body(11))
-                    .foregroundStyle(t.fg4)
-            }
-            .accessibilityLabel("Effort unavailable")
-            .accessibilityValue("Auto")
-            .accessibilityIdentifier("code.composer.model-picker.effort.auto")
-        }
-    }
-
-    private func applyEffort(_ effort: ReasoningEffort, choice: ProviderChoice) {
-        store.selectEffort(effort, forChoice: choice, catalog: catalog)
-        if mode == .single,
-           let modelId = store.model(forChoice: choice, catalog: catalog)
-            ?? defaultsStore.modelId(forChoice: choice, catalog: catalog) {
-            onSelectModel?(choice, modelId, effort)
         }
     }
 
@@ -963,23 +888,6 @@ struct VisibleRowEntry: Hashable {
     let choice: ProviderChoice
     let model: ModelCatalogEntry
     var compositeId: String { "\(choice.id)|\(model.id)" }
-}
-
-// MARK: - Effort display fallback
-
-private extension ReasoningEffort {
-    var displayLabel: String {
-        switch self {
-        case .minimal: return "Minimal"
-        case .low:     return "Low"
-        case .medium:  return "Medium"
-        case .high:    return "High"
-        default:
-            // .xhigh / .max / any future cases fall back to capitalized raw
-            // so the bottom bar still reads sensibly.
-            return rawValue.capitalized
-        }
-    }
 }
 
 #endif

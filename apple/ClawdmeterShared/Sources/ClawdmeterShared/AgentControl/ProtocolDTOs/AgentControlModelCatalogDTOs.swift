@@ -37,6 +37,21 @@ public enum ReasoningEffort: String, Codable, Hashable, Sendable, CaseIterable {
         }
     }
 
+    /// Menu row label for the composer's effort selector.
+    public var displayName: String {
+        switch self {
+        case .minimal: return "Minimal"
+        case .low:     return "Low"
+        case .medium:  return "Medium"
+        case .high:    return "High"
+        case .xhigh:   return "Extra high"
+        case .max:     return "Max"
+        }
+    }
+
+    /// Short label used on the effort chip itself.
+    public var shortLabel: String { displayName }
+
     /// Lenient decoder: unknown raw values (older Macs reading a `max`
     /// effort written by a newer Mac) decode to `.xhigh` rather than
     /// failing the whole AgentSession Codable round-trip.
