@@ -4,6 +4,16 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.33.1 build 232] - 2026-06-11 - Fix Claude chat sticking on "streaming" with no reply on the first turn
+
+Starting a Claude chat and immediately sending a prompt could leave the
+column stuck on the streaming indicator with no assistant reply. Fixed for
+both solo chats and broadcast (compare-providers) columns.
+
+### Fixed
+
+- **Claude chat now replies on the very first turn.** A freshly created Claude chat warms its transcript watcher before your first message lands, so an immediate send no longer races startup and silently produces no reply. In broadcast mode, the first message to each Claude column is delivered as a plain prompt instead of a paste sequence the just-launched Claude could drop — the column now answers reliably.
+
 ## [0.33.0 build 230] - 2026-06-11 - Light theme, leaderboard, effort pill, vendor Install All, and 21 targeted fixes
 
 Quiet White light theme, flat tokens-by-model leaderboard, provider logo

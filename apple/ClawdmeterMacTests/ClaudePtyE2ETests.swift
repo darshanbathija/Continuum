@@ -146,6 +146,15 @@ final class ClaudePtyE2ETests: XCTestCase {
         }
         XCTAssertTrue(ready, "PTY host should spawn the (fake) claude and reach READY")
 
+        // 3b. Solo create must pre-warm the JSONL-backed chat store so the
+        // client's immediate /send doesn't race the first snapshot acquire.
+        // Assert RESIDENCY (non-creating) — chatStore(for:) is get-or-create
+        // and would pass even if create never warmed the store.
+        XCTAssertTrue(
+            server.isChatStoreResident(session.id),
+            "create must stand up the sentinel JSONL store before returning"
+        )
+
         // 4. SEND via the real handler → the prompt reaches the child.
         let sendBody = try JSONEncoder().encode(
             SendPromptRequest(
