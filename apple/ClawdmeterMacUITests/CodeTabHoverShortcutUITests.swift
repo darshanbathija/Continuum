@@ -497,7 +497,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(element("code.review.pane").waitForExistence(timeout: 5), "Expand pane should reveal the review pane again.")
     }
 
-    func testCenterHeaderDensityAndMoreActionsMenusExposeSafeActions() throws {
+    func testCenterHeaderDensityMenuUpdatesTranscriptDensity() throws {
         openCodeTab()
 
         let row = workspaceLeafRowElement()
@@ -515,239 +515,6 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         density.click()
         clickMenuItem(identifier: "code.header.density.compact", title: "Compact")
         XCTAssertTrue(element("code.header.density.selected.compact").waitForExistence(timeout: 5), "Selecting Compact should update the density state.")
-
-        let more = element("code.header.more-actions")
-        XCTAssertTrue(more.waitForExistence(timeout: 10), "Center header should expose the More actions menu.")
-        more.click()
-        for menuRow in [
-            ("code.header.more-actions.terminal", "Open terminal tab (⇧⌘T)"),
-            ("code.header.more-actions.schedule-follow-up", "Schedule follow-up…"),
-            ("code.header.more-actions.create-checkpoint", "Create checkpoint"),
-            ("code.header.more-actions.pop-out", "Pop out window"),
-            ("code.header.more-actions.archive", "Archive"),
-            ("code.header.more-actions.end-session", "End session"),
-        ] {
-            XCTAssertTrue(
-                element(menuRow.0).waitForExistence(timeout: 5),
-                "More actions should expose \(menuRow.1)."
-            )
-        }
-        clickMenuItem(identifier: "code.header.more-actions.schedule-follow-up", title: "Schedule follow-up…")
-        XCTAssertTrue(element("code.follow-up-sheet").waitForExistence(timeout: 5), "Schedule follow-up should open the scheduler sheet.")
-        XCTAssertTrue(element("code.follow-up-sheet.prompt").waitForExistence(timeout: 5), "Scheduler sheet should expose a prompt field.")
-        XCTAssertTrue(element("code.follow-up-sheet.schedule").waitForExistence(timeout: 5), "Scheduler sheet should expose the Schedule action.")
-        element("code.follow-up-sheet.done").click()
-        XCTAssertTrue(waitForNonExistence(element("code.follow-up-sheet"), timeout: 5), "Done should close the scheduler sheet without scheduling.")
-
-        more.click()
-        clickMenuItem(identifier: "code.header.more-actions.terminal", title: "Open terminal tab (⇧⌘T)")
-        XCTAssertTrue(element("code.workspace.tab.terminal").waitForExistence(timeout: 10), "More actions terminal row should create a workspace terminal tab.")
-        XCTAssertTrue(element("code.workspace.terminal.surface").waitForExistence(timeout: 10), "More actions terminal row should render the terminal surface.")
-    }
-
-    func testCenterHeaderMoreActionsArchiveHidesSessionAndKeepsArchiveRecoverable() throws {
-        openCodeTab()
-
-        let row = workspaceLeafRowElement()
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
-        row.click()
-
-        openCenterHeaderMoreActions()
-        clickMenuItem(identifier: "code.header.more-actions.archive", title: "Archive")
-
-        XCTAssertTrue(waitForSeedSessionArchived(timeout: 5), "Center header Archive should persist archivedAt for the active session.")
-        XCTAssertTrue(waitForNonExistence(element("code.worktree.row"), timeout: 5), "Archived active session should leave the default sidebar.")
-
-        selectArchivedFilter()
-        XCTAssertTrue(workspaceLeafRowElement().waitForExistence(timeout: 5), "Archived filter should show the session archived from the center header.")
-    }
-
-    func testCenterHeaderMoreActionsEndSessionDeletesNonOwnedSession() throws {
-        openCodeTab()
-
-        let row = workspaceLeafRowElement()
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
-        row.click()
-
-        openCenterHeaderMoreActions()
-        clickMenuItem(identifier: "code.header.more-actions.end-session", title: "End session")
-
-        XCTAssertTrue(waitForSeedSessionDeleted(timeout: 5), "Center header End session should delete the active non-owned fixture session.")
-        XCTAssertTrue(seedWorkspaceExists(), "Ending a session should not remove the managed workspace record.")
-        XCTAssertTrue(waitForNonExistence(element("code.worktree.row"), timeout: 5), "Ended session should leave the default sidebar.")
-
-        selectArchivedFilter()
-        XCTAssertTrue(waitForNonExistence(element("code.worktree.row"), timeout: 5), "Deleted sessions should not appear in Archive.")
-    }
-
-    func testCenterHeaderCheckpointCreateAndRestoreRoundTripsRepoState() throws {
-        openCodeTab()
-
-        let row = workspaceLeafRowElement()
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
-        row.click()
-
-        XCTAssertEqual(try seedRepoFileContents(), "initial checkpoint state\n")
-
-        openCenterHeaderMoreActions()
-        clickMenuItem(identifier: "code.header.more-actions.create-checkpoint", title: "Create checkpoint")
-
-        XCTAssertTrue(waitForCheckpointRefCount(atLeast: 1, timeout: 10), "Create checkpoint should persist a git checkpoint ref for the active session.")
-        XCTAssertTrue(element("code.header.checkpoint-status").waitForExistence(timeout: 5), "Create checkpoint should surface immediate header feedback.")
-
-        try commitSeedRepoFile("post-checkpoint committed state\n", message: "Post checkpoint state")
-        XCTAssertEqual(try seedRepoFileContents(), "post-checkpoint committed state\n")
-
-        openCenterHeaderMoreActions()
-        XCTAssertTrue(
-            element("code.header.more-actions.restore-latest-checkpoint").waitForExistence(timeout: 5),
-            "Once a checkpoint exists, More actions should expose Restore latest checkpoint."
-        )
-        clickMenuItem(identifier: "code.header.more-actions.restore-latest-checkpoint", title: "Restore latest checkpoint…")
-
-        XCTAssertTrue(element("code.checkpoint.restore-sheet").waitForExistence(timeout: 10), "Restore latest should open the checkpoint restore preview.")
-        XCTAssertTrue(
-            waitForAny([
-                element("code.checkpoint.restore-sheet.preview"),
-                app.staticTexts["Preview"],
-            ], timeout: 5),
-            "Restore preview should expose the diff body."
-        )
-        let restore = firstExisting([
-            element("code.checkpoint.restore-sheet.restore"),
-            app.buttons["Restore to checkpoint"],
-        ])
-        XCTAssertTrue(restore.waitForExistence(timeout: 5), "Restore preview should expose the destructive restore action.")
-        XCTAssertTrue(restore.isEnabled, "A clean committed repo should allow restore.")
-        restore.click()
-
-        XCTAssertTrue(waitForNonExistence(element("code.checkpoint.restore-sheet"), timeout: 10), "Successful restore should dismiss the preview sheet.")
-        XCTAssertTrue(
-            waitUntil(timeout: 10) {
-                (try? self.seedRepoFileContents()) == "initial checkpoint state\n"
-            },
-            "Restore should return tracked files to the selected checkpoint state."
-        )
-    }
-
-    func testCenterHeaderCheckpointRestoreBlocksDirtyTrackedChangesAndCancelPreservesWorktree() throws {
-        openCodeTab()
-
-        let row = workspaceLeafRowElement()
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
-        row.click()
-
-        openCenterHeaderMoreActions()
-        clickMenuItem(identifier: "code.header.more-actions.create-checkpoint", title: "Create checkpoint")
-        XCTAssertTrue(waitForCheckpointRefCount(atLeast: 1, timeout: 10), "Create checkpoint should persist a git checkpoint ref before restore is offered.")
-
-        try writeSeedRepoFile("dirty tracked local state\n")
-        XCTAssertTrue(seedRepoStatusLines().contains { $0.contains("notes.md") }, "The fixture repo should contain dirty tracked work before restore.")
-
-        openCenterHeaderMoreActions()
-        clickMenuItem(identifier: "code.header.more-actions.restore-latest-checkpoint", title: "Restore latest checkpoint…")
-
-        XCTAssertTrue(element("code.checkpoint.restore-sheet").waitForExistence(timeout: 10), "Restore latest should open the checkpoint restore preview.")
-        XCTAssertTrue(
-            waitForAny([
-                element("code.checkpoint.restore-sheet.blocking-reasons"),
-                app.staticTexts["Working tree has uncommitted tracked or staged changes."],
-            ], timeout: 5),
-            "Dirty tracked changes should surface a blocking restore reason."
-        )
-        XCTAssertTrue(
-            waitForAny([
-                element("code.checkpoint.restore-sheet.dirty-status-label"),
-                app.staticTexts["Dirty status"],
-                element("code.checkpoint.restore-sheet.dirty-status.present"),
-                element("code.checkpoint.restore-sheet.dirty-status"),
-                app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "notes.md")).firstMatch,
-            ], timeout: 5),
-            "The blocked restore sheet should show the dirty file status."
-        )
-        let restore = firstExisting([
-            element("code.checkpoint.restore-sheet.restore"),
-            app.buttons["Restore to checkpoint"],
-        ])
-        XCTAssertTrue(restore.waitForExistence(timeout: 5), "Blocked restore sheet should still expose the restore action.")
-        XCTAssertFalse(restore.isEnabled, "Restore must be disabled while tracked local changes would be overwritten.")
-
-        let cancel = firstExisting([
-            element("code.checkpoint.restore-sheet.cancel"),
-            app.buttons["Cancel"],
-        ])
-        XCTAssertTrue(cancel.waitForExistence(timeout: 5), "Blocked restore sheet should expose Cancel.")
-        cancel.click()
-        XCTAssertTrue(waitForNonExistence(element("code.checkpoint.restore-sheet"), timeout: 10), "Cancel should dismiss the blocked restore sheet.")
-        XCTAssertEqual(try seedRepoFileContents(), "dirty tracked local state\n", "Canceling a blocked restore must preserve local tracked edits.")
-        XCTAssertTrue(seedRepoStatusLines().contains { $0.contains("notes.md") }, "Canceling a blocked restore must leave the worktree dirty.")
-    }
-
-    func testCenterHeaderCheckpointRestoreBlocksUntrackedOverwriteAndCancelPreservesFile() throws {
-        openCodeTab()
-
-        let row = workspaceLeafRowElement()
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
-        row.click()
-
-        try commitRepoFile("conflict.txt", contents: "checkpoint tracked conflict\n", message: "Add conflict file")
-
-        openCenterHeaderMoreActions()
-        clickMenuItem(identifier: "code.header.more-actions.create-checkpoint", title: "Create checkpoint")
-        XCTAssertTrue(waitForCheckpointRefCount(atLeast: 1, timeout: 10), "Create checkpoint should persist a git checkpoint ref before restore is offered.")
-        XCTAssertTrue(
-            latestCheckpointTreePaths().contains("conflict.txt"),
-            "The fixture checkpoint should track conflict.txt before the overwrite-risk restore."
-        )
-
-        try removeRepoFileAndCommit("conflict.txt", message: "Remove conflict file")
-        try writeRepoFile("conflict.txt", contents: "untracked local conflict\n")
-        XCTAssertTrue(
-            seedRepoStatusLines().contains { $0 == "?? conflict.txt" },
-            "The fixture repo should contain an untracked file that would be overwritten by the checkpoint."
-        )
-
-        openCenterHeaderMoreActions()
-        clickMenuItem(identifier: "code.header.more-actions.restore-latest-checkpoint", title: "Restore latest checkpoint…")
-
-        XCTAssertTrue(element("code.checkpoint.restore-sheet").waitForExistence(timeout: 10), "Restore latest should open the checkpoint restore preview.")
-        XCTAssertTrue(
-            waitForAny([
-                app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Untracked files would be overwritten")).firstMatch,
-                app.staticTexts.matching(NSPredicate(format: "value CONTAINS[c] %@", "Untracked files would be overwritten")).firstMatch,
-                app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "conflict.txt")).firstMatch,
-                app.staticTexts.matching(NSPredicate(format: "value CONTAINS[c] %@", "conflict.txt")).firstMatch,
-                element("code.checkpoint.restore-sheet.blocking-reasons"),
-            ], timeout: 5),
-            "Untracked overwrite risk should surface a blocking restore reason."
-        )
-        XCTAssertTrue(
-            waitForAny([
-                element("code.checkpoint.restore-sheet.dirty-status-label"),
-                app.staticTexts["Dirty status"],
-                element("code.checkpoint.restore-sheet.dirty-status.present"),
-                element("code.checkpoint.restore-sheet.dirty-status"),
-                app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "conflict.txt")).firstMatch,
-                app.staticTexts.matching(NSPredicate(format: "value CONTAINS[c] %@", "conflict.txt")).firstMatch,
-            ], timeout: 5),
-            "The blocked restore sheet should show the untracked file status."
-        )
-        let restore = firstExisting([
-            element("code.checkpoint.restore-sheet.restore"),
-            app.buttons["Restore to checkpoint"],
-        ])
-        XCTAssertTrue(restore.waitForExistence(timeout: 5), "Blocked restore sheet should still expose the restore action.")
-        XCTAssertFalse(restore.isEnabled, "Restore must be disabled when it would overwrite an untracked file.")
-
-        let cancel = firstExisting([
-            element("code.checkpoint.restore-sheet.cancel"),
-            app.buttons["Cancel"],
-        ])
-        XCTAssertTrue(cancel.waitForExistence(timeout: 5), "Blocked restore sheet should expose Cancel.")
-        cancel.click()
-        XCTAssertTrue(waitForNonExistence(element("code.checkpoint.restore-sheet"), timeout: 10), "Cancel should dismiss the blocked restore sheet.")
-        XCTAssertEqual(try repoFileContents("conflict.txt"), "untracked local conflict\n", "Canceling a blocked restore must preserve the untracked file.")
-        XCTAssertTrue(seedRepoStatusLines().contains { $0 == "?? conflict.txt" }, "Canceling a blocked restore must leave the untracked file untracked.")
     }
 
     func testWorkspaceNewTabButtonCreatesUnboundedChatDraftTabsFromCodeTab() throws {
@@ -1086,7 +853,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         } else {
             row.click()
         }
-        XCTAssertTrue(element("code.header.more-actions").waitForExistence(timeout: 10), "Bypass trust coverage must start from a bound session, not the empty/draft composer.")
+        XCTAssertTrue(element("code.center.header").waitForExistence(timeout: 10), "Bypass trust coverage must start from a bound session, not the empty/draft composer.")
 
         let permissionChip = element("code.composer.permission-mode")
         XCTAssertTrue(permissionChip.waitForExistence(timeout: 10), "Seeded session should expose the permission-mode chip.")
@@ -1740,15 +1507,6 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         let menu = element("code.composer.tools-menu")
         XCTAssertTrue(menu.waitForExistence(timeout: 10), "Composer should expose the + tools menu.", file: file, line: line)
         menu.click()
-    }
-
-    private func openCenterHeaderMoreActions(
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        let more = element("code.header.more-actions")
-        XCTAssertTrue(more.waitForExistence(timeout: 10), "Center header should expose the More actions menu.", file: file, line: line)
-        more.click()
     }
 
     private func openReviewPaneTab(
