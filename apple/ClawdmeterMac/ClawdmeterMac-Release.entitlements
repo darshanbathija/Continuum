@@ -40,6 +40,10 @@
 	     comment above is retained for history but no longer applies. -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
+	<!-- Composer dictation (AVAudioEngine) — required for the mic TCC prompt
+	     when sandbox is re-enabled. Harmless while sandbox is off. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
 	<!-- Sparkle sandbox installer service rendezvous. Required when

@@ -572,6 +572,14 @@ struct ComposerInputCore: View {
                 }
             )
             .layoutPriority(2)
+            if modelSupportsEffort {
+                EffortChip(
+                    effort: store.effort,
+                    supportsEffort: modelSupportsEffort,
+                    onChange: { store.effort = $0 }
+                )
+                .layoutPriority(2)
+            }
             if !isReadOnly, onChangePermissionMode != nil {
                 // v0.7.12 revert: `PermissionModeChip` Menu (matches
                 // Claude Code's compact "Auto ▾" pattern — single
@@ -634,6 +642,13 @@ struct ComposerInputCore: View {
             }
             Spacer(minLength: 8)
             let resolvedInfo = usageStatus ?? Self.placeholderUsage(modelId: store.modelId, effort: store.effort, catalog: catalog)
+            if modelSupportsEffort {
+                EffortChip(
+                    effort: store.effort,
+                    supportsEffort: modelSupportsEffort,
+                    onChange: { store.effort = $0 }
+                )
+            }
             ModelEffortChip(
                 info: resolvedInfo,
                 catalog: catalog,
@@ -1137,6 +1152,9 @@ struct ComposerInputCore: View {
     private func toggleDictation() {
         if dictation.state == .recording {
             dictation.stop()
+        } else if case .denied = dictation.state {
+            // Permission was previously denied — route to the matching pane.
+            dictation.openPrivacySettings()
         } else {
             composerTextBeforeDictation = store.text
             Task { await dictation.start() }
@@ -1147,7 +1165,7 @@ struct ComposerInputCore: View {
         switch dictation.state {
         case .recording: return "Stop dictation (Ctrl+M)"
         case .requestingPermission: return "Requesting permission…"
-        case .denied(let r): return r
+        case .denied(let r): return "\(r) Click to open System Settings."
         case .unavailable(let r): return r
         case .idle: return "Dictate (Ctrl+M)"
         }

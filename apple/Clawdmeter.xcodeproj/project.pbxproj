@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A815C2FAB3A047049510AD1F /* CustomProviderStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52A8D33DF7BE4B4CA6E429CC /* CustomProviderStore.swift */; };
+		1DC6C939B83D4C96AB09FE41 /* CustomProviderSpawnPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E14243A8F554D7FBC9B40B0 /* CustomProviderSpawnPlan.swift */; };
+		769804BB345549E2BA1EB7CD /* CustomProviderAPIProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C80B3B188F4FF0AFC786C4 /* CustomProviderAPIProbe.swift */; };
+		6468C99228F447B6B1EE992C /* CustomProviderSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A6CF67909CF45F69E644D68 /* CustomProviderSettings.swift */; };
 		006EEA9AA50560F63C68B82D /* iOSModelPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47379626A67ED52F4DF364AE /* iOSModelPicker.swift */; };
 		0127E090A7799D2F4A7BC9BB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 052C6AEF07A486E8A35669C5 /* Assets.xcassets */; };
 		0190050C63A0552D50548BA8 /* CodexPlanPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCF9A1F1CC3BBCFFE5BFE1B3 /* CodexPlanPane.swift */; };
@@ -242,6 +246,7 @@
 		8F810CE05FE7DB26AD6760E8 /* PlanApprovalStoreRolloverTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DDD96BA101F1AAAD5E6DCAD /* PlanApprovalStoreRolloverTest.swift */; };
 		8FA40B3A1BDFF8D2E6EA2746 /* AgentControlServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9DC6C356E49170FC1FE84C /* AgentControlServer.swift */; };
 		906808FD1730A88D3E1E065A /* PermissionModeChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E0AF7F2D36777237BB36333 /* PermissionModeChip.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* EffortChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* EffortChip.swift */; };
 		912202BEEA9A6B028E79D53D /* PlanQueueLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEE226FC69071781E21A03F9 /* PlanQueueLoaderTests.swift */; };
 		915EBD7C5CDF6BE7C78E185D /* DoneDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1079DC5DFB5709D11EDAACB2 /* DoneDetectorTests.swift */; };
 		91F59FC843FCFADA8995B62C /* AppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC65FE99FD75CA3B6A74A83 /* AppRuntime.swift */; };
@@ -501,6 +506,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		52A8D33DF7BE4B4CA6E429CC /* CustomProviderStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomProviderStore.swift; sourceTree = "<group>"; };
+		0E14243A8F554D7FBC9B40B0 /* CustomProviderSpawnPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomProviderSpawnPlan.swift; sourceTree = "<group>"; };
+		18C80B3B188F4FF0AFC786C4 /* CustomProviderAPIProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomProviderAPIProbe.swift; sourceTree = "<group>"; };
+		8A6CF67909CF45F69E644D68 /* CustomProviderSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomProviderSettings.swift; sourceTree = "<group>"; };
 		012447D961770BC6D8F59436 /* F1dWireChatParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = F1dWireChatParityTests.swift; sourceTree = "<group>"; };
 		015F6FD7463F3710A54A36EB /* MacMenubarPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMenubarPopover.swift; sourceTree = "<group>"; };
 		0212D82878893E944B18EC31 /* GrokAnalyticsRangeAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokAnalyticsRangeAdapterTests.swift; sourceTree = "<group>"; };
@@ -591,6 +600,7 @@
 		38DC91CBDEFE54A4A03CA31D /* PlanQueueSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanQueueSheet.swift; sourceTree = "<group>"; };
 		3AC85897BEF981BD4BAEB79F /* AppearanceMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceMode.swift; sourceTree = "<group>"; };
 		3E0AF7F2D36777237BB36333 /* PermissionModeChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionModeChip.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60718293A4B5C6D /* EffortChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffortChip.swift; sourceTree = "<group>"; };
 		3F1627364A3A4398D5A45B4A /* JSONLTail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONLTail.swift; sourceTree = "<group>"; };
 		3F390A788ACC767845A4786C /* Vendor */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Vendor; path = ClawdmeterMac/Resources/Vendor; sourceTree = SOURCE_ROOT; };
 		412A35101FFC2DBB6623AD83 /* WorkspaceTerminalPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTerminalPane.swift; sourceTree = "<group>"; };
@@ -965,6 +975,9 @@
 		02FCCC418BA0C1695E829FB9 /* AgentControl */ = {
 			isa = PBXGroup;
 			children = (
+				18C80B3B188F4FF0AFC786C4 /* CustomProviderAPIProbe.swift */,
+				0E14243A8F554D7FBC9B40B0 /* CustomProviderSpawnPlan.swift */,
+				52A8D33DF7BE4B4CA6E429CC /* CustomProviderStore.swift */,
 				2D57648012C2D3368CD2ED3C /* AcpHarnessBridge.swift */,
 				BC9DC6C356E49170FC1FE84C /* AgentControlServer.swift */,
 				98827BB6B0A2F3F766FF3C57 /* AgentControlServer+RepoOnboarding.swift */,
@@ -1167,6 +1180,7 @@
 				A2507332067583B37F56219E /* InheritedContextChips.swift */,
 				A1D3F0399FF3C5DFC23B1532 /* MacComposerSender.swift */,
 				797168CA4C5227800441FD18 /* MentionPicker.swift */,
+				B2C3D4E5F60718293A4B5C6D /* EffortChip.swift */,
 				3E0AF7F2D36777237BB36333 /* PermissionModeChip.swift */,
 				60C622DD99169A6ABCBC6F8C /* UsageStatusChip.swift */,
 			);
@@ -1447,6 +1461,7 @@
 			isa = PBXGroup;
 			children = (
 				58B2791865D23423A7F4CC0F /* AnalyticsRangeAdapter.swift */,
+				8A6CF67909CF45F69E644D68 /* CustomProviderSettings.swift */,
 				C2D094B6FFC14AA31CD6E63E /* KeyboardCheatSheet.swift */,
 				5E503A54446667EB3A1CEE00 /* MacCodeShell.swift */,
 				015F6FD7463F3710A54A36EB /* MacMenubarPopover.swift */,
@@ -2179,6 +2194,10 @@
 				0D5249B534DF8025B1A19E2C /* MacTahoeAdapter.swift in Sources */,
 				FC09E87265C8C2DFEF77D40F /* MacTerminalView.swift in Sources */,
 				E2C107C402AACE6FAB80BBB3 /* MacUsageView.swift in Sources */,
+				A815C2FAB3A047049510AD1F /* CustomProviderStore.swift in Sources */,
+				1DC6C939B83D4C96AB09FE41 /* CustomProviderSpawnPlan.swift in Sources */,
+				769804BB345549E2BA1EB7CD /* CustomProviderAPIProbe.swift in Sources */,
+				6468C99228F447B6B1EE992C /* CustomProviderSettings.swift in Sources */,
 				EB76FBD9A97AD9FC87600DEB /* MarkdownDocumentTabView.swift in Sources */,
 				ECB0775FEF1BF8D1B9D4B339 /* MarkdownRenderer.swift in Sources */,
 				F2A463341EA0924E426712F0 /* MentionPicker.swift in Sources */,
@@ -2199,6 +2218,7 @@
 				A9C33C7309E3C6A8B289CEB1 /* PairingSettingsView.swift in Sources */,
 				A570A995C1EE313DE7FA7EC7 /* PairingTokenStore.swift in Sources */,
 				D0FA4EF3B888EFA7C45DBC11 /* PathAllowList.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* EffortChip.swift in Sources */,
 				906808FD1730A88D3E1E065A /* PermissionModeChip.swift in Sources */,
 				CCB83D01841DFB63E28F43C6 /* PermissionModeStore.swift in Sources */,
 				4B4863CAE9854CDB98817D4A /* PlanCompletionSurfaces.swift in Sources */,
