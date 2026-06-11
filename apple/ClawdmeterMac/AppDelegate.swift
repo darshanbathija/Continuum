@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var geminiController: ProviderStatusController?
     private var grokController: ProviderStatusController?
     private var cursorController: ProviderStatusController?
+    private var opencodeController: ProviderStatusController?
 
     private var prefsObserver: NSObjectProtocol?
     private var windowCloseObserver: NSObjectProtocol?
@@ -88,6 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if cursorController == nil {
             cursorController = ProviderStatusController(model: runtime.cursorModel, runtime: runtime)
+        }
+        if opencodeController == nil {
+            opencodeController = ProviderStatusController(model: runtime.opencodeModel, runtime: runtime)
         }
         installObserversIfNeeded()
         applyVisibilityFromPrefs()
@@ -330,6 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         geminiController?.setVisible(geminiShown)
         grokController?.setVisible(grokShown)
         cursorController?.setVisible(cursorShown)
+        opencodeController?.setVisible(opencodeShown)
     }
 }
 
@@ -351,6 +356,7 @@ final class ProviderStatusController: NSObject {
         case "gemini": return .gemini
         case "cursor": return .cursor
         case "grok": return .grok
+        case "opencode": return .opencode
         default:       return .claude
         }
     }

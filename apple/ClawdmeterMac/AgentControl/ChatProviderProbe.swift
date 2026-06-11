@@ -112,9 +112,8 @@ public actor ChatProviderProbe {
             agyHeadlessAvailable: Bool,
             opencodeAvailable: Bool,
             opencodeAuthProviderCount: Int,
-            opencodeOpenRouterAuthAvailable: Bool,
-            opencodeEnvironmentAuthAvailable: Bool,
-            openRouterModelState: OpenRouterModelProbeState,
+            opencodeGoAuthAvailable: Bool,
+            openCodeGoModelState: OpenCodeGoModelProbeState,
             cursorState: CursorModelProbeState,
             grokAvailable: Bool
         ) = await Task.detached {
@@ -130,48 +129,30 @@ public actor ChatProviderProbe {
             // and works with the desktop app CLOSED — binary presence is the signal,
             // mirroring how grok/cursor/codex are probed by `locateBinary`.
             let agyHeadlessAvailable = geminiEnabled && ShellRunner.locateBinary("agy") != nil
-            let opencodeAvailable = await MainActor.run {
+            let opencodeBinaryAvailable = await MainActor.run {
                 opencodeEnabled && OpencodeProcessManager.shared.locateBinary() != nil
             }
             let opencodeProviderIds = opencodeEnabled
                 ? await OpencodeAuthFile.shared.providerIds()
                 : []
             let opencodeAuthProviderCount = opencodeProviderIds.count
-            let opencodeEnvironmentAuthAvailable: Bool = {
-                guard opencodeEnabled else { return false }
-                return ProcessInfo.processInfo.environment.contains { key, value in
-                    guard !value.isEmpty else { return false }
-                    switch key {
-                    case "OPENROUTER_API_KEY",
-                         "ANTHROPIC_API_KEY",
-                         "OPENAI_API_KEY",
-                         "GOOGLE_GENERATIVE_AI_API_KEY",
-                         "GEMINI_API_KEY",
-                         "MISTRAL_API_KEY",
-                         "GROQ_API_KEY",
-                         "XAI_API_KEY",
-                         "DEEPSEEK_API_KEY",
-                         "MOONSHOT_API_KEY",
-                         "MOONSHOTAI_API_KEY":
-                        return true
-                    default:
-                        return false
-                    }
-                }
-            }()
-            let opencodeOpenRouterAuthAvailable = opencodeEnabled
-                && (opencodeProviderIds.contains("openrouter")
-                    || (ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]?.isEmpty == false))
-            let disabledOpenRouterState = OpenRouterModelProbeState(
+            // Chat needs a Go API key to route a model through `opencode serve`.
+            // Dashboard quota creds (workspace + cookie) alone can't send a
+            // prompt, so they must NOT make the chat provider available.
+            let opencodeGoAuthAvailable = opencodeEnabled
+                && OpenCodeGoCredentials.hasGoAuthFromDisk()
+            let opencodeAvailable = opencodeEnabled
+                && (opencodeBinaryAvailable || opencodeGoAuthAvailable)
+            let disabledOpenCodeGoState = OpenCodeGoModelProbeState(
                 models: ModelCatalog.bundled.opencode,
                 authenticated: false,
                 discoverySucceeded: false,
                 reason: "Provider disabled",
                 probedAt: Date()
             )
-            let openRouterModelState = opencodeEnabled
-                ? await OpenRouterModelProbe.shared.currentState()
-                : disabledOpenRouterState
+            let openCodeGoModelState = opencodeEnabled
+                ? await OpenCodeGoModelProbe.shared.currentState()
+                : disabledOpenCodeGoState
             // Passive provider discovery must not launch cursor-agent or
             // touch Cursor's login Keychain item. In dev/AI test builds,
             // those reads can surface SecurityAgent prompts repeatedly
@@ -199,9 +180,8 @@ public actor ChatProviderProbe {
                 agyHeadlessAvailable,
                 opencodeAvailable,
                 opencodeAuthProviderCount,
-                opencodeOpenRouterAuthAvailable,
-                opencodeEnvironmentAuthAvailable,
-                openRouterModelState,
+                opencodeGoAuthAvailable,
+                openCodeGoModelState,
                 cursorState,
                 grokAvailable
             )
@@ -225,9 +205,8 @@ public actor ChatProviderProbe {
         let (geminiAuth, geminiReason) = resolveAuth(key: "gemini", fallback: geminiDriveAvailable)
         let (opencodeAuth, opencodeReason) = resolveAuth(
             key: "opencode",
-            fallback: probes.opencodeAvailable
-                && probes.opencodeOpenRouterAuthAvailable
-                && probes.openRouterModelState.discoverySucceeded
+            fallback: probes.opencodeGoAuthAvailable
+                && probes.openCodeGoModelState.discoverySucceeded
         )
         let (cursorAuth, cursorReason) = resolveAuth(
             key: "cursor",
@@ -236,12 +215,11 @@ public actor ChatProviderProbe {
         let (grokAuth, grokReason) = resolveAuth(key: "grok", fallback: probes.grokAvailable)
         let opencodeDefaultReason: String? = {
             if !probes.opencodeEnabled { return "Provider disabled" }
-            if !probes.opencodeAvailable { return "opencode CLI not installed" }
-            if !probes.opencodeOpenRouterAuthAvailable {
-                return "Add an OpenRouter key in Settings"
+            if !probes.opencodeGoAuthAvailable {
+                return "Add your OpenCode Go API key in Settings"
             }
-            if !probes.openRouterModelState.discoverySucceeded {
-                return probes.openRouterModelState.reason ?? "OpenRouter model discovery failed"
+            if !probes.openCodeGoModelState.discoverySucceeded {
+                return probes.openCodeGoModelState.reason ?? "OpenCode Go model discovery failed"
             }
             return nil
         }()

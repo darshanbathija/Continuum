@@ -177,7 +177,7 @@ final class VendorProvisioningServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(result.succeededVendorIds, ["alpha"])
-        XCTAssertEqual(result.failedVendorIds.keys, Set(["beta"]))
+        XCTAssertEqual(Set(result.failedVendorIds.keys), Set(["beta"]))
         XCTAssertTrue(progress.contains { $0.vendorId == "alpha" && $0.phase == .installing })
         XCTAssertTrue(progress.contains { $0.vendorId == "alpha" && $0.phase == .succeeded })
         XCTAssertTrue(progress.contains { $0.vendorId == "beta" && ifCaseFailed($0.phase) })
@@ -279,7 +279,7 @@ final class VendorProvisioningServiceTests: XCTestCase {
             )
             XCTFail("Expected noInstallTargets")
         } catch VendorProvisioningError.noInstallTargets {
-            XCTAssertEqual(error.localizedDescription, "No vendor CLIs need installation.")
+            XCTAssertEqual(VendorProvisioningError.noInstallTargets.localizedDescription, "No vendor CLIs need installation.")
         }
     }
 

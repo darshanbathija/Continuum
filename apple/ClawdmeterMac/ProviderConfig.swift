@@ -122,4 +122,17 @@ public struct ProviderConfig: Identifiable, Sendable {
         supportsAutoRevive: false,
         hasWeeklyWindow: false
     )
+
+    /// OpenCode Go subscription — rolling 5h, weekly, and monthly windows.
+    public static let opencode = ProviderConfig(
+        id: "opencode",
+        displayName: "OpenCode",
+        logoAssetName: "OpencodeLogo",
+        reviveModel: "",
+        reviveEndpoint: URL(string: "https://opencode.ai/zen/go/v1/usage")!,
+        reviveAuthVersion: nil,
+        storageKeyPrefix: "clawdmeter.opencode",
+        supportsAutoRevive: false,
+        hasWeeklyWindow: true
+    )
 }

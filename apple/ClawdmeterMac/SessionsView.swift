@@ -2329,7 +2329,7 @@ public final class SessionsModel: ObservableObject {
         case .codex: return "ChatGPT"
         case .gemini: return "Antigravity"
         case .cursor: return "Cursor"
-        case .opencode: return "OpenRouter"
+        case .opencode: return "OpenCode"
         case .grok: return "Grok"
         case .unknown: return "this provider"
         }
@@ -2552,7 +2552,7 @@ public final class SessionsModel: ObservableObject {
         guard let _ = await OpencodeProcessManager.shared.ensureRunning() else {
             switch OpencodeProcessManager.shared.state {
             case .notInstalled:
-                throw SpawnError.missingBinary("OpenCode is not installed. Install OpenCode, then add an OpenRouter key in Settings.")
+                throw SpawnError.missingBinary("OpenCode is not installed. Install OpenCode, then add your OpenCode Go API key in Settings.")
             case .failed(let detail):
                 throw SpawnError.missingBinary("OpenCode serve failed: \(detail)")
             default:

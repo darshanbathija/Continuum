@@ -110,6 +110,7 @@ public final class AgentControlServer {
     private weak var geminiModel: AppModel?
     private weak var cursorModel: AppModel?
     private weak var grokModel: AppModel?
+    private weak var opencodeModel: AppModel?
     private weak var usageHistory: UsageHistoryStore?
     /// Multi-account (wire v28): every per-instance `AppModel` keyed by
     /// `ProviderInstanceId.wireId`. Closure (not a captured dict) so the
@@ -319,6 +320,7 @@ public final class AgentControlServer {
         gemini: AppModel? = nil,
         cursor: AppModel? = nil,
         grok: AppModel? = nil,
+        opencode: AppModel? = nil,
         history: UsageHistoryStore?
     ) {
         self.claudeModel = claude
@@ -326,6 +328,7 @@ public final class AgentControlServer {
         self.geminiModel = gemini
         self.cursorModel = cursor
         self.grokModel = grok
+        self.opencodeModel = opencode
         self.usageHistory = history
     }
 
@@ -1497,7 +1500,7 @@ public final class AgentControlServer {
             catalog = catalog.replacingCursor(await CursorModelProbe.shared.currentModels())
         }
         if ProviderEnablement.isEnabled("opencode") {
-            catalog = catalog.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
+            catalog = catalog.replacingOpenCodeGo(await OpenCodeGoModelProbe.shared.currentModels())
         }
         let enabledIDs = ProviderEnablement.enabledProviderIDs(for: .code)
         let readyModelProviderIDs = enabledIDs.filter { id in
@@ -4719,6 +4722,8 @@ public final class AgentControlServer {
            let cursor = cursorModel?.usage { dict["cursor"] = cursor }
         if ProviderRegistry.isVisible(id: "grok", capability: .liveUsage),
            let grok = grokModel?.usage { dict["grok"] = grok }
+        if ProviderRegistry.isVisible(id: "opencode", capability: .liveUsage),
+           let opencode = opencodeModel?.usage { dict["opencode"] = opencode }
         // Multi-account (wire v28): per-instance keys for SECONDARY
         // accounts (`claude/work`, `codex/pro`). Primary data stays
         // under the legacy kind keys above; the client-side
@@ -6515,7 +6520,7 @@ public final class AgentControlServer {
             let body: String
             switch OpencodeProcessManager.shared.state {
             case .notInstalled:
-                body = #"{"error":"opencode_not_installed","hint":"Install OpenCode, then add an OpenRouter key in Settings."}"#
+                body = #"{"error":"opencode_not_installed","hint":"Install OpenCode, then add your OpenCode Go API key in Settings."}"#
             case .failed(let detail):
                 body = #"{"error":"opencode_serve_failed","detail":"\#(detail)"}"#
             default:
@@ -6673,7 +6678,7 @@ public final class AgentControlServer {
         case .codex: return "ChatGPT"
         case .gemini: return "Antigravity"
         case .cursor: return "Cursor"
-        case .opencode: return "OpenRouter"
+        case .opencode: return "OpenCode"
         case .grok: return "Grok"
         case .unknown: return "this provider"
         }
@@ -6794,7 +6799,7 @@ public final class AgentControlServer {
 
     private func handleRefreshChatProviders(connection: NWConnection) async {
         await ChatProviderProbe.shared.invalidate()
-        await OpenRouterModelProbe.shared.invalidate()
+        await OpenCodeGoModelProbe.shared.invalidate()
         await CursorModelProbe.shared.invalidate()
         await handleGetChatProviders(connection: connection)
     }
@@ -7676,25 +7681,32 @@ public final class AgentControlServer {
                 ["type": "text", "text": prompt]
             ]
         ]
-        // Honor the picked model. registry.create stored the OpenRouter slug
+        // Honor the picked model. registry.create stored the Go model slug
         // on session.model, but until now it was dropped here and OpenCode
-        // silently ran its own opencode.json default — so the 320-model picker
+        // silently ran its own opencode.json default — so the model picker
         // was cosmetic. OpenCode's /session/:id/message takes an optional
-        // `model:{providerID,modelID}`; the OpenRouter-backed vendor always
-        // routes via providerID "openrouter" with the full slug as modelID.
+        // `model:{providerID,modelID}`; the Go-backed vendor always
+        // routes via providerID "opencode-go" with the catalog id as modelID.
         if let model = Self.opencodeModelObject(forModelId: session.model) {
             body["model"] = model
         }
         return body
     }
 
-    /// Maps a session's selected OpenRouter model id to OpenCode's message
+    /// Maps a session's selected OpenCode Go model id to OpenCode's message
     /// `{providerID, modelID}` object. Returns nil for the "opencode-default"
     /// sentinel (or no selection) so OpenCode keeps its own default model.
     nonisolated static func opencodeModelObject(forModelId raw: String?) -> [String: String]? {
         guard let id = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
               !id.isEmpty, id != "opencode-default" else { return nil }
-        return ["providerID": "openrouter", "modelID": id]
+        if id.contains("/") {
+            let parts = id.split(separator: "/", maxSplits: 1).map(String.init)
+            if parts.count == 2, parts[0] == "opencode-go" {
+                return ["providerID": "opencode-go", "modelID": parts[1]]
+            }
+            return ["providerID": "openrouter", "modelID": id]
+        }
+        return ["providerID": "opencode-go", "modelID": id]
     }
 
     private func isVerifiedOwnedWorktree(_ session: AgentSession) async -> Bool {

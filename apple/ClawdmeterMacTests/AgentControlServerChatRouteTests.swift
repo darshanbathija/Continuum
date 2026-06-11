@@ -104,7 +104,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         await ChatProviderProbe.shared.clearAuthOverride(providerKey: "opencode")
         await ChatProviderProbe.shared.invalidate()
         await CursorModelProbe.shared.invalidate()
-        await OpenRouterModelProbe.shared.invalidate()
+        await OpenCodeGoModelProbe.shared.invalidate()
 
         server?.stop()
         server = nil

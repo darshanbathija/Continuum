@@ -85,9 +85,9 @@ final class SessionLauncherModel: ObservableObject {
 
         if opencodeEnabled {
             await OpencodeProcessManager.shared.refreshAuthStatus()
-            opencodeReady = OpencodeProcessManager.shared.binaryPath != nil
-                && !(OpencodeProcessManager.shared.authStatus ?? [:]).isEmpty
-            nextCatalog = nextCatalog.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
+            let goAuth = await OpenCodeGoCredentials.hasGoAuth()
+            opencodeReady = OpencodeProcessManager.shared.binaryPath != nil && goAuth
+            nextCatalog = nextCatalog.replacingOpenCodeGo(await OpenCodeGoModelProbe.shared.currentModels())
         }
 
         if cursorEnabled {

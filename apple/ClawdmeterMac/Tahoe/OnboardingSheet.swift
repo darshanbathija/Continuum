@@ -24,9 +24,11 @@ struct OnboardingSheet: View {
     @State private var pendingSetupProviderIDs: Set<String> = []
     @State private var discoveryResult: ProviderDiscoveryResult?
     @State private var isRefreshingDiscovery = false
-    @State private var openRouterKeyDraft = ""
-    @State private var isSavingOpenRouterKey = false
-    @State private var openRouterKeyMessage: String?
+    @State private var openCodeGoKeyDraft = ""
+    @State private var openCodeGoWorkspaceDraft = ""
+    @State private var openCodeGoAuthCookieDraft = ""
+    @State private var isSavingOpenCodeGoKey = false
+    @State private var openCodeGoKeyMessage: String?
     @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
     @State private var setupTerminal: SetupTerminalSession?
     @State private var customProviderEditorPresentation: CustomProviderEditorPresentation?
@@ -140,8 +142,8 @@ struct OnboardingSheet: View {
                 .padding(.leading, 4)
                 .padding(16)
             }
-            if showOpenRouterKeyField {
-                openRouterKeyPanel
+            if showOpenCodeGoSetupPanel {
+                openCodeGoSetupPanel
             }
         }
     }
@@ -208,9 +210,10 @@ struct OnboardingSheet: View {
         return Dictionary(uniqueKeysWithValues: discoveryResult.statuses.map { ($0.providerId, $0) })
     }
 
-    private var showOpenRouterKeyField: Bool {
+    private var showOpenCodeGoSetupPanel: Bool {
         guard let status = discoveryResult?.status(for: "opencode") else { return false }
-        return !status.authenticated && status.setupActions.contains(.addOpenRouterKey)
+        return status.setupActions.contains(.addOpenCodeGoKey)
+            || status.setupActions.contains(.configureOpenCodeGoQuota)
     }
 
     @ViewBuilder
@@ -240,25 +243,32 @@ struct OnboardingSheet: View {
         }
     }
 
-    private var openRouterKeyPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("OpenRouter API key")
+    private var openCodeGoSetupPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("OpenCode Go")
                 .font(TahoeFont.body(12.5, weight: .semibold))
                 .foregroundStyle(t.fg)
+            Text("Paste your Go API key from opencode.ai/zen — that powers chat + code. Optional: add workspace ID + auth cookie for 5h / weekly / monthly meters (best-effort; OpenCode has not shipped a usage API yet, so meters may stay empty). The cookie is stored in your Keychain.")
+                .font(TahoeFont.body(11.5))
+                .foregroundStyle(t.fg3)
+            SecureField("OpenCode Go API key", text: $openCodeGoKeyDraft)
+                .textFieldStyle(.roundedBorder)
+            TextField("Workspace ID (from opencode.ai/workspace/…/go)", text: $openCodeGoWorkspaceDraft)
+                .textFieldStyle(.roundedBorder)
+            SecureField("Auth cookie (optional, for quota meters)", text: $openCodeGoAuthCookieDraft)
+                .textFieldStyle(.roundedBorder)
             HStack(spacing: 8) {
-                SecureField("sk-or-…", text: $openRouterKeyDraft)
-                    .textFieldStyle(.roundedBorder)
                 Button {
-                    Task { await saveOpenRouterKey() }
+                    Task { await saveOpenCodeGoCredentials() }
                 } label: {
-                    Text(isSavingOpenRouterKey ? "Saving…" : "Save")
+                    Text(isSavingOpenCodeGoKey ? "Saving…" : "Save")
                         .font(TahoeFont.body(12, weight: .semibold))
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(openRouterKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSavingOpenRouterKey)
+                .disabled(openCodeGoKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSavingOpenCodeGoKey)
             }
-            if let openRouterKeyMessage {
-                Text(openRouterKeyMessage)
+            if let openCodeGoKeyMessage {
+                Text(openCodeGoKeyMessage)
                     .font(TahoeFont.body(11.5))
                     .foregroundStyle(t.fg3)
             }
@@ -336,8 +346,13 @@ struct OnboardingSheet: View {
             }
         case .openOpencodeSignIn:
             await MainActor.run { opencodeSetupCommand = .signIn }
-        case .addOpenRouterKey:
-            await MainActor.run { openRouterKeyDraft = "" }
+        case .addOpenRouterKey, .addOpenCodeGoKey:
+            await MainActor.run { openCodeGoKeyDraft = "" }
+        case .configureOpenCodeGoQuota:
+            await MainActor.run {
+                openCodeGoWorkspaceDraft = UserDefaults.standard.string(forKey: OpenCodeGoCredentials.workspaceDefaultsKey) ?? ""
+                openCodeGoAuthCookieDraft = UserDefaults.standard.string(forKey: OpenCodeGoCredentials.authCookieDefaultsKey) ?? ""
+            }
         case .runCodexLogin, .runCursorAgentLogin, .installCodexCLI, .installCursorCLI,
              .installAgyCLI, .installGrokCLI:
             guard let command = action.shellCommand else { return }
@@ -358,19 +373,26 @@ struct OnboardingSheet: View {
         }
     }
 
-    private func saveOpenRouterKey() async {
-        let key = openRouterKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func saveOpenCodeGoCredentials() async {
+        let key = openCodeGoKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
-        isSavingOpenRouterKey = true
-        defer { isSavingOpenRouterKey = false }
+        isSavingOpenCodeGoKey = true
+        defer { isSavingOpenCodeGoKey = false }
         do {
-            try await OpencodeAuthFile.shared.setAPIKey(providerId: "openrouter", key: key)
-            openRouterKeyMessage = "OpenRouter key saved."
-            openRouterKeyDraft = ""
+            try await OpencodeAuthFile.shared.setAPIKey(providerId: "opencode-go", key: key)
+            let workspace = openCodeGoWorkspaceDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cookie = openCodeGoAuthCookieDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !workspace.isEmpty, !cookie.isEmpty {
+                OpenCodeGoCredentials.saveDashboardQuotaConfig(workspaceId: workspace, authCookie: cookie)
+            }
+            openCodeGoKeyMessage = "OpenCode Go connected."
+            openCodeGoKeyDraft = ""
             stagedProviderIDs.insert("opencode")
+            runtime.opencodeModel.forcePoll()
+            await OpenCodeGoModelProbe.shared.invalidate()
             await refreshDiscovery()
         } catch {
-            openRouterKeyMessage = error.localizedDescription
+            openCodeGoKeyMessage = error.localizedDescription
         }
     }
 
