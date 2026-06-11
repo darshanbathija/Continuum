@@ -98,6 +98,7 @@ struct MacChatV2View: View {
 @available(macOS 14, *)
 private struct ChatRoot: View {
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var client: AgentControlClient
     weak var runtime: AppRuntime?
 
@@ -110,29 +111,42 @@ private struct ChatRoot: View {
     @State private var pendingBroadcast: PendingBroadcast?
     /// Providers that failed to spawn — shown as error columns in the live group.
     @State private var failedBroadcastColumns: [FailedBroadcastColumn] = []
+    @State private var isSidebarExpanded: Bool
+
+    private static let sidebarExpandedDefaultsKey = "clawdmeter.chat.sidebarExpanded"
+    private static let sidebarWidth: CGFloat = 252
+    private static let sidebarToggleAnimation = Animation.easeOut(duration: 0.22)
 
     init(client: AgentControlClient, runtime: AppRuntime?) {
         self.client = client
         self.runtime = runtime
         _sendCtl = StateObject(wrappedValue: ComposerSendController(client: client))
         _usageSource = StateObject(wrappedValue: ChatCursorUsageSource(cursorModel: runtime?.cursorModel))
+        let persistedSidebarExpanded = UserDefaults.standard.object(
+            forKey: Self.sidebarExpandedDefaultsKey
+        ) as? Bool
+        _isSidebarExpanded = State(initialValue: persistedSidebarExpanded ?? true)
     }
 
     var body: some View {
         HStack(spacing: 10) {
-            Sidebar(
-                sessions: client.chatSessions,
-                openTarget: $openTarget,
-                client: client,
-                onNew: {
-                    openTarget = nil
-                    sendCtl.reset()
-                    store.clearAttachments()
-                    pendingBroadcast = nil
-                    failedBroadcastColumns = []
-                }
-            )
-            .frame(width: 252)
+            if isSidebarExpanded {
+                Sidebar(
+                    sessions: client.chatSessions,
+                    openTarget: $openTarget,
+                    client: client,
+                    onNew: startNewChat,
+                    onCollapse: { setSidebarExpanded(false) }
+                )
+                .frame(width: Self.sidebarWidth)
+                .transition(.move(edge: .leading).combined(with: .opacity))
+            } else {
+                ChatSidebarGutter(
+                    onExpand: { setSidebarExpanded(true) },
+                    onNew: startNewChat
+                )
+                .transition(.move(edge: .leading).combined(with: .opacity))
+            }
 
             VStack(spacing: 10) {
                 Header(
@@ -207,6 +221,7 @@ private struct ChatRoot: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .animation(reduceMotion ? nil : Self.sidebarToggleAnimation, value: isSidebarExpanded)
         .padding(10)
         // A2 (v0.30.x): TahoeWallpaperView is already painted by MacRootView
         // (the parent). Painting it again here is a doubled SwiftUI Canvas
@@ -246,6 +261,69 @@ private struct ChatRoot: View {
         return client.frontierChildren(groupId: groupId)
     }
 
+    private func startNewChat() {
+        openTarget = nil
+        sendCtl.reset()
+        store.clearAttachments()
+        pendingBroadcast = nil
+        failedBroadcastColumns = []
+    }
+
+    private func setSidebarExpanded(_ expanded: Bool) {
+        animateSidebarChange {
+            isSidebarExpanded = expanded
+            UserDefaults.standard.set(expanded, forKey: Self.sidebarExpandedDefaultsKey)
+        }
+    }
+
+    private func animateSidebarChange(_ updates: () -> Void) {
+        if reduceMotion {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction, updates)
+        } else {
+            withAnimation(Self.sidebarToggleAnimation, updates)
+        }
+    }
+
+}
+
+@available(macOS 14, *)
+private struct ChatSidebarGutter: View {
+    @Environment(\.tahoe) private var t
+    let onExpand: () -> Void
+    let onNew: () -> Void
+
+    var body: some View {
+        TahoeGlass(radius: 8, tone: .panel) {
+            VStack(spacing: 6) {
+                Button(action: onExpand) {
+                    TahoeIcon("sidebar", size: 13)
+                        .foregroundStyle(t.fg2)
+                        .frame(width: 36, height: 36)
+                        .background(t.hair2.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(PressableButtonStyle())
+                .help("Show chat list")
+                .accessibilityIdentifier("chat.sidebar.expand")
+
+                Button(action: onNew) {
+                    TahoeIcon("plus", size: 13)
+                        .foregroundStyle(t.fg2)
+                        .frame(width: 36, height: 36)
+                        .background(t.hair2.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(PressableButtonStyle())
+                .help("New chat")
+                .accessibilityIdentifier("chat.sidebar.new")
+
+                Spacer()
+            }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 4)
+        }
+        .frame(width: 44)
+    }
 }
 
 @MainActor
@@ -272,6 +350,7 @@ private struct Sidebar: View {
     @Binding var openTarget: ChatOpenTarget?
     @ObservedObject var client: AgentControlClient
     let onNew: () -> Void
+    let onCollapse: () -> Void
 
     @State private var query = ""
     @State private var results: [ChatSessionSearchMatch] = []
@@ -296,11 +375,18 @@ private struct Sidebar: View {
                         .font(TahoeFont.body(13, weight: .semibold))
                         .foregroundStyle(t.fg)
                     Spacer()
+                    Button(action: onCollapse) {
+                        TahoeIcon("sidebar", size: 13).foregroundStyle(t.fg2)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .help("Hide chat list")
+                    .accessibilityIdentifier("chat.sidebar.collapse")
                     Button(action: onNew) {
                         TahoeIcon("plus", size: 13).foregroundStyle(t.fg2)
                     }
                     .buttonStyle(PressableButtonStyle())
                     .help("New chat")
+                    .accessibilityIdentifier("chat.sidebar.new")
                 }
                 .padding(12)
 
