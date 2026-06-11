@@ -276,7 +276,7 @@ public enum AgentSpawner {
         guard agent == .claude else { return nil }
         let binary = agent.rawValue
         if ShellRunner.locateBinary(binary) == nil {
-            return "Agent CLI not found on PATH: \(binary). Configure in Settings → Diagnostics."
+            return "Agent CLI not found on PATH: \(binary). Install the CLI and ensure it's on your PATH."
         }
         return nil
     }
