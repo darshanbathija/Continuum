@@ -270,17 +270,33 @@ struct MenuBarGaugeView {
             storeImageCacheValueLocked(fallback, for: key)
             return fallback
         }
-        // Copy so isTemplate/size tweaks don't poison the shared bundle image.
-        // Audit P1 fix: `NSImage.copy()` returns `Any` and may yield a
-        // non-NSImage for proxy-backed images. Fall back to mutating the
-        // shared image when copy doesn't produce an NSImage — better
-        // a slightly-shared instance than a crash on every menu-bar
-        // refresh tick.
-        let copy: NSImage = (source.copy() as? NSImage) ?? source
-        copy.size = NSSize(width: size, height: size)
-        copy.isTemplate = template
-        storeImageCacheValueLocked(copy, for: key)
-        return copy
+
+        // Aspect-fit into a square canvas. Setting `NSImage.size` to a square
+        // stretches non-square assets (CursorLogo is taller than wide), which
+        // shows up as a horizontally squashed cube in the menu bar.
+        let sourceSize = source.size
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            guard sourceSize.width > 0, sourceSize.height > 0 else { return false }
+            let scale = min(rect.width / sourceSize.width, rect.height / sourceSize.height)
+            let drawWidth = sourceSize.width * scale
+            let drawHeight = sourceSize.height * scale
+            let drawRect = CGRect(
+                x: (rect.width - drawWidth) / 2,
+                y: (rect.height - drawHeight) / 2,
+                width: drawWidth,
+                height: drawHeight
+            )
+            source.draw(
+                in: drawRect,
+                from: NSRect(origin: .zero, size: sourceSize),
+                operation: .copy,
+                fraction: 1.0
+            )
+            return true
+        }
+        image.isTemplate = template
+        storeImageCacheValueLocked(image, for: key)
+        return image
     }
 
     private static func touchLabelCacheKeyLocked(_ key: LabelKey) {
