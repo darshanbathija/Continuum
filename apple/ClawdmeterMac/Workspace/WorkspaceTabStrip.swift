@@ -100,24 +100,18 @@ struct WorkspaceTabStrip: View {
                 availableWidth: geometry.size.width,
                 itemCount: items.count
             )
-            HStack(spacing: 0) {
-                HStack(spacing: Self.tabSpacing) {
-                    ForEach(items) { item in
-                        tabView(item, labelWidth: labelWidth)
-                            .id(item.id)
-                    }
+            HStack(spacing: Self.tabSpacing) {
+                ForEach(items) { item in
+                    tabView(item, labelWidth: labelWidth)
+                        .id(item.id)
                 }
-                .padding(.leading, Self.stripHorizontalPadding / 2)
-                .padding(.vertical, 7)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .clipped()
-                .layoutPriority(0)
-
                 newTabButton
-                    .padding(.trailing, Self.stripHorizontalPadding / 2)
-                    .padding(.vertical, 7)
-                    .layoutPriority(1)
             }
+            .padding(.leading, Self.stripHorizontalPadding / 2)
+            .padding(.trailing, Self.stripHorizontalPadding / 2)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
         }
         .frame(height: 40)
         .background(t.dark ? Color.white.opacity(0.035) : Color.black.opacity(0.025))
