@@ -8,9 +8,14 @@ import ClawdmeterShared
 struct MacCodeShell: View {
     @ObservedObject var model: SessionsModel
     @ObservedObject var presentationStore: SessionPresentationStore
+    @ObservedObject var workbenchState: WorkbenchState
 
     var body: some View {
-        SessionWorkspaceView(model: model, presentationStore: presentationStore)
+        SessionWorkspaceView(
+            model: model,
+            presentationStore: presentationStore,
+            workbenchState: workbenchState
+        )
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)

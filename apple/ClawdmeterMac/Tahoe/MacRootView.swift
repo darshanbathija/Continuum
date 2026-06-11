@@ -148,6 +148,7 @@ struct MacRootView: View {
     @State private var composerModelPickerActive: Bool = false
     @State private var planQueue: PlanQueue = PlanQueue(rows: [])
     @StateObject private var presentationStore: SessionPresentationStore
+    @StateObject private var workbenchState = WorkbenchState()
     private let shortcutRegistry = ClawdmeterShortcutRegistry()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openWindow) private var openWindow
@@ -222,7 +223,8 @@ struct MacRootView: View {
                         tab = newTab
                     },
                     theme: theme,
-                    runtime: runtime
+                    runtime: runtime,
+                    workbenchState: workbenchState
                 )
                     .padding(.horizontal, 10)
                     // v0.22.7: flush the titlebar chip against the top of
@@ -290,7 +292,11 @@ struct MacRootView: View {
                         .modifier(TabSlotVisibility(active: tab == .usage))
                     }
                     if visitedTabs.contains(.code) {
-                        MacCodeShell(model: sessionsModel, presentationStore: presentationStore)
+                        MacCodeShell(
+                            model: sessionsModel,
+                            presentationStore: presentationStore,
+                            workbenchState: workbenchState
+                        )
                             .modifier(TabSlotVisibility(active: tab == .code))
                     }
                     if visitedTabs.contains(.settings) {
@@ -1232,17 +1238,20 @@ struct MacTitlebar: View {
     /// text for Previews.
     /// v0.27.0: .design chip removed along with the Design tab.
     var runtime: AppRuntime?
+    @ObservedObject var workbenchState: WorkbenchState
 
     init(
         active: MacRootView.Tab,
         onTab: @escaping (MacRootView.Tab) -> Void,
         theme: TahoeThemeStore,
-        runtime: AppRuntime? = nil
+        runtime: AppRuntime? = nil,
+        workbenchState: WorkbenchState
     ) {
         self.active = active
         self.onTab = onTab
         self.theme = theme
         self.runtime = runtime
+        self.workbenchState = workbenchState
     }
 
     /// Repo count for the Usage-tab status label.
@@ -1411,9 +1420,17 @@ struct MacTitlebar: View {
             Button(action: {
                 NotificationCenter.default.post(name: .toggleCodeReviewPane, object: nil)
             }) {
-                Label("Collapse pane", systemImage: "sidebar.trailing")
+                if workbenchState.showingReviewPane {
+                    Label("Collapse pane", systemImage: "sidebar.trailing")
+                } else {
+                    Label("Expand pane", systemImage: "sidebar.leading")
+                }
             }
-            .accessibilityIdentifier("code.titlebar.right-pane.collapse")
+            .accessibilityIdentifier(
+                workbenchState.showingReviewPane
+                    ? "code.titlebar.right-pane.collapse"
+                    : "code.titlebar.right-pane.expand"
+            )
         } label: {
             TahoeIcon("sidebar", size: 12)
                 .foregroundStyle(t.fg3)

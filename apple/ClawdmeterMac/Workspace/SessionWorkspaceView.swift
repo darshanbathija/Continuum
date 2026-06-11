@@ -27,7 +27,7 @@ struct SessionWorkspaceView: View {
     @State private var modeSwitchLabel: String = ""
     @State private var showingWorkspaceSwitcher: Bool = false
     @StateObject private var launcher = SessionLauncherModel()
-    @StateObject private var workbenchState = WorkbenchState()
+    @ObservedObject var workbenchState: WorkbenchState
     @StateObject private var browserControllers = BrowserWorkspaceControllerStore()
     /// Workspace-level width, measured via GeometryReader. Drives responsive
     /// pane collapsing so even when the user opens the review pane it only
@@ -46,6 +46,7 @@ struct SessionWorkspaceView: View {
     /// Below this, the workspace is just sidebar + chat — the user can
     /// resize to summon the gutter back.
     private static let gutterThreshold: CGFloat = 900
+    private static let reviewPaneToggleAnimation = Animation.easeOut(duration: 0.22)
 
     private var effectiveShowReviewPane: Bool {
         !isImmersiveBrowserActive
@@ -57,6 +58,16 @@ struct SessionWorkspaceView: View {
         !isImmersiveBrowserActive
             && !effectiveShowReviewPane
             && workbenchState.workspaceWidth >= Self.gutterThreshold
+    }
+
+    private var canHostReviewPaneColumn: Bool {
+        !isImmersiveBrowserActive
+            && workbenchState.workspaceWidth >= Self.reviewPaneThreshold
+            && model.openSession != nil
+    }
+
+    private var animatedReviewPaneWidth: CGFloat {
+        effectiveShowReviewPane ? reviewPaneWidth : 0
     }
 
     private var isImmersiveBrowserActive: Bool {
@@ -189,50 +200,55 @@ struct SessionWorkspaceView: View {
                         .frame(maxWidth: .infinity)
                         if effectiveShowGutter, model.openSession != nil {
                             TahoeHairline(vertical: true)
+                                .transition(.opacity)
                             ReviewPaneGutter(
                                 selectedTab: selectedRightPaneBinding,
                                 onExpand: { tab in
                                     workbenchState.selectRightPane(tab)
-                                    animateWorkspaceChange(.easeOut(duration: 0.18)) {
+                                    animateWorkspaceChange(Self.reviewPaneToggleAnimation) {
                                         workbenchState.setReviewPaneVisible(true)
                                     }
                                 }
                             )
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                     }
+                    .animation(reduceMotion ? nil : Self.reviewPaneToggleAnimation, value: effectiveShowGutter)
                 }
                 .frame(minWidth: 420, idealWidth: 600)
                 .padding(.horizontal, 5)
 
-                if effectiveShowReviewPane, let session = model.openSession {
+                if canHostReviewPaneColumn, let session = model.openSession {
                     TahoeGlass(radius: 8, tone: .panel) {
-                        WorkspaceReviewPane(
-                            session: session,
-                            chatStore: model.chatStore(for: session),
-                            model: model,
-                            workbenchState: workbenchState,
-                            presentationStore: presentationStore,
-                            browserControllerProvider: {
-                                browserController(for: session)
-                            },
-                            selectedTab: selectedRightPaneBinding,
-                            onClose: {
-                                animateWorkspaceChange(.easeOut(duration: 0.18)) {
-                                    workbenchState.setReviewPaneVisible(false)
+                        if effectiveShowReviewPane {
+                            WorkspaceReviewPane(
+                                session: session,
+                                chatStore: model.chatStore(for: session),
+                                model: model,
+                                workbenchState: workbenchState,
+                                presentationStore: presentationStore,
+                                browserControllerProvider: {
+                                    browserController(for: session)
+                                },
+                                selectedTab: selectedRightPaneBinding,
+                                onClose: {
+                                    animateWorkspaceChange(Self.reviewPaneToggleAnimation) {
+                                        workbenchState.setReviewPaneVisible(false)
+                                    }
+                                },
+                                onApprove: {
+                                    Task {
+                                        guard await createApprovalCheckpoint(for: session) else { return }
+                                        await model.approvePlan(id: session.id)
+                                    }
                                 }
-                            },
-                            onApprove: {
-                                Task {
-                                    guard await createApprovalCheckpoint(for: session) else { return }
-                                    await model.approvePlan(id: session.id)
-                                }
-                            }
-                        )
-                        // Root cause: unlike the sibling CenterThread (which is
-                        // .id(session.id)), ReviewPane kept structural identity
-                        // across a session switch, so its panes (Artifacts, etc.)
-                        // showed the previous session's state until refresh.
-                        .id(session.id)
+                            )
+                            // Root cause: unlike the sibling CenterThread (which is
+                            // .id(session.id)), ReviewPane kept structural identity
+                            // across a session switch, so its panes (Artifacts, etc.)
+                            // showed the previous session's state until refresh.
+                            .id(session.id)
+                        }
                     }
                     // Diff is the one pane that's useless at the default
                     // 380pt width — readers need to see ±50 cols at once.
@@ -240,16 +256,21 @@ struct SessionWorkspaceView: View {
                     // selected tab; the other tabs (Plan / Sources / PR /
                     // Terminal) stay compact so the center chat keeps its
                     // breathing room.
-                    .frame(width: reviewPaneWidth)
+                    .frame(width: animatedReviewPaneWidth)
+                    .clipped()
+                    .opacity(effectiveShowReviewPane ? 1 : 0)
+                    .allowsHitTesting(effectiveShowReviewPane)
                     // P7: animate the Diff width morph (~58% expand) on tab
                     // switch. Keyed on the selected pane — NOT workspaceWidth —
                     // so window resizes still track the cursor instantly.
+                    .animation(reduceMotion ? nil : Self.reviewPaneToggleAnimation,
+                               value: effectiveShowReviewPane)
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.2),
                                value: workbenchState.selectedRightPane)
-                    .padding(.leading, 5)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .padding(.leading, effectiveShowReviewPane ? 5 : 0)
                 }
             }
+            .animation(reduceMotion ? nil : Self.reviewPaneToggleAnimation, value: effectiveShowReviewPane)
             .padding(10)
         }
         .background(Color.clear)
@@ -304,7 +325,7 @@ struct SessionWorkspaceView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleCodeReviewPane)) { _ in
             guard workbenchState.workspaceWidth >= Self.reviewPaneThreshold else { return }
-            animateWorkspaceChange(.easeOut(duration: 0.18)) {
+            animateWorkspaceChange(Self.reviewPaneToggleAnimation) {
                 workbenchState.setReviewPaneVisible(!workbenchState.showingReviewPane)
             }
         }
@@ -313,7 +334,7 @@ struct SessionWorkspaceView: View {
                let tab = WorkbenchPaneTab(rawValue: raw) {
                 workbenchState.selectRightPane(tab)
             }
-            animateWorkspaceChange(.easeOut(duration: 0.18)) {
+            animateWorkspaceChange(Self.reviewPaneToggleAnimation) {
                 workbenchState.setReviewPaneVisible(true)
             }
         }
