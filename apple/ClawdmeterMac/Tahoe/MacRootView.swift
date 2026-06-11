@@ -200,11 +200,9 @@ struct MacRootView: View {
         // so usage polls only re-render MacRootView when Usage is the
         // active tab.
         //
-        // sessionsModel.repos + agentSessionRegistry.sessions stay at the
-        // top because MacTitlebar reads `runtime?.sessionsModel.repos` and
-        // the code breadcrumb reads `runtime?.sessionsModel.openSession` —
-        // those need to live-update across every tab.
-        _ = sessionsModel.repos
+        // agentSessionRegistry.sessions stays at the top because the
+        // code breadcrumb reads `runtime?.sessionsModel.openSession` and
+        // needs to live-update across every tab.
         _ = agentSessionRegistry.sessions
 
         return ZStack {
@@ -1230,9 +1228,8 @@ struct MacTitlebar: View {
     var active: MacRootView.Tab
     var onTab: (MacRootView.Tab) -> Void
     var theme: TahoeThemeStore
-    /// PR #26 D6: runtime for the secondary-right chips (repo count,
-    /// pairing state, sync popover trigger). Nil falls back to static
-    /// text for Previews.
+    /// PR #26 D6: runtime for the secondary-right chips (pairing state,
+    /// sync popover trigger). Nil falls back to static text for Previews.
     /// v0.27.0: .design chip removed along with the Design tab.
     var runtime: AppRuntime?
     @ObservedObject var workbenchState: WorkbenchState
@@ -1249,14 +1246,6 @@ struct MacTitlebar: View {
         self.theme = theme
         self.runtime = runtime
         self.workbenchState = workbenchState
-    }
-
-    /// Repo count for the Usage-tab status label.
-    private var repoCountLabel: String {
-        let count = runtime?.sessionsModel.repos.count ?? 0
-        if count == 0 { return "0 repos" }
-        if count == 1 { return "1 repo" }
-        return "\(count) repos"
     }
 
     @ViewBuilder
@@ -1491,23 +1480,7 @@ struct MacTitlebar: View {
             // toggle. Selecting 1 provider = solo, >1 = broadcast.
             EmptyView()
         case .usage:
-            HStack(spacing: 8) {
-                // PR #26 D6: removed the hardcoded "Updated 14s ago"
-                // label (was lying to users). Replaced with a quick
-                // status pill showing live repo count.
-                Label {
-                    Text("\(repoCountLabel) tracked")
-                        .font(TahoeFont.body(12))
-                } icon: {
-                    TahoeIcon("folder", size: 11)
-                }
-                .foregroundStyle(t.fg2)
-                TahoeHair(vertical: true).frame(height: 14)
-                // PR #26 D6: sync chip becomes a button — opens a popover
-                // with the pairing QR when no iPhone is paired, otherwise
-                // shows paired state.
-                syncChipUsage
-            }
+            syncChipUsage
         case .code:
             HStack(spacing: 8) {
                 codeBreadcrumb
