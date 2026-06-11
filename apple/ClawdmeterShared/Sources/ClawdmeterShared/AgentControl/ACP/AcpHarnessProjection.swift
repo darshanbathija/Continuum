@@ -60,6 +60,9 @@ public struct AcpHarnessProjection: Sendable {
         case .usage:
             return []
 
+        case .contextBreakdown:
+            return []
+
         case .modeChanged:
             return []
 

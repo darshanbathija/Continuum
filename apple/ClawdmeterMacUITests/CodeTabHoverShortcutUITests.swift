@@ -153,8 +153,8 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         chip.click()
 
         XCTAssertTrue(element("code.context-usage.popover").waitForExistence(timeout: 5), "Clicking the chip should open the context usage popover.")
-        XCTAssertTrue(element("code.context-usage.row.context").waitForExistence(timeout: 5), "Popover should render the context-window row for the selected catalog model.")
-        XCTAssertTrue(element("code.context-usage.row.cost").waitForExistence(timeout: 5), "Popover should render the session cost row.")
+        XCTAssertTrue(element("code.context-usage.section.context").waitForExistence(timeout: 5), "Popover should render the context breakdown header.")
+        XCTAssertTrue(element("code.context-usage.row.messages").waitForExistence(timeout: 5), "Popover should render context breakdown category rows.")
     }
 
     func testPromptHistoryRenderedSheetSearchUseCopyAndDeleteRows() throws {

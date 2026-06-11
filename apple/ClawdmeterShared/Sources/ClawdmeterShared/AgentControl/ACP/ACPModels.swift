@@ -210,6 +210,7 @@ public struct ACPSessionUpdate: Sendable, Equatable {
         case availableCommandsUpdate = "available_commands_update"
         case currentModeUpdate = "current_mode_update"
         case usage = "usage_update"
+        case contextWindowUpdate = "context_window_update"
         case unknown
     }
     public var kind: Kind

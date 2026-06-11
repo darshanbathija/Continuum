@@ -201,6 +201,7 @@ final class ComposerSendStopRenderingTests: XCTestCase {
         let rows = ContextUsagePopover.rowDescriptors(for: usageInfo(
             contextUsedTokens: 336_200,
             contextLimitTokens: 1_000_000,
+            contextBreakdown: sampleBreakdown(used: 336_200, limit: 1_000_000),
             sessionPct: 12,
             sessionResetMins: 40,
             weeklyPct: 72,
@@ -209,8 +210,15 @@ final class ComposerSendStopRenderingTests: XCTestCase {
         ))
 
         XCTAssertEqual(rows.map(\.id), [
-            "code.context-usage.row.context",
-            "code.context-usage.row.cost",
+            "code.context-usage.section.context",
+            "code.context-usage.row.free-space",
+            "code.context-usage.row.mcp-tools",
+            "code.context-usage.row.messages",
+            "code.context-usage.row.memory-files",
+            "code.context-usage.row.system-tools",
+            "code.context-usage.row.skills",
+            "code.context-usage.row.system-prompt",
+            "code.context-usage.row.custom-agents",
             "code.context-usage.row.plan-header",
             "code.context-usage.row.cursor-included",
             "code.context-usage.row.cursor-extra",
@@ -220,12 +228,13 @@ final class ComposerSendStopRenderingTests: XCTestCase {
             "code.context-usage.row.weekly",
         ])
         XCTAssertFalse(rows.contains { $0.id == "code.context-usage.row.session" })
-        XCTAssertEqual(rows.first { $0.id == "code.context-usage.row.context" }?.value, "336.2k / 1.0M (33%)")
+        XCTAssertFalse(rows.contains { $0.id == "code.context-usage.row.cost" })
+        XCTAssertEqual(rows.first { $0.id == "code.context-usage.section.context" }?.value, "336.2k / 1.0M")
         XCTAssertEqual(rows.first { $0.id == "code.context-usage.row.cursor-total" }?.value, "63% · resets 3d")
         XCTAssertEqual(rows.first { $0.id == "code.context-usage.row.cursor-auto" }?.value, "37% · resets 3d")
         XCTAssertEqual(rows.first { $0.id == "code.context-usage.row.cursor-api" }?.kind, .progress(tint: .danger))
         XCTAssertEqual(rows.first { $0.id == "code.context-usage.row.weekly" }?.value, "72% · resets 2h")
-        XCTAssertTrue(rows.first { $0.id == "code.context-usage.row.cost" }?.value?.contains("0.0123") == true)
+        XCTAssertEqual(rows.first { $0.id == "code.context-usage.row.messages" }?.value, "12.7%")
 
         let genericRows = ContextUsagePopover.rowDescriptors(for: usageInfo(
             contextUsedTokens: 1_000,
@@ -308,6 +317,7 @@ final class ComposerSendStopRenderingTests: XCTestCase {
     private func usageInfo(
         contextUsedTokens: Int = 0,
         contextLimitTokens: Int? = nil,
+        contextBreakdown: ContextWindowBreakdown? = nil,
         sessionPct: Int? = nil,
         sessionResetMins: Int? = nil,
         weeklyPct: Int? = nil,
@@ -320,11 +330,29 @@ final class ComposerSendStopRenderingTests: XCTestCase {
             contextUsedTokens: contextUsedTokens,
             contextLimitTokens: contextLimitTokens,
             costDollar: Decimal(string: "0.0123") ?? 0,
+            contextBreakdown: contextBreakdown,
             sessionPct: sessionPct,
             sessionResetMins: sessionResetMins,
             weeklyPct: weeklyPct,
             weeklyResetMins: weeklyResetMins,
             cursorQuota: cursorQuota
+        )
+    }
+
+    private func sampleBreakdown(used: Int, limit: Int) -> ContextWindowBreakdown {
+        ContextWindowBreakdown(
+            usedTokens: used,
+            limitTokens: limit,
+            entries: [
+                .init(id: .freeSpace, tokens: limit - used, limitTokens: limit),
+                .init(id: .mcpTools, tokens: 222_000, limitTokens: limit),
+                .init(id: .messages, tokens: 127_000, limitTokens: limit),
+                .init(id: .memoryFiles, tokens: 31_000, limitTokens: limit),
+                .init(id: .systemTools, tokens: 28_000, limitTokens: limit),
+                .init(id: .skills, tokens: 6_000, limitTokens: limit),
+                .init(id: .systemPrompt, tokens: 5_000, limitTokens: limit),
+                .init(id: .customAgents, tokens: 0, limitTokens: limit),
+            ]
         )
     }
 

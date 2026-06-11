@@ -122,6 +122,10 @@ public final class SessionChatStore {
         /// clamp + Stop↔Send transition. Defaults to `.idle` on
         /// legacy snapshots.
         public let currentTurnState: TurnState
+        /// Latest provider-published or estimated context-window composition
+        /// for the Code tab breakdown popover. Nil when the model limit is
+        /// unknown or no breakdown has been computed yet.
+        public let contextBreakdown: ContextWindowBreakdown?
 
         public init(
             items: [ChatItem],
@@ -141,7 +145,8 @@ public final class SessionChatStore {
             modelHint: String? = nil,
             lastEventAt: Date? = nil,
             updateCounter: UInt64,
-            currentTurnState: TurnState = .idle
+            currentTurnState: TurnState = .idle,
+            contextBreakdown: ContextWindowBreakdown? = nil
         ) {
             self.items = items
             self.messages = messages
@@ -161,6 +166,7 @@ public final class SessionChatStore {
             self.lastEventAt = lastEventAt
             self.updateCounter = updateCounter
             self.currentTurnState = currentTurnState
+            self.contextBreakdown = contextBreakdown
         }
 
         public static let empty = ChatSnapshot(items: [], updateCounter: 0)
@@ -384,6 +390,14 @@ public final class SessionChatStore {
     /// no-op and does NOT bump the snapshot counter.
     public func setCurrentTurnState(_ state: TurnState) {
         Task { [staging] in await staging.setCurrentTurnState(state) }
+    }
+
+    /// Latest context-window composition for the Code tab breakdown
+    /// popover. Harness backends publish this via ACP
+    /// `context_window_update`; the Mac client may also estimate locally
+    /// when rendering the popover.
+    public func setContextBreakdown(_ breakdown: ContextWindowBreakdown?) {
+        Task { [staging] in await staging.setContextBreakdown(breakdown) }
     }
 
     /// True when a `type:"user"` JSONL frame is the interactive-Claude ESC
@@ -2117,6 +2131,7 @@ actor StagingParser {
     /// strip's cost estimator uses this — sessions can switch mid-stream
     /// via `/model` and the most recent rate should apply going forward.
     private var modelHint: String? = nil
+    private var contextBreakdown: ContextWindowBreakdown? = nil
     /// Timestamp of the most-recently ingested line. The chat's
     /// "thinking" indicator pulses when this is within the activity
     /// window (Date() - 30s).
@@ -2270,6 +2285,12 @@ actor StagingParser {
         updateCounter &+= 1
     }
 
+    func setContextBreakdown(_ breakdown: ContextWindowBreakdown?) {
+        guard contextBreakdown != breakdown else { return }
+        contextBreakdown = breakdown
+        updateCounter &+= 1
+    }
+
     /// Bump the published snapshot without changing parsed transcript state.
     /// Used when parallel store state such as `pendingPermissionPrompt`
     /// changes; WS subscribers read that field while encoding the snapshot.
@@ -2393,7 +2414,8 @@ actor StagingParser {
             modelHint: modelHint,
             lastEventAt: lastEventAt,
             updateCounter: updateCounter,
-            currentTurnState: snapshotTurnState
+            currentTurnState: snapshotTurnState,
+            contextBreakdown: contextBreakdown
         )
         cachedCounter = updateCounter
         lastSnapshotRebuildNS = nowNS

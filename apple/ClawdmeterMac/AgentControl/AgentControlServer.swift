@@ -1232,6 +1232,9 @@ public final class AgentControlServer {
         t.register(method: "GET", pattern: "/sessions/:id/chat-snapshot") { [weak self] req, conn, params in
             await self?.handleGetChatSnapshot(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
+        t.register(method: "GET", pattern: "/sessions/:id/context-breakdown") { [weak self] _, conn, params in
+            await self?.handleGetContextBreakdown(sessionId: params["id"] ?? "", connection: conn)
+        }
         t.register(method: "GET", pattern: "/sessions/:id/run-profile") { [weak self] _, conn, params in
             await self?.handleGetRunProfile(sessionId: params["id"] ?? "", connection: conn)
         }
@@ -3923,6 +3926,41 @@ public final class AgentControlServer {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let body = try? encoder.encode(snapshot) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleGetContextBreakdown(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let store = chatStoreRegistry.snapshotStore(for: session)
+        let warmSnapshot = store?.snapshot
+        let modelId = session.model ?? warmSnapshot?.modelHint
+        let catalog = await providerEnabledModelCatalog()
+        let limit = modelId.flatMap { catalog.entry(forId: $0)?.contextWindow }
+        let used = warmSnapshot?.contextWindowUsedTokens ?? 0
+
+        let breakdown: ContextWindowBreakdown?
+        if let published = warmSnapshot?.contextBreakdown {
+            breakdown = published
+        } else if let limit, limit > 0 {
+            breakdown = ContextWindowBreakdownParser.estimate(
+                usedTokens: used,
+                limitTokens: limit,
+                messages: warmSnapshot?.messages ?? []
+            )
+        } else {
+            breakdown = nil
+        }
+
+        guard let breakdown else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let encoder = JSONEncoder()
+        if let body = try? encoder.encode(breakdown) {
             sendResponse(.ok(contentType: "application/json", body: body), on: connection)
         } else {
             sendResponse(.internalError, on: connection)

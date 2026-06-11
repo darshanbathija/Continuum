@@ -22,6 +22,9 @@ public enum HarnessEvent: Sendable, Equatable {
     case permissionRequest(HarnessPermissionRequest)
     /// Token / cost accounting for the turn.
     case usage(HarnessUsage)
+    /// Provider-published context-window composition (ACP
+    /// `context_window_update`).
+    case contextBreakdown(ContextWindowBreakdown)
     /// The agent's active mode changed (`current_mode_update`).
     case modeChanged(String)
     /// The turn finished. Maps from `session/prompt`'s `stopReason`.
