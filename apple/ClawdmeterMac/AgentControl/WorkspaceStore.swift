@@ -28,6 +28,7 @@ public final class WorkspaceStore: ObservableObject {
 
     private let storeURL: URL
     private let sessionsURL: URL
+    private var deferredSaveTask: Task<Void, Never>?
 
     public init(
         storeURL: URL = WorkspaceStore.defaultStoreURL(),
@@ -104,11 +105,19 @@ public final class WorkspaceStore: ObservableObject {
     /// Remove a workspace record by id ("Remove from list" in the sidebar).
     /// Forgets the managed-workspace card only — it does NOT delete the repo
     /// on disk or archive its sessions. Returns true if a record was removed.
+    ///
+    /// When `deferPersistence` is true, the in-memory `@Published` update is
+    /// immediate and `workspaces.json` is flushed on a background task so the
+    /// sidebar row can disappear within the click budget on slow disks.
     @discardableResult
-    public func delete(id: UUID) -> Bool {
+    public func delete(id: UUID, deferPersistence: Bool = false) -> Bool {
         guard let idx = workspaces.firstIndex(where: { $0.id == id }) else { return false }
         workspaces.remove(at: idx)
-        save()
+        if deferPersistence {
+            scheduleDeferredSave()
+        } else {
+            save()
+        }
         return true
     }
 
@@ -433,9 +442,29 @@ public final class WorkspaceStore: ObservableObject {
         }
     }
 
+    private func scheduleDeferredSave() {
+        deferredSaveTask?.cancel()
+        deferredSaveTask = Task { @MainActor in
+            try? await Task.yield()
+            guard !Task.isCancelled else { return }
+            let snapshot = workspaces
+            let url = storeURL
+            await Task.detached(priority: .utility) {
+                Self.writeSnapshot(snapshot, to: url)
+            }.value
+        }
+    }
+
     private func save() {
+        Self.writeSnapshot(workspaces, to: storeURL)
+    }
+
+    private nonisolated static func writeSnapshot(
+        _ workspaces: [CodeWorkspaceRecord],
+        to storeURL: URL
+    ) {
         let file = StoreFile(
-            schemaVersion: Self.currentSchemaVersion,
+            schemaVersion: currentSchemaVersion,
             workspaces: workspaces
         )
         let encoder = JSONEncoder()

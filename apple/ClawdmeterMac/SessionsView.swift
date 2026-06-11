@@ -1112,6 +1112,25 @@ public final class SessionsModel: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+        workspaceStore.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+    }
+
+    /// "Remove from list" / archive-entire-repo workspace drop. Forgets the
+    /// managed-workspace card and synchronously drops the repo from the
+    /// in-memory sidebar list so the row disappears within the click budget
+    /// without awaiting `refresh()`.
+    @discardableResult
+    public func removeManagedWorkspace(id: UUID) -> Bool {
+        guard let record = workspaceStore.workspace(id: id) else { return false }
+        let repoKey = RepoIdentity.normalize(record.repoRoot)
+        guard workspaceStore.delete(id: id, deferPersistence: true) else { return false }
+        repos.removeAll { $0.key == repoKey }
+        return true
     }
 
     /// Lazy `RepoOnboarding` service. Wired with self-referential closures

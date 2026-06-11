@@ -719,22 +719,16 @@ public final class AgentSessionRegistry: ObservableObject {
         var next = sessions
         var didMutate = false
         var toReclaim: [AgentSession] = []
-        defer {
-            if didMutate {
-                sessions = next
-                save()
-                scheduleWorktreeReclaims(toReclaim)
-            }
-        }
+        var receipts: [(UUID, AgentSession)] = []
 
         for id in ids {
             guard let idx = next.firstIndex(where: { $0.id == id }) else { continue }
             let s = next[idx]
             let projected = with(s, archivedAt: date)
-            try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
             next[idx] = projected
             didMutate = true
             toReclaim.append(s)
+            receipts.append((id, projected))
 
             // D16: promote sibling to standalone with banner. If the sibling is
             // also in the bulk archive set, its own projected archive will land
@@ -744,9 +738,25 @@ public final class AgentSessionRegistry: ObservableObject {
                let siblingIdx = next.firstIndex(where: { $0.id == siblingId }) {
                 let sibling = next[siblingIdx]
                 let siblingProjected = with(sibling, abPairSessionId: .some(nil))
-                try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: siblingId, session: siblingProjected)
                 next[siblingIdx] = siblingProjected
+                receipts.append((siblingId, siblingProjected))
             }
+        }
+
+        // Publish the archived rows before WAL receipts so sidebar rows
+        // disappear within the click budget even when the event store is on.
+        if didMutate {
+            sessions = next
+            save()
+            scheduleWorktreeReclaims(toReclaim)
+        }
+
+        for (sessionId, projected) in receipts {
+            try await writeReceipt(
+                kind: .sessionMetadataUpdated,
+                sessionId: sessionId,
+                session: projected
+            )
         }
     }
 
