@@ -107,6 +107,14 @@ final class UpdateCoordinatorTests: XCTestCase {
         XCTAssertEqual(driver.manualChecks, 0)
         XCTAssertEqual(driver.informationChecks, 1)
         XCTAssertEqual(coordinator.state, .checking)
+        XCTAssertTrue(coordinator.awaitingManualCheckPopover)
+    }
+
+    func testManualCheckAwaitingPopoverClearedAfterAcknowledgement() {
+        let (coordinator, _) = makeCoordinator()
+        coordinator.refreshUpdateStatus()
+        coordinator.acknowledgeManualCheckPopover()
+        XCTAssertFalse(coordinator.awaitingManualCheckPopover)
     }
 
     func testUpdateAvailableForegroundCheckBypassesProbeDebounce() {
@@ -352,6 +360,18 @@ final class UpdateCoordinatorTests: XCTestCase {
         XCTAssertFalse(updateControlShouldRender(.failed("Network unavailable"), showsInactiveStates: false))
 
         XCTAssertTrue(updateControlShouldRender(.upToDate, showsInactiveStates: true))
+    }
+
+    func testUpdateControlRendersForManualUpToDateCheck() {
+        XCTAssertTrue(
+            updateControlShouldRender(.upToDate, showsInactiveStates: false, awaitingManualCheckPopover: true)
+        )
+        XCTAssertTrue(
+            updateControlShouldRender(.checking, showsInactiveStates: false, awaitingManualCheckPopover: true)
+        )
+        XCTAssertFalse(
+            updateControlShouldRender(.upToDate, showsInactiveStates: false, awaitingManualCheckPopover: false)
+        )
     }
 
     private static func waitForMetadata(_ coordinator: UpdateCoordinator) async {

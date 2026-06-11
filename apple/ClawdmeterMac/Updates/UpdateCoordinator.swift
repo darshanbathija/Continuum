@@ -108,6 +108,7 @@ final class UpdateCoordinator: ObservableObject {
     @Published private(set) var releaseHistory: [ReleaseHistoryEntry] = []
     @Published private(set) var releaseMetadataError: String?
     @Published private(set) var isLoadingReleaseMetadata: Bool = false
+    @Published private(set) var awaitingManualCheckPopover: Bool = false
 
     static let manualCheckDebounce: TimeInterval = 2
 
@@ -250,6 +251,10 @@ final class UpdateCoordinator: ObservableObject {
         }
     }
 
+    func acknowledgeManualCheckPopover() {
+        awaitingManualCheckPopover = false
+    }
+
     // MARK: - Setup
 
     private var canUseSparkle: Bool {
@@ -336,6 +341,7 @@ final class UpdateCoordinator: ObservableObject {
         }
 
         lastManualCheckAt = nowProvider()
+        awaitingManualCheckPopover = true
         state = .checking
         switch mode {
         case .foreground:
