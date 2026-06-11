@@ -619,16 +619,17 @@ private struct SettingsSidebarRow: View {
     var section: SettingsSection
     var isSelected: Bool
     var onSelect: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 10) {
                 TahoeIcon(section.icon, size: 13, weight: .semibold)
-                    .foregroundStyle(isSelected ? t.accent : t.fg3)
+                    .foregroundStyle(isSelected ? t.fg : t.fg3)
                     .frame(width: 18, height: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(section.title)
-                        .font(TahoeFont.body(13, weight: .semibold))
+                        .font(TahoeFont.body(13, weight: isSelected ? .bold : .semibold))
                         .foregroundStyle(isSelected ? t.fg : t.fg2)
                         .lineLimit(1)
                     Text(section.subtitle)
@@ -643,17 +644,16 @@ private struct SettingsSidebarRow: View {
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
             .background {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isSelected ? t.accentAlpha(t.dark ? 0.16 : 0.09) : .clear)
+                if isSelected || isHovered {
+                    RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                        .fill(isSelected ? t.segmentActiveFill : t.hover)
+                }
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(isSelected ? t.accentAlpha(0.55) : Color.clear, lineWidth: 1)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("settings.section.\(section.rawValue)")
+        .onHover { isHovered = $0 }
     }
 }
 
