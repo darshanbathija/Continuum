@@ -1757,9 +1757,9 @@ final class WorkspaceTabsTests: XCTestCase {
     /// (`claude --model cursor-default`), which never becomes ready and
     /// strands the session on "Connecting to Claude" while the chip and
     /// header show the foreign model. Cross-provider picks must leave the
-    /// session untouched and open a sibling draft configured for the picked
-    /// provider/model instead — model plurality lives in tabs.
-    func test_switchModelAcrossProvidersOpensSiblingDraftInsteadOfMutatingSession() async throws {
+    /// runtime untouched and update the composer chip on the current tab
+    /// instead of opening a sibling draft.
+    func test_switchModelAcrossProvidersUpdatesComposerInPlaceWithoutOpeningDraft() async throws {
         let (model, registry, directory) = try Self.makeIsolatedModel("CrossProviderSwitch")
         addTeardownBlock {
             await registry.closeEventStoreForTesting()
@@ -1788,13 +1788,13 @@ final class WorkspaceTabsTests: XCTestCase {
         let stored = try XCTUnwrap(model.registry.session(id: session.id))
         XCTAssertEqual(stored.agent, .claude, "cross-provider pick must not touch the session's provider")
         XCTAssertEqual(stored.model, "claude-opus-4-8", "cross-provider pick must not hand a foreign model id to the runtime")
-        let draft = try XCTUnwrap(model.draftWorkspaceTab, "cross-provider pick must open a sibling draft tab")
-        XCTAssertEqual(draft.workspaceKey, WorkspaceKey.of(stored))
-        XCTAssertEqual(draft.agent, .cursor)
-        XCTAssertEqual(draft.modelId, cursorEntry.id)
-        XCTAssertNil(model.openSessionId, "the sibling draft tab should take the foreground selection")
+        XCTAssertNil(model.draftWorkspaceTab, "cross-provider pick must not open a sibling draft tab")
+        XCTAssertEqual(model.openSessionId, session.id, "the current session tab should stay selected")
+        let store = model.composerStore(for: session, catalog: .bundled)
+        XCTAssertEqual(store.agent, .cursor)
+        XCTAssertEqual(store.modelId, cursorEntry.id)
         if !cursorEntry.supportsEffort {
-            XCTAssertNil(draft.effort, "stale effort must clear when the picked provider's model does not support it")
+            XCTAssertNil(store.effort, "stale effort must clear when the picked provider's model does not support it")
         }
     }
 
