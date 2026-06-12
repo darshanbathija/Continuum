@@ -21,7 +21,7 @@ struct ReviewPaneGutter: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            ForEach(WorkbenchPaneTab.allCases) { tab in
+            ForEach(WorkbenchPaneTab.visibleReviewPaneTabs) { tab in
                 Button(action: { onExpand(tab) }) {
                     VStack(spacing: 2) {
                         Image(systemName: tab.systemImage)

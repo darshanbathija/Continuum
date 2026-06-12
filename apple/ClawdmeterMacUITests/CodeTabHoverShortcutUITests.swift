@@ -1093,7 +1093,6 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             "code.review.gutter.sources",
             "code.review.gutter.artifacts",
             "code.review.gutter.browser",
-            "code.review.gutter.pr",
             "code.review.gutter.terminal",
         ]
 
@@ -1106,7 +1105,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             let rightPaneMenu = element("code.titlebar.right-pane")
             XCTAssertTrue(rightPaneMenu.waitForExistence(timeout: 5), "Code titlebar should expose the right-pane menu.")
             rightPaneMenu.click()
-            for title in ["Plan", "Diff", "Terminal", "Sources", "Artifacts", "Browser", "PR"] {
+            for title in ["Plan", "Diff", "Terminal", "Sources", "Artifacts", "Browser"] {
                 XCTAssertTrue(app.menuItems[title].waitForExistence(timeout: 5), "Right-pane menu should list \(title).")
             }
             app.menuItems["Terminal"].click()
@@ -1118,7 +1117,6 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             "code.review.tab.diff",
             "code.review.tab.sources",
             "code.review.tab.browser",
-            "code.review.tab.pr",
             "code.review.tab.terminal",
         ]
         XCTAssertTrue(waitForAny(paneTabs.map(element), timeout: 3), "Expanded review pane should expose tab chips.")
@@ -1355,55 +1353,47 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(element("code.diff.git.file.stage").waitForExistence(timeout: 10), "Unstaged file row should expose Stage again after unstage.")
     }
 
-    func testPRReviewPaneLoadedFixtureSafeActionsClickThrough() throws {
+    func testPRTitlebarControlsLoadedFixtureSafeActionsClickThrough() throws {
         openCodeTab()
 
         let row = workspaceLeafRowElement()
         XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
         row.click()
 
-        openReviewPaneTab(key: "pr", title: "PR")
-        XCTAssertTrue(element("code.pr.title").waitForExistence(timeout: 10), "Loaded PR fixture should render a PR title.")
-        XCTAssertTrue(element("code.pr.subtitle").waitForExistence(timeout: 5), "Loaded PR fixture should render PR metadata.")
-        for id in [
-            "code.pr.status.review",
-            "code.pr.status.ci",
-            "code.pr.status.changes",
-            "code.pr.status.todos",
-            "code.pr.check.row",
-            "code.pr.review-actions",
-            "code.pr.approve",
-            "code.pr.request-changes",
-            "code.pr.merge",
-        ] {
-            XCTAssertTrue(element(id).waitForExistence(timeout: 5), "\(id) should render for the loaded PR fixture.")
-        }
-
-        let requestChanges = element("code.pr.request-changes")
-        XCTAssertTrue(requestChanges.isEnabled, "Request changes should be clickable for an open PR fixture.")
-        requestChanges.click()
+        XCTAssertTrue(element("code.titlebar.pr.link").waitForExistence(timeout: 10), "Loaded PR fixture should render a titlebar PR link.")
+        XCTAssertTrue(element("code.titlebar.pr.merge").waitForExistence(timeout: 5), "Loaded open PR fixture should render a Merge CTA.")
         XCTAssertTrue(
             waitUntil(timeout: 5) {
-                self.accessibilityValue(of: self.element("code.composer.input")).contains("Review PR #184")
+                self.accessibilityValue(of: self.element("code.titlebar.pr.link")).contains("#184")
             },
-            "Request changes should insert a review-request prompt into the Code composer."
+            "Titlebar PR link should expose the PR number."
         )
 
-        let actions = element("code.pr.actions")
-        XCTAssertTrue(actions.waitForExistence(timeout: 5), "Loaded PR fixture should expose the PR Actions menu.")
-        actions.click()
-        clickMenuItem(identifier: "code.pr.copy-url", title: "Copy URL")
+        let merge = element("code.titlebar.pr.merge")
+        XCTAssertTrue(merge.isEnabled, "Merge should be clickable for an open PR fixture.")
+        merge.click()
+    }
 
-        actions.click()
-        clickMenuItem(identifier: "code.pr.copy-number", title: "Copy Number")
+    func testCreatePRTitlebarButtonInsertsPromptAfterCompletedTurn() throws {
+        openCodeTab()
 
-        actions.click()
-        clickMenuItem(identifier: "code.pr.ask-agent-fix-checks", title: "Ask agent to fix checks")
+        let row = workspaceLeafRowElement()
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
+        row.click()
+
+        let create = element("code.titlebar.create-pr")
+        guard create.waitForExistence(timeout: 10) else {
+            throw XCTSkip("Fixture session has no completed turn without an open PR.")
+        }
+        create.click()
         XCTAssertTrue(
-            waitUntil(timeout: 5) {
-                self.accessibilityValue(of: self.element("code.composer.input")).contains("Inspect PR #184")
+            waitUntil(timeout: 8) {
+                let input = self.accessibilityValue(of: self.element("code.composer.input"))
+                let sent = input.contains("Create a PR")
+                    || self.app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'Create a PR'")).count > 0
+                return sent
             },
-            "Ask agent to fix checks should append its prompt into the Code composer."
+            "Create PR should send the PR instruction prompt to the agent."
         )
     }
 

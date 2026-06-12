@@ -45,7 +45,7 @@ struct WorkspaceReviewPane: View {
 
     private var tabBar: some View {
         HStack(spacing: 4) {
-            ForEach(Self.primaryTabs) { tab in
+            ForEach(WorkbenchPaneTab.visibleReviewPaneTabs) { tab in
                 tabChip(tab)
             }
         }
@@ -64,8 +64,6 @@ struct WorkspaceReviewPane: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
     }
-
-    private static let primaryTabs: [WorkbenchPaneTab] = [.plan, .diff, .sources, .browser, .pr, .terminal]
 
     private func tabChip(_ tab: WorkbenchPaneTab) -> some View {
         let isSelected = (selectedTab == tab)
@@ -141,13 +139,7 @@ struct WorkspaceReviewPane: View {
                 controller: browserControllerProvider()
             )
         case .pr:
-            TahoePRCompactPane(
-                coordinator: model.prCoordinator(for: session),
-                chatStore: chatStore,
-                onBeforeMerge: {
-                    await createCheckpoint(summary: "Before PR merge")
-                }
-            )
+            EmptyView()
         case .terminal:
             // Real PTY-backed terminal pointed at the session's repo.
             // Reuses the same `TerminalTabContainer` (G12 multi-pane)

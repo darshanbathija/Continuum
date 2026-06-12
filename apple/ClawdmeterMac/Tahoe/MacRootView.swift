@@ -757,7 +757,7 @@ struct MacRootView: View {
         commands.append(contentsOf: [
             .init(id: "code.search", title: "Focus Code Search", subtitle: "Search sessions and projects", keywords: ["filter"], scope: .code, kind: .action, shortcutID: "code.search"),
             .init(id: "code.workspaceSwitcher", title: "Open Workspace Switcher", subtitle: "Switch workspace or session", keywords: ["repo", "session", "switch"], scope: .code, kind: .navigation, shortcutID: "code.workspaceSwitcher"),
-            .init(id: "code.reviewPane", title: "Toggle Review Pane", subtitle: "Show or hide Plan/Diff/PR/Terminal", keywords: ["plan", "diff", "terminal"], scope: .code, kind: .action, shortcutID: "code.reviewPane"),
+            .init(id: "code.reviewPane", title: "Toggle Review Pane", subtitle: "Show or hide Plan/Diff/Terminal", keywords: ["plan", "diff", "terminal"], scope: .code, kind: .action, shortcutID: "code.reviewPane"),
             .init(id: "settings.pairIPhone", title: "Pair Or Manage iPhone", subtitle: "Open Settings for desktop sync", keywords: ["phone", "sync", "qr"], scope: .settings, kind: .setting),
         ])
         var registry = ClawdmeterCommandRegistry(commands: commands)
@@ -1420,7 +1420,16 @@ struct MacTitlebar: View {
 
     private var codeActions: some View {
         TahoeGlass(radius: 6, tone: .chip) {
-            HStack(spacing: 2) {
+            HStack(spacing: 6) {
+                if let runtime,
+                   let session = runtime.sessionsModel.openSession,
+                   !runtime.sessionsModel.openSessionIsReadOnly {
+                    CodeTitlebarPRControl(
+                        model: runtime.sessionsModel,
+                        workbenchState: workbenchState,
+                        session: session
+                    )
+                }
                 UpdateAppControl(coordinator: updateCoordinator, compact: true)
                 paneMenuButton
             }
@@ -1444,7 +1453,6 @@ struct MacTitlebar: View {
             paneMenuItem(.terminal,  shortcut: "⌃`")
             paneMenuItem(.sources)
             paneMenuItem(.artifacts, shortcut: "⇧⌘F")
-            paneMenuItem(.pr)
             paneMenuItem(.browser)
             Divider()
             Button(action: {

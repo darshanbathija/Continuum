@@ -1120,10 +1120,23 @@ struct ComposerInputCore: View {
         guard let id = insertionInbox.pendingRequest?.id,
               let request = insertionInbox.consumePendingRequest(id: id)
         else { return }
-        applyExternalInsertion(text: request.text, autoSend: request.autoSend)
+        applyExternalInsertion(
+            text: request.text,
+            autoSend: request.autoSend,
+            attachmentURL: request.attachmentURL,
+            attachmentDisplayName: request.attachmentDisplayName
+        )
     }
 
-    private func applyExternalInsertion(text inserted: String, autoSend: Bool) {
+    private func applyExternalInsertion(
+        text inserted: String,
+        autoSend: Bool,
+        attachmentURL: URL? = nil,
+        attachmentDisplayName: String? = nil
+    ) {
+        if let attachmentURL {
+            attachExternalFile(attachmentURL, displayName: attachmentDisplayName)
+        }
         if store.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             store.text = inserted
         } else {
@@ -1133,6 +1146,20 @@ struct ComposerInputCore: View {
         if autoSend {
             requestProgrammaticSend()
         }
+    }
+
+    private func attachExternalFile(_ url: URL, displayName: String?) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let byteSize = attrs?[.size] as? Int ?? 0
+        guard byteSize > 0 else { return }
+        let ext = url.pathExtension.lowercased()
+        let isImage = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif"].contains(ext)
+        let name = displayName ?? url.lastPathComponent
+        if store.attachments.contains(where: { $0.sourceURL == url && $0.displayName == name }) {
+            return
+        }
+        try? store.attach(url: url, displayName: name, byteSize: byteSize, isImage: isImage)
     }
 
     private func requestProgrammaticSend() {
