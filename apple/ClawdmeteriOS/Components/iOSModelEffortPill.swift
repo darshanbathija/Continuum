@@ -27,7 +27,12 @@ struct iOSModelEffortPill: View {
         Menu {
             Section(iOSModelPicker.sectionTitle(for: agent, customProviderId: customProviderId, in: catalog)) {
                 ForEach(iOSModelPicker.entries(for: agent, customProviderId: customProviderId, in: catalog)) { entry in
-                    Button(action: { selectedModelId = entry.id }) {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "select_model",
+                            {
+ selectedModelId = entry.id 
+                            }
+                        )) {
                         Label {
                             HStack {
                                 Text(entry.displayName)
@@ -47,7 +52,12 @@ struct iOSModelEffortPill: View {
             }
             Section("Effort") {
                 ForEach([ReasoningEffort.low, .medium, .high, .xhigh, .max], id: \.self) { effort in
-                    Button(action: { selectedEffort = effort }) {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "select_effort",
+                            {
+ selectedEffort = effort 
+                            }
+                        )) {
                         Label {
                             Text(effortLabel(effort))
                         } icon: {

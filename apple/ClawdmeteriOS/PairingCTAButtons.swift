@@ -20,9 +20,7 @@ struct PairingCTAButtons: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Button {
-                showingPairing = true
-            } label: {
+            Button(action: ContinuumAnalytics.wrapButton("scan_qr", { showingPairing = true })) {
                 Label("Scan QR", systemImage: "qrcode.viewfinder")
                     .font(compact ? .subheadline.bold() : .headline)
                     .frame(maxWidth: .infinity)
@@ -31,9 +29,7 @@ struct PairingCTAButtons: View {
             .buttonStyle(.borderedProminent)
             .tint(terraCotta)
 
-            Button {
-                showingPairing = true
-            } label: {
+            Button(action: ContinuumAnalytics.wrapButton("paste_url", { showingPairing = true })) {
                 Label("Paste URL", systemImage: "doc.on.clipboard")
                     .font(compact ? .subheadline.bold() : .headline)
                     .frame(maxWidth: .infinity)
@@ -73,7 +69,7 @@ struct IOSDesktopPairingCTA: View {
     private var configured: Bool { client.isConfigured }
 
     var body: some View {
-        Button(action: onPair) {
+        Button(action: ContinuumAnalytics.wrapButton("desktop_pairing_cta", onPair)) {
             TahoeGlass(radius: compact ? 16 : 20, tone: .raised) {
                 HStack(spacing: compact ? 10 : 12) {
                     ZStack {

@@ -112,9 +112,7 @@ struct OpencodeProviderExtrasSection: View {
                     .lineLimit(2)
             }
             Spacer(minLength: 12)
-            Button {
-                onCustomProviderConnect()
-            } label: {
+            Button(action: ContinuumAnalytics.wrapButton("opencode_custom_provider_connect", onCustomProviderConnect)) {
                 HStack(spacing: 4) {
                     TahoeIcon("plus", size: 10, weight: .bold)
                     Text("Connect")
@@ -135,7 +133,7 @@ struct OpencodeProviderExtrasSection: View {
     }
 
     private var showMoreButton: some View {
-        Button(action: onShowMoreProviders) {
+        Button(action: ContinuumAnalytics.wrapButton("opencode_show_more_providers", onShowMoreProviders)) {
             Text("Show more providers")
                 .font(TahoeFont.body(12, weight: .semibold))
                 .foregroundStyle(t.accent)
@@ -212,9 +210,7 @@ struct OpencodeConnectProvidersOverlay: View {
                 .font(TahoeFont.body(15, weight: .bold))
                 .foregroundStyle(t.fg)
             Spacer()
-            Button {
-                dismiss()
-            } label: {
+            Button(action: ContinuumAnalytics.wrapButton("opencode_provider_catalog_close", { dismiss() })) {
                 TahoeIcon("xmark", size: 11, weight: .bold)
                     .foregroundStyle(t.fg3)
             }
@@ -258,10 +254,10 @@ struct OpencodeConnectProvidersOverlay: View {
 
     private func providerRow(_ provider: OpencodeSupportedProvider) -> some View {
         let hovered = hoveredID == provider.id
-        return Button {
+        return Button(action: ContinuumAnalytics.wrapButton("opencode_provider_select", {
             onSelectProvider(provider)
             dismiss()
-        } label: {
+        })) {
             HStack(spacing: 12) {
                 OpencodeProviderLogoView(provider: provider, size: 24)
                 VStack(alignment: .leading, spacing: 2) {
@@ -367,18 +363,18 @@ struct OpencodeProviderAPIKeySheet: View {
             }
             HStack {
                 if opencodeCLIAvailable, let onTerminalLogin {
-                    Button("Sign in via opencode") {
+                    Button("Sign in via opencode", action: ContinuumAnalytics.wrapButton("opencode_sign_in_via_cli", {
                         dismiss()
                         onTerminalLogin()
-                    }
+                    }))
                     .buttonStyle(.bordered)
                 }
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("opencode_api_key_cancel", { dismiss() }))
                     .keyboardShortcut(.cancelAction)
-                Button(isSaving ? "Saving…" : "Save") {
+                Button(isSaving ? "Saving…" : "Save", action: ContinuumAnalytics.wrapButton("opencode_api_key_save", {
                     Task { await save() }
-                }
+                }))
                 .buttonStyle(.borderedProminent)
                 .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
                 .keyboardShortcut(.defaultAction)

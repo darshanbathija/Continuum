@@ -314,7 +314,7 @@ private struct ChatSidebarGutter: View {
     var body: some View {
         TahoeGlass(radius: 8, tone: .panel) {
             VStack(spacing: 6) {
-                Button(action: onExpand) {
+                Button(action: ContinuumAnalytics.wrapButton("expand_chat_sidebar", onExpand)) {
                     TahoeIcon("sidebar", size: 13)
                         .foregroundStyle(t.fg2)
                         .frame(width: 36, height: 36)
@@ -324,7 +324,7 @@ private struct ChatSidebarGutter: View {
                 .help("Show chat list")
                 .accessibilityIdentifier("chat.sidebar.expand")
 
-                Button(action: onNew) {
+                Button(action: ContinuumAnalytics.wrapButton("new_chat", onNew)) {
                     TahoeIcon("plus", size: 13)
                         .foregroundStyle(t.fg2)
                         .frame(width: 36, height: 36)
@@ -392,13 +392,13 @@ private struct Sidebar: View {
                         .font(TahoeFont.body(13, weight: .semibold))
                         .foregroundStyle(t.fg)
                     Spacer()
-                    Button(action: onCollapse) {
+                    Button(action: ContinuumAnalytics.wrapButton("collapse_chat_sidebar", onCollapse)) {
                         TahoeIcon("sidebar", size: 13).foregroundStyle(t.fg2)
                     }
                     .buttonStyle(PressableButtonStyle())
                     .help("Hide chat list")
                     .accessibilityIdentifier("chat.sidebar.collapse")
-                    Button(action: onNew) {
+                    Button(action: ContinuumAnalytics.wrapButton("new_chat", onNew)) {
                         TahoeIcon("plus", size: 13).foregroundStyle(t.fg2)
                     }
                     .buttonStyle(PressableButtonStyle())
@@ -450,9 +450,13 @@ private struct Sidebar: View {
                             }
                         } else {
                             ForEach(results) { match in
-                                Button {
+                                Button(action: ContinuumAnalytics.wrapButton(
+                                        "open_search_result",
+                                        {
                                     Task { await open(match: match) }
-                                } label: {
+                                
+                                        }
+                                    )) {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(match.snippet)
                                             .font(TahoeFont.body(11.5))
@@ -611,7 +615,7 @@ private struct HistoryRow: View {
     @State private var hovering = false
 
     var body: some View {
-        Button(action: action) {
+        Button(action: ContinuumAnalytics.wrapButton("select_chat_history_row", action)) {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 6) {
                     ForEach(Array(row.providers.prefix(3).enumerated()), id: \.offset) { _, provider in
@@ -639,7 +643,7 @@ private struct HistoryRow: View {
         .buttonStyle(PressableButtonStyle())
         .overlay(alignment: .trailing) {
             if hovering, let onArchive {
-                Button(action: onArchive) {
+                Button(action: ContinuumAnalytics.wrapButton("archive_chat", onArchive)) {
                     Image(systemName: "archivebox")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(t.fg)
@@ -1104,15 +1108,21 @@ private struct ProviderColumn: View {
                             .foregroundStyle(t.fg4)
                     }
                     Spacer()
-                    Button {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "mark_frontier_winner",
+                            {
                         Task { _ = await client.setFrontierTurnWinner(groupId: groupId, turnId: turnId, childIndex: session.frontierChildIndex ?? 0) }
-                    } label: {
+                    
+                            }
+                        )) {
                         TahoeIcon("bookmark", size: 13).foregroundStyle(winner == nil ? t.fg3 : session.tahoeProvider.dot)
                     }
                     .buttonStyle(PressableButtonStyle())
                     .disabled(turnId == "turn-0")
                     .help("Mark this answer as winner")
-                    Button {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "continue_frontier_winner",
+                            {
                         guard !continuing else { return }
                         continuing = true
                         Task {
@@ -1124,7 +1134,9 @@ private struct ProviderColumn: View {
                                 await MainActor.run { onContinueWinner(promoted) }
                             }
                         }
-                    } label: {
+                    
+                            }
+                        )) {
                         TahoeIcon("arrowR", size: 13).foregroundStyle(continuing ? t.fg4 : t.fg3)
                     }
                     .buttonStyle(PressableButtonStyle())
@@ -1402,9 +1414,13 @@ private struct TranscriptScroll: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     if hasOlderHistory, let onLoadOlder {
-                        Button {
+                        Button(action: ContinuumAnalytics.wrapButton(
+                                "load_earlier_messages",
+                                {
                             Task { await onLoadOlder() }
-                        } label: {
+                        
+                                }
+                            )) {
                             HStack(spacing: 6) {
                                 if isLoadingOlder {
                                     ProgressView().controlSize(.mini)
@@ -1535,9 +1551,13 @@ private struct TranscriptScroll: View {
     private func disclosureButton(_ turn: TranscriptTurn) -> some View {
         let isOpen = expandedTurns.contains(turn.id)
         if turn.hasCollapsedContent {
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "toggle_turn_disclosure",
+                    {
                 if isOpen { expandedTurns.remove(turn.id) } else { expandedTurns.insert(turn.id) }
-            } label: {
+            
+                    }
+                )) {
                 disclosureLabel(turn, icon: isOpen ? "chevron.down" : "chevron.right")
             }
             .buttonStyle(PressableButtonStyle())
@@ -1562,9 +1582,13 @@ private struct TranscriptScroll: View {
                 if !turn.outputArtifacts.isEmpty {
                     HStack(spacing: 7) {
                         ForEach(turn.outputArtifacts.prefix(4)) { artifact in
-                            Button {
+                            Button(action: ContinuumAnalytics.wrapButton(
+                                    "open_output_artifact",
+                                    {
                                 openArtifact(artifact)
-                            } label: {
+                            
+                                    }
+                                )) {
                                 compactChip(icon: iconName(for: artifact.kind), title: artifact.filename)
                             }
                             .buttonStyle(PressableButtonStyle())
@@ -1791,17 +1815,17 @@ private struct MessageRow: View {
             ForEach(Array(actionDescriptors.enumerated()), id: \.offset) { _, descriptor in
                 switch descriptor.kind {
                 case .retry:
-                    Button(descriptor.visibleTitle) {
+                    Button(descriptor.visibleTitle, action: ContinuumAnalytics.wrapButton("retry_failed_turn", {
                         onRetryFailedTurn?(retryPrompt)
-                    }
+                    }))
                     .buttonStyle(PressableButtonStyle())
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .foregroundStyle(t.accent)
                     .accessibilityIdentifier(descriptor.accessibilityIdentifier)
                 case .retryInNewChat:
-                    Button(descriptor.visibleTitle) {
+                    Button(descriptor.visibleTitle, action: ContinuumAnalytics.wrapButton("retry_failed_turn_new_chat", {
                         onRetryFailedTurnInNewChat?(retryPrompt)
-                    }
+                    }))
                     .buttonStyle(PressableButtonStyle())
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .foregroundStyle(t.accent)
@@ -1819,9 +1843,13 @@ private struct MessageRow: View {
 
     @ViewBuilder
     private func messageCopyMenu(_ message: ChatMessage) -> some View {
-        Button("Copy Message", systemImage: "doc.on.doc") {
+        Button("Copy Message", systemImage: "doc.on.doc", action: ContinuumAnalytics.wrapButton(
+                "copy_message",
+                {
             copyMessageBody(message.body)
-        }
+        
+                }
+            ))
     }
 }
 
@@ -1945,7 +1973,12 @@ private struct ComposerBar: View {
                 .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
                 .help("Enable a provider in Settings → Providers.")
         } else {
-            Button { providerPopoverPresented = true } label: { providerBarLabel }
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "open_provider_selector",
+                    {
+ providerPopoverPresented = true 
+                    }
+                )) { providerBarLabel }
                 .buttonStyle(.plain)
                 .fixedSize(horizontal: true, vertical: false)
                 .popover(isPresented: $providerPopoverPresented, arrowEdge: .bottom) {
@@ -2053,7 +2086,7 @@ private struct ComposerBar: View {
     }
 
     private func soloCompareSegment(title: String, active: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: ContinuumAnalytics.wrapButton("select_chat_history_row", action)) {
             Text(title)
                 .font(TahoeFont.body(10.5, weight: .semibold))
                 .foregroundStyle(active ? t.fg : t.fg4)
@@ -2070,7 +2103,12 @@ private struct ComposerBar: View {
         let available = isChoiceAvailable(choice)
         let canSelect = selected || available
         HStack(spacing: 10) {
-            Button { toggleProviderRow(choice) } label: {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "toggle_provider_row",
+                    {
+ toggleProviderRow(choice) 
+                    }
+                )) {
                 HStack(spacing: 10) {
                     Image(systemName: selected ? "checkmark.square.fill" : "square")
                         .font(.system(size: 15, weight: .medium))
@@ -2139,9 +2177,13 @@ private struct ComposerBar: View {
         let currentLabel = accounts.first { $0.wireId == currentWireId }?.displayName ?? "Default"
         return Menu {
             ForEach(accounts) { account in
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "select_provider_account",
+                        {
                     store.selectAccount(account.isPrimary ? nil : account.wireId, for: vendor)
-                } label: {
+                
+                        }
+                    )) {
                     let isCurrent = account.isPrimary ? currentWireId == nil : account.wireId == currentWireId
                     if isCurrent { Label(account.displayName, systemImage: "checkmark") }
                     else { Text(account.displayName) }
@@ -2169,9 +2211,13 @@ private struct ComposerBar: View {
         return Menu {
             if models.isEmpty { Text("No models") }
             ForEach(models, id: \.id) { m in
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "select_provider_model",
+                        {
                     store.selectModel(m.id, forChoice: choice, catalog: client.modelCatalog)
-                } label: {
+                
+                        }
+                    )) {
                     if m.id == currentId { Label(m.displayName, systemImage: "checkmark") }
                     else { Text(m.displayName) }
                 }
@@ -2211,9 +2257,13 @@ private struct ComposerBar: View {
         let current = store.effort(forChoice: choice, catalog: client.modelCatalog)
         Menu {
             ForEach(ReasoningEffort.allCases, id: \.self) { effort in
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "select_reasoning_effort",
+                        {
                     store.selectEffort(effort, forChoice: choice, catalog: client.modelCatalog)
-                } label: {
+                
+                        }
+                    )) {
                     if current == effort { Label(effort.rawValue.capitalized, systemImage: "checkmark") }
                     else { Text(effort.rawValue.capitalized) }
                 }
@@ -2239,10 +2289,14 @@ private struct ComposerBar: View {
     private var composerActionsMenu: some View {
         Menu {
             if openTarget == nil {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "toggle_deep_research",
+                        {
                     store.deepResearch.toggle()
                     store.persist()
-                } label: {
+                
+                        }
+                    )) {
                     if store.deepResearch {
                         Label("Deep Research", systemImage: "checkmark")
                     } else {
@@ -2250,7 +2304,7 @@ private struct ComposerBar: View {
                     }
                 }
             }
-            Button(action: pickAttachments) {
+            Button(action: ContinuumAnalytics.wrapButton("attach_files", pickAttachments)) {
                 Label("Attach", systemImage: "paperclip")
             }
         } label: {
@@ -2296,7 +2350,12 @@ private struct ComposerBar: View {
                         .font(TahoeFont.mono(10.5))
                         .foregroundStyle(t.fg2)
                         .lineLimit(1)
-                    Button { store.removeAttachment(id: attachment.id) } label: {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "remove_composer_attachment",
+                            {
+ store.removeAttachment(id: attachment.id) 
+                            }
+                        )) {
                         TahoeIcon("x", size: 9).foregroundStyle(t.fg4)
                     }
                     .buttonStyle(PressableButtonStyle())
@@ -2311,7 +2370,7 @@ private struct ComposerBar: View {
     }
 
     private var micButton: some View {
-        Button(action: toggleDictation) {
+        Button(action: ContinuumAnalytics.wrapButton("toggle_dictation", toggleDictation)) {
             Image(systemName: dictation.state == .recording ? "mic.fill" : "mic")
                 .font(.system(size: 13))
                 .foregroundStyle(dictation.state == .recording ? t.accent : t.fg3)
@@ -2326,7 +2385,12 @@ private struct ComposerBar: View {
     }
 
     private var sendButton: some View {
-        Button { Task { await dispatchSend() } } label: {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "send_message",
+                {
+ Task { await dispatchSend() } 
+                }
+            )) {
             ZStack {
                 Circle().fill(sendCtl.canSend ? t.accent : Color.white.opacity(0.08))
                 if sendCtl.sending {

@@ -188,9 +188,9 @@ struct VendorProvisioningSettingsView: View {
                     .font(TahoeFont.body(11.5, weight: .semibold))
                     .foregroundStyle(t.fg2)
                 Spacer(minLength: 0)
-                Button("Cancel") {
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("vendor_provisioning_install_all_cancel", {
                     installAllTask?.cancel()
-                }
+                }))
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier("settings.provisioning.install-all-cancel")
             }
@@ -370,7 +370,7 @@ private struct VendorProvisioningActionTerminalSheet: View {
                     .font(TahoeFont.body(14, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer(minLength: 0)
-                Button("Close", action: onClose)
+                Button("Close", action: ContinuumAnalytics.wrapButton("vendor_provisioning_terminal_close", onClose))
                     .buttonStyle(.bordered)
                     .keyboardShortcut(.cancelAction)
             }
@@ -521,9 +521,7 @@ private struct VendorProvisioningRow: View {
 
     @ViewBuilder
     private func actionButton(_ action: VendorProvisioningAction) -> some View {
-        let base = Button {
-            onAction(action)
-        } label: {
+        let base = Button(action: ContinuumAnalytics.wrapButton("vendor_provisioning_\(action.kind.rawValue)", { onAction(action) })) {
             HStack(spacing: 5) {
                 TahoeIcon(icon(for: action.kind), size: 10, weight: .bold)
                 Text(action.label)
@@ -543,9 +541,7 @@ private struct VendorProvisioningRow: View {
 
     @ViewBuilder
     private var addEnvButton: some View {
-        let base = Button {
-            onImport()
-        } label: {
+        let base = Button(action: ContinuumAnalytics.wrapButton("vendor_provisioning_add_env", onImport)) {
             HStack(spacing: 5) {
                 TahoeIcon("tray", size: 10, weight: .bold)
                 Text("Add Env")
@@ -717,7 +713,7 @@ struct VendorEnvImportSheet: View {
                         .foregroundStyle(t.fg3)
                 }
                 Spacer(minLength: 0)
-                Button("Close", action: onClose)
+                Button("Close", action: ContinuumAnalytics.wrapButton("vendor_env_import_close", onClose))
                     .buttonStyle(.bordered)
             }
 
@@ -747,16 +743,16 @@ struct VendorEnvImportSheet: View {
                 .frame(width: 220)
 
                 Spacer(minLength: 0)
-                Button("Preview") {
+                Button("Preview", action: ContinuumAnalytics.wrapButton("vendor_env_import_preview", {
                     Task { await preview() }
-                }
+                }))
                 .buttonStyle(.bordered)
                 .disabled(isWorking || candidates.isEmpty || currentWorkspaceId == nil)
                 .accessibilityIdentifier("settings.provisioning.env.preview")
 
-                Button("Import") {
+                Button("Import", action: ContinuumAnalytics.wrapButton("vendor_env_import_submit", {
                     Task { await importValues() }
-                }
+                }))
                 .buttonStyle(.borderedProminent)
                 .disabled(isWorking || candidates.isEmpty || currentWorkspaceId == nil)
                 .accessibilityIdentifier("settings.provisioning.env.import")

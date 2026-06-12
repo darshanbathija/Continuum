@@ -35,7 +35,12 @@ struct SessionComparisonSheet: View {
                 Text("Compare Sessions")
                     .font(TahoeFont.body(18, weight: .bold))
                 Spacer()
-                Button("Done") { dismiss() }
+                Button("Done", action: ContinuumAnalytics.wrapButton(
+                        "done",
+                        {
+ dismiss() 
+                        }
+                    ))
                     .keyboardShortcut(.cancelAction)
             }
             HStack(alignment: .top, spacing: 12) {

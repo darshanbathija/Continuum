@@ -46,10 +46,19 @@ struct iOSDiffView: View {
             ),
             presenting: discardTarget
         ) { file in
-            Button("Discard \(file.path)", role: .destructive) {
+            Button("Discard \(file.path)", role: .destructive, action: ContinuumAnalytics.wrapButton(
+                    "discard_file_path",
+                    {
                 Task { await apply(.discardFile, to: file) }
-            }
-            Button("Cancel", role: .cancel) { discardTarget = nil }
+            
+                    }
+                ))
+            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                    "cancel",
+                    {
+ discardTarget = nil 
+                    }
+                ))
         } message: { file in
             Text("This is destructive. Untracked files move to Trash; tracked changes are restored from HEAD.")
         }
@@ -109,9 +118,13 @@ struct iOSDiffView: View {
                         .tint(.green)
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button(role: .destructive) {
+                        Button(role: .destructive, action: ContinuumAnalytics.wrapButton(
+                                "diff_revert_hunk",
+                                {
                             discardTarget = file
-                        } label: {
+                        
+                                }
+                            )) {
                             Label("Discard", systemImage: "trash")
                         }
                         if file.changeState == "staged" || file.changeState == "mixed" {
@@ -134,21 +147,15 @@ struct iOSDiffView: View {
 
     @ViewBuilder
     private func diffActionButtons(for file: GitDiffFile) -> some View {
-        Button {
-            Task { await apply(.stageFile, to: file) }
-        } label: {
+        Button(action: ContinuumAnalytics.wrapButton("diff_stage_file", { Task { await apply(.stageFile, to: file) } })) {
             Label("Stage file", systemImage: "plus.square")
         }
         if file.changeState == "staged" || file.changeState == "mixed" {
-            Button {
-                Task { await apply(.unstageFile, to: file) }
-            } label: {
+            Button(action: ContinuumAnalytics.wrapButton("diff_unstage_file", { Task { await apply(.unstageFile, to: file) } })) {
                 Label("Unstage file", systemImage: "minus.square")
             }
         }
-        Button(role: .destructive) {
-            discardTarget = file
-        } label: {
+        Button(role: .destructive, action: ContinuumAnalytics.wrapButton("diff_discard_file", { discardTarget = file })) {
             Label("Discard file", systemImage: "trash")
         }
     }
@@ -284,19 +291,13 @@ struct iOSDiffFileView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button {
-                        Task { await apply(.stageFile) }
-                    } label: {
+                    Button(action: ContinuumAnalytics.wrapButton("diff_stage_file", { Task { await apply(.stageFile) } })) {
                         Label("Stage file", systemImage: "plus.square")
                     }
-                    Button {
-                        Task { await apply(.unstageFile) }
-                    } label: {
+                    Button(action: ContinuumAnalytics.wrapButton("diff_unstage_file", { Task { await apply(.unstageFile) } })) {
                         Label("Unstage file", systemImage: "minus.square")
                     }
-                    Button(role: .destructive) {
-                        discardPresented = true
-                    } label: {
+                    Button(role: .destructive, action: ContinuumAnalytics.wrapButton("diff_discard_file", { discardPresented = true })) {
                         Label("Discard file", systemImage: "trash")
                     }
                 } label: {
@@ -311,10 +312,8 @@ struct iOSDiffFileView: View {
             }
         }
         .confirmationDialog("Discard file changes?", isPresented: $discardPresented) {
-            Button("Discard", role: .destructive) {
-                Task { await apply(.discardFile) }
-            }
-            Button("Cancel", role: .cancel) {}
+            Button("Discard", role: .destructive, action: ContinuumAnalytics.wrapButton("diff_confirm_discard", { Task { await apply(.discardFile) } }))
+            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton("diff_discard_cancel", {}))
         } message: {
             Text("This is destructive. Untracked files move to Trash; tracked changes are restored from HEAD.")
         }

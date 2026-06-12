@@ -73,9 +73,13 @@ public struct iOSOutboxPane: View {
                 } label: { Label("Retry", systemImage: "arrow.clockwise") }
                 .tint(.blue)
             }
-            Button(role: .destructive) {
+            Button(role: .destructive, action: ContinuumAnalytics.wrapButton(
+                    "outbox_cancel",
+                    {
                 outbox.discard(idempotencyKey: envelope.idempotencyKey)
-            } label: { Label("Cancel", systemImage: "xmark") }
+            
+                    }
+                )) { Label("Cancel", systemImage: "xmark") }
         }
     }
 

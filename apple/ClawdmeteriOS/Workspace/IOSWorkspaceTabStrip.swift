@@ -37,7 +37,7 @@ struct IOSWorkspaceTabStrip: View {
                 }
 
                 if terminalAvailable {
-                    Button(action: onOpenTerminal) {
+                    Button(action: ContinuumAnalytics.wrapButton("onopenterminal", onOpenTerminal)) {
                         HStack(spacing: 6) {
                             Image(systemName: "terminal.fill")
                                 .font(.system(size: 11, weight: .semibold))

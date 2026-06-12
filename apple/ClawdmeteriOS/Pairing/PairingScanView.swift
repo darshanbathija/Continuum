@@ -54,7 +54,12 @@ public struct PairingScanView: View {
             // Top-leading close + top-trailing paste button.
             VStack {
                 HStack {
-                    Button(action: { onDone(.failure(CancellationError())); dismiss() }) {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "pairing_scan_cancel",
+                            {
+ onDone(.failure(CancellationError())); dismiss() 
+                            }
+                        )) {
                         Image(systemName: "xmark")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(.white)
@@ -63,7 +68,12 @@ public struct PairingScanView: View {
                     }
                     .accessibilityLabel("Cancel pairing")
                     Spacer()
-                    Button(action: { pasteSheetPresented = true }) {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "pairing_scan_paste",
+                            {
+ pasteSheetPresented = true 
+                            }
+                        )) {
                         Image(systemName: "doc.on.clipboard")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(.white)
@@ -84,7 +94,12 @@ public struct PairingScanView: View {
             )
         }
         .alert("Pairing failed", isPresented: errorAlertBinding) {
-            Button("OK") { capturedError = nil }
+            Button("OK", action: ContinuumAnalytics.wrapButton(
+                    "ok",
+                    {
+ capturedError = nil 
+                    }
+                ))
         } message: {
             Text(capturedError ?? "")
         }
@@ -141,7 +156,12 @@ public struct PairingScanView: View {
                 .foregroundStyle(.white.opacity(0.85))
                 .padding(.horizontal, 28)
 
-            Button(action: { pasteSheetPresented = true }) {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "pairing_paste_url",
+                    {
+ pasteSheetPresented = true 
+                    }
+                )) {
                 HStack(spacing: 8) {
                     Image(systemName: "doc.on.clipboard")
                     Text("Paste pairing URL instead")
@@ -309,7 +329,9 @@ struct PairingPasteURLSheet: View {
                         .foregroundStyle(.red)
                         .font(.caption)
                 }
-                Button("Pair") {
+                Button("Pair", action: ContinuumAnalytics.wrapButton(
+                        "pair",
+                        {
                     let trimmed = pastedURL.trimmingCharacters(in: .whitespacesAndNewlines)
                     // Don't double-parse — let the service do the
                     // validation and surface its error.
@@ -319,7 +341,9 @@ struct PairingPasteURLSheet: View {
                     }
                     onAccept(trimmed)
                     isPresented = false
-                }
+                
+                        }
+                    ))
                 .buttonStyle(.borderedProminent)
                 .tint(SessionsV2Theme.accent)
                 .disabled(pastedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -330,7 +354,12 @@ struct PairingPasteURLSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Cancel") { isPresented = false }
+                    Button("Cancel", action: ContinuumAnalytics.wrapButton(
+                            "cancel",
+                            {
+ isPresented = false 
+                            }
+                        ))
                 }
             }
         }

@@ -87,9 +87,7 @@ public struct iOSCodexPlanView: View {
     }
 
     private func approveButton(onApprove: @escaping () async -> Void) -> some View {
-        Button {
-            Task { await onApprove() }
-        } label: {
+        Button(action: ContinuumAnalytics.wrapButton("codex_plan_approve", { Task { await onApprove() } })) {
             HStack(spacing: 8) {
                 TahoeIcon("play", size: 12, weight: .bold)
                 Text("Approve & run")

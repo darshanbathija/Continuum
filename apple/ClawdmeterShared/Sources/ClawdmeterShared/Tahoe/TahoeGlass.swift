@@ -169,10 +169,21 @@ public struct TahoeAccentButton<Label: View>: View {
     public var size: Size
     public var disabled: Bool
     public var action: () -> Void
+    public var analyticsName: String?
     public var label: Label
 
-    public init(size: Size = .m, disabled: Bool = false, action: @escaping () -> Void = {}, @ViewBuilder label: () -> Label) {
-        self.size = size; self.disabled = disabled; self.action = action; self.label = label()
+    public init(
+        size: Size = .m,
+        disabled: Bool = false,
+        analyticsName: String? = nil,
+        action: @escaping () -> Void = {},
+        @ViewBuilder label: () -> Label
+    ) {
+        self.size = size
+        self.disabled = disabled
+        self.analyticsName = analyticsName
+        self.action = action
+        self.label = label()
     }
 
     private var height: CGFloat {
@@ -183,7 +194,7 @@ public struct TahoeAccentButton<Label: View>: View {
     }
 
     public var body: some View {
-        Button(action: action) {
+        Button(action: ContinuumAnalytics.wrapButton(analyticsName ?? "tahoe_accent", action)) {
             HStack(spacing: 6) { label }
                 .font(ContinuumFont.body(fontSize, weight: .semibold))
                 .padding(.horizontal, height * 0.5)
@@ -208,11 +219,22 @@ public struct TahoeGhostButton<Label: View>: View {
     public var size: Size
     public var active: Bool
     public var action: () -> Void
+    public var analyticsName: String?
     public var label: Label
     @State private var isHovered = false
 
-    public init(size: Size = .m, active: Bool = false, action: @escaping () -> Void = {}, @ViewBuilder label: () -> Label) {
-        self.size = size; self.active = active; self.action = action; self.label = label()
+    public init(
+        size: Size = .m,
+        active: Bool = false,
+        analyticsName: String? = nil,
+        action: @escaping () -> Void = {},
+        @ViewBuilder label: () -> Label
+    ) {
+        self.size = size
+        self.active = active
+        self.analyticsName = analyticsName
+        self.action = action
+        self.label = label()
     }
 
     private var height: CGFloat {
@@ -223,7 +245,7 @@ public struct TahoeGhostButton<Label: View>: View {
     }
 
     public var body: some View {
-        Button(action: action) {
+        Button(action: ContinuumAnalytics.wrapButton(analyticsName ?? "tahoe_ghost", action)) {
             HStack(spacing: 5) { label }
                 .font(ContinuumFont.body(fontSize, weight: .medium))
                 .padding(.horizontal, height * 0.5)

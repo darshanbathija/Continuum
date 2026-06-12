@@ -375,9 +375,9 @@ public struct MacSettingsView: View {
             }
             TahoeHair().padding(.vertical, 14)
             SettingsRow(label: "Test chime", hint: "Plays the configured in-app chime without sending a banner.") {
-                Button("Play") {
+                Button("Play", action: ContinuumAnalytics.wrapButton("settings_test_chime", {
                     ChimeAudioPlayer.shared.playCompletion()
-                }
+                }))
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
@@ -438,9 +438,9 @@ public struct MacSettingsView: View {
                                     .textFieldStyle(.roundedBorder)
                                     .font(TahoeFont.mono(11))
                                     .frame(width: 96)
-                                Button("Reset") {
+                                Button("Reset", action: ContinuumAnalytics.wrapButton("settings_shortcut_reset", {
                                     try? presentationStore.setShortcutOverride(id: shortcut.id, chord: nil)
-                                }
+                                }))
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .disabled(presentationStore.snapshot.shortcutOverrides[shortcut.id] == nil)
@@ -583,7 +583,7 @@ private struct ProviderSettingsTabButton: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button(action: onSelect) {
+        Button(action: ContinuumAnalytics.wrapButton("settings_provider_tab_\(tab.rawValue)", onSelect)) {
             Text(tab.title)
                 .font(TahoeFont.body(12.5, weight: isSelected ? .semibold : .medium))
                 .foregroundStyle(isSelected ? t.fg : t.fg3)
@@ -722,7 +722,7 @@ private struct SettingsSidebarRow: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button(action: onSelect) {
+        Button(action: ContinuumAnalytics.wrapButton("settings_section_\(section.rawValue)", onSelect)) {
             HStack(spacing: 10) {
                 TahoeIcon(section.icon, size: 13, weight: .semibold)
                     .foregroundStyle(isSelected ? t.fg : t.fg3)
@@ -805,7 +805,7 @@ private struct SettingsHeader: View {
                     .textFieldStyle(.plain)
                     .frame(width: 180)
                 if !search.isEmpty {
-                    Button(action: { search = "" }) {
+                    Button(action: ContinuumAnalytics.wrapButton("settings_search_clear", { search = "" })) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(t.fg3)
                     }
@@ -1155,7 +1155,7 @@ private struct SwatchToggle: View {
         HStack(spacing: 10) {
             ForEach(options, id: \.key) { opt in
                 let on = opt.key == value
-                Button { onChange(opt.key) } label: {
+                Button(action: ContinuumAnalytics.wrapButton("settings_visual_\(opt.key)", { onChange(opt.key) })) {
                     VStack(spacing: 6) {
                         opt.swatch
                             .frame(width: 92, height: 56)
@@ -1277,7 +1277,7 @@ private struct AccentPicker: View {
         HStack(spacing: 8) {
             ForEach(TahoeAccent.allCases) { a in
                 let on = a == value
-                Button { value = a } label: {
+                Button(action: ContinuumAnalytics.wrapButton("settings_accent_\(a.rawValue)", { value = a })) {
                     VStack(spacing: 6) {
                         Circle()
                             .fill(LinearGradient(colors: [a.glow.color, a.base.color, a.deep.color],
@@ -1361,9 +1361,9 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                 openRouterSetupPanel
             }
             if !deviceStatuses.isEmpty {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_provider_recheck_device", {
                     Task { await refreshDiscovery() }
-                } label: {
+                })) {
                     HStack(spacing: 6) {
                         TahoeIcon("refresh", size: 11, weight: .bold)
                         Text(isRefreshingDiscovery ? "Checking…" : "Re-check device")
@@ -1521,9 +1521,9 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                     .font(TahoeFont.body(12.5, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer(minLength: 0)
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_opencode_go_close", {
                     showOpenCodeGoSetupPanel = false
-                } label: {
+                })) {
                     TahoeIcon("xmark", size: 10, weight: .bold)
                         .foregroundStyle(t.fg3)
                 }
@@ -1537,9 +1537,9 @@ struct SettingsProviderRowsWithDeviceStatus: View {
             TextField("Workspace ID (from opencode.ai/workspace/…/go)", text: $openCodeGoWorkspaceDraft)
                 .textFieldStyle(.roundedBorder)
             HStack(spacing: 8) {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_opencode_go_save", {
                     Task { await saveOpenCodeGoCredentials() }
-                } label: {
+                })) {
                     Text(isSavingOpenCodeGoKey ? "Saving…" : "Save")
                         .font(TahoeFont.body(12, weight: .semibold))
                 }
@@ -1637,9 +1637,9 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                     .font(TahoeFont.body(12.5, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer(minLength: 0)
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_openrouter_close", {
                     showOpenRouterSetupPanel = false
-                } label: {
+                })) {
                     TahoeIcon("xmark", size: 10, weight: .bold)
                         .foregroundStyle(t.fg3)
                 }
@@ -1651,9 +1651,9 @@ struct SettingsProviderRowsWithDeviceStatus: View {
             SecureField("OpenRouter API key", text: $openRouterKeyDraft)
                 .textFieldStyle(.roundedBorder)
             HStack(spacing: 8) {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_openrouter_save", {
                     Task { await saveOpenRouterCredentials() }
-                } label: {
+                })) {
                     Text(isSavingOpenRouterKey ? "Saving…" : "Save")
                         .font(TahoeFont.body(12, weight: .semibold))
                 }
@@ -2258,9 +2258,9 @@ private struct ConnectedProviderRow: View {
                     onSelectModel: onSelectModel,
                     onOpenModelMenu: onOpenModelMenu
                 )
-                Button("Disconnect") {
+                Button("Disconnect", action: ContinuumAnalytics.wrapButton("settings_provider_disconnect", {
                     isEnabled = false
-                }
+                }))
                 .buttonStyle(.plain)
                 .font(TahoeFont.body(12, weight: .semibold))
                 .foregroundStyle(t.fg2)
@@ -2326,9 +2326,7 @@ private struct PopularProviderRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 12)
-            Button {
-                onConnect()
-            } label: {
+            Button(action: ContinuumAnalytics.wrapButton("settings_provider_connect", onConnect)) {
                 HStack(spacing: 4) {
                     TahoeIcon("plus", size: 10, weight: .bold)
                     Text("Connect")
@@ -2388,15 +2386,15 @@ private struct ConnectedCustomProviderSettingsRow: View {
             }
             Spacer(minLength: 12)
             customModelMenu
-            Button("Edit", action: onEdit)
+            Button("Edit", action: ContinuumAnalytics.wrapButton("settings_custom_provider_edit", onEdit))
                 .buttonStyle(.plain)
                 .font(TahoeFont.body(12, weight: .semibold))
                 .foregroundStyle(t.fg2)
-            Button("Disconnect") {
+            Button("Disconnect", action: ContinuumAnalytics.wrapButton("settings_custom_provider_disconnect", {
                 do {
                     try store.setEnabled(id: record.id, isEnabled: false)
                 } catch {}
-            }
+            }))
             .buttonStyle(.plain)
             .font(TahoeFont.body(12, weight: .semibold))
             .foregroundStyle(t.fg2)
@@ -2415,9 +2413,9 @@ private struct ConnectedCustomProviderSettingsRow: View {
             ForEach(sections) { section in
                 Section(section.title) {
                     ForEach(section.entries) { entry in
-                        Button {
+                        Button(action: ContinuumAnalytics.wrapButton("settings_custom_provider_select_model", {
                             onSelectModel(entry.id)
-                        } label: {
+                        })) {
                             HStack {
                                 Text(entry.displayName)
                                 if entry.id == selectedModelId {
@@ -2474,7 +2472,7 @@ private struct PopularCustomProviderSettingsRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 12)
-            Button(action: onConnect) {
+            Button(action: ContinuumAnalytics.wrapButton("settings_custom_provider_connect", onConnect)) {
                 HStack(spacing: 4) {
                     TahoeIcon("plus", size: 10, weight: .bold)
                     Text("Connect")
@@ -2522,7 +2520,7 @@ private struct AddCustomProviderSettingsRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 12)
-            Button(action: onConnect) {
+            Button(action: ContinuumAnalytics.wrapButton("settings_custom_provider_add_connect", onConnect)) {
                 HStack(spacing: 4) {
                     TahoeIcon("plus", size: 10, weight: .bold)
                     Text("Connect")
@@ -2593,9 +2591,9 @@ private struct ProviderModelMenu: View {
             ForEach(sections) { section in
                 Section(section.title) {
                     ForEach(section.entries) { entry in
-                        Button {
+                        Button(action: ContinuumAnalytics.wrapButton("settings_provider_select_model", {
                             onSelectModel(entry)
-                        } label: {
+                        })) {
                             HStack {
                                 Text(entry.displayName)
                                 if entry.id == selectedModelId {
@@ -2635,9 +2633,9 @@ private struct ProviderSetupActionButtons: View {
     var body: some View {
         HStack(spacing: 8) {
             ForEach(deviceStatus.setupActions) { action in
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_provider_setup_\(action.id)", {
                     onSetupAction?(providerId, action)
-                } label: {
+                })) {
                     Text(action.label)
                         .font(TahoeFont.body(11, weight: .semibold))
                 }
@@ -2747,9 +2745,9 @@ private struct FullDiskAccessBanner: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_open_full_disk_access", {
                     NSWorkspace.shared.open(Self.settingsURL)
-                } label: {
+                })) {
                     Text("Open Settings")
                         .font(TahoeFont.body(12, weight: .semibold))
                         .foregroundStyle(t.accent)

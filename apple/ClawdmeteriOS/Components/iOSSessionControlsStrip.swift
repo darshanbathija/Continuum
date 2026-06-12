@@ -46,7 +46,12 @@ struct iOSSessionControlsStrip: View {
             // `--permission-mode acceptEdits`; Codex toggles between
             // `--sandbox read-only` and `--sandbox workspace-write`.
             HStack(spacing: 8) {
-                Button(action: { Task { await togglePlanMode() } }) {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "toggle_plan_mode",
+                        {
+ Task { await togglePlanMode() } 
+                        }
+                    )) {
                     Label(session.status == .planning ? "Plan" : "Code",
                           systemImage: session.status == .planning ? "doc.text.below.ecg" : "play.fill")
                         .font(.caption.weight(.medium))
@@ -59,7 +64,7 @@ struct iOSSessionControlsStrip: View {
                 .accessibilityHint("Double-tap to switch between plan and code mode.")
                 .disabled(cursorSwapUnavailable)
 
-                Button(role: .destructive, action: { Task { await client.interruptSession(sessionId: session.id) } }) {
+                Button(role: .destructive, action: ContinuumAnalytics.wrapButton("interrupt_session", { Task { await client.interruptSession(sessionId: session.id) } })) {
                     Label("Interrupt", systemImage: "stop.fill")
                         .font(.caption.weight(.medium))
                 }
@@ -72,7 +77,12 @@ struct iOSSessionControlsStrip: View {
                 // Revive a degraded session by restarting its direct runtime.
                 // Gated on the paired Mac's wire version (older Macs 404 the route).
                 if session.status == .degraded && client.supportsRevive {
-                    Button(action: { Task { await client.revive(sessionId: session.id) } }) {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "revive_session",
+                            {
+ Task { await client.revive(sessionId: session.id) } 
+                            }
+                        )) {
                         Label("Revive", systemImage: "arrow.clockwise.circle")
                             .font(.caption.weight(.medium))
                     }
@@ -123,10 +133,10 @@ struct iOSSessionControlsStrip: View {
                 List {
                     Section("Reasoning effort") {
                         ForEach(ReasoningEffort.allCases, id: \.self) { effort in
-                            Button {
+                            Button(action: ContinuumAnalytics.wrapButton("select_effort_\(effort.rawValue)", {
                                 Task { await changeEffort(to: effort) }
                                 showingEffortSheet = false
-                            } label: {
+                            })) {
                                 HStack {
                                     Text(effortLabel(effort))
                                     Spacer()
@@ -169,7 +179,7 @@ struct iOSSessionControlsStrip: View {
 
     @ViewBuilder
     private func chip(_ label: String, accessibilityLabel: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: ContinuumAnalytics.wrapButton("session_chip_\(label.lowercased().replacingOccurrences(of: " ", with: "_"))", action)) {
             Text(label)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)

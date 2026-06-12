@@ -13,11 +13,15 @@ import ClawdmeterShared
 struct QuietDisclosure: DisclosureGroupStyle {
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "quietdisclosure_l16",
+                    {
                 withAnimation(.easeOut(duration: 0.15)) {
                     configuration.isExpanded.toggle()
                 }
-            } label: {
+            
+                    }
+                )) {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))

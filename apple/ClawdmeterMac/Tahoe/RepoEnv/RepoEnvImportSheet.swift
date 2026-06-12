@@ -133,7 +133,7 @@ struct RepoEnvImportSheet: View {
                     .foregroundStyle(t.fg3)
             }
             Spacer()
-            Button(action: onCancel) {
+            Button(action: ContinuumAnalytics.wrapButton("repo_env_import_close", onCancel)) {
                 TahoeIcon("x", size: 12, weight: .bold)
             }
             .buttonStyle(.borderless)
@@ -367,9 +367,9 @@ struct RepoEnvImportSheet: View {
                     .foregroundStyle(t.fg2)
                 Spacer(minLength: 0)
                 if isVendorImporting {
-                    Button("Cancel") {
+                    Button("Cancel", action: ContinuumAnalytics.wrapButton("repo_env_import_vendor_cancel", {
                         vendorImportTask?.cancel()
-                    }
+                    }))
                     .buttonStyle(.bordered)
                     .accessibilityIdentifier("settings.env.import.vendor-cancel")
                 }
@@ -495,20 +495,20 @@ struct RepoEnvImportSheet: View {
                 .font(TahoeFont.body(12, weight: .semibold))
                 .foregroundStyle(t.fg2)
             Spacer()
-            Button("Cancel", action: onCancel)
+            Button("Cancel", action: ContinuumAnalytics.wrapButton("repo_env_import_cancel", onCancel))
                 .disabled(isVendorImporting)
             if importSource == .paste {
-                Button("Import") {
+                Button("Import", action: ContinuumAnalytics.wrapButton("repo_env_import_submit", {
                     _ = onImport(draft)
-                }
+                }))
                 .buttonStyle(.borderedProminent)
                 .disabled(!canImport)
                 .accessibilityIdentifier("settings.env.import.save")
             } else {
-                Button(importSource.oneClickLabel) {
+                Button(importSource.oneClickLabel, action: ContinuumAnalytics.wrapButton("repo_env_import_vendor_submit", {
                     vendorImportTask?.cancel()
                     vendorImportTask = Task { await runVendorImport() }
-                }
+                }))
                 .buttonStyle(.borderedProminent)
                 .disabled(!canStartVendorImport || isVendorImporting)
                 .accessibilityIdentifier("settings.env.import.vendor-save")

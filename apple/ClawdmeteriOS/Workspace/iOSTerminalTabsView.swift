@@ -42,8 +42,18 @@ struct iOSTerminalTabsView: View {
         }
         .alert("New terminal", isPresented: $isAdding) {
             TextField("Pane title (optional)", text: $addDraft)
-            Button("Cancel", role: .cancel) { addDraft = "" }
-            Button("Create") { Task { await addPane() } }
+            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                    "cancel",
+                    {
+ addDraft = "" 
+                    }
+                ))
+            Button("Create", action: ContinuumAnalytics.wrapButton(
+                    "create",
+                    {
+ Task { await addPane() } 
+                    }
+                ))
         } message: {
             Text("Spawns a new terminal in this session.")
         }
@@ -52,8 +62,18 @@ struct iOSTerminalTabsView: View {
             set: { if !$0 { renameTarget = nil } }
         )) {
             TextField("Title", text: $renameDraft)
-            Button("Cancel", role: .cancel) { renameTarget = nil; renameDraft = "" }
-            Button("Save") { Task { await applyRename() } }
+            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                    "cancel",
+                    {
+ renameTarget = nil; renameDraft = "" 
+                    }
+                ))
+            Button("Save", action: ContinuumAnalytics.wrapButton(
+                    "save",
+                    {
+ Task { await applyRename() } 
+                    }
+                ))
         } message: {
             Text("Saved on the Mac and kept after the session list reloads.")
         }
@@ -84,17 +104,15 @@ struct iOSTerminalTabsView: View {
                     controlButton("Esc", bytes: [0x1B])
                     controlButton("Tab", bytes: [0x09])
                     controlButton("Clear", bytes: [0x0C])
-                    Button {
-                        terminalCommand = .reconnect(UUID())
-                    } label: {
+                    Button(action: ContinuumAnalytics.wrapButton("terminal_reconnect", { terminalCommand = .reconnect(UUID()) })) {
                         Label("Reconnect", systemImage: "arrow.clockwise")
                     }
                     #if canImport(UIKit)
-                    Button {
+                    Button(action: ContinuumAnalytics.wrapButton("terminal_paste", {
                         if let pasted = UIPasteboard.general.string, !pasted.isEmpty {
                             terminalCommand = .send(UUID(), pasted)
                         }
-                    } label: {
+                    })) {
                         Label("Paste", systemImage: "doc.on.clipboard")
                     }
                     #endif
@@ -159,9 +177,9 @@ struct iOSTerminalTabsView: View {
     }
 
     private func controlButton(_ title: String, bytes: [UInt8]) -> some View {
-        Button {
+        Button(action: ContinuumAnalytics.wrapButton("terminal_key_\(title.lowercased().replacingOccurrences(of: "-", with: "_"))", {
             terminalCommand = .raw(UUID(), bytes)
-        } label: {
+        })) {
             Text(title)
         }
     }
@@ -258,9 +276,13 @@ struct iOSTerminalTabsView: View {
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .contextMenu {
             if !pane.isPrimary {
-                Button(role: .destructive) {
+                Button(role: .destructive, action: ContinuumAnalytics.wrapButton(
+                        "close_terminal_tab",
+                        {
                     Task { await deletePane(pane) }
-                } label: {
+                
+                        }
+                    )) {
                     Label("Delete pane", systemImage: "trash")
                 }
             }

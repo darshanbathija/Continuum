@@ -760,11 +760,15 @@ struct GitDiffPane: View {
             presenting: pendingTrashFile
         ) { file in
             Button("Cancel", role: .cancel) {}
-            Button("Move to Trash", role: .destructive) {
+            Button("Move to Trash", role: .destructive, action: ContinuumAnalytics.wrapButton(
+                    "move_to_trash",
+                    {
                 runDestructiveChange {
                     await store.revertFile(file)
                 }
-            }
+            
+                    }
+                ))
         } message: { file in
             Text(file.path)
         }
@@ -785,7 +789,12 @@ struct GitDiffPane: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
             }
-            Button(action: { store.refresh() }) {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "gitdiffpane_l788",
+                    {
+ store.refresh() 
+                    }
+                )) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 10, weight: .semibold))
             }
@@ -852,10 +861,14 @@ struct GitDiffPane: View {
         let isExpanded = expandedFiles.contains(file.id)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Button(action: {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "gitdiffpane_l855",
+                        {
                     if isExpanded { expandedFiles.remove(file.id) }
                     else { expandedFiles.insert(file.id) }
-                }) {
+                
+                        }
+                    )) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.secondary)
@@ -914,20 +927,28 @@ struct GitDiffPane: View {
     private func fileActionButtons(_ file: GitDiffFile) -> some View {
         let actions = Self.fileActionDescriptors(for: file.changeState)
         if let stage = actions.stage {
-            Button(stage.title) {
+            Button(stage.title, action: ContinuumAnalytics.wrapButton(
+                    "title",
+                    {
                 Task { await store.stageFile(file) }
-            }
+            
+                    }
+                ))
             .buttonStyle(.borderless)
             .font(.system(size: 10))
             .help("Stage all hunks in this file")
             .accessibilityIdentifier(stage.accessibilityIdentifier)
         }
         if let revert = actions.revert {
-            Button(revert.title) {
+            Button(revert.title, action: ContinuumAnalytics.wrapButton(
+                    "title",
+                    {
                 runDestructiveChange {
                     await store.revertFile(file)
                 }
-            }
+            
+                    }
+                ))
             .buttonStyle(.borderless)
             .font(.system(size: 10))
             .foregroundStyle(.red)
@@ -935,18 +956,26 @@ struct GitDiffPane: View {
             .accessibilityIdentifier(revert.accessibilityIdentifier)
         }
         if let unstage = actions.unstage {
-            Button(unstage.title) {
+            Button(unstage.title, action: ContinuumAnalytics.wrapButton(
+                    "title",
+                    {
                 Task { await store.revertFile(file) }
-            }
+            
+                    }
+                ))
             .buttonStyle(.borderless)
             .font(.system(size: 10))
             .help("Move this staged file back to unstaged changes")
             .accessibilityIdentifier(unstage.accessibilityIdentifier)
         }
         if let trash = actions.trash {
-            Button(trash.title) {
+            Button(trash.title, action: ContinuumAnalytics.wrapButton(
+                    "title",
+                    {
                 pendingTrashFile = file
-            }
+            
+                    }
+                ))
             .buttonStyle(.borderless)
             .font(.system(size: 10))
             .foregroundStyle(.red)
@@ -996,24 +1025,38 @@ struct GitDiffPane: View {
     private func hunkActionButtons(_ hunk: GitDiffHunk) -> some View {
         let actions = Self.hunkActionDescriptors(for: hunk.changeState)
         if let stage = actions.stage {
-            Button(stage.title) { Task { await store.stage(hunk) } }
+            Button(stage.title, action: ContinuumAnalytics.wrapButton(
+                    "title",
+                    {
+ Task { await store.stage(hunk) } 
+                    }
+                ))
                 .buttonStyle(.borderless)
                 .font(.system(size: 10))
                 .accessibilityIdentifier(stage.accessibilityIdentifier)
         }
         if let revert = actions.revert {
-            Button(revert.title) {
+            Button(revert.title, action: ContinuumAnalytics.wrapButton(
+                    "title",
+                    {
                 runDestructiveChange {
                     await store.revert(hunk)
                 }
-            }
+            
+                    }
+                ))
                 .buttonStyle(.borderless)
                 .font(.system(size: 10))
                 .foregroundStyle(.red)
                 .accessibilityIdentifier(revert.accessibilityIdentifier)
         }
         if let unstage = actions.unstage {
-            Button(unstage.title) { Task { await store.revert(hunk) } }
+            Button(unstage.title, action: ContinuumAnalytics.wrapButton(
+                    "title",
+                    {
+ Task { await store.revert(hunk) } 
+                    }
+                ))
                 .buttonStyle(.borderless)
                 .font(.system(size: 10))
                 .accessibilityIdentifier(unstage.accessibilityIdentifier)
@@ -1077,7 +1120,12 @@ struct GitDiffPane: View {
     private var footer: some View {
         HStack(spacing: 8) {
             if !store.files.isEmpty {
-                Button(action: { showingCommitSheet = true }) {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "gitdiffpane_l1080",
+                        {
+ showingCommitSheet = true 
+                        }
+                    )) {
                     Label("Commit…", systemImage: "checkmark.seal")
                         .font(.system(size: 11, weight: .semibold))
                 }
@@ -1110,13 +1158,19 @@ struct GitDiffPane: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") {
+                Button("Cancel", action: ContinuumAnalytics.wrapButton(
+                        "cancel",
+                        {
                     showingCommitSheet = false
                     commitMessage = ""
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier(CommitSheetDescriptor.cancelAccessibilityIdentifier)
-                Button(descriptor.submit.title) {
+                Button(descriptor.submit.title, action: ContinuumAnalytics.wrapButton(
+                        "title",
+                        {
                     Task {
                         isCommitting = true
                         defer { isCommitting = false }
@@ -1126,7 +1180,9 @@ struct GitDiffPane: View {
                             showingCommitSheet = false
                         }
                     }
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .tint(terraCotta)

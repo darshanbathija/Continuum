@@ -138,7 +138,7 @@ struct SessionHoverActions: View {
         // always-on chip background was dropped so it reads as a light
         // affordance, not a heavy button; `codeHoverChrome` still draws a
         // subtle highlight when the cursor is on the glyph itself.
-        Button(action: onArchive) {
+        Button(action: ContinuumAnalytics.wrapButton("archive_session", onArchive)) {
             Image(systemName: "archivebox")
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(.secondary)

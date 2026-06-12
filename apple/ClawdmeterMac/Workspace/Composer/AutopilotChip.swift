@@ -9,7 +9,7 @@ struct AutopilotChip: View {
     let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
+        Button(action: ContinuumAnalytics.wrapButton("autopilot_toggle", onTap)) {
             HStack(spacing: 4) {
                 Image(systemName: isOn ? "bolt.fill" : "bolt.slash")
                     .font(.system(size: 10, weight: .semibold))

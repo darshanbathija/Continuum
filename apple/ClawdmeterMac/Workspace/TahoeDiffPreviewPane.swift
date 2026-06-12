@@ -173,13 +173,23 @@ struct TahoeDiffPreviewPane: View {
             .frame(width: 132)
             .labelsHidden()
             .accessibilityIdentifier(ToolbarDescriptor.layoutAccessibilityIdentifier)
-            Button("Next") { jumpToNextUnviewed(proxy: proxy) }
+            Button("Next", action: ContinuumAnalytics.wrapButton(
+                    "next",
+                    {
+ jumpToNextUnviewed(proxy: proxy) 
+                    }
+                ))
                 .font(TahoeFont.body(11, weight: .semibold))
                 .buttonStyle(PressableButtonStyle())
                 .disabled(!descriptor.nextEnabled)
                 .help("Jump to the next unviewed file")
                 .accessibilityIdentifier(ToolbarDescriptor.nextAccessibilityIdentifier)
-            Button("Mark all viewed") { markAllViewed() }
+            Button("Mark all viewed", action: ContinuumAnalytics.wrapButton(
+                    "mark_all_viewed",
+                    {
+ markAllViewed() 
+                    }
+                ))
                 .font(TahoeFont.body(11, weight: .semibold))
                 .buttonStyle(PressableButtonStyle())
                 .disabled(!descriptor.markAllEnabled)
@@ -224,26 +234,43 @@ struct TahoeDiffPreviewPane: View {
                         .truncationMode(.middle)
                         .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .trailing)))
                 }
-                Button("Mark reviewed") {
+                Button("Mark reviewed", action: ContinuumAnalytics.wrapButton(
+                        "mark_reviewed",
+                        {
                     try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .approved)
-                }
+                
+                        }
+                    ))
                 .font(TahoeFont.body(10.5, weight: .semibold))
                 .buttonStyle(PressableButtonStyle())
                 .accessibilityIdentifier(actions.reviewed.accessibilityIdentifier)
-                Button("Flag changes") {
+                Button("Flag changes", action: ContinuumAnalytics.wrapButton(
+                        "flag_changes",
+                        {
                     try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .changesRequested)
-                }
+                
+                        }
+                    ))
                 .font(TahoeFont.body(10.5, weight: .semibold))
                 .buttonStyle(PressableButtonStyle())
                 .accessibilityIdentifier(actions.flagChanges.accessibilityIdentifier)
-                Button(actions.markViewed.title) {
+                Button(actions.markViewed.title, action: ContinuumAnalytics.wrapButton(
+                        "title",
+                        {
                     markViewed(path)
-                }
+                
+                        }
+                    ))
                 .font(TahoeFont.body(10.5, weight: .semibold))
                 .buttonStyle(PressableButtonStyle())
                 .disabled(!actions.markViewed.isEnabled)
                 .accessibilityIdentifier(actions.markViewed.accessibilityIdentifier)
-                Button("Open") { open(path) }
+                Button("Open", action: ContinuumAnalytics.wrapButton(
+                        "open",
+                        {
+ open(path) 
+                        }
+                    ))
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .buttonStyle(PressableButtonStyle())
                     .accessibilityIdentifier(actions.open.accessibilityIdentifier)
@@ -259,19 +286,43 @@ struct TahoeDiffPreviewPane: View {
             }
             .contextMenu {
                 Button("Mark viewed") { markViewed(path) }.disabled(viewed)
-                Button("Mark file reviewed") { try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .approved) }
-                Button("Flag file changes") { try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .changesRequested) }
-                Button("Clear review disposition") { try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: nil) }
+                Button("Mark file reviewed", action: ContinuumAnalytics.wrapButton(
+                        "mark_file_reviewed",
+                        {
+ try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .approved) 
+                        }
+                    ))
+                Button("Flag file changes", action: ContinuumAnalytics.wrapButton(
+                        "flag_file_changes",
+                        {
+ try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .changesRequested) 
+                        }
+                    ))
+                Button("Clear review disposition", action: ContinuumAnalytics.wrapButton(
+                        "clear_review_disposition",
+                        {
+ try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: nil) 
+                        }
+                    ))
                 Button("Copy path") { copy(path) }
-                Button("Open file") { open(path) }
+                Button("Open file", action: ContinuumAnalytics.wrapButton(
+                        "open_file",
+                        {
+ open(path) 
+                        }
+                    ))
             }
         } else if line.kind == .hunk, let hunkId = line.hunkId {
             let collapsed = isHunkCollapsed(hunkId)
             let actions = Self.hunkActionDescriptors(collapsed: collapsed)
             HStack(spacing: 8) {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "tahoediffpreviewpane_l272",
+                        {
                     try? presentationStore.setDiffHunkCollapsed(sessionId: sessionId, hunkId: hunkId, collapsed: !collapsed)
-                } label: {
+                
+                        }
+                    )) {
                     Image(systemName: actions.toggle.systemImage)
                         .font(.system(size: 10, weight: .bold))
                 }
@@ -282,9 +333,13 @@ struct TahoeDiffPreviewPane: View {
                     .foregroundStyle(t.fg3)
                     .textSelection(.enabled)
                 Spacer()
-                Button("Explain") {
+                Button("Explain", action: ContinuumAnalytics.wrapButton(
+                        "explain",
+                        {
                     ComposerInsertionInbox.shared.enqueue(text: "Explain this diff hunk:\n\n```diff\n\(hunkText(hunkId))\n```\n", autoSend: false)
-                }
+                
+                        }
+                    ))
                 .font(TahoeFont.body(10.5, weight: .semibold))
                 .buttonStyle(PressableButtonStyle())
                 .accessibilityIdentifier(actions.explain.accessibilityIdentifier)
@@ -295,13 +350,21 @@ struct TahoeDiffPreviewPane: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(HunkActionDescriptors.rowAccessibilityIdentifier)
             .contextMenu {
-                Button(collapsed ? "Expand hunk" : "Collapse hunk") {
+                Button(collapsed ? "Expand hunk" : "Collapse hunk", action: ContinuumAnalytics.wrapButton(
+                        "collapsed_expand_hunk_collapse_hunk",
+                        {
                     try? presentationStore.setDiffHunkCollapsed(sessionId: sessionId, hunkId: hunkId, collapsed: !collapsed)
-                }
+                
+                        }
+                    ))
                 Button("Copy hunk") { copy(hunkText(hunkId)) }
-                Button("Explain hunk") {
+                Button("Explain hunk", action: ContinuumAnalytics.wrapButton(
+                        "explain_hunk",
+                        {
                     ComposerInsertionInbox.shared.enqueue(text: "Explain this diff hunk:\n\n```diff\n\(hunkText(hunkId))\n```\n", autoSend: false)
-                }
+                
+                        }
+                    ))
             }
         } else if presentationStore.snapshot.diffDisplayMode == .split {
             splitDiffLineRow(line)
@@ -319,9 +382,13 @@ struct TahoeDiffPreviewPane: View {
             .background(diffBackground(for: line))
             .contextMenu {
                 Button("Copy line") { copy(line.text) }
-                Button("Explain hunk") {
+                Button("Explain hunk", action: ContinuumAnalytics.wrapButton(
+                        "explain_hunk",
+                        {
                     ComposerInsertionInbox.shared.enqueue(text: "Explain this diff hunk:\n\n```diff\n\(line.text)\n```\n", autoSend: false)
-                }
+                
+                        }
+                    ))
             }
         }
     }
@@ -333,9 +400,13 @@ struct TahoeDiffPreviewPane: View {
         }
         .contextMenu {
             Button("Copy line") { copy(line.text) }
-            Button("Explain line") {
+            Button("Explain line", action: ContinuumAnalytics.wrapButton(
+                    "explain_line",
+                    {
                 ComposerInsertionInbox.shared.enqueue(text: "Explain this diff line:\n\n```diff\n\(line.text)\n```\n", autoSend: false)
-            }
+            
+                    }
+                ))
         }
     }
 

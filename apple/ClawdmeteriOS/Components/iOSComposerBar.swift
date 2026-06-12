@@ -94,7 +94,11 @@ struct iOSComposerBar: View {
         }
         .alert("Voice dictation coming soon",
                isPresented: $showingMicNotice) {
-            Button("OK", role: .cancel) {}
+            Button("OK", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                    "ok",
+                    {
+                    }
+                ))
         } message: {
             Text("On-device dictation needs the Speech entitlement — not wired yet. Type or paste for now.")
         }
@@ -152,7 +156,12 @@ struct iOSComposerBar: View {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.secondary.opacity(0.3), lineWidth: 0.5)
             )
-            Button(action: { removeAttachment(att.id) }) {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "remove_attachment",
+                    {
+ removeAttachment(att.id) 
+                    }
+                )) {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.white, .black.opacity(0.6))
                     .font(.system(size: 18))
@@ -205,7 +214,12 @@ struct iOSComposerBar: View {
     }
 
     private var micButton: some View {
-        Button(action: { showingMicNotice = true }) {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "mic_notice",
+                {
+ showingMicNotice = true 
+                }
+            )) {
             Image(systemName: "mic")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -329,7 +343,12 @@ struct iOSComposerBar: View {
     }
 
     private var sendButton: some View {
-        Button(action: { Task { await performSend() } }) {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "send_message",
+                {
+ Task { await performSend() } 
+                }
+            )) {
             Group {
                 if isSending {
                     ProgressView()

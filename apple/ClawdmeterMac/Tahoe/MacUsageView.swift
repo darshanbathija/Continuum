@@ -246,11 +246,11 @@ public struct MacUsageView: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: 440)
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("grant_usage_access", {
                     ProviderEnablement.usageDataAccessGranted = true
                     usageAccessGranted = true
                     usageHistoryStore?.forceRefresh()
-                } label: {
+                })) {
                     Text("Grant access")
                         .font(TahoeFont.body(12.5, weight: .semibold))
                         .foregroundStyle(.white)
@@ -593,7 +593,7 @@ private struct MenuBarCheckbox: View {
     @Binding var on: Bool
 
     var body: some View {
-        Button { on.toggle() } label: {
+        Button(action: ContinuumAnalytics.wrapButton("toggle_menu_bar", { on.toggle() })) {
             HStack(spacing: 6) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 3, style: .continuous)

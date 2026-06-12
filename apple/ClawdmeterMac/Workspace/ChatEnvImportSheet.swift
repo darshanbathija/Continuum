@@ -96,17 +96,25 @@ struct ChatEnvImportSheet: View {
             Spacer(minLength: 0)
 
             HStack {
-                Button("Cancel", action: onCancel)
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("cancel", onCancel))
                     .buttonStyle(.bordered)
                 Spacer(minLength: 0)
-                Button("Send without saving") {
+                Button("Send without saving", action: ContinuumAnalytics.wrapButton(
+                        "send_without_saving",
+                        {
                     onSendWithoutSaving()
-                }
+                
+                        }
+                    ))
                 .buttonStyle(.bordered)
                 .disabled(isWorking)
-                Button("Save & send") {
+                Button("Save & send", action: ContinuumAnalytics.wrapButton(
+                        "save_send",
+                        {
                     Task { await saveAndSend() }
-                }
+                
+                        }
+                    ))
                 .buttonStyle(.borderedProminent)
                 .disabled(isWorking || service == nil)
             }

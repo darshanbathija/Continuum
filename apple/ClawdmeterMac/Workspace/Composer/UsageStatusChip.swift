@@ -65,10 +65,14 @@ struct ModelEffortChip: View {
     @StateObject private var pickerScratchStore = ChatV2Store()
 
     var body: some View {
-        Button(action: {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "open_model_picker",
+                {
             guard !enabledChoices.isEmpty else { return }
             showingPopover.toggle()
-        }) {
+        
+                }
+            )) {
             HStack(spacing: 6) {
                 // Hug the text and center it instead of left-pinning inside a
                 // fixed 128–220pt slot (which clipped "Model · Effort" with an
@@ -183,7 +187,12 @@ struct ContextUsageChip: View {
     }
 
     var body: some View {
-        Button(action: { showingPopover.toggle() }) {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "open_context_usage",
+                {
+ showingPopover.toggle() 
+                }
+            )) {
             HStack(spacing: 5) {
                 ring
                 Text(percentText)
@@ -290,9 +299,13 @@ struct ModelEffortPopover: View {
     @ViewBuilder
     private func modelRow(_ entry: ModelCatalogEntry, shortcut: String?) -> some View {
         let isSelected = (selectedModelId == entry.id)
-        Button(action: {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "select_model",
+                {
             selectedModelId = entry.id
-        }) {
+        
+                }
+            )) {
             HStack(spacing: 6) {
                 Text(entry.displayName)
                     .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
@@ -344,9 +357,13 @@ struct ModelEffortPopover: View {
     @ViewBuilder
     private func effortRow(_ effort: ReasoningEffort) -> some View {
         let isSelected = (selectedEffort == effort)
-        Button(action: {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "select_effort",
+                {
             selectedEffort = effort
-        }) {
+        
+                }
+            )) {
             HStack(spacing: 6) {
                 Text(effortLabel(effort))
                     .font(.system(size: 12, weight: isSelected ? .semibold : .regular))

@@ -265,12 +265,16 @@ struct ChatThreadScroll: View {
                 // scrolled away from the bottom (a new turn lands while
                 // they're reading history). Click → scroll-to-last-item.
                 if !userPinnedToBottom, !projection.turns.isEmpty {
-                    Button(action: {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "jump_to_bottom",
+                            {
                         autoScrollTask?.cancel()
                         autoScrollTask = Task { @MainActor in
                             await jumpToBottom(proxy, animated: true)
                         }
-                    }) {
+                    
+                            }
+                        )) {
                         Label(
                             unreadWhileReading > 0 ? "Jump to latest (\(unreadWhileReading))" : "Jump to latest",
                             systemImage: "arrow.down.circle.fill"
@@ -415,7 +419,12 @@ struct ChatThreadScroll: View {
                 .font(TahoeFont.mono(10.5))
                 .foregroundStyle(t.fg3)
                 .frame(minWidth: 54, alignment: .trailing)
-            Button(action: { jumpToFindMatch(proxy, delta: -1) }) {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "find_previous_match",
+                    {
+ jumpToFindMatch(proxy, delta: -1) 
+                    }
+                )) {
                 Image(systemName: "chevron.up")
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
@@ -424,7 +433,12 @@ struct ChatThreadScroll: View {
             .disabled(findMatches.isEmpty)
             .help("Previous match (⌘⇧G)")
             .accessibilityLabel("Previous match")
-            Button(action: { jumpToFindMatch(proxy, delta: 1) }) {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "find_next_match",
+                    {
+ jumpToFindMatch(proxy, delta: 1) 
+                    }
+                )) {
                 Image(systemName: "chevron.down")
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
@@ -433,11 +447,15 @@ struct ChatThreadScroll: View {
             .disabled(findMatches.isEmpty)
             .help("Next match (⌘G)")
             .accessibilityLabel("Next match")
-            Button(action: {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "close_find_bar",
+                    {
                 findQuery = ""
                 selectedMatchIndex = nil
                 showingFindBar = false
-            }) {
+            
+                    }
+                )) {
                 Image(systemName: "xmark")
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
@@ -561,7 +579,9 @@ struct ChatThreadScroll: View {
     private var loadEarlierButton: some View {
         HStack {
             Spacer()
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "load_earlier_history",
+                    {
                 guard !isLoadingEarlierHistory else { return }
                 isLoadingEarlierHistory = true
                 userPinnedToBottom = false
@@ -571,7 +591,9 @@ struct ChatThreadScroll: View {
                         isLoadingEarlierHistory = false
                     }
                 }
-            } label: {
+            
+                    }
+                )) {
                 HStack(spacing: 6) {
                     if isLoadingEarlierHistory {
                         ProgressView().controlSize(.mini)
@@ -751,13 +773,17 @@ struct ChatThreadScroll: View {
     private func collapsedDisclosureRow(_ turn: TranscriptTurn) -> some View {
         let isOpen = expanded.contains(turn.id)
         if turn.hasCollapsedContent {
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "toggle_turn_disclosure",
+                    {
                 if isOpen {
                     expanded.remove(turn.id)
                 } else {
                     expanded.insert(turn.id)
                 }
-            } label: {
+            
+                    }
+                )) {
                 collapsedDisclosureLabel(
                     turn,
                     icon: isOpen ? "chevron.down" : "chevron.right"
@@ -798,9 +824,13 @@ struct ChatThreadScroll: View {
                 if turn.finalAssistant != nil || !artifacts.isEmpty {
                     HStack(spacing: 8) {
                         if turn.finalAssistant != nil {
-                            Button {
+                            Button(action: ContinuumAnalytics.wrapButton(
+                                    "preview_turn",
+                                    {
                                 onPreviewTurn()
-                            } label: {
+                            
+                                    }
+                                )) {
                                 transcriptChip(
                                     icon: WorkbenchPaneTab.browser.systemImage,
                                     title: "Preview",
@@ -812,9 +842,13 @@ struct ChatThreadScroll: View {
                             .accessibilityIdentifier("code.turn.preview")
                         }
                         ForEach(artifacts.prefix(6)) { artifact in
-                            Button {
+                            Button(action: ContinuumAnalytics.wrapButton(
+                                    "open_transcript_artifact",
+                                    {
                                 openTranscriptArtifact(artifact)
-                            } label: {
+                            
+                                    }
+                                )) {
                                 transcriptChip(
                                     icon: iconName(for: artifact.kind),
                                     title: artifact.filename,

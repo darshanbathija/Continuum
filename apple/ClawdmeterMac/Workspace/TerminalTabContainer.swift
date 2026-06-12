@@ -40,13 +40,17 @@ struct TerminalTabContainer: View {
             ForEach(secondaryPanes) { ref in
                 tabButton(id: ref.id, title: ref.title, isPrimary: ref.isPrimary, paneRef: ref)
             }
-            Button(action: {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "terminal_add_pane",
+                    {
                 Task {
                     if let pane = await model.addTerminalPane(sessionId: session.id) {
                         selectedSecondaryId = pane.id
                     }
                 }
-            }) {
+            
+                    }
+                )) {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .semibold))
                     .frame(width: 24, height: 24)
@@ -75,7 +79,12 @@ struct TerminalTabContainer: View {
     ) -> some View {
         let isSelected = isPrimary ? selectedSecondaryPane == nil : (id == selectedSecondaryId)
         return HStack(spacing: 4) {
-            Button(action: { selectedSecondaryId = id }) {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "terminal_tab_select",
+                    {
+ selectedSecondaryId = id 
+                    }
+                )) {
                 HStack(spacing: 4) {
                     Image(systemName: isPrimary ? "sparkle" : "terminal")
                         .font(.system(size: 9))
@@ -100,14 +109,18 @@ struct TerminalTabContainer: View {
             .buttonStyle(PressableButtonStyle())
             .accessibilityIdentifier(isPrimary ? "code.terminal.tab.primary" : "code.terminal.tab.secondary")
             if let paneRef, !paneRef.isPrimary {
-                Button(action: {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "terminal_tab_close",
+                        {
                     Task {
                         await model.closeTerminalPane(sessionId: session.id, paneRef: paneRef)
                         if selectedSecondaryId == paneRef.id {
                             selectedSecondaryId = nil
                         }
                     }
-                }) {
+                
+                        }
+                    )) {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(t.fg4)

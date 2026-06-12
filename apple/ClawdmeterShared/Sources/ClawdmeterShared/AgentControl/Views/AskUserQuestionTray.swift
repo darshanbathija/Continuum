@@ -92,9 +92,9 @@ public struct AskUserQuestionTray: View {
         option: AskUserQuestion.Option
     ) -> some View {
         let isSelected = (selections[q.header] ?? []).contains(option.label)
-        Button {
+        Button(action: ContinuumAnalytics.wrapButton("ask_user_option_select", {
             toggleSelection(for: q, option: option)
-        } label: {
+        })) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: isSelected
                     ? (q.multiSelect ? "checkmark.square.fill" : "largecircle.fill.circle")
@@ -131,10 +131,10 @@ public struct AskUserQuestionTray: View {
     private func sendButton(for q: AskUserQuestion.Question) -> some View {
         let picked = (selections[q.header] ?? [])
         let options = q.options.filter { picked.contains($0.label) }
-        Button {
+        Button(action: ContinuumAnalytics.wrapButton("ask_user_send_answer", {
             guard !options.isEmpty else { return }
             onSend(q, options)
-        } label: {
+        })) {
             HStack(spacing: 6) {
                 Image(systemName: "paperplane.fill")
                     .font(.system(size: 11, weight: .semibold))

@@ -72,12 +72,12 @@ public struct PlanCardView: View {
 
             HStack(spacing: 12) {
                 if let onReject {
-                    Button("Reject", action: onReject)
+                    Button("Reject", action: ContinuumAnalytics.wrapButton("plan_reject", onReject))
                         .buttonStyle(.bordered)
                         .controlSize(.large)
                 }
                 Spacer()
-                Button(action: onApprove) {
+                Button(action: ContinuumAnalytics.wrapButton("plan_approve", onApprove)) {
                     Text("Approve & run")
                         .fontWeight(.semibold)
                         .padding(.horizontal, 18)
@@ -121,9 +121,9 @@ public struct PlanCardView: View {
     private func fileCard(_ file: PlanFile) -> some View {
         let isExpanded = expandedFiles.contains(file.id)
         return VStack(alignment: .leading, spacing: 0) {
-            Button(action: {
+            Button(action: ContinuumAnalytics.wrapButton("plan_file_toggle", {
                 if isExpanded { expandedFiles.remove(file.id) } else { expandedFiles.insert(file.id) }
-            }) {
+            })) {
                 HStack(spacing: 8) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 11, weight: .semibold))

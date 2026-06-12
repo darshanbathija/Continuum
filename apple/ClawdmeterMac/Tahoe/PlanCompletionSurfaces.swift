@@ -102,11 +102,11 @@ struct RepoFilePickerView: View {
                             .buttonStyle(.plain)
                             .id(match.id)
                             .contextMenu {
-                                Button("Open") { open(match) }
-                                Button("Reveal in Finder") { reveal(match.path) }
-                                Button("Copy relative path") { copy(match.path) }
+                                Button("Open", action: ContinuumAnalytics.wrapButton("plan_match_open", { open(match) }))
+                                Button("Reveal in Finder", action: ContinuumAnalytics.wrapButton("plan_match_reveal", { reveal(match.path) }))
+                                Button("Copy relative path", action: ContinuumAnalytics.wrapButton("plan_match_copy_path", { copy(match.path) }))
                                 if let line = match.line {
-                                    Button("Copy path with line") { copy("\(match.path):\(line)") }
+                                    Button("Copy path with line", action: ContinuumAnalytics.wrapButton("plan_match_copy_path_line", { copy("\(match.path):\(line)") }))
                                 }
                             }
                         }
