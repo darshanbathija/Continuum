@@ -47,6 +47,32 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(PermissionModeChip.quickFlipTarget(current: .bypass, availableModes: cursorModes), .acceptEdits)
     }
 
+    func test_providerAccountChipDisplayLabelAndPreference() {
+        let primary = ProviderInstanceId.primary(kind: .claude)
+        let work = ProviderInstanceId(kind: .claude, name: "work")
+        let choices = [primary, work]
+
+        XCTAssertEqual(ProviderAccountChip.displayLabel(for: nil, in: choices), "Default")
+        XCTAssertEqual(ProviderAccountChip.displayLabel(for: work.wireId, in: choices), "work")
+
+        // The composer chip persists its pick through the same single source
+        // of truth Settings uses — CodePreferredAccountStore — so picking an
+        // account in the composer and in Settings can never disagree.
+        let defaults = UserDefaults.standard
+        let key = "clawdmeter.code.preferredAccountWireIdByKind"
+        let prior = defaults.dictionary(forKey: key)
+        defer {
+            if let prior { defaults.set(prior, forKey: key) }
+            else { defaults.removeObject(forKey: key) }
+        }
+        defaults.removeObject(forKey: key)
+
+        CodePreferredAccountStore.setPreferred(wireId: work.wireId, for: .claude)
+        XCTAssertEqual(CodePreferredAccountStore.preferredWireId(for: .claude), work.wireId)
+        CodePreferredAccountStore.setPreferred(wireId: nil, for: .claude)
+        XCTAssertNil(CodePreferredAccountStore.preferredWireId(for: .claude))
+    }
+
     func test_rootCommandRoutingRegistersCodeTabShortcutBackedActions() {
         let enabledCommands = Dictionary(uniqueKeysWithValues: MacRootCommandRouting
             .codeTabCommands(canOpenChatTab: true, canOpenTerminalTab: true)

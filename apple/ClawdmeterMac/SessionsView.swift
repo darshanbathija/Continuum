@@ -700,6 +700,7 @@ public final class SessionsModel: ObservableObject {
     }
 
     public func prepareNewSession(in repoKey: String?) {
+        abandonInFlightQuickSpawnProvisionalSessions()
         selectedWorkspaceDraftTabId = nil
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
@@ -707,6 +708,29 @@ public final class SessionsModel: ObservableObject {
         openSessionId = nil
         selectedRepoKey = repoKey
         showingNewSessionSheet = true
+    }
+
+    /// Tear down optimistic "+" rows that are still provisioning. Opening the
+    /// New Session sheet (⌥-click "+", Cmd+N, etc.) must never leave a
+    /// background quick-spawn competing with the sheet's fresh worktree spawn.
+    private func abandonInFlightQuickSpawnProvisionalSessions() {
+        let abandoning = provisioningSessionIds
+        guard !abandoning.isEmpty else { return }
+        for id in abandoning {
+            provisioningSessionIds.remove(id)
+            provisionalLaunchConfigurations.removeValue(forKey: id)
+            provisioningProgress[id] = nil
+            CityNamer.shared.release(id)
+        }
+        if let openId = openSessionId, abandoning.contains(openId) {
+            openSessionId = nil
+        }
+        Task { @MainActor in
+            for id in abandoning {
+                await AppDelegate.runtime?.agentControlServer.teardownHarnessSession(id)
+                try? await registry.delete(id: id)
+            }
+        }
     }
 
     /// One-click "+ New workspace" for a known repo. Bypasses the New

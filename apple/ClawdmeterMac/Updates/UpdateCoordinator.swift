@@ -392,7 +392,8 @@ final class UpdateCoordinator: ObservableObject {
             state = .upToDate(lastCheckedAt: checkedAt)
         case .updateAvailable(let update):
             // Don't restore if we're already at or past the advertised version.
-            if update.version.compare(currentVersion, options: .numeric) != .orderedDescending {
+            guard let current = currentVersionProvider() else { return }
+            if update.version.compare(current, options: .numeric) != .orderedDescending {
                 UpdateStatusPersistence.clear()
                 return
             }

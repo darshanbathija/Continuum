@@ -64,6 +64,9 @@ struct ComposerInputCore: View {
     var minimalChrome: Bool = false
     /// Optional override for the text field placeholder.
     var placeholderOverride: String? = nil
+    /// When set, shows a provider-account chip (Claude/Codex multi-account)
+    /// to the right of the permission-mode chip. nil wireId = primary account.
+    var selectedAccountWireId: Binding<String?>? = nil
 
     struct PrimaryActionDescriptor: Equatable {
         enum Kind: Equatable {
@@ -282,6 +285,7 @@ struct ComposerInputCore: View {
     /// §Motion). Toggled true while a turn runs so the repeatForever animation
     /// oscillates the rim opacity; held false (static rim) under Reduce Motion.
     @State private var rimPulse: Bool = false
+    @State private var accountChoices: [ProviderInstanceId] = []
     @ObservedObject private var insertionInbox = ComposerInsertionInbox.shared
     /// Optional: when set, MentionPicker uses these as the source of
     /// suggestions (parent passes session-derived sources + open sessions).
@@ -445,6 +449,9 @@ struct ComposerInputCore: View {
         }
         .onChange(of: store.agent) { _, _ in
             updatePaletteTriggers(text: store.text)
+        }
+        .task(id: store.agent) {
+            await refreshAccountChoices()
         }
         .onAppear {
             skillCatalog.projectSkillsRoot = projectSkillsRoot
@@ -644,6 +651,7 @@ struct ComposerInputCore: View {
                 )
                 .layoutPriority(1)
             }
+            providerAccountChip
             queueFollowUpButton
 
             switch store.modeKind {
@@ -685,6 +693,7 @@ struct ComposerInputCore: View {
                     onChange: { newMode in onChangePermissionMode?(newMode) }
                 )
             }
+            providerAccountChip
             Spacer(minLength: 8)
             let resolvedInfo = usageStatus ?? Self.placeholderUsage(modelId: store.modelId, effort: store.effort, catalog: catalog)
             ModelEffortChip(
@@ -739,6 +748,49 @@ struct ComposerInputCore: View {
                     .accessibilityHidden(true)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var providerAccountChip: some View {
+        if let selectedAccountWireId, accountChoices.count >= 2 {
+            ProviderAccountChip(
+                accountChoices: accountChoices,
+                selectedWireId: selectedAccountWireId.wrappedValue,
+                onSelect: { wireId in
+                    selectedAccountWireId.wrappedValue = wireId
+                    CodePreferredAccountStore.setPreferred(wireId: wireId, for: store.agent)
+                }
+            )
+            .layoutPriority(1)
+        }
+    }
+
+    @MainActor
+    private func refreshAccountChoices() async {
+        guard selectedAccountWireId != nil else {
+            accountChoices = []
+            return
+        }
+        guard let registry = AppDelegate.runtime?.providerInstanceRegistry,
+              ProviderInstanceEnvironment.configDirVariable(for: store.agent) != nil else {
+            accountChoices = []
+            selectedAccountWireId?.wrappedValue = nil
+            return
+        }
+        let choices = await registry.instances(for: store.agent)
+        accountChoices = choices
+        guard choices.count >= 2 else {
+            selectedAccountWireId?.wrappedValue = nil
+            return
+        }
+        if let pinned = selectedAccountWireId?.wrappedValue,
+           !choices.contains(where: { $0.wireId == pinned }) {
+            selectedAccountWireId?.wrappedValue = nil
+        }
+        if selectedAccountWireId?.wrappedValue == nil,
+           let persisted = CodePreferredAccountStore.providerInstanceId(for: store.agent, available: choices) {
+            selectedAccountWireId?.wrappedValue = persisted
         }
     }
 

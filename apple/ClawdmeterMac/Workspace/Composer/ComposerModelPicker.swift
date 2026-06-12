@@ -456,6 +456,7 @@ public struct ComposerModelPicker: View {
             .accessibilityIdentifier("code.composer.model-picker.favorite.\(entry.choice.id).\(accessibilityToken(entry.model.id))")
 
             Button {
+                focusedRowIndex = index
                 select(entry: entry)
             } label: {
                 HStack(spacing: 10) {
@@ -524,6 +525,10 @@ public struct ComposerModelPicker: View {
                 }
             )
         )
+        .onHover { hovering in
+            guard hovering else { return }
+            focusedRowIndex = index
+        }
     }
 
     @ViewBuilder
@@ -766,6 +771,9 @@ public struct ComposerModelPicker: View {
     // MARK: - Selection
 
     private func select(entry: VisibleRowEntry) {
+        if let idx = visibleEntries.firstIndex(where: { $0.compositeId == entry.compositeId }) {
+            focusedRowIndex = idx
+        }
         let choice = entry.choice
         if mode == .multi {
             if !store.isChoiceSelected(choice) {

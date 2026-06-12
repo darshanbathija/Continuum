@@ -131,4 +131,26 @@ final class OpenCodeGoQuotaClientTests: XCTestCase {
         XCTAssertFalse(OpenCodeGoCredentials.isValidWorkspaceId("has space"))
         XCTAssertFalse(OpenCodeGoCredentials.isValidWorkspaceId(""))
     }
+
+    func test_extractWorkspaceId_fromDashboardURL() {
+        XCTAssertEqual(
+            OpenCodeGoBrowserAuthImporter.extractWorkspaceId(from: "https://opencode.ai/workspace/wrk_01KS8WZZ3M8TK1JD8SCKPFSSA7/go"),
+            "wrk_01KS8WZZ3M8TK1JD8SCKPFSSA7"
+        )
+        XCTAssertNil(OpenCodeGoBrowserAuthImporter.extractWorkspaceId(from: "https://opencode.ai/zen"))
+    }
+
+    func test_discoverWorkspaceId_prefersSavedUserDefaults() {
+        let key = OpenCodeGoCredentials.workspaceDefaultsKey
+        let prior = UserDefaults.standard.string(forKey: key)
+        UserDefaults.standard.set("wrk_saved123", forKey: key)
+        defer {
+            if let prior {
+                UserDefaults.standard.set(prior, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        XCTAssertEqual(OpenCodeGoBrowserAuthImporter.discoverWorkspaceId(), "wrk_saved123")
+    }
 }

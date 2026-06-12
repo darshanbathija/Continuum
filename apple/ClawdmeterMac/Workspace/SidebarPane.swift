@@ -1625,6 +1625,22 @@ struct SidebarPane: View {
         }
     }
 
+    private var isOptionKeyPressed: Bool {
+        NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.option)
+    }
+
+    /// Normal click: instant Codex quick-spawn. ⌥-click: full New Session sheet
+    /// so the user can pick a different provider/model — never both.
+    private func handleRepoNewSessionClick(repoKey: String, onAdd: (() -> Void)?) {
+        if isOptionKeyPressed {
+            model.prepareNewSession(in: repoKey)
+        } else if let onAdd {
+            onAdd()
+        } else {
+            model.quickSpawnInRepo(repoKey)
+        }
+    }
+
     private func repoHeader(
         _ repo: AgentRepo,
         isExpanded: Bool,
@@ -1684,7 +1700,7 @@ struct SidebarPane: View {
                 gearMenu
             }
             Button {
-                if let onAdd { onAdd() } else { model.quickSpawnInRepo(repo.key) }
+                handleRepoNewSessionClick(repoKey: repo.key, onAdd: onAdd)
             } label: {
                 TahoeIcon("plus", size: 11, weight: .bold)
                     .foregroundStyle(t.fg3)
@@ -1694,12 +1710,6 @@ struct SidebarPane: View {
             .buttonStyle(PressableButtonStyle())
             .help("New workspace — Codex · GPT-5.5 · extra-high effort · plan mode (option-click to customize)")
             .accessibilityIdentifier("code.repo.new-session")
-            // Option/Alt-click escape hatch: power users who want to
-            // pick a different agent/model/effort/path get the full
-            // sheet by holding Option while clicking the "+".
-            .simultaneousGesture(TapGesture().modifiers(.option).onEnded {
-                model.prepareNewSession(in: repo.key)
-            })
         }
         .padding(.horizontal, 10)
         .padding(.vertical, subtitle == nil ? 6 : 5)
