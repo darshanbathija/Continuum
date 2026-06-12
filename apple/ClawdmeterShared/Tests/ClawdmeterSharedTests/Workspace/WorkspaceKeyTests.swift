@@ -59,10 +59,57 @@ final class WorkspaceKeyTests: XCTestCase {
         XCTAssertEqual(session.workspaceBranchLabel, "kolkata")
     }
 
+    func test_workspaceSessionTabLabelDefaultsToRepoDashBranchWithoutSummary() {
+        let session = makeSession(
+            repo: "/Users/dev/conductor/repos/Clawdmeter",
+            repoDisplayName: "Clawdmeter",
+            cwd: "/Users/dev/conductor/workspaces/Clawdmeter/kigali"
+        )
+
+        XCTAssertEqual(
+            WorkspaceSessionTabLabel.labels(for: session),
+            WorkspaceSessionTabLabel.Labels(title: "Clawdmeter - kigali", subtitle: "")
+        )
+    }
+
+    func test_workspaceSessionTabLabelUsesFiveWordSummaryAndBranchSubtitle() {
+        let session = makeSession(
+            repo: "/Users/dev/conductor/repos/Clawdmeter",
+            repoDisplayName: "Clawdmeter",
+            cwd: "/Users/dev/conductor/workspaces/Clawdmeter/kigali",
+            goal: "Fix the cramped workspace tab labels for Conductor sessions"
+        )
+
+        XCTAssertEqual(
+            WorkspaceSessionTabLabel.labels(for: session),
+            WorkspaceSessionTabLabel.Labels(
+                title: "Fix the cramped workspace tab…",
+                subtitle: "kigali"
+            )
+        )
+    }
+
+    func test_workspaceSessionTabLabelPrefersCustomNameOverGoal() {
+        let session = makeSession(
+            repo: "/Users/dev/conductor/repos/Clawdmeter",
+            repoDisplayName: "Clawdmeter",
+            cwd: "/Users/dev/conductor/workspaces/Clawdmeter/kigali",
+            goal: "This goal should not win",
+            customName: "Ship tab rename polish"
+        )
+
+        XCTAssertEqual(
+            WorkspaceSessionTabLabel.labels(for: session),
+            WorkspaceSessionTabLabel.Labels(title: "Ship tab rename polish", subtitle: "kigali")
+        )
+    }
+
     private func makeSession(
         repo: String,
         repoDisplayName: String = "repo",
         cwd: String?,
+        goal: String? = nil,
+        customName: String? = nil,
         provisioning: WorktreeProvisioningMetadata? = nil,
         mode: SessionMode = .worktree,
         kind: SessionKind = .code,
@@ -75,7 +122,7 @@ final class WorkspaceKeyTests: XCTestCase {
             repoDisplayName: repoDisplayName,
             agent: .claude,
             model: nil,
-            goal: nil,
+            goal: goal,
             worktreePath: cwd,
             provisioning: provisioning,
             tmuxWindowId: nil,
@@ -88,6 +135,7 @@ final class WorkspaceKeyTests: XCTestCase {
             mode: mode,
             archivedAt: archived ? Date(timeIntervalSince1970: 99) : nil,
             runtimeCwd: cwd,
+            customName: customName,
             kind: kind
         )
     }

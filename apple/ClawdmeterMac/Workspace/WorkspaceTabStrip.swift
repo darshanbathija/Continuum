@@ -206,9 +206,10 @@ struct WorkspaceTabStrip: View {
         let isActive = activeTerminalTabId == nil
             && activeDocumentTabId == nil
             && session.id == activeSessionId
+        let labels = WorkspaceSessionTabLabel.labels(for: session)
         return tabRow(
-            title: title(for: session),
-            subtitle: workspaceSubtitle(for: session),
+            title: labels.title,
+            subtitle: labels.subtitle,
             systemImage: nil,
             isActive: isActive,
             labelWidth: labelWidth,
@@ -312,16 +313,18 @@ struct WorkspaceTabStrip: View {
                             .font(.system(size: 10.5, weight: .semibold))
                             .foregroundStyle(isActive ? t.accent : t.fg3)
                     }
-                    VStack(alignment: .leading, spacing: 1) {
+                    VStack(alignment: .leading, spacing: subtitle.isEmpty ? 0 : 1) {
                         Text(title)
                             .font(TahoeFont.body(12.5, weight: isActive ? .semibold : .medium))
                             .foregroundStyle(isActive ? t.fg : t.fg2)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        Text(subtitle)
-                            .font(TahoeFont.body(9.5))
-                            .foregroundStyle(t.fg3)
-                            .lineLimit(1)
+                        if !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(TahoeFont.body(9.5))
+                                .foregroundStyle(t.fg3)
+                                .lineLimit(1)
+                        }
                     }
                     .frame(width: labelWidth, alignment: .leading)
                 }
@@ -358,23 +361,6 @@ struct WorkspaceTabStrip: View {
                     .padding(.horizontal, 8)
             }
         }
-    }
-
-    private func title(for session: AgentSession) -> String {
-        if let custom = session.customName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !custom.isEmpty {
-            return custom
-        }
-        if let goal = session.goal?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !goal.isEmpty {
-            return goal
-        }
-        return session.displayLabel
-    }
-
-    private func workspaceSubtitle(for session: AgentSession) -> String {
-        let last = (WorkspaceKey.workspacePath(for: session) as NSString).lastPathComponent
-        return last.isEmpty ? session.agent.rawValue : "\(session.agent.rawValue) - \(last)"
     }
 
     private func terminalTitle(for tab: WorkspaceTerminalTab, session: AgentSession) -> String {
