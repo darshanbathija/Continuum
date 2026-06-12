@@ -52,6 +52,9 @@ struct CenterThread: View {
     /// a genuine in-session user edit. Seeded in `.onAppear`.
     @State private var lastModelChipSessionId: UUID?
     @State private var lastEffortChipSessionId: UUID?
+    /// When the composer contains vendor env vars, hold the detection here
+    /// and surface `ChatEnvImportSheet` before the prompt reaches the model.
+    @State private var pendingChatEnvImport: PendingChatEnvImport?
 
     init(
         session: AgentSession,
@@ -139,6 +142,31 @@ struct CenterThread: View {
         .sheet(isPresented: $showingAutopilotConfirm) {
             autopilotConfirm
         }
+        .sheet(item: $pendingChatEnvImport) { pending in
+            ChatEnvImportSheet(
+                detection: pending.detection,
+                workspaceId: pending.workspaceId,
+                envSetIds: pending.envSetIds,
+                service: AppDelegate.runtime?.vendorProvisioningService,
+                envStore: AppDelegate.runtime?.repoEnvStore,
+                onSaveAndSend: {
+                    let keys = pending.detection.keys
+                    pendingChatEnvImport = nil
+                    composerStore.text = ChatEnvPasteDetector.redactEnvLines(
+                        from: composerStore.text,
+                        keys: keys
+                    )
+                    Task { await performBoundSend(skipEnvCheck: true) }
+                },
+                onSendWithoutSaving: {
+                    pendingChatEnvImport = nil
+                    Task { await performBoundSend(skipEnvCheck: true) }
+                },
+                onCancel: {
+                    pendingChatEnvImport = nil
+                }
+            )
+        }
         .onChange(of: session.status) { _, newValue in
             if newValue == .running {
                 dispatchedQueuedTurnForCurrentIdle = false
@@ -162,6 +190,7 @@ struct CenterThread: View {
         .onChange(of: session.id) { _, _ in
             showingTerminalOverlay = false
             showingAutopilotConfirm = false
+            pendingChatEnvImport = nil
             pendingBypassMode = false
             checkpointStatusText = nil
             isDispatchingQueuedSend = false
@@ -851,7 +880,24 @@ struct CenterThread: View {
         }
     }
 
-    private func performBoundSend() async {
+    private func performBoundSend(skipEnvCheck: Bool = false) async {
+        if !skipEnvCheck,
+           !isReadOnly,
+           session.kind == .code,
+           let workspace = resolveWorkspace(for: session),
+           let chatStore = model.chatStore(for: session),
+           let detection = ChatEnvPasteDetector.detect(
+               in: composerStore.text,
+               contextHints: ChatEnvPasteDetector.contextHints(from: chatStore.messages)
+           ) {
+            pendingChatEnvImport = PendingChatEnvImport(
+                detection: detection,
+                workspaceId: workspace.id,
+                envSetIds: resolveEnvSetIds(for: session, workspaceId: workspace.id)
+            )
+            return
+        }
+
         composerStore.beginSend()
         let draftText = composerStore.text
         let draftAttachments = composerStore.attachments
@@ -1542,7 +1588,41 @@ struct CenterThread: View {
         return fresh && selected && (claudePtyReady || harnessReady)
     }
 
+    private func resolveWorkspace(for session: AgentSession) -> CodeWorkspaceRecord? {
+        guard let runtime = AppDelegate.runtime else { return nil }
+        if let workspaceId = session.workspaceId,
+           let workspace = runtime.workspaceStore.workspace(id: workspaceId) {
+            return workspace
+        }
+        if let repoKey = session.repoKey {
+            return runtime.workspaceStore.workspace(forRepoRoot: repoKey)
+        }
+        return nil
+    }
+
+    private func resolveEnvSetIds(for session: AgentSession, workspaceId: UUID) -> Set<UUID> {
+        guard let runtime = AppDelegate.runtime else { return [] }
+        let envStore = runtime.repoEnvStore
+        _ = envStore.ensureDefaultSet(workspaceId: workspaceId)
+        let sets = envStore.sets(for: workspaceId)
+        if let envSetId = session.envSetId,
+           sets.contains(where: { $0.id == envSetId }) {
+            return [envSetId]
+        }
+        if let active = sets.first(where: \.isActive) ?? sets.first {
+            return [active.id]
+        }
+        return []
+    }
+
     private var terraCotta: Color { SessionsV2Theme.accent }
+}
+
+private struct PendingChatEnvImport: Identifiable {
+    let id = UUID()
+    let detection: ChatEnvPasteDetection
+    let workspaceId: UUID
+    let envSetIds: Set<UUID>
 }
 
 private struct BypassPermissionWarningText: NSViewRepresentable {
