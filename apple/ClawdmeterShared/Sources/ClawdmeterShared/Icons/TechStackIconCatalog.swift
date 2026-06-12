@@ -172,8 +172,7 @@ public enum TechStackIconCatalog {
         "hs": "haskell",
         "zig": "zig",
         "r": "python",
-        "pl": "perl",
-        "pm": "perl",
+        // No stack-perl asset shipped — let .pl/.pm fall back to the doc glyph.
         // Markup & styling
         "html": "html5",
         "htm": "html5",

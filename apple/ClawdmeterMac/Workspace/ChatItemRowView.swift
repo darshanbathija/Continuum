@@ -532,6 +532,7 @@ struct ChatItemRowContent: View {
         }
     }
 
+    @ViewBuilder
     private func metaRow(_ msg: SessionChatStore.ChatMessage) -> some View {
         if msg.title == "Thinking" {
             ThinkingActionRow(summary: msg.body)
