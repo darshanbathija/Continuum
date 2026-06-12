@@ -1,5 +1,5 @@
 import XCTest
-@testable import ClawdmeterMac
+@testable import Clawdmeter
 
 final class OpencodeSupportedProviderCatalogTests: XCTestCase {
     func test_splitSeparatesFeaturedAndMoreProviders() {
