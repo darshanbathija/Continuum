@@ -381,13 +381,21 @@ final class UpdateCoordinator: ObservableObject {
 
     private func restorePersistedStatusIfNeeded() {
         guard canUseSparkle else { return }
-        guard case .idle = state else { return }
+        switch state {
+        case .idle, .automaticChecksDisabled: break
+        default: return
+        }
         guard let record = UpdateStatusPersistence.load() else { return }
         switch record {
         case .upToDate(let checkedAt):
             lastCheckedAt = checkedAt
             state = .upToDate(lastCheckedAt: checkedAt)
         case .updateAvailable(let update):
+            // Don't restore if we're already at or past the advertised version.
+            if update.version.compare(currentVersionProvider(), options: .numeric) != .orderedDescending {
+                UpdateStatusPersistence.clear()
+                return
+            }
             currentUpdate = update
             state = .updateAvailable(update)
         }
@@ -480,10 +488,12 @@ extension UpdateCoordinator: SparkleUpdateDriverDelegate {
     func updateDriverDidStartInstalling(_ update: SparkleUpdateInfo?) {
         if let update { currentUpdate = update }
         state = .installing(update ?? currentUpdate)
+        UpdateStatusPersistence.clear()
     }
 
     func updateDriverDidInstallAndAwaitRelaunch(version: String?) {
         state = .installedRelaunchPending(version: version ?? currentUpdate?.displayVersion)
+        UpdateStatusPersistence.clear()
     }
 
     func updateDriverDidCancel(version: String?) {
@@ -497,6 +507,7 @@ extension UpdateCoordinator: SparkleUpdateDriverDelegate {
     }
 
     func updateDriverPreferencesChanged() {
+        isRefreshingUpdateStatus = false
         syncDriverPreferences()
     }
 }

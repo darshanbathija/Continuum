@@ -3,7 +3,9 @@ import Foundation
 /// Persists the last completed Sparkle probe so manual "Check for Updates"
 /// can surface status immediately instead of waiting on the network.
 enum UpdateStatusPersistence {
-    private static let storageKey = "update.lastKnownStatus"
+    // Versioned, namespaced key: bump the version suffix when Record's shape changes
+    // so old incompatible blobs are silently dropped rather than decoded incorrectly.
+    private static let storageKey = "com.clawdmeter.mac.update.lastKnownStatus.v1"
 
     enum Record: Codable, Equatable {
         case upToDate(lastCheckedAt: Date?)

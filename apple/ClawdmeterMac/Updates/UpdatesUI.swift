@@ -433,9 +433,6 @@ struct UpdatePopoverContent: View {
     }
 
     private var headerTitle: String {
-        if coordinator.wrapped?.isRefreshingUpdateStatus == true {
-            return "Refreshing update status"
-        }
         switch coordinator.wrapped?.state {
         case .updateAvailable(let update):
             return "Continuum \(update.displayVersion) is available"
