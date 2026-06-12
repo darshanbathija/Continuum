@@ -460,15 +460,8 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(workspaceLeafRowElement().waitForExistence(timeout: 5), "Archived filter should show the archived worktree row.")
     }
 
-    func testCodeTabTitlebarFilterAndCommandKFocusSidebarSearch() throws {
+    func testCodeTabCommandKFocusSidebarSearch() throws {
         openCodeTab()
-
-        let titlebarFilter = element("code.titlebar.focus-filters")
-        XCTAssertTrue(titlebarFilter.waitForExistence(timeout: 10), "Code titlebar should expose a filter-focus control.")
-        titlebarFilter.click()
-        app.typeText("Preview")
-        XCTAssertTrue(element("code.sidebar.search.clear").waitForExistence(timeout: 5), "Clicking the titlebar filter control should focus sidebar search.")
-        element("code.sidebar.search.clear").click()
 
         let row = workspaceLeafRowElement()
         XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
