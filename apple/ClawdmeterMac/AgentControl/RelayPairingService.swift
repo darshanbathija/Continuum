@@ -368,6 +368,7 @@ public final class RelayPairingService: ObservableObject {
         }
         self.phase = .keyExchanged
         self.refreshSummary()
+        PostHogIdentity.onRelayPairingCompleted(record: record)
         return derived
     }
 
@@ -385,6 +386,7 @@ public final class RelayPairingService: ObservableObject {
         // successful pairing.
         pairingStore.clear()
         relayPairingLogger.info("Relay pairing state reset to .unpaired")
+        PostHogIdentity.refreshFromCurrentState()
     }
 
     // MARK: - Summary
