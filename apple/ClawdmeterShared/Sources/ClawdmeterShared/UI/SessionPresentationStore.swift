@@ -146,6 +146,8 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
     public var exportedSessionURLs: [String]
     public var notificationPreferences: NotificationPresentationPreferences
     public var externalEditorIdentifier: String?
+    public var lastDictationTab: DictationComposerTarget?
+    public var voicePresentationPreferences: VoicePresentationPreferences
     public var updatedAt: Date
 
     public init(
@@ -171,6 +173,8 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         exportedSessionURLs: [String] = [],
         notificationPreferences: NotificationPresentationPreferences = NotificationPresentationPreferences(),
         externalEditorIdentifier: String? = nil,
+        lastDictationTab: DictationComposerTarget? = nil,
+        voicePresentationPreferences: VoicePresentationPreferences = VoicePresentationPreferences(),
         updatedAt: Date = Date()
     ) {
         self.pinnedSessionIds = pinnedSessionIds
@@ -195,6 +199,8 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         self.exportedSessionURLs = exportedSessionURLs
         self.notificationPreferences = notificationPreferences
         self.externalEditorIdentifier = externalEditorIdentifier
+        self.lastDictationTab = lastDictationTab
+        self.voicePresentationPreferences = voicePresentationPreferences
         self.updatedAt = updatedAt
     }
 
@@ -222,6 +228,9 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         self.exportedSessionURLs = try c.decodeIfPresent([String].self, forKey: .exportedSessionURLs) ?? []
         self.notificationPreferences = try c.decodeIfPresent(NotificationPresentationPreferences.self, forKey: .notificationPreferences) ?? NotificationPresentationPreferences()
         self.externalEditorIdentifier = try c.decodeIfPresent(String.self, forKey: .externalEditorIdentifier)
+        self.lastDictationTab = try c.decodeIfPresent(DictationComposerTarget.self, forKey: .lastDictationTab)
+        self.voicePresentationPreferences = try c.decodeIfPresent(VoicePresentationPreferences.self, forKey: .voicePresentationPreferences)
+            ?? VoicePresentationPreferences()
         self.updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
 
@@ -248,6 +257,8 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         case exportedSessionURLs
         case notificationPreferences
         case externalEditorIdentifier
+        case lastDictationTab
+        case voicePresentationPreferences
         case updatedAt
     }
 }
@@ -428,6 +439,18 @@ public final class SessionPresentationStore: ObservableObject, @unchecked Sendab
         try update { snapshot in
             let trimmed = identifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             snapshot.externalEditorIdentifier = trimmed.isEmpty ? nil : trimmed
+        }
+    }
+
+    public func setLastDictationTab(_ tab: DictationComposerTarget) throws {
+        try update { snapshot in
+            snapshot.lastDictationTab = tab
+        }
+    }
+
+    public func setVoicePresentationPreferences(_ preferences: VoicePresentationPreferences) throws {
+        try update { snapshot in
+            snapshot.voicePresentationPreferences = preferences
         }
     }
 

@@ -36,6 +36,8 @@ public final class SpeechDictation: ObservableObject {
     /// inserted by the previous fire — partial → final delivers strictly
     /// monotonic prefixes per session.
     public var onTranscript: ((String, Bool) -> Void)?
+    /// Normalized RMS audio level in 0…1 for waveform UI.
+    public var onAudioLevel: ((Float) -> Void)?
 
     public init(locale: Locale = .current) {
         self.recognizer = SFSpeechRecognizer(locale: locale)
@@ -82,6 +84,7 @@ public final class SpeechDictation: ObservableObject {
 
         // Step 3: spin up the audio engine + recognition request.
         do {
+            partialTranscript = ""
             try beginCapture()
             state = .recording
         } catch {
@@ -98,6 +101,8 @@ public final class SpeechDictation: ObservableObject {
         request = nil
         task?.finish()
         task = nil
+        partialTranscript = ""
+        onAudioLevel?(0)
         state = .idle
     }
 
@@ -134,8 +139,9 @@ public final class SpeechDictation: ObservableObject {
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             request.append(buffer)
+            self?.publishAudioLevel(from: buffer)
         }
 
         audioEngine.prepare()
@@ -154,6 +160,22 @@ public final class SpeechDictation: ObservableObject {
                     self.stop()
                 }
             }
+        }
+    }
+
+    nonisolated private func publishAudioLevel(from buffer: AVAudioPCMBuffer) {
+        guard let channelData = buffer.floatChannelData?[0] else { return }
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else { return }
+        var sum: Float = 0
+        for index in 0..<frameCount {
+            let sample = channelData[index]
+            sum += sample * sample
+        }
+        let rms = sqrt(sum / Float(frameCount))
+        let normalized = min(max(rms * 8, 0), 1)
+        Task { @MainActor [weak self] in
+            self?.onAudioLevel?(normalized)
         }
     }
 
