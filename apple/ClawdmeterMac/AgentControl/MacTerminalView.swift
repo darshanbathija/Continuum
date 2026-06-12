@@ -117,7 +117,11 @@ public struct MacTerminalView: NSViewRepresentable {
         return view
     }
 
-    public func updateNSView(_ nsView: TerminalView, context: Context) {}
+    public func updateNSView(_ nsView: TerminalView, context: Context) {
+        if context.coordinator.isReadyForInput {
+            context.coordinator.requestFocus()
+        }
+    }
 
     public static func dismantleNSView(_ nsView: TerminalView, coordinator: Coordinator) {
         coordinator.disconnect(publishState: false)
@@ -138,6 +142,10 @@ public struct MacTerminalView: NSViewRepresentable {
         weak var terminalView: TerminalView?
         private var task: URLSessionWebSocketTask?
         private var sawOutput = false
+        private var hasRequestedFocus = false
+
+        /// True once shell output has arrived and the terminal is ready for typing.
+        var isReadyForInput: Bool { sawOutput }
 
         /// Live WS reachability the view can surface (e.g. a "reconnecting…"
         /// banner). Flipped false on read-loop failure, true once a frame
@@ -274,6 +282,19 @@ public struct MacTerminalView: NSViewRepresentable {
             onConnectionStateChange?(state)
         }
 
+        /// Move keyboard focus into the embedded terminal so the user can type
+        /// immediately after a tab opens, without clicking the surface first.
+        func requestFocus() {
+            guard !hasRequestedFocus, let terminalView else { return }
+            DispatchQueue.main.async { [weak self, weak terminalView] in
+                guard let self, let terminalView else { return }
+                guard let window = terminalView.window else { return }
+                guard terminalView.acceptsFirstResponder else { return }
+                window.makeFirstResponder(terminalView)
+                self.hasRequestedFocus = true
+            }
+        }
+
         #if DEBUG
         internal func simulateReadFailureForTesting() {
             scheduleReconnect()
@@ -296,6 +317,7 @@ public struct MacTerminalView: NSViewRepresentable {
                 if !arr.isEmpty, !sawOutput {
                     sawOutput = true
                     onFirstOutput?()
+                    requestFocus()
                 }
                 terminalView?.feed(byteArray: ArraySlice(arr))
             case .title:
