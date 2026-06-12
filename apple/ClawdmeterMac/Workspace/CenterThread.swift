@@ -499,10 +499,6 @@ struct CenterThread: View {
     private var chatPane: some View {
         VStack(spacing: 0) {
             messageList
-            if !workbenchState.queuedSends(for: session.id).isEmpty {
-                Divider()
-                queuedSendsPanel
-            }
             // The inline "Checkpoint · <date> · <summary> · Restore" strip was
             // removed per user feedback. Checkpoints are still created on
             // lifecycle events and surfaced via the header status text.
@@ -531,86 +527,6 @@ struct CenterThread: View {
     private func primePlanRefinement() {
         if composerStore.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             composerStore.text = "Refine the plan above: "
-        }
-    }
-
-    private var queuedSendsPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Label("Queued follow-ups", systemImage: "tray.and.arrow.down.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Clear") {
-                    workbenchState.clearQueuedSends(sessionId: session.id)
-                }
-                .font(.system(size: 10, weight: .medium))
-                .buttonStyle(PressableButtonStyle())
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("code.queue.clear")
-            }
-            ForEach(workbenchState.queuedSends(for: session.id)) { draft in
-                queuedDraftRow(draft)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(Color.secondary.opacity(0.035))
-        .accessibilityIdentifier("code.queue.panel")
-    }
-
-    private func queuedDraftRow(_ draft: QueuedWorkbenchSend) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            TextField(
-                "Queued prompt",
-                text: Binding(
-                    get: { draft.text },
-                    set: { workbenchState.updateQueuedSend(id: draft.id, text: $0) }
-                ),
-                axis: .vertical
-            )
-            .font(.system(size: 11))
-            .textFieldStyle(.plain)
-            .lineLimit(1...4)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-            .accessibilityIdentifier("code.queue.prompt")
-            if !draft.attachmentPaths.isEmpty {
-                Label("\(draft.attachmentPaths.count)", systemImage: "paperclip")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 6)
-                    .help(draft.attachmentPaths.joined(separator: "\n"))
-            }
-            if !draft.browserComments.isEmpty {
-                Label("\(draft.browserComments.count)", systemImage: "safari")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(SessionsV2Theme.accent)
-                    .padding(.top, 6)
-                    .help(draft.browserComments.map(\.chipLabel).joined(separator: "\n"))
-            }
-            Button {
-                Task { await dispatchQueuedDraft(draft, manual: true) }
-            } label: {
-                Image(systemName: "paperplane.fill")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .buttonStyle(PressableButtonStyle())
-            .disabled(turnIsStreaming || isDispatchingQueuedSend)
-            .help(turnIsStreaming ? "Dispatches when the current turn finishes" : "Send queued prompt now")
-            .padding(.top, 6)
-            .accessibilityIdentifier("code.queue.send")
-            Button(role: .destructive) {
-                workbenchState.removeQueuedSend(id: draft.id)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .buttonStyle(PressableButtonStyle())
-            .help("Delete queued follow-up")
-            .padding(.top, 6)
-            .accessibilityIdentifier("code.queue.delete")
         }
     }
 
@@ -704,7 +620,18 @@ struct CenterThread: View {
             usageStatus: usageStatusInfo,
             projectSkillsRoot: URL(fileURLWithPath: session.effectiveCwd).appendingPathComponent(".claude/skills", isDirectory: true),
             chatStore: model.chatStore(for: session),
-            onRetryPending: { Task { await performPendingRetry() } }
+            onRetryPending: { Task { await performPendingRetry() } },
+            queuedSends: workbenchState.queuedSends(for: session.id),
+            isDispatchingQueuedSend: isDispatchingQueuedSend,
+            onQueuedSendUpdate: { id, text in
+                workbenchState.updateQueuedSend(id: id, text: text)
+            },
+            onQueuedSendDelete: { id in
+                workbenchState.removeQueuedSend(id: id)
+            },
+            onQueuedSendSteer: { draft in
+                Task { await steerQueuedDraft(draft) }
+            }
         )
         .onChange(of: composerStore.modelId) { _, new in
             // Skip the value change caused by re-pointing the observed composer
@@ -788,8 +715,16 @@ struct CenterThread: View {
         await dispatchQueuedDraft(draft, manual: false)
     }
 
-    private func dispatchQueuedDraft(_ draft: QueuedWorkbenchSend, manual: Bool) async {
-        guard !turnIsStreaming else { return }
+    private func steerQueuedDraft(_ draft: QueuedWorkbenchSend) async {
+        await dispatchQueuedDraft(draft, manual: true, steerMidTurn: true)
+    }
+
+    private func dispatchQueuedDraft(
+        _ draft: QueuedWorkbenchSend,
+        manual: Bool,
+        steerMidTurn: Bool = false
+    ) async {
+        guard steerMidTurn || !turnIsStreaming else { return }
         guard draft.payload.hasContent else {
             workbenchState.removeQueuedSend(id: draft.id)
             return
@@ -797,12 +732,22 @@ struct CenterThread: View {
         guard let runtime = AppDelegate.runtime,
               let port = runtime.agentControlServer.boundPort
         else {
-            composerStore.endSend(error: .offline)
+            if steerMidTurn {
+                model.chatStore(for: session)?.markPendingQueuedOffline(
+                    error: "Daemon offline — steer when it returns."
+                )
+            } else {
+                composerStore.endSend(error: .offline)
+            }
             if !manual { dispatchedQueuedTurnForCurrentIdle = false }
             return
         }
         isDispatchingQueuedSend = true
-        composerStore.beginSend()
+        if steerMidTurn {
+            injectOptimisticPending(for: draft)
+        } else {
+            composerStore.beginSend()
+        }
         defer {
             isDispatchingQueuedSend = false
         }
@@ -811,8 +756,11 @@ struct CenterThread: View {
         var stagedPaths: [URL] = []
         if !draft.attachmentPaths.isEmpty {
             guard let dir = AttachmentStaging.stagingDir(for: target) else {
-                composerStore.endSend(error: .daemonError(message: "Couldn't create attachment staging directory."))
-                if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+                finishQueuedDispatchFailure(
+                    steerMidTurn: steerMidTurn,
+                    error: .daemonError(message: "Couldn't create attachment staging directory."),
+                    manual: manual
+                )
                 return
             }
             for path in draft.attachmentPaths {
@@ -824,8 +772,11 @@ struct CenterThread: View {
                     )
                     stagedPaths.append(staged)
                 } catch {
-                    composerStore.endSend(error: .daemonError(message: "Couldn't stage queued attachment: \(error.localizedDescription)"))
-                    if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+                    finishQueuedDispatchFailure(
+                        steerMidTurn: steerMidTurn,
+                        error: .daemonError(message: "Couldn't stage queued attachment: \(error.localizedDescription)"),
+                        manual: manual
+                    )
                     return
                 }
             }
@@ -834,36 +785,72 @@ struct CenterThread: View {
         let sender = MacComposerSender(port: Int(port), token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? ""))
         let body = QueuedPromptRenderer.render(payload: draft.payload, attachmentPaths: stagedPaths)
         do {
-            guard await createLifecycleCheckpoint(summary: "Before queued prompt") else {
-                composerStore.endSend(error: .daemonError(message: "Safety checkpoint failed. Prompt was not sent."))
-                if !manual { dispatchedQueuedTurnForCurrentIdle = false }
-                return
+            if !steerMidTurn {
+                guard await createLifecycleCheckpoint(summary: "Before queued prompt") else {
+                    finishQueuedDispatchFailure(
+                        steerMidTurn: steerMidTurn,
+                        error: .daemonError(message: "Safety checkpoint failed. Prompt was not sent."),
+                        manual: manual
+                    )
+                    return
+                }
             }
             try await sender.send(
                 sessionId: target.id,
                 body: body,
                 asFollowUp: true,
                 origin: .userComposer,
-                idempotencyKey: "queued-send:\(draft.id.uuidString)",
+                idempotencyKey: steerMidTurn ? "steer-send:\(draft.id.uuidString)" : "queued-send:\(draft.id.uuidString)",
                 clientIntentId: draft.id.uuidString
             )
             workbenchState.removeQueuedSend(id: draft.id)
-            composerStore.endSend()
-        } catch MacComposerSender.Error.http(let status, let retry, _) {
-            switch status {
-            case 401: composerStore.endSend(error: .unauthorized)
-            case 404: composerStore.endSend(error: .sessionGone)
-            case 429: composerStore.endSend(error: .rateLimited(retryAfter: retry))
-            default: composerStore.endSend(error: .daemonError(message: "HTTP \(status)"))
+            if steerMidTurn {
+                // Optimistic pending reconciles when the echoed user row lands.
+            } else {
+                composerStore.endSend()
             }
-            if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+        } catch MacComposerSender.Error.http(let status, let retry, _) {
+            let sendError: ComposerStore.SendError = switch status {
+            case 401: .unauthorized
+            case 404: .sessionGone
+            case 429: .rateLimited(retryAfter: retry)
+            default: .daemonError(message: "HTTP \(status)")
+            }
+            finishQueuedDispatchFailure(steerMidTurn: steerMidTurn, error: sendError, manual: manual)
         } catch MacComposerSender.Error.transport(let message) {
-            composerStore.endSend(error: .daemonError(message: message))
-            if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+            finishQueuedDispatchFailure(
+                steerMidTurn: steerMidTurn,
+                error: .daemonError(message: message),
+                manual: manual
+            )
         } catch {
-            composerStore.endSend(error: .daemonError(message: error.localizedDescription))
-            if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+            finishQueuedDispatchFailure(
+                steerMidTurn: steerMidTurn,
+                error: .daemonError(message: error.localizedDescription),
+                manual: manual
+            )
         }
+    }
+
+    private func finishQueuedDispatchFailure(
+        steerMidTurn: Bool,
+        error: ComposerStore.SendError,
+        manual: Bool
+    ) {
+        if steerMidTurn {
+            model.chatStore(for: session)?.markPendingQueuedOffline(error: error.localizedDescription)
+        } else {
+            composerStore.endSend(error: error)
+        }
+        if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+    }
+
+    private func injectOptimisticPending(for draft: QueuedWorkbenchSend) {
+        guard let chatStore = model.chatStore(for: session) else { return }
+        let trimmed = draft.payload.render().trimmingCharacters(in: .whitespacesAndNewlines)
+        let attachmentRefs = draft.attachmentPaths.map { URL(fileURLWithPath: $0).lastPathComponent }
+        guard !trimmed.isEmpty || !attachmentRefs.isEmpty || !draft.browserComments.isEmpty else { return }
+        chatStore.injectPending(text: trimmed, attachmentRefs: attachmentRefs)
     }
 
     private func createLifecycleCheckpoint(summary: String, for targetSession: AgentSession? = nil) async -> Bool {

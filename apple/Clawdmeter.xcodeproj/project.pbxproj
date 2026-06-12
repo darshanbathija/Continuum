@@ -382,6 +382,7 @@
 		D0FA4EF3B888EFA7C45DBC11 /* PathAllowList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AE0957459712F018ACC76C5 /* PathAllowList.swift */; };
 		D2D67A3555F9EE2A3BEC40B0 /* IOSRelayClientCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DC85826013E1F3EE2672116 /* IOSRelayClientCoordinator.swift */; };
 		D2FF1EA36DA1BF4CD9450D2C /* SessionChatStore+ChatSnapshotSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31DB05FB7CD0E566FC1EA2BF /* SessionChatStore+ChatSnapshotSource.swift */; };
+		D49E9D612D054802D5A9A16B /* QueuedSendsStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08C54E8F8A69F8482120032E /* QueuedSendsStrip.swift */; };
 		D512BBBBF8AE0CEF5EB1E05A /* RepoIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5CD71EDF0C57482E26E894 /* RepoIndexTests.swift */; };
 		D535EA7FFC2A1AAF11116950 /* GrokAnalyticsRangeAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0212D82878893E944B18EC31 /* GrokAnalyticsRangeAdapterTests.swift */; };
 		D609B22B0D306509093B09D2 /* AutopilotState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5239318D643E1B51443A7C3 /* AutopilotState.swift */; };
@@ -571,6 +572,7 @@
 		07E588070BA9CBA723BA60EC /* ClawdmeterMacWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ClawdmeterMacWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		082C9ACB265F5683E2F5645E /* OpencodeSendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeSendTests.swift; sourceTree = "<group>"; };
 		08A7E1550F933A4D19DC48D9 /* MacTahoeAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTahoeAdapter.swift; sourceTree = "<group>"; };
+		08C54E8F8A69F8482120032E /* QueuedSendsStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueuedSendsStrip.swift; sourceTree = "<group>"; };
 		0A4AA299B141BD4D1652F66B /* NotificationDispatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationDispatcher.swift; sourceTree = "<group>"; };
 		0B507230034C690DF30B18D5 /* TahoeReviewContentShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TahoeReviewContentShell.swift; sourceTree = "<group>"; };
 		0BE652466D437D2E8099589C /* iOSChatStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSChatStore.swift; sourceTree = "<group>"; };
@@ -1313,6 +1315,7 @@
 				797168CA4C5227800441FD18 /* MentionPicker.swift */,
 				3E0AF7F2D36777237BB36333 /* PermissionModeChip.swift */,
 				3792ADA750EEAA8CBFB4ACF6 /* ProviderAccountChip.swift */,
+				08C54E8F8A69F8482120032E /* QueuedSendsStrip.swift */,
 				60C622DD99169A6ABCBC6F8C /* UsageStatusChip.swift */,
 			);
 			path = Composer;
@@ -2430,6 +2433,7 @@
 				FB8B0004FB74372C709B6B0D /* ProviderInstanceShellShimInstaller.swift in Sources */,
 				3C391FC18132F11AED711762 /* ProvisioningTrailView.swift in Sources */,
 				DCA8543E3CD0D2378D6C6BC3 /* PseudoTerminal.swift in Sources */,
+				D49E9D612D054802D5A9A16B /* QueuedSendsStrip.swift in Sources */,
 				43CE166F0225B3A52F99D7BA /* QuickStartRepoSheet.swift in Sources */,
 				0D64A3A6B6B8E57782AEC0DC /* QuietDisclosure.swift in Sources */,
 				23D6E3DB6CFE748F738370BA /* RateLimiter.swift in Sources */,
