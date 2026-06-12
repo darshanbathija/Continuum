@@ -4,6 +4,36 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.35.0 build 235] - 2026-06-12 - Multi-account provider settings + Providers redesign
+
+Multi-account provider settings get evened out across the app, Settings →
+Providers is redesigned with a Connect/Disconnect layout, the OpenRouter
+provider returns, and the Code tab gets faster, more consistent model
+switching plus an account chip.
+
+### Added
+
+- **OpenRouter provider restored** with distinct branding for Chat and Code. (#376)
+- **Code tab account chip** beside the permission-mode control, so you can see which account/subscription a session runs under. (#373)
+- **Terminal shims for secondary Claude/Codex accounts** so the shell environment resolves to the right account. (#375)
+- **OpenCode Go quota credential import** from the browser Keychain on Save. (#372)
+
+### Changed
+
+- **Settings → Providers redesigned** with a Connect/Disconnect layout; Skills settings tab restyled to match. (#383, #380)
+- **Evened-out multi-account provider settings** and per-account Code defaults. (#371)
+- **Cursor Auto + API usage** shown in the menu-bar label; redundant Monthly total row removed; Usage tab provider-card grid fixed for 5 and 6 cards. (#387, #388, #374)
+- **Simplified Code-tab model picker** bottom bar and row styling; removed the non-functional Code-tab filter button. (#389, #385)
+
+### Fixed
+
+- **Instant model/default switches** — Settings default-model switch and picker selection update the model pill immediately; the Code-tab model toggle stays in sync across tab, header, and composer. (#368, #370, #386)
+- **Check for Updates** responds instantly from cached status; empty release-notes section hidden in the update popover. (#369, #379)
+- **Repo-branch tab labels** shown until a short summary arrives. (#384)
+- **Worktree archive clickable**, branches sorted by creation time, and Option-click repo always spawns a fresh branch instead of reusing a stale diff. (#382, #378)
+- **Bounded live UI timelines** so long sessions stay responsive. (#381)
+- **iOS/Watch app icons** have their alpha channel stripped for App Store compliance. (#364)
+
 ## [0.34.0 build 233] - 2026-06-11 - OpenCode Go as a first-class provider
 
 OpenCode Go joins Claude, Codex, Cursor, Antigravity, and Grok as a
