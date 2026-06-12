@@ -2150,7 +2150,7 @@ public final class SessionsModel: ObservableObject {
         let existingTabs = workspaceTerminalTabs.filter {
             $0.sessionId == session.id && $0.workspaceKey == workspaceKey
         }
-        let visibleTitle = existingTabs.isEmpty ? "Shell" : "Pane \(existingTabs.count + 1)"
+        let visibleTitle = existingTabs.isEmpty ? "Terminal" : "Pane \(existingTabs.count + 1)"
         guard let pendingTab = openPendingWorkspaceTerminalTab(
             from: session,
             workspaceKey: workspaceKey,
