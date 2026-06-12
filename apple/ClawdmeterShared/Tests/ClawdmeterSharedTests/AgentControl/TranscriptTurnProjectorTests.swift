@@ -105,6 +105,16 @@ final class TranscriptTurnProjectorTests: XCTestCase {
         XCTAssertTrue(GeneratedArtifactDetector.isMarkdownPath("docs/report.MDOWN"))
     }
 
+    func testOutputClassifierDetectsComposerAttachmentPaths() {
+        let text = "@/tmp/a.png\n@/tmp/report.pdf look at these"
+
+        let candidates = TranscriptArtifactClassifier.pathCandidates(in: text)
+
+        XCTAssertEqual(candidates, ["/tmp/a.png", "/tmp/report.pdf"])
+        XCTAssertTrue(TranscriptArtifactClassifier.opensInDocumentTab(forPath: "/tmp/a.png"))
+        XCTAssertTrue(TranscriptArtifactClassifier.opensInDocumentTab(forPath: "/tmp/report.pdf"))
+    }
+
     func testEditedFileChipStripOverflowSummaryAggregatesHiddenFiles() {
         let files = (0..<14).map {
             TranscriptEditedFile(

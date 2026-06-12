@@ -1,6 +1,33 @@
 import SwiftUI
 import AppKit
+import WebKit
+import Quartz
 import ClawdmeterShared
+
+/// Routes a workspace document tab to the right in-app preview surface for
+/// Markdown, HTML, images, PDFs, Office docs, and other popular outputs.
+struct WorkspaceDocumentTabView: View {
+    let tab: WorkspaceDocumentTab
+
+    @Environment(\.tahoe) private var t
+
+    private var kind: TranscriptArtifactKind {
+        TranscriptArtifactClassifier.kind(forPath: tab.path) ?? .markdown
+    }
+
+    var body: some View {
+        switch kind {
+        case .markdown:
+            MarkdownDocumentTabView(tab: tab)
+        case .html:
+            HTMLDocumentTabView(tab: tab)
+        case .image:
+            ImageDocumentTabView(tab: tab)
+        case .pdf, .document, .spreadsheet, .presentation, .media, .archive, .data:
+            QuickLookDocumentTabView(tab: tab)
+        }
+    }
+}
 
 struct MarkdownDocumentTabView: View {
     let tab: WorkspaceDocumentTab
@@ -24,7 +51,7 @@ struct MarkdownDocumentTabView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Image(systemName: "doc.richtext")
+            Image(systemName: TranscriptArtifactClassifier.systemImageName(forPath: tab.path))
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(t.accent)
             VStack(alignment: .leading, spacing: 1) {
@@ -379,5 +406,180 @@ private struct MarkdownDocumentPage: View {
         case 3: return TahoeFont.body(17, weight: .semibold)
         default: return TahoeFont.body(15.5, weight: .semibold)
         }
+    }
+}
+
+// MARK: - Shared document tab chrome
+
+private struct WorkspaceDocumentTabToolbar: View {
+    let tab: WorkspaceDocumentTab
+    let onRefresh: (() -> Void)?
+
+    @Environment(\.tahoe) private var t
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: TranscriptArtifactClassifier.systemImageName(forPath: tab.path))
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(t.accent)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tab.title)
+                    .font(TahoeFont.body(13, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                    .lineLimit(1)
+                Text(tab.path)
+                    .font(TahoeFont.mono(10.5))
+                    .foregroundStyle(t.fg3)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+            Button {
+                NSWorkspace.shared.open(URL(fileURLWithPath: tab.path))
+            } label: {
+                Image(systemName: "square.and.pencil")
+            }
+            .help("Open in Editor")
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: tab.path)])
+            } label: {
+                Image(systemName: "folder")
+            }
+            .help("Reveal in Finder")
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(tab.path, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .help("Copy Path")
+            if let onRefresh {
+                Button(action: onRefresh) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("Refresh")
+            }
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(t.dark ? Color.white.opacity(0.025) : Color.black.opacity(0.018))
+    }
+}
+
+// MARK: - HTML preview
+
+private struct HTMLDocumentTabView: View {
+    let tab: WorkspaceDocumentTab
+
+    var body: some View {
+        VStack(spacing: 0) {
+            WorkspaceDocumentTabToolbar(tab: tab, onRefresh: nil)
+            Divider()
+            LocalHTMLPreview(url: URL(fileURLWithPath: tab.path))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+private struct LocalHTMLPreview: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.setValue(false, forKey: "drawsBackground")
+        webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        return webView
+    }
+
+    func updateNSView(_ nsView: WKWebView, context: Context) {
+        if nsView.url != url {
+            nsView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        }
+    }
+}
+
+// MARK: - Image preview
+
+private struct ImageDocumentTabView: View {
+    let tab: WorkspaceDocumentTab
+    @State private var image: NSImage?
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            WorkspaceDocumentTabToolbar(tab: tab, onRefresh: { loadImage() })
+            Divider()
+            Group {
+                if let image {
+                    ScrollView([.horizontal, .vertical]) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(24)
+                    }
+                } else if let errorMessage {
+                    ContentUnavailableView(
+                        "Could not load image",
+                        systemImage: "photo.badge.exclamationmark",
+                        description: Text(errorMessage)
+                    )
+                } else {
+                    ProgressView()
+                        .controlSize(.large)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .task(id: tab.path) {
+            loadImage()
+        }
+    }
+
+    private func loadImage() {
+        image = nil
+        errorMessage = nil
+        let path = tab.path
+        guard FileManager.default.fileExists(atPath: path) else {
+            errorMessage = "The file no longer exists at this path."
+            return
+        }
+        guard let loaded = NSImage(contentsOfFile: path) else {
+            errorMessage = "Clawdmeter could not decode this image."
+            return
+        }
+        image = loaded
+    }
+}
+
+// MARK: - QuickLook preview (PDF, Office, media, archives, …)
+
+private struct QuickLookDocumentTabView: View {
+    let tab: WorkspaceDocumentTab
+
+    var body: some View {
+        VStack(spacing: 0) {
+            WorkspaceDocumentTabToolbar(tab: tab, onRefresh: nil)
+            Divider()
+            WorkspaceQuickLookPreview(url: URL(fileURLWithPath: tab.path))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+private struct WorkspaceQuickLookPreview: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> QLPreviewView {
+        let view = QLPreviewView()
+        view.previewItem = url as NSURL
+        return view
+    }
+
+    func updateNSView(_ nsView: QLPreviewView, context: Context) {
+        nsView.previewItem = url as NSURL
     }
 }

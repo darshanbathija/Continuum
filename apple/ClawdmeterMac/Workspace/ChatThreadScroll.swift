@@ -818,7 +818,7 @@ struct ChatThreadScroll: View {
                                 transcriptChip(
                                     icon: iconName(for: artifact.kind),
                                     title: artifact.filename,
-                                    tint: artifact.kind == .markdown ? t.accent : t.fg3
+                                    tint: TranscriptArtifactClassifier.opensInDocumentTab(forPath: artifact.path) ? t.accent : t.fg3
                                 )
                             }
                             .buttonStyle(PressableButtonStyle())
@@ -1021,7 +1021,7 @@ struct ChatThreadScroll: View {
     }
 
     private func openTranscriptArtifact(_ artifact: TranscriptOutputArtifact) {
-        if artifact.kind == .markdown {
+        if TranscriptArtifactClassifier.opensInDocumentTab(forPath: artifact.path) {
             model.openWorkspaceDocumentTab(from: session, path: artifact.path)
             return
         }
@@ -1045,12 +1045,10 @@ struct ChatThreadScroll: View {
     }
 
     private func helpText(for artifact: TranscriptOutputArtifact) -> String {
-        switch artifact.kind {
-        case .markdown:
-            return "Open Markdown document in Code tab"
-        case .html, .image, .pdf, .document, .spreadsheet, .presentation, .media, .archive, .data:
-            return "Open \(artifact.path)"
+        if TranscriptArtifactClassifier.opensInDocumentTab(forPath: artifact.path) {
+            return "Open \(artifact.filename) in Code tab"
         }
+        return "Open \(artifact.path)"
     }
 
     private func iconName(for kind: TranscriptArtifactKind) -> String {

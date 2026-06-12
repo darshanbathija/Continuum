@@ -58,12 +58,14 @@ jobs:
         working-directory: infra/apns-gateway
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_OAUTH_REFRESH_TOKEN: ${{ secrets.CLOUDFLARE_OAUTH_REFRESH_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "::notice::CLOUDFLARE_API_TOKEN not configured. Skipping dry-run; wrangler.toml syntax check only."
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] && [ -z "$CLOUDFLARE_OAUTH_REFRESH_TOKEN" ]; then
+            echo "::notice::Cloudflare credentials not configured. Skipping dry-run; wrangler.toml syntax check only."
             bunx wrangler@${WRANGLER_VERSION} types --env staging || true
           else
+            source ../../tools/cloudflare-ci-auth.sh
             bunx wrangler@${WRANGLER_VERSION} deploy --dry-run --env staging
           fi
 
@@ -87,8 +89,11 @@ jobs:
         working-directory: infra/apns-gateway
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_OAUTH_REFRESH_TOKEN: ${{ secrets.CLOUDFLARE_OAUTH_REFRESH_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: bunx wrangler@${WRANGLER_VERSION} deploy --env staging
+        run: |
+          source ../../tools/cloudflare-ci-auth.sh
+          bunx wrangler@${WRANGLER_VERSION} deploy --env staging
 
   deploy-production:
     name: Deploy to production
@@ -111,5 +116,8 @@ jobs:
         working-directory: infra/apns-gateway
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_OAUTH_REFRESH_TOKEN: ${{ secrets.CLOUDFLARE_OAUTH_REFRESH_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: bunx wrangler@${WRANGLER_VERSION} deploy --env production
+        run: |
+          source ../../tools/cloudflare-ci-auth.sh
+          bunx wrangler@${WRANGLER_VERSION} deploy --env production

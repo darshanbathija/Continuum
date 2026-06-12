@@ -367,7 +367,7 @@ struct WorkspaceDocumentTab: Identifiable, Equatable {
 
     var title: String {
         let name = URL(fileURLWithPath: path).lastPathComponent
-        return name.isEmpty ? "Markdown" : name
+        return name.isEmpty ? "Document" : name
     }
 }
 

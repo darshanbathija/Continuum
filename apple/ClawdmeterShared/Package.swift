@@ -48,6 +48,9 @@ let package = Package(
                 // bundled as a resource asset catalog. Read via
                 // `Image("tahoe-…-mark", bundle: .module)`.
                 .process("Tahoe/Tahoe.xcassets"),
+                // Technology-stack logos (simple-icons, MIT) for file rows in
+                // the Code tab transcript. Loaded via `Image("stack-…", bundle: .module)`.
+                .process("Icons/StackIcons.xcassets"),
             ]
         ),
         .testTarget(
