@@ -130,7 +130,15 @@ struct ModelEffortChip: View {
     }
 
     private var summaryText: String {
-        info.modelDisplay
+        // Prefer the live binding over `info.modelDisplay`. Bound sessions
+        // synthesise `info` from `session.model`, which lags behind a picker
+        // change until the daemon round-trip completes — iOS already reads
+        // `selectedModelId` directly for the same reason.
+        if let id = selectedModelId, !id.isEmpty,
+           let entry = catalog.entry(forId: id, customProviderId: customProviderId) {
+            return entry.displayName
+        }
+        return info.modelDisplay
     }
 
     private var currentPickerChoice: ProviderChoice {
