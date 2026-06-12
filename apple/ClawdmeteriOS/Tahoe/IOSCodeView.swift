@@ -181,26 +181,32 @@ public struct IOSCodeView: View {
         }
         .confirmationDialog("Filter sessions", isPresented: $filtersDialogPresented, titleVisibility: .visible) {
             ForEach(StatusScope.allCases) { scope in
-                Button("\(scope.label) \(statusCounts[scope] ?? 0)") {
+                Button("\(scope.label) \(statusCounts[scope] ?? 0)", action: ContinuumAnalytics.wrapButton(
+                        "filter_status_\(scope.rawValue)",
+                        {
                     statusScope = scope
                     if scope == .archived {
                         includeRecents = true
                     }
-                }
+                
+                        }
+                    ))
             }
-            Button(includeRecents ? "Hide recent sessions" : "Show recent sessions") {
+            Button(includeRecents ? "Hide recent sessions" : "Show recent sessions", action: ContinuumAnalytics.wrapButton("toggle_recent_sessions", {
                 includeRecents.toggle()
                 if statusScope == .archived {
                     statusScope = .all
                 }
-            }
-            Button("All providers") {
+            }))
+            Button("All providers", action: ContinuumAnalytics.wrapButton(
+                    "all_providers",
+                    {
                 providerFilter = nil
-            }
+            
+                    }
+                ))
             ForEach(availableProviders, id: \.id) { provider in
-                Button(provider.displayName) {
-                    providerFilter = provider
-                }
+                Button(provider.displayName, action: ContinuumAnalytics.wrapButton("filter_provider_\(provider.id)", { providerFilter = provider }))
             }
         }
         .sheet(isPresented: $workspaceSwitcherPresented) {
@@ -443,7 +449,7 @@ private struct IOSDesktopSyncBadge: View {
 
     var body: some View {
         let connected = client.isDesktopEventSyncConnected
-        Button(action: onPair) {
+        Button(action: ContinuumAnalytics.wrapButton("pair_with_desktop", onPair)) {
             HStack(spacing: 6) {
                 Circle()
                     .fill(connected ? Color.green : (client.isConfigured ? Color.orange : t.fg4))
@@ -529,7 +535,12 @@ private struct IOSRepoCard: View {
                     if i > 0 {
                         TahoeHair().padding(.leading, 58)
                     }
-                    Button(action: { onOpen(s.id) }) {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "open_session",
+                            {
+ onOpen(s.id) 
+                            }
+                        )) {
                         HStack(spacing: 12) {
                             TahoeProviderGlyph(provider: s.agent, size: 32)
                             VStack(alignment: .leading, spacing: 2) {
@@ -595,19 +606,11 @@ private struct IOSRepoCard: View {
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
-                        Button("Open Session", systemImage: "arrow.right") { onOpen(s.id) }
-                        Button(presentationStore.snapshot.pinnedSessionIds.contains(s.id) ? "Unpin" : "Pin", systemImage: "pin") {
-                            try? presentationStore.togglePin(s.id)
-                        }
-                        Button(presentationStore.snapshot.unreadSessionIds.contains(s.id) ? "Mark Read" : "Mark Unread", systemImage: "circle.fill") {
-                            try? presentationStore.markUnread(s.id, unread: !presentationStore.snapshot.unreadSessionIds.contains(s.id))
-                        }
-                        Button(presentationStore.snapshot.mutedSessionIds.contains(s.id) ? "Unmute" : "Mute", systemImage: "bell.slash") {
-                            try? presentationStore.setMuted(s.id, muted: !presentationStore.snapshot.mutedSessionIds.contains(s.id))
-                        }
-                        Button("Copy Session ID", systemImage: "doc.on.doc") {
-                            UIPasteboard.general.string = s.id.uuidString
-                        }
+                        Button("Open Session", systemImage: "arrow.right", action: ContinuumAnalytics.wrapButton("open_session", { onOpen(s.id) }))
+                        Button(presentationStore.snapshot.pinnedSessionIds.contains(s.id) ? "Unpin" : "Pin", systemImage: "pin", action: ContinuumAnalytics.wrapButton("toggle_pin_session", { try? presentationStore.togglePin(s.id) }))
+                        Button(presentationStore.snapshot.unreadSessionIds.contains(s.id) ? "Mark Read" : "Mark Unread", systemImage: "circle.fill", action: ContinuumAnalytics.wrapButton("toggle_unread_session", { try? presentationStore.markUnread(s.id, unread: !presentationStore.snapshot.unreadSessionIds.contains(s.id)) }))
+                        Button(presentationStore.snapshot.mutedSessionIds.contains(s.id) ? "Unmute" : "Mute", systemImage: "bell.slash", action: ContinuumAnalytics.wrapButton("toggle_mute_session", { try? presentationStore.setMuted(s.id, muted: !presentationStore.snapshot.mutedSessionIds.contains(s.id)) }))
+                        Button("Copy Session ID", systemImage: "doc.on.doc", action: ContinuumAnalytics.wrapButton("copy_session_id", { UIPasteboard.general.string = s.id.uuidString }))
                     }
                 }
                 if !repo.recents.isEmpty {

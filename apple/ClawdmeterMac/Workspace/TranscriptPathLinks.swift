@@ -74,7 +74,7 @@ struct TranscriptPathLinkButton: View {
     }
 
     var body: some View {
-        Button(action: open) {
+        Button(action: ContinuumAnalytics.wrapButton("transcript_path_open", open)) {
             HStack(spacing: 5) {
                 Image(systemName: exists ? "doc.text.magnifyingglass" : "exclamationmark.triangle")
                     .font(.system(size: 11, weight: .semibold))
@@ -98,14 +98,34 @@ struct TranscriptPathLinkButton: View {
         .accessibilityLabel(exists ? "Open \(link.path) line \(lineLabel)" : "File not found \(link.path)")
         .contextMenu {
             if opensInDocumentTab, let onOpenMarkdownDocument {
-                Button("Open in Code Tab") { onOpenMarkdownDocument(link.absolutePath) }
+                Button("Open in Code Tab", action: ContinuumAnalytics.wrapButton(
+                        "open_in_code_tab",
+                        {
+ onOpenMarkdownDocument(link.absolutePath) 
+                        }
+                    ))
                     .disabled(!exists)
-                Button("Open External Editor") { openExternal() }
+                Button("Open External Editor", action: ContinuumAnalytics.wrapButton(
+                        "open_external_editor",
+                        {
+ openExternal() 
+                        }
+                    ))
                     .disabled(!exists)
             }
-            Button("Copy Relative Path") { copy(link.path) }
-            Button("Copy Absolute Path") { copy(link.absolutePath) }
-            Button("Reveal in Finder") { reveal() }
+            Button("Copy Relative Path", action: ContinuumAnalytics.wrapButton(
+                    "copy_relative_path",
+                    {
+ copy(link.path) 
+                    }
+                ))
+            Button("Copy Absolute Path", action: ContinuumAnalytics.wrapButton("copy_absolute_path", { copy(link.absolutePath) }))
+            Button("Reveal in Finder", action: ContinuumAnalytics.wrapButton(
+                    "reveal_in_finder",
+                    {
+ reveal() 
+                    }
+                ))
                 .disabled(!exists)
         }
     }

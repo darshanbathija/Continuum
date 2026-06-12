@@ -216,7 +216,7 @@ struct SkillsSettingsView: View {
                     .tracking(0.6)
                     .foregroundStyle(t.fg4)
                 Spacer()
-                Button(action: { isAddPluginPresented = true }) {
+                Button(action: ContinuumAnalytics.wrapButton("skills_add_plugin", { isAddPluginPresented = true })) {
                     HStack(spacing: 5) {
                         TahoeIcon("plus", size: 9, weight: .bold)
                         Text("Add plugin")
@@ -260,7 +260,7 @@ struct SkillsSettingsView: View {
                     .tracking(0.6)
                     .foregroundStyle(t.fg4)
                 Spacer()
-                Button(action: { catalog.refreshIfStale() }) {
+                Button(action: ContinuumAnalytics.wrapButton("skills_refresh_catalog", { catalog.refreshIfStale() })) {
                     HStack(spacing: 5) {
                         TahoeIcon("refresh", size: 10)
                         Text("Refresh")
@@ -419,12 +419,12 @@ struct SkillsSettingsView: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { closeImportSheet() }
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("skills_import_cancel", closeImportSheet))
                     .keyboardShortcut(.cancelAction)
                     .disabled(importStatus == .importing)
-                Button(importStatus == .importing ? "Importing…" : "Import") {
+                Button(importStatus == .importing ? "Importing…" : "Import", action: ContinuumAnalytics.wrapButton("skills_import_submit", {
                     Task { await importPluginFromURL() }
-                }
+                }))
                 .keyboardShortcut(.defaultAction)
                 .disabled(parsedImportSource == nil || importStatus == .importing)
             }
@@ -522,7 +522,7 @@ private struct SkillPluginSidebarRow: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button(action: onSelect) {
+        Button(action: ContinuumAnalytics.wrapButton("skills_plugin_select", onSelect)) {
             HStack(spacing: 8) {
                 Text(group.title)
                     .font(TahoeFont.body(13, weight: isSelected ? .bold : .semibold))
@@ -566,7 +566,7 @@ private struct SkillCommandRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(action: onSelect) {
+            Button(action: ContinuumAnalytics.wrapButton("skills_command_select", onSelect)) {
                 HStack(spacing: 6) {
                     if skill.filePath != nil {
                         TahoeIcon(isExpanded ? "chevD" : "chevR", size: 8)

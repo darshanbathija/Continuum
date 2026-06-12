@@ -98,7 +98,7 @@ struct UpdateAppControl: View {
             showsInactiveStates: showsInactiveStates,
             awaitingManualCheckPopover: coordinator.wrapped?.awaitingManualCheckPopover ?? false
         ) {
-            Button(action: primaryAction) {
+            Button(action: ContinuumAnalytics.wrapButton("updates_primary_action", primaryAction)) {
                 HStack(spacing: compact ? 5 : 6) {
                     icon
                     if !compact || labelAlwaysVisible {

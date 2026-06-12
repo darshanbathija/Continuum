@@ -69,9 +69,13 @@ struct SettingsView: View {
                     }
                     PairingCTAButtons(client: agentClient, compact: true)
                     if agentClient.isConfigured {
-                        Button(role: .destructive) {
+                        Button(role: .destructive, action: ContinuumAnalytics.wrapButton(
+                                "forget_relay_pairing",
+                                {
                             showingClearPairingConfirm = true
-                        } label: {
+                        
+                                }
+                            )) {
                             Label("Forget Mac pairing", systemImage: "trash")
                         }
                     }
@@ -129,9 +133,7 @@ struct SettingsView: View {
                                 .foregroundStyle(.green)
                             Text("Connected")
                             Spacer()
-                            Button("Sign out") {
-                                showingClearConfirm = true
-                            }
+                            Button("Sign out", action: ContinuumAnalytics.wrapButton("sign_out", { showingClearConfirm = true }))
                             .foregroundStyle(.red)
                         }
                     } else {
@@ -151,11 +153,11 @@ struct SettingsView: View {
                         .lineLimit(3, reservesSpace: true)
                         .font(.system(.body, design: .monospaced))
 
-                    Button(action: pasteFromClipboard) {
+                    Button(action: ContinuumAnalytics.wrapButton("paste_token", pasteFromClipboard)) {
                         Label("Paste from clipboard", systemImage: "doc.on.clipboard")
                     }
 
-                    Button("Save token") {
+                    Button("Save token", action: ContinuumAnalytics.wrapButton("save_token", {
                         let trimmed = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !trimmed.isEmpty else { return }
                         if model.setToken(trimmed) {
@@ -165,7 +167,7 @@ struct SettingsView: View {
                         } else {
                             saveError = "Couldn't find an `sk-ant-oat01-…` token in what you pasted. Try copying just the password value from Keychain Access (the JSON starting with `{\"claudeAiOauth\":…`), or the bare token if you have it."
                         }
-                    }
+                    }))
                     .disabled(tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                     if let saveError {
@@ -238,24 +240,22 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button("Done", action: ContinuumAnalytics.wrapButton("settings_done", { dismiss() }))
                 }
             }
             .alert("Sign out?", isPresented: $showingClearConfirm) {
 
-                Button("Sign out", role: .destructive) {
-                    model.setToken("")
-                }
-                Button("Cancel", role: .cancel) { }
+                Button("Sign out", role: .destructive, action: ContinuumAnalytics.wrapButton("confirm_sign_out", { model.setToken("") }))
+                Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton("sign_out_cancel", {}))
             } message: {
                 Text("Your token will be removed from this device.")
             }
             .alert("Forget Mac pairing?", isPresented: $showingClearPairingConfirm) {
-                Button("Forget pairing", role: .destructive) {
+                Button("Forget pairing", role: .destructive, action: ContinuumAnalytics.wrapButton("forget_pairing", {
                     agentClient.clearPairing()
                     PostHogIdentity.refreshFromCurrentState()
-                }
-                Button("Cancel", role: .cancel) { }
+                }))
+                Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton("forget_pairing_cancel", {}))
             } message: {
                 Text("Erases the stored host, port and token from this iPhone. The Mac is untouched — you can re-pair anytime via Scan QR or Paste URL.")
             }

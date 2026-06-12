@@ -27,7 +27,7 @@ struct KeyboardCheatSheet: View {
                     .textFieldStyle(.plain)
                     .font(TahoeFont.body(14, weight: .medium))
                     .focused($focused)
-                Button(action: onDismiss) {
+                Button(action: ContinuumAnalytics.wrapButton("keyboard_cheat_sheet_close", onDismiss)) {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(t.fg3)

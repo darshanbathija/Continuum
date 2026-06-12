@@ -67,7 +67,12 @@ struct RepoSettingsSheet: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 0)
-            Button { dismiss() } label: {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "reposettingssheet_l70",
+                    {
+ dismiss() 
+                    }
+                )) {
                 TahoeIcon("x", size: 12, weight: .bold)
             }
             .buttonStyle(.borderless)
@@ -138,15 +143,24 @@ struct RepoSettingsSheet: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            Button("Open in Settings…") {
+            Button("Open in Settings…", action: ContinuumAnalytics.wrapButton(
+                    "open_in_settings",
+                    {
                 onOpenFullSettings(workspaceRecord?.id ?? context.workspaceId)
                 dismiss()
-            }
+            
+                    }
+                ))
             .accessibilityIdentifier("code.repo.settings.open-full-settings")
 
             Spacer(minLength: 0)
 
-            Button("Done") { dismiss() }
+            Button("Done", action: ContinuumAnalytics.wrapButton(
+                    "done",
+                    {
+ dismiss() 
+                    }
+                ))
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("code.repo.settings.done")

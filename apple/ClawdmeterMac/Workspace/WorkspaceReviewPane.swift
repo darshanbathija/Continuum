@@ -50,14 +50,22 @@ struct WorkspaceReviewPane: View {
             }
         }
         .contextMenu {
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "workspacereviewpane_l53",
+                    {
                 selectedTab = .artifacts
-            } label: {
+            
+                    }
+                )) {
                 Label("Artifacts", systemImage: WorkbenchPaneTab.artifacts.systemImage)
             }
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "workspacereviewpane_l58",
+                    {
                 selectedTab = .browser
-            } label: {
+            
+                    }
+                )) {
                 Label("Browser", systemImage: WorkbenchPaneTab.browser.systemImage)
             }
         }
@@ -67,7 +75,12 @@ struct WorkspaceReviewPane: View {
 
     private func tabChip(_ tab: WorkbenchPaneTab) -> some View {
         let isSelected = (selectedTab == tab)
-        return Button(action: { selectedTab = tab }) {
+        return Button(action: ContinuumAnalytics.wrapButton(
+                "workspacereviewpane_l70",
+                {
+ selectedTab = tab 
+                }
+            )) {
             HStack(spacing: 3) {
                 Image(systemName: tab.systemImage)
                     .font(.system(size: 10, weight: .semibold))
@@ -196,9 +209,13 @@ struct WorkspaceReviewPane: View {
     private func diffModeButton(_ mode: DiffPaneMode) -> some View {
         let isSelected = diffPaneMode == mode
         let accessibilityIdentifier = "code.diff.mode.\(mode.rawValue)"
-        return Button {
+        return Button(action: ContinuumAnalytics.wrapButton(
+                "diff_mode_\(mode.rawValue)",
+                {
             diffPaneMode = mode
-        } label: {
+        
+                }
+            )) {
             Text(mode.title)
                 .font(TahoeFont.body(11, weight: isSelected ? .bold : .semibold))
                 .lineLimit(1)

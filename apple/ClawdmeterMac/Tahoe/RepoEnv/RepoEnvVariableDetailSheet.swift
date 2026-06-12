@@ -28,7 +28,7 @@ struct RepoEnvVariableDetailSheet: View {
                         .foregroundStyle(t.fg3)
                 }
                 Spacer()
-                Button(action: onClose) {
+                Button(action: ContinuumAnalytics.wrapButton("repo_env_detail_close", onClose)) {
                     TahoeIcon("x", size: 12, weight: .bold)
                 }
                 .buttonStyle(.borderless)
@@ -58,13 +58,13 @@ struct RepoEnvVariableDetailSheet: View {
                     .foregroundStyle(revealedValue == nil ? t.fg3 : t.fg)
                     .lineLimit(3)
                 Spacer()
-                Button(revealedValue == nil ? "Reveal" : "Hide") {
+                Button(revealedValue == nil ? "Reveal" : "Hide", action: ContinuumAnalytics.wrapButton("repo_env_detail_toggle_reveal", {
                     if revealedValue == nil {
                         revealValue()
                     } else {
                         revealedValue = nil
                     }
-                }
+                }))
                 .buttonStyle(.bordered)
             }
             if let note = variable.note, !note.isEmpty {

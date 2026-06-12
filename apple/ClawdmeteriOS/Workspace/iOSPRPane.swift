@@ -183,9 +183,13 @@ struct iOSPRPane: View {
                 reviewActions(pr)
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Button(role: .destructive) {
+                    Button(role: .destructive, action: ContinuumAnalytics.wrapButton(
+                            "pr_delete",
+                            {
                         showingMergeConfirm = true
-                    } label: {
+                    
+                            }
+                        )) {
                         HStack(spacing: 7) {
                             TahoeIcon("branch", size: 12)
                             Text(isMerging ? "Merging..." : "Merge")
@@ -216,9 +220,9 @@ struct iOSPRPane: View {
                     }
                 }
                 .alert("Merge to main?", isPresented: $showingMergeConfirm) {
-                    Button("Merge", role: .destructive) { Task { await merge() } }
-                    Button("Open PR instead") { showingMergeConfirm = false }
-                    Button("Cancel", role: .cancel) { }
+                    Button("Merge", role: .destructive, action: ContinuumAnalytics.wrapButton("pr_merge", { Task { await merge() } }))
+                    Button("Open PR instead", action: ContinuumAnalytics.wrapButton("pr_open_instead", { showingMergeConfirm = false }))
+                    Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton("pr_merge_cancel", {}))
                 } message: {
                     Text(mergeSummary)
                 }

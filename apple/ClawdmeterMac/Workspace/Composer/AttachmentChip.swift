@@ -27,7 +27,7 @@ struct AttachmentChip: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: 180, alignment: .leading)
-            Button(action: onRemove) {
+            Button(action: ContinuumAnalytics.wrapButton("remove_attachment", onRemove)) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)

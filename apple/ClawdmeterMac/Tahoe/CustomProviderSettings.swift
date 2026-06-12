@@ -47,9 +47,9 @@ private struct CustomProviderSettingsContent: View {
                 }
             )
 
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton("custom_provider_add", {
                 editorPresentation = CustomProviderEditorPresentation(editingRecord: nil)
-            } label: {
+            })) {
                 HStack(spacing: 6) {
                     TahoeIcon("plus", size: 11, weight: .bold)
                     Text("Add provider")
@@ -124,12 +124,12 @@ struct CustomProviderRows: View {
             isPresented: $showDeleteConfirm,
             presenting: recordPendingDelete
         ) { record in
-            Button("Delete", role: .destructive) {
+            Button("Delete", role: .destructive, action: ContinuumAnalytics.wrapButton("custom_provider_delete_confirm", {
                 delete(record)
-            }
-            Button("Cancel", role: .cancel) {
+            }))
+            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton("custom_provider_delete_cancel", {
                 recordPendingDelete = nil
-            }
+            }))
         } message: { record in
             Text(deleteDialogMessage(for: record))
         }
@@ -254,29 +254,29 @@ private struct CustomProviderRow: View {
                 }
                 Spacer(minLength: 12)
                 HStack(spacing: 8) {
-                    Button("Edit", action: onEdit)
+                    Button("Edit", action: ContinuumAnalytics.wrapButton("custom_provider_edit", onEdit))
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .accessibilityIdentifier("settings.provider.custom.\(record.id).edit")
-                    Button("Delete", action: onDelete)
+                    Button("Delete", action: ContinuumAnalytics.wrapButton("custom_provider_delete", onDelete))
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .accessibilityIdentifier("settings.provider.custom.\(record.id).delete")
                 }
                 modelMenu
                 if isEnabled {
-                    Button("Disconnect") {
+                    Button("Disconnect", action: ContinuumAnalytics.wrapButton("custom_provider_disconnect", {
                         isEnabled = false
-                    }
+                    }))
                     .buttonStyle(.plain)
                     .font(TahoeFont.body(12, weight: .semibold))
                     .foregroundStyle(t.fg2)
                     .help("Disconnect \(record.displayLabel)")
                     .accessibilityIdentifier("settings.provider.custom.\(record.id).disconnect")
                 } else {
-                    Button {
+                    Button(action: ContinuumAnalytics.wrapButton("custom_provider_connect", {
                         isEnabled = true
-                    } label: {
+                    })) {
                         HStack(spacing: 4) {
                             TahoeIcon("plus", size: 10, weight: .bold)
                             Text("Connect")
@@ -315,9 +315,9 @@ private struct CustomProviderRow: View {
             ForEach(sections) { section in
                 Section(section.title) {
                     ForEach(section.entries) { entry in
-                        Button {
+                        Button(action: ContinuumAnalytics.wrapButton("custom_provider_select_model", {
                             onSelectModel(entry.id)
-                        } label: {
+                        })) {
                             HStack {
                                 Text(entry.displayName)
                                 if entry.id == selectedModelId {
@@ -494,9 +494,9 @@ struct CustomProviderEditorSheet: View {
     private var testSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("custom_provider_test_api", {
                     Task { await runTest() }
-                } label: {
+                })) {
                     Text(testButtonTitle)
                         .font(TahoeFont.body(12, weight: .semibold))
                 }
@@ -544,9 +544,9 @@ struct CustomProviderEditorSheet: View {
                     Text("Run Test API first")
                 }
                 ForEach(draftModels) { model in
-                    Button {
+                    Button(action: ContinuumAnalytics.wrapButton("custom_provider_select_default_model", {
                         defaultModelId = model.id
-                    } label: {
+                    })) {
                         HStack {
                             Text(model.displayName ?? model.id)
                             if model.id == defaultModelId {
@@ -574,15 +574,15 @@ struct CustomProviderEditorSheet: View {
 
     private var footer: some View {
         HStack {
-            Button("Cancel") {
+            Button("Cancel", action: ContinuumAnalytics.wrapButton("custom_provider_editor_cancel", {
                 dismiss()
                 onDismiss()
-            }
+            }))
             .keyboardShortcut(.cancelAction)
             Spacer()
-            Button(isSaving ? "Saving…" : "Save") {
+            Button(isSaving ? "Saving…" : "Save", action: ContinuumAnalytics.wrapButton("custom_provider_editor_save", {
                 Task { await save() }
-            }
+            }))
             .buttonStyle(.borderedProminent)
             .disabled(!canSave || isSaving)
             .keyboardShortcut(.defaultAction)

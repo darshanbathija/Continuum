@@ -51,7 +51,7 @@ struct SetupTerminalSheet: View {
                     .font(TahoeFont.body(14, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer(minLength: 0)
-                Button("Done", action: onClose)
+                Button("Done", action: ContinuumAnalytics.wrapButton("setup_terminal_done", onClose))
                     .buttonStyle(.bordered)
                     .keyboardShortcut(.defaultAction)
             }

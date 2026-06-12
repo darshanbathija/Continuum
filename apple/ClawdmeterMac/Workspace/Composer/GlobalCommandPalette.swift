@@ -53,7 +53,12 @@ struct GlobalCommandPalette: View {
                 ScrollView {
                     LazyVStack(spacing: 4) {
                         ForEach(Array(commandList.enumerated()), id: \.element.id) { idx, command in
-                            Button(action: { run(command) }) {
+                            Button(action: ContinuumAnalytics.wrapButton(
+                                    "command_palette_run",
+                                    {
+ run(command) 
+                                    }
+                                )) {
                                 commandRow(command, selected: idx == selectedIndex)
                             }
                             .buttonStyle(PressableButtonStyle())

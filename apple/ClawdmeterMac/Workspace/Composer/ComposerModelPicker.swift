@@ -244,9 +244,13 @@ public struct ComposerModelPicker: View {
         let active = (entry.key == activeRail)
         let dimmed = isRailDimmed(entry.key)
 
-        Button {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "select_provider_rail",
+                {
             activeRail = entry.key
-        } label: {
+        
+                }
+            )) {
             ZStack {
                 // No active-state cell fill — the mockup uses stripe-only.
                 // Adding a fill flattens the brand glyph behind it.
@@ -369,10 +373,14 @@ public struct ComposerModelPicker: View {
                     return .handled
                 }
             if !searchQuery.isEmpty {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "clear_model_search",
+                        {
                     searchQuery = ""
                     searchFocused = true
-                } label: {
+                
+                        }
+                    )) {
                     TahoeIcon("x", size: 11)
                         .foregroundStyle(t.fg4)
                 }
@@ -434,11 +442,15 @@ public struct ComposerModelPicker: View {
                     .accessibilityHidden(true)
             }
 
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "toggle_favorite_model",
+                    {
                 if let vendor = entry.choice.chatVendor {
                     defaultsStore.toggleFavoriteModel(entry.model.id, for: vendor)
                 }
-            } label: {
+            
+                    }
+                )) {
                 Image(systemName: isFav ? "star.fill" : "star")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(isFav ? t.accent : t.fg4)
@@ -448,10 +460,14 @@ public struct ComposerModelPicker: View {
             .accessibilityLabel("\(isFav ? "Unstar" : "Star") \(entry.model.displayName)")
             .accessibilityIdentifier("code.composer.model-picker.favorite.\(entry.choice.id).\(accessibilityToken(entry.model.id))")
 
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "select_model_row",
+                    {
                 focusedRowIndex = index
                 select(entry: entry)
-            } label: {
+            
+                    }
+                )) {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.model.displayName)
@@ -664,9 +680,13 @@ public struct ComposerModelPicker: View {
     private func addRemoveButton(for choice: ProviderChoice) -> some View {
         let selected = store.isChoiceSelected(choice)
         let toggleable = canToggle(choice)
-        Button {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "toggle_provider_choice",
+                {
             store.toggleChoice(choice)
-        } label: {
+        
+                }
+            )) {
             Text(selected ? (toggleable ? "Remove" : "Required") : (toggleable ? "Add" : "3 max"))
                 .font(TahoeFont.body(11, weight: .semibold))
         }

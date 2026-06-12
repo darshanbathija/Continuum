@@ -23,6 +23,9 @@ enum PostHogSetup {
             #endif
             PostHogSDK.shared.setup(config)
             isConfigured = true
+            ContinuumAnalytics.buttonTapped = { name, screen in
+                PostHogButtonTracking.tap(name, screen: screen)
+            }
             PostHogIdentity.configureOnLaunch()
         }
     }

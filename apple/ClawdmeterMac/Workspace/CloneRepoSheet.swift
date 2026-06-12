@@ -41,7 +41,7 @@ struct CloneRepoSheet: View {
                     TextField("Destination parent", text: $destinationParent,
                               prompt: Text("/Users/.../code"))
                         .textFieldStyle(.roundedBorder)
-                    Button("Choose…", action: chooseDestination)
+                    Button("Choose…", action: ContinuumAnalytics.wrapButton("choose", chooseDestination))
                         .disabled(status == .cloning)
                 }
 
@@ -68,12 +68,21 @@ struct CloneRepoSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel", action: ContinuumAnalytics.wrapButton(
+                        "cancel",
+                        {
+ dismiss() 
+                        }
+                    ))
                     .keyboardShortcut(.cancelAction)
                     .disabled(status == .cloning)
-                Button(status == .cloning ? "Cloning…" : "Clone") {
+                Button(status == .cloning ? "Cloning…" : "Clone", action: ContinuumAnalytics.wrapButton(
+                        "cloning_cloning_clone",
+                        {
                     Task { await clone() }
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .disabled(!canClone || status == .cloning)
@@ -111,9 +120,13 @@ struct CloneRepoSheet: View {
                 Text("GitHub CLI not found — install for private repos: ")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button("Copy install command") {
+                Button("Copy install command", action: ContinuumAnalytics.wrapButton(
+                        "copy_install_command",
+                        {
                     copyToClipboard("brew install gh")
-                }
+                
+                        }
+                    ))
                 .buttonStyle(.link)
                 .font(.caption)
             }
@@ -132,15 +145,23 @@ struct CloneRepoSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack {
-                Button("Copy `gh auth login`") {
+                Button("Copy `gh auth login`", action: ContinuumAnalytics.wrapButton(
+                        "copy_gh_auth_login",
+                        {
                     copyToClipboard("gh auth login")
-                }
+                
+                        }
+                    ))
                 .buttonStyle(.link)
                 .font(.caption)
                 if !ghDetected {
-                    Button("Copy `brew install gh`") {
+                    Button("Copy `brew install gh`", action: ContinuumAnalytics.wrapButton(
+                            "copy_brew_install_gh",
+                            {
                         copyToClipboard("brew install gh")
-                    }
+                    
+                            }
+                        ))
                     .buttonStyle(.link)
                     .font(.caption)
                 }

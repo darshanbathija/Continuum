@@ -105,7 +105,12 @@ public struct iOSAntigravityPlanView: View {
                                 .font(TahoeFont.body(11))
                                 .foregroundStyle(t.fg3)
                                 .fixedSize(horizontal: false, vertical: true)
-                            Button("Retry") { Task { await store.refresh() } }
+                            Button("Retry", action: ContinuumAnalytics.wrapButton(
+                                    "retry",
+                                    {
+ Task { await store.refresh() } 
+                                    }
+                                ))
                                 .font(TahoeFont.body(12, weight: .semibold))
                         }
                         .padding(12)

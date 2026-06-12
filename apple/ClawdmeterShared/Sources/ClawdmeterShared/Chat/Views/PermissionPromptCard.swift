@@ -102,7 +102,7 @@ public struct PermissionPromptCard: View {
     private func optionRow(option: PermissionOption, index: Int) -> some View {
         let isHovered = hoveredOptionId == option.id
         let isRecommended = option.isRecommended
-        Button(action: { respond(optionId: option.id) }) {
+        Button(action: ContinuumAnalytics.wrapButton("permission_option_\(option.id)", { respond(optionId: option.id) })) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {

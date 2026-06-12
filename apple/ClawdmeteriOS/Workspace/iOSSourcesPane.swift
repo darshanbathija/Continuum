@@ -83,9 +83,19 @@ struct iOSSourcesPane: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button("Copy path") { copy(entry.payload, id: entry.id) }
+            Button("Copy path", action: ContinuumAnalytics.wrapButton(
+                    "copy_path",
+                    {
+ copy(entry.payload, id: entry.id) 
+                    }
+                ))
             if canSendToAgent {
-                Button("Send to agent") { sendToAgent(entry) }
+                Button("Send to agent", action: ContinuumAnalytics.wrapButton(
+                        "send_to_agent",
+                        {
+ sendToAgent(entry) 
+                        }
+                    ))
             }
             if entry.kind == .url, let url = URL(string: entry.payload) {
                 Link("Open URL", destination: url)

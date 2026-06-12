@@ -172,11 +172,9 @@ struct WorkspaceTabStrip: View {
     }
 
     private var newTabButton: some View {
-        Button {
-            DispatchQueue.main.async {
-                onNewChat()
-            }
-        } label: {
+        Button(action: ContinuumAnalytics.wrapButton("workspace_new_tab", {
+            DispatchQueue.main.async { onNewChat() }
+        })) {
             Image(systemName: "plus")
                 .font(.system(size: 12, weight: .semibold))
                 .frame(width: Self.newTabButtonWidth, height: 26)
@@ -190,17 +188,13 @@ struct WorkspaceTabStrip: View {
             accessibilityIdentifier: "code.workspace.new-tab"
         )
         .contextMenu {
-            Button("Chat") {
-                DispatchQueue.main.async {
-                    onNewChat()
-                }
-            }
+            Button("Chat", action: ContinuumAnalytics.wrapButton("workspace_new_chat", {
+                DispatchQueue.main.async { onNewChat() }
+            }))
             .accessibilityIdentifier("code.workspace.new-tab.chat")
-            Button("Terminal") {
-                DispatchQueue.main.async {
-                    onNewTerminal()
-                }
-            }
+            Button("Terminal", action: ContinuumAnalytics.wrapButton("workspace_new_terminal", {
+                DispatchQueue.main.async { onNewTerminal() }
+            }))
             .disabled(!terminalAvailable)
             .accessibilityIdentifier("code.workspace.new-tab.terminal")
         }
@@ -224,16 +218,16 @@ struct WorkspaceTabStrip: View {
         .accessibilityIdentifier("code.workspace.tab.session")
         .accessibilityValue("\(isActive ? "selected" : "not selected") \(session.id.uuidString) \(session.agent.rawValue) \(session.model ?? "")")
         .contextMenu {
-            Button("Close", role: .destructive) {
+            Button("Close", role: .destructive, action: ContinuumAnalytics.wrapButton("workspace_close_session", {
                 Task { await model.endSession(id: session.id) }
-            }
-            Button("Pop out window") {
+            }))
+            Button("Pop out window", action: ContinuumAnalytics.wrapButton("workspace_pop_out_session", {
                 NotificationCenter.default.post(
                     name: .popOutSession,
                     object: nil,
                     userInfo: ["sessionId": session.id]
                 )
-            }
+            }))
         }
     }
 
@@ -269,9 +263,9 @@ struct WorkspaceTabStrip: View {
         .help("\(terminalTitle(for: tab, session: session))\n\(session.effectiveCwd)")
         .accessibilityIdentifier("code.workspace.tab.terminal")
         .contextMenu {
-            Button("Close") {
+            Button("Close", action: ContinuumAnalytics.wrapButton("workspace_close_terminal", {
                 onCloseTerminal(tab)
-            }
+            }))
         }
     }
 
@@ -288,13 +282,13 @@ struct WorkspaceTabStrip: View {
         .help(tab.path)
         .accessibilityIdentifier("code.workspace.tab.document")
         .contextMenu {
-            Button("Close") {
+            Button("Close", action: ContinuumAnalytics.wrapButton("workspace_close_document", {
                 onCloseDocument(tab)
-            }
-            Button("Copy Path") {
+            }))
+            Button("Copy Path", action: ContinuumAnalytics.wrapButton("workspace_copy_document_path", {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(tab.path, forType: .string)
-            }
+            }))
         }
     }
 
@@ -310,7 +304,7 @@ struct WorkspaceTabStrip: View {
         closeAction: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 7) {
-            Button(action: selectAction) {
+            Button(action: ContinuumAnalytics.wrapButton("workspace_tab_select", selectAction)) {
                 HStack(spacing: 7) {
                     if let systemImage {
                         Image(systemName: systemImage)
@@ -335,7 +329,7 @@ struct WorkspaceTabStrip: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(PressableButtonStyle())
-            Button(action: closeAction) {
+            Button(action: ContinuumAnalytics.wrapButton("workspace_tab_close", closeAction)) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
                     .frame(width: 22, height: 22)

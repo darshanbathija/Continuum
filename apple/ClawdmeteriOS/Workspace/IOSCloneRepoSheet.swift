@@ -60,12 +60,15 @@ struct IOSCloneRepoSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }.disabled(isCloning)
+                    Button("Cancel", action: ContinuumAnalytics.wrapButton(
+                            "cancel",
+                            {
+ dismiss() 
+                            }
+                        )).disabled(isCloning)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(isCloning ? "Cloning…" : "Clone") {
-                        Task { await clone() }
-                    }
+                    Button(isCloning ? "Cloning…" : "Clone", action: ContinuumAnalytics.wrapButton("clone_repo", { Task { await clone() } }))
                     .disabled(!canClone || isCloning)
                 }
             }

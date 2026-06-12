@@ -350,12 +350,17 @@ public struct MacMenubarPopover: View {
     @ViewBuilder
     private func providerTab(_ p: TahoeProvider) -> some View {
         let active = p == selectedProvider
-        Button {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "menubar_select_provider",
+                {
+
             guard p != selectedProvider else { return }
             var tx = Transaction()
             tx.disablesAnimations = true
             withTransaction(tx) { selected = p }
-        } label: {
+        
+                }
+            )) {
             HStack(spacing: 4) {
                 TahoeProviderGlyph(provider: p, size: 16)
                 Text(p.displayName)

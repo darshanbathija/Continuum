@@ -46,7 +46,7 @@ private struct ReviewPaneGutterTab: View {
     let onExpand: (WorkbenchPaneTab) -> Void
 
     var body: some View {
-        Button(action: { onExpand(tab) }) {
+        Button(action: ContinuumAnalytics.wrapButton("review_gutter_expand_\(tab.accessibilityKey)", { onExpand(tab) })) {
             VStack(spacing: 2) {
                 Image(systemName: tab.systemImage)
                     .font(.system(size: 13))

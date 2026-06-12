@@ -51,7 +51,9 @@ struct FollowUpSchedulerSheet: View {
                             .truncationMode(.tail)
                         Spacer()
                         if up.deliveryPolicy == .requiresConfirmation {
-                            Button(action: {
+                            Button(action: ContinuumAnalytics.wrapButton(
+                                    "followupschedulersheet_l54",
+                                    {
                                 Task { @MainActor in
                                     try? await registry.confirmScheduledFollowUp(
                                         sessionId: session.id,
@@ -59,14 +61,18 @@ struct FollowUpSchedulerSheet: View {
                                         confirmedBy: "mac-follow-up-sheet-confirm"
                                     )
                                 }
-                            }) {
+                            
+                                    }
+                                )) {
                                 Image(systemName: "checkmark")
                                     .font(.system(size: 10, weight: .semibold))
                             }
                             .buttonStyle(PressableButtonStyle())
                             .help("Confirm")
                         }
-                        Button(action: {
+                        Button(action: ContinuumAnalytics.wrapButton(
+                                "followupschedulersheet_l69",
+                                {
                             // F2-wire: SwiftUI Button action closures are
                             // sync — wrap the now-async registry call in
                             // a Task. Errors are non-fatal here (failing
@@ -76,7 +82,9 @@ struct FollowUpSchedulerSheet: View {
                             Task { @MainActor in
                                 try? await registry.removeScheduledFollowUp(sessionId: session.id, followUpId: up.id)
                             }
-                        }) {
+                        
+                                }
+                            )) {
                             Image(systemName: "trash")
                                 .font(.system(size: 10))
                         }
@@ -86,10 +94,17 @@ struct FollowUpSchedulerSheet: View {
             }
             HStack {
                 Spacer()
-                Button("Done") { dismiss() }
+                Button("Done", action: ContinuumAnalytics.wrapButton(
+                        "done",
+                        {
+ dismiss() 
+                        }
+                    ))
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("code.follow-up-sheet.done")
-                Button("Schedule") {
+                Button("Schedule", action: ContinuumAnalytics.wrapButton(
+                        "schedule",
+                        {
                     let up = ScheduledFollowUp(
                         fireAt: fireAt,
                         prompt: prompt,
@@ -105,7 +120,9 @@ struct FollowUpSchedulerSheet: View {
                     }
                     prompt = ""
                     fireAt = Date().addingTimeInterval(5 * 60)
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .tint(SessionsV2Theme.accent)

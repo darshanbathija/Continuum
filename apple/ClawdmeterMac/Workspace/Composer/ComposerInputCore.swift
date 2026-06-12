@@ -788,9 +788,13 @@ struct ComposerInputCore: View {
         if !isReadOnly, onChangePermissionMode != nil {
             ZStack {
                 ForEach(availablePermissionModes, id: \.self) { mode in
-                    Button("") {
+                    Button("", action: ContinuumAnalytics.wrapButton(
+                            "button",
+                            {
                         onChangePermissionMode?(mode)
-                    }
+                    
+                            }
+                        ))
                     .keyboardShortcut(
                         KeyEquivalent(PermissionModeChip.shortcutDigit(for: mode)),
                         modifiers: [.command, .shift]
@@ -847,7 +851,12 @@ struct ComposerInputCore: View {
     }
 
     private var plusAttachButton: some View {
-        Button(action: { isShowingFileImporter = true }) {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "open_file_importer",
+                {
+ isShowingFileImporter = true 
+                }
+            )) {
             Image(systemName: "plus")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -944,12 +953,22 @@ struct ComposerInputCore: View {
     /// the "+" (matching the Claude-Desktop +/mic layout).
     private var composerToolsMenu: some View {
         Menu {
-            Button { isShowingFileImporter = true } label: {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "attach_files",
+                    {
+ isShowingFileImporter = true 
+                    }
+                )) {
                 Label("Attach File…", systemImage: "paperclip")
             }
             .accessibilityIdentifier("code.composer.attach")
 
-            Button { showingPromptHistory = true } label: {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "open_prompt_history",
+                    {
+ showingPromptHistory = true 
+                    }
+                )) {
                 Label("Prompt History", systemImage: "clock.arrow.circlepath")
             }
             .keyboardShortcut(.upArrow, modifiers: [.option])
@@ -960,15 +979,19 @@ struct ComposerInputCore: View {
                     Text("No saved prompts")
                 } else {
                     ForEach(presentationStore.snapshot.savedPrompts) { prompt in
-                        Button(prompt.title) { store.text = prompt.body }
+                        Button(prompt.title, action: ContinuumAnalytics.wrapButton("use_saved_prompt", { store.text = prompt.body }))
                             .accessibilityIdentifier(Self.savedPromptRowIdentifier(for: prompt.id))
                     }
                 }
                 Divider()
-                Button("Save Current Prompt…") {
+                Button("Save Current Prompt…", action: ContinuumAnalytics.wrapButton(
+                        "save_current_prompt",
+                        {
                     savePromptTitle = ClawdmeterTextUtilities.collapsedWhitespacePreview(store.text, limit: 48)
                     showingExpandedEditor = true
-                }
+                
+                        }
+                    ))
                 .disabled(store.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityIdentifier("code.composer.saved-prompts.save-current")
             } label: {
@@ -978,12 +1001,22 @@ struct ComposerInputCore: View {
 
             Divider()
 
-            Button { pasteStrippingANSI() } label: {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "paste_stripping_ansi",
+                    {
+ pasteStrippingANSI() 
+                    }
+                )) {
                 Label("Paste Without ANSI Codes", systemImage: "wand.and.stars")
             }
             .accessibilityIdentifier("code.composer.paste-ansi")
 
-            Button { showingExpandedEditor = true } label: {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "open_expanded_editor",
+                    {
+ showingExpandedEditor = true 
+                    }
+                )) {
                 Label("Expand Editor", systemImage: "arrow.up.left.and.arrow.down.right")
             }
             .accessibilityIdentifier("code.composer.expand")
@@ -1002,7 +1035,7 @@ struct ComposerInputCore: View {
     }
 
     private var micButton: some View {
-        Button(action: toggleDictation) {
+        Button(action: ContinuumAnalytics.wrapButton("toggle_dictation", toggleDictation)) {
             Image(systemName: dictation.state == .recording ? "mic.fill" : "mic")
                 .font(.system(size: 13))
                 .foregroundStyle(dictation.state == .recording ? terraCotta : .secondary)
@@ -1107,7 +1140,7 @@ struct ComposerInputCore: View {
             canSendNow: canSendNow
         )
         if action.kind == .stop, let onInterrupt {
-            Button(action: onInterrupt) {
+            Button(action: ContinuumAnalytics.wrapButton("interrupt_turn", onInterrupt)) {
                 ZStack {
                     Circle()
                         .fill(t.dark ? Color.white.opacity(0.90) : Color.black.opacity(0.86))
@@ -1124,7 +1157,7 @@ struct ComposerInputCore: View {
             .accessibilityLabel(action.accessibilityLabel)
             .accessibilityIdentifier(action.accessibilityIdentifier)
         } else {
-            Button(action: sendCurrentDraft) {
+            Button(action: ContinuumAnalytics.wrapButton("send_message", sendCurrentDraft)) {
                 TahoeIcon("arrowU", size: 15, weight: .bold)
                     .foregroundStyle(action.isEnabled ? .white : t.fg4)
                     .frame(width: 34, height: 34)
@@ -1153,7 +1186,7 @@ struct ComposerInputCore: View {
             sessionIsRunning: sessionIsRunning,
             hasQueueHandler: onQueue != nil
         ) {
-            Button(action: queueCurrentDraft) {
+            Button(action: ContinuumAnalytics.wrapButton("queue_follow_up", queueCurrentDraft)) {
                 Image(systemName: store.isSending ? "tray.and.arrow.down" : "tray.and.arrow.down.fill")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(store.canSend && !store.isSending ? t.accent : t.fg3)
@@ -1466,7 +1499,7 @@ private struct PromptHistorySheet: View {
                 TextField("Search prompts", text: $query)
                     .textFieldStyle(.plain)
                     .accessibilityIdentifier("code.prompt-history.search")
-                Button("Done", action: onDismiss)
+                Button("Done", action: ContinuumAnalytics.wrapButton("done", onDismiss))
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("code.prompt-history.done")
             }
@@ -1529,15 +1562,28 @@ private struct PromptHistorySheet: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier(row.accessibilityIdentifier)
         .contextMenu {
-            Button("Use Prompt") { onUse(row.body) }
-            Button("Copy Prompt") {
+            Button("Use Prompt", action: ContinuumAnalytics.wrapButton(
+                    "use_prompt",
+                    {
+ onUse(row.body) 
+                    }
+                ))
+            Button("Copy Prompt", action: ContinuumAnalytics.wrapButton(
+                    "copy_prompt",
+                    {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(row.body, forType: .string)
-            }
+            
+                    }
+                ))
             if case .saved(let id) = row.kind {
-                Button("Delete Saved Prompt", role: .destructive) {
+                Button("Delete Saved Prompt", role: .destructive, action: ContinuumAnalytics.wrapButton(
+                        "delete_saved_prompt",
+                        {
                     onDeleteSaved(id)
-                }
+                
+                        }
+                    ))
             }
         }
     }
@@ -1557,7 +1603,7 @@ private struct ExpandedComposerEditor: View {
                     .font(TahoeFont.body(14, weight: .semibold))
                     .accessibilityIdentifier("code.composer.expanded-editor")
                 Spacer()
-                Button("Done", action: onClose)
+                Button("Done", action: ContinuumAnalytics.wrapButton("done", onClose))
                     .keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("code.composer.expanded.done")
             }
@@ -1574,7 +1620,7 @@ private struct ExpandedComposerEditor: View {
                 TextField("Saved prompt title", text: $title)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("code.composer.expanded.title")
-                Button("Save Prompt", action: onSavePrompt)
+                Button("Save Prompt", action: ContinuumAnalytics.wrapButton("save_prompt", onSavePrompt))
                     .disabled(!ComposerInputCore.canSavePromptText(text))
                     .accessibilityIdentifier("code.composer.expanded.save-prompt")
             }
@@ -1694,16 +1740,20 @@ private struct PendingMessageStrip: View {
                         .foregroundStyle(SessionsV2Theme.warn)
                 }
                 if let retry = pendingActions.first(where: { $0.kind == .retry }) {
-                    Button(retry.visibleTitle ?? "Retry now") { onRetry() }
+                    Button(retry.visibleTitle ?? "Retry now", action: ContinuumAnalytics.wrapButton("retry_pending_send", onRetry))
                         .buttonStyle(PressableButtonStyle())
                         .font(TahoeFont.body(10.5, weight: .semibold))
                         .foregroundStyle(t.accent)
                         .accessibilityIdentifier(retry.accessibilityIdentifier)
                 }
                 if let dismiss = pendingActions.first(where: { $0.kind == .dismiss }) {
-                    Button {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "dismiss_pending_send",
+                            {
                         onDismiss()
-                    } label: {
+                    
+                            }
+                        )) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 11))
                             .foregroundStyle(t.fg4)
@@ -1723,16 +1773,20 @@ private struct PendingMessageStrip: View {
                         .lineLimit(2)
                 }
                 if let retry = pendingActions.first(where: { $0.kind == .retry }) {
-                    Button(retry.visibleTitle ?? "Retry") { onRetry() }
+                    Button(retry.visibleTitle ?? "Retry", action: ContinuumAnalytics.wrapButton("retry_failed_send", onRetry))
                         .buttonStyle(PressableButtonStyle())
                         .font(TahoeFont.body(10.5, weight: .semibold))
                         .foregroundStyle(t.accent)
                         .accessibilityIdentifier(retry.accessibilityIdentifier)
                 }
                 if let dismiss = pendingActions.first(where: { $0.kind == .dismiss }) {
-                    Button {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "dismiss_failed_send",
+                            {
                         onDismiss()
-                    } label: {
+                    
+                            }
+                        )) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 11))
                             .foregroundStyle(t.fg4)

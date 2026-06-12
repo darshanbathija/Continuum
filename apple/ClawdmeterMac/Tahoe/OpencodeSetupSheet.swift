@@ -140,9 +140,7 @@ public struct OpencodeSetupSheet: View {
             Text(command.title)
                 .font(.headline)
             Spacer()
-            Button("Done") {
-                dismiss()
-            }
+            Button("Done", action: ContinuumAnalytics.wrapButton("opencode_setup_done", { dismiss() }))
             .keyboardShortcut(.cancelAction)
             .disabled(oauthInFlight)
         }
@@ -163,7 +161,7 @@ public struct OpencodeSetupSheet: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 480)
-            Button("Close") { dismiss() }
+            Button("Close", action: ContinuumAnalytics.wrapButton("opencode_setup_close", { dismiss() }))
                 .buttonStyle(.borderedProminent)
         }
         .frame(minWidth: 720, minHeight: 480)
@@ -194,12 +192,12 @@ public struct OpencodeSetupSheet: View {
             }
             Spacer()
             if oauthInFlight {
-                Button("Cancel") {
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("opencode_setup_cancel", {
                     if let host {
                         Task { await host.kill() }
                     }
                     dismiss()
-                }
+                }))
                 .keyboardShortcut(.escape, modifiers: [])
             }
         }

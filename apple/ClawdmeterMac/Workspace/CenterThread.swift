@@ -265,9 +265,13 @@ struct CenterThread: View {
             } else {
                 Menu {
                     ForEach(TranscriptDensity.allCases, id: \.self) { option in
-                        Button {
+                        Button(action: ContinuumAnalytics.wrapButton(
+                                "set_transcript_density",
+                                {
                             onDensityChange(option)
-                        } label: {
+                        
+                                }
+                            )) {
                             if option == density {
                                 Label(densityLabel(option), systemImage: "checkmark")
                             } else {
@@ -394,7 +398,12 @@ struct CenterThread: View {
                             .lineLimit(1)
                     }
                     Spacer()
-                    Button { showingTerminalOverlay = false } label: {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "close_terminal_overlay",
+                            {
+ showingTerminalOverlay = false 
+                            }
+                        )) {
                         Image(systemName: "xmark")
                             .font(.system(size: 11, weight: .semibold))
                             .frame(width: 26, height: 26)
@@ -459,20 +468,24 @@ struct CenterThread: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") {
+                Button("Cancel", action: ContinuumAnalytics.wrapButton(
+                        "cancel",
+                        {
                     showingAutopilotConfirm = false
                     pendingBypassMode = false
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("code.permission.bypass.cancel")
-                Button(autopilotConfirmCTA(willEnable: true, needsTrustGrant: needsTrustGrant)) {
+                Button(autopilotConfirmCTA(willEnable: true, needsTrustGrant: needsTrustGrant), action: ContinuumAnalytics.wrapButton("confirm_autopilot_bypass", {
                     showingAutopilotConfirm = false
                     pendingBypassMode = false
                     if needsTrustGrant, let repoKey = session.repoKey {
                         AutopilotState.shared.trustRepo(repoKey)
                     }
                     Task { await model.setPermissionMode(sessionId: session.id, to: .bypass) }
-                }
+                }))
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .tint(terraCotta)

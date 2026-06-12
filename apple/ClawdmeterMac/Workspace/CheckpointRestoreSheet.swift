@@ -98,10 +98,10 @@ struct CheckpointRestoreSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel", action: onCancel)
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("cancel", onCancel))
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("code.checkpoint.restore-sheet.cancel")
-                Button(role: .destructive, action: onRestore) {
+                Button(role: .destructive, action: ContinuumAnalytics.wrapButton("restore_checkpoint", onRestore)) {
                     Text(isRestoring ? "Restoring…" : "Restore to checkpoint")
                 }
                     .keyboardShortcut(.defaultAction)

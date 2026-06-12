@@ -124,6 +124,7 @@ private struct ProviderAccountMenuButton: NSViewRepresentable {
         }
 
         @objc func openMenu(_ sender: NSButton) {
+            ContinuumAnalytics.trackButton("composer_account_menu")
             button = sender
             sender.setAccessibilityValue("Open" as NSString)
             let menu = NSMenu()
@@ -149,8 +150,10 @@ private struct ProviderAccountMenuButton: NSViewRepresentable {
 
         @objc func selectAccount(_ item: NSMenuItem) {
             if item.representedObject is NSNull {
+                ContinuumAnalytics.trackButton("composer_account_select_primary")
                 onSelect(nil)
             } else if let wireId = item.representedObject as? String {
+                ContinuumAnalytics.trackButton("composer_account_select_\(wireId)")
                 onSelect(wireId)
             }
         }

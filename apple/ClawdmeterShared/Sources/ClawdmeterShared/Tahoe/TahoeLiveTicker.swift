@@ -37,7 +37,7 @@ public struct TahoeLiveTicker: View {
                         .foregroundStyle(ContinuumTokens.fg3)
                 }
             }
-            Button(action: onStop) {
+            Button(action: ContinuumAnalytics.wrapButton("live_ticker_stop", onStop)) {
                 Image(systemName: "stop.fill")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(ContinuumTokens.error)

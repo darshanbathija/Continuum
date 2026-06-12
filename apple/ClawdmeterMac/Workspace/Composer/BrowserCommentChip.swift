@@ -24,7 +24,7 @@ struct BrowserCommentChip: View {
                 }
             }
             .frame(maxWidth: 220, alignment: .leading)
-            Button(action: onRemove) {
+            Button(action: ContinuumAnalytics.wrapButton("remove_browser_comment", onRemove)) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)

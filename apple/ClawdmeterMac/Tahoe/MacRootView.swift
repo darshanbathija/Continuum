@@ -268,6 +268,7 @@ struct MacRootView: View {
                             loopbackClient: runtime.loopbackClient,
                             runtime: runtime
                         )
+                        .postHogScreenScope("chat")
                         .modifier(TabSlotVisibility(active: tab == .chat))
                     }
                     if visitedTabs.contains(.usage) {
@@ -297,6 +298,7 @@ struct MacRootView: View {
                             usageHistoryStore: runtime.usageHistoryStore,
                             secondaryColumns: runtime.tahoeSecondaryColumns
                         )
+                        .postHogScreenScope("usage")
                         .modifier(TabSlotVisibility(active: tab == .usage))
                     }
                     if visitedTabs.contains(.code) {
@@ -305,7 +307,8 @@ struct MacRootView: View {
                             presentationStore: presentationStore,
                             workbenchState: workbenchState
                         )
-                            .modifier(TabSlotVisibility(active: tab == .code))
+                        .postHogScreenScope("code")
+                        .modifier(TabSlotVisibility(active: tab == .code))
                     }
                     if visitedTabs.contains(.settings) {
                         MacSettingsView(
@@ -318,6 +321,7 @@ struct MacRootView: View {
                             requestedSection: $requestedSettingsSection,
                             requestedEnvWorkspaceId: $requestedEnvWorkspaceId
                         )
+                        .postHogScreenScope("settings")
                         .modifier(TabSlotVisibility(active: tab == .settings))
                     }
                 }
@@ -500,7 +504,7 @@ struct MacRootView: View {
                     }
                 }
                 if let actionTitle = toast.actionTitle {
-                    Button(actionTitle) { performToastAction(toast) }
+                    Button(actionTitle, action: ContinuumAnalytics.wrapButton("toast_action", { performToastAction(toast) }))
                         .buttonStyle(.borderless)
                         .font(.system(size: 11, weight: .semibold))
                 }
@@ -1325,7 +1329,7 @@ struct MacTitlebar: View {
 
     @ViewBuilder
     private var syncChipUsage: some View {
-        Button(action: { syncChipPopoverPresented.toggle() }) {
+        Button(action: ContinuumAnalytics.wrapButton("pair_with_iphone", { syncChipPopoverPresented.toggle() })) {
             TahoeSyncChip(
                 icon: "qr",
                 text: "Pair with iPhone"
@@ -1446,9 +1450,9 @@ struct MacTitlebar: View {
     /// deep-link to specific tabs via `.openCodeReviewPane`.
     @ViewBuilder
     private var paneMenuButton: some View {
-        Button(action: {
+        Button(action: ContinuumAnalytics.wrapButton("toggle_review_pane", {
             NotificationCenter.default.post(name: .toggleCodeReviewPane, object: nil)
-        }) {
+        })) {
             TahoeIcon("sidebar", size: 12)
                 .foregroundStyle(t.fg3)
                 .frame(width: 24, height: 24)

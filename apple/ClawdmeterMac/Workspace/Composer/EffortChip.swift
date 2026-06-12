@@ -118,6 +118,7 @@ private struct EffortMenuButton: NSViewRepresentable {
         }
 
         @objc func openMenu(_ sender: NSButton) {
+            ContinuumAnalytics.trackButton("composer_effort_menu")
             button = sender
             sender.setAccessibilityValue("Open" as NSString)
             let menu = NSMenu()
@@ -142,6 +143,7 @@ private struct EffortMenuButton: NSViewRepresentable {
                 let raw = item.representedObject as? String,
                 let selectedEffort = ReasoningEffort(rawValue: raw)
             else { return }
+            ContinuumAnalytics.trackButton("composer_effort_select_\(raw)")
             onSelect(selectedEffort)
         }
 

@@ -72,7 +72,12 @@ struct SourcesPane: View {
     }
 
     private func row(_ entry: RenderedSourceEntry) -> some View {
-        Button(action: { entry.open() }) {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "sources_open_entry",
+                {
+ entry.open() 
+                }
+            )) {
             HStack(spacing: 8) {
                 Image(systemName: entry.icon)
                     .font(.system(size: 11))

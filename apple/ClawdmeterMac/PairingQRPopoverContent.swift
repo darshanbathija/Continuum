@@ -113,7 +113,12 @@ struct PairingQRPopoverContent: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Button(action: { Task { await pairingService.beginPairing() } }) {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "pairing_begin_cloud",
+                    {
+ Task { await pairingService.beginPairing() } 
+                    }
+                )) {
                 HStack(spacing: 6) {
                     Image(systemName: "qrcode")
                     Text("Pair iPhone")
@@ -271,7 +276,7 @@ struct PairingQRPopoverContent: View {
 
     private func pairingActionRow(copyAction: @escaping () -> Void, regenerateAction: @escaping () -> Void) -> some View {
         HStack(spacing: 8) {
-            Button(action: copyAction) {
+            Button(action: ContinuumAnalytics.wrapButton("pairing_copy_url", copyAction)) {
                 HStack(spacing: 6) {
                     Image(systemName: "doc.on.doc")
                     Text(didCopy ? "Copied ✓" : "Copy URL")
@@ -281,7 +286,7 @@ struct PairingQRPopoverContent: View {
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
             .tint(terraCotta)
-            Button(action: regenerateAction) {
+            Button(action: ContinuumAnalytics.wrapButton("pairing_regenerate_qr", regenerateAction)) {
                 Image(systemName: "arrow.clockwise")
             }
             .controlSize(.large)
