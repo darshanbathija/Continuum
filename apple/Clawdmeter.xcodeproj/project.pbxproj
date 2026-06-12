@@ -282,6 +282,8 @@
 		968F1A809DD00135F492B0FE /* RelaySubscriptionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F51A41CE73D5F9E79AE1DE9 /* RelaySubscriptionBridge.swift */; };
 		96A37EE3F9DD16B68B705113 /* VendorProvisioningService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8524794C9A655A7937BDCB51 /* VendorProvisioningService.swift */; };
 		972A8C92564CE8C6269F8682 /* ExecutionHostServerRouteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51C306A7F8CA416D498EEC6 /* ExecutionHostServerRouteTests.swift */; };
+		E4F5061728394A5B6C7D8E9F /* AWSComputeProvisionerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5061728394A5B6C7D8E9FA0 /* AWSComputeProvisionerTests.swift */; };
+		061728394A5B6C7D8E9FA0B1 /* AWSComputeLiveE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1728394A5B6C7D8E9FA0B1C2 /* AWSComputeLiveE2ETests.swift */; };
 		97623C56C0F6148B34FE03C6 /* RelayGrantTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1392A469BC8DB11964EE6640 /* RelayGrantTokenStore.swift */; };
 		97AFB2408A239828ECA833EC /* SessionStatusBadges.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD46C6D38786A4F6BE0A898A /* SessionStatusBadges.swift */; };
 		97EC18A60CE563948263154E /* RepoEnvVendorSecretsImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16D62A87AF663F29D7EC4DD5 /* RepoEnvVendorSecretsImporter.swift */; };
@@ -874,6 +876,8 @@
 		B3C6F2D7B52D4DA18E6794CD /* AgentSessionRegistryEventStoreWireTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionRegistryEventStoreWireTests.swift; sourceTree = "<group>"; };
 		B402D2971401AAA603A1AC75 /* HarnessProcessReaperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessProcessReaperTests.swift; sourceTree = "<group>"; };
 		B51C306A7F8CA416D498EEC6 /* ExecutionHostServerRouteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionHostServerRouteTests.swift; sourceTree = "<group>"; };
+		F5061728394A5B6C7D8E9FA0 /* AWSComputeProvisionerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AWSComputeProvisionerTests.swift; sourceTree = "<group>"; };
+		1728394A5B6C7D8E9FA0B1C2 /* AWSComputeLiveE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AWSComputeLiveE2ETests.swift; sourceTree = "<group>"; };
 		B53A23CB4E962050EF7971CB /* GitDiffPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitDiffPane.swift; sourceTree = "<group>"; };
 		B5A629825BB527592CC870F4 /* PRCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRCoordinatorTests.swift; sourceTree = "<group>"; };
 		B67061D7F5F105E0995FC937 /* OpenCodeGoQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeGoQuotaClient.swift; sourceTree = "<group>"; };
@@ -1443,6 +1447,8 @@
 				21210F0340F6B45C7BF28AB0 /* DiagnosticsSupportBundleTests.swift */,
 				1079DC5DFB5709D11EDAACB2 /* DoneDetectorTests.swift */,
 				B51C306A7F8CA416D498EEC6 /* ExecutionHostServerRouteTests.swift */,
+				F5061728394A5B6C7D8E9FA0 /* AWSComputeProvisionerTests.swift */,
+				1728394A5B6C7D8E9FA0B1C2 /* AWSComputeLiveE2ETests.swift */,
 				5B2F92F537B1AC9C7C24DFCF /* F1aWireChatParityTests.swift */,
 				294F5D2431C605A4E23DF6F8 /* F1bWireChatParityTests.swift */,
 				483357794C2704F3A1892570 /* F1cWireChatParityTests.swift */,
@@ -2207,6 +2213,8 @@
 				961138F14762FD98647ADA23 /* DiagnosticsSupportBundleTests.swift in Sources */,
 				915EBD7C5CDF6BE7C78E185D /* DoneDetectorTests.swift in Sources */,
 				972A8C92564CE8C6269F8682 /* ExecutionHostServerRouteTests.swift in Sources */,
+				E4F5061728394A5B6C7D8E9F /* AWSComputeProvisionerTests.swift in Sources */,
+				061728394A5B6C7D8E9FA0B1 /* AWSComputeLiveE2ETests.swift in Sources */,
 				E8E88A643114653B96748F29 /* F1aWireChatParityTests.swift in Sources */,
 				4FC21031ECC2F0973F4D9FBC /* F1bWireChatParityTests.swift in Sources */,
 				36C488FE08B36947E3A98EF9 /* F1cWireChatParityTests.swift in Sources */,

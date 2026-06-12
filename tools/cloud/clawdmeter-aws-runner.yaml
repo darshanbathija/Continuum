@@ -5,6 +5,10 @@ Parameters:
   ClawdmeterRunnerRoleName:
     Type: String
     Default: ClawdmeterRunnerRole
+  ContinuumAgentBinaryURL:
+    Type: String
+    Default: ''
+    Description: Optional prebuilt continuum-agent-linux-arm64 URL (skips on-box Go compile)
   AllowedRegions:
     Type: CommaDelimitedList
     Default: us-east-1,us-west-2,eu-west-1
@@ -54,10 +58,18 @@ Resources:
               - Key: clawdmeter:managed
                 Value: 'true'
         UserData:
-          Fn::Base64: |
-            #!/bin/bash
-            set -euo pipefail
-            curl -fsSL https://raw.githubusercontent.com/clawdmeter/clawdmeter/main/tools/continuum-agent/install-linux.sh | bash
+          Fn::Base64:
+            Fn::Sub: |
+              #!/bin/bash
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -y
+              apt-get install -y curl ca-certificates golang-go
+              BINARY_URL='${ContinuumAgentBinaryURL}'
+              if [[ -n "$BINARY_URL" ]]; then
+                export CONTINUUM_AGENT_BINARY_URL="$BINARY_URL"
+              fi
+              curl -fsSL https://raw.githubusercontent.com/clawdmeter/clawdmeter/main/tools/continuum-agent/install-linux.sh | bash
 
 Outputs:
   LaunchTemplateId:

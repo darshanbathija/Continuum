@@ -16,18 +16,31 @@ public final class AWSComputeProvisioner: ComputeProvisioner {
     }
 
     private let hostStore: ExecutionHostStore
-    private let shellRunner: ShellRunner
+    private let shellRunner: any ShellRunning
+    private let awsExecutableOverride: String?
 
-    public init(
+    init(
         hostStore: ExecutionHostStore = .shared,
-        shellRunner: ShellRunner = .shared
+        shellRunner: (any ShellRunning)? = nil,
+        awsExecutable: String? = nil
     ) {
         self.hostStore = hostStore
-        self.shellRunner = shellRunner
+        self.shellRunner = shellRunner ?? ShellRunner.shared
+        self.awsExecutableOverride = awsExecutable
+    }
+
+    private func resolvedAWSCLI() throws -> String {
+        if let awsExecutableOverride, !awsExecutableOverride.isEmpty {
+            return awsExecutableOverride
+        }
+        guard let aws = ShellRunner.locateBinary("aws") else {
+            throw Error.cliMissing
+        }
+        return aws
     }
 
     public func validateCredentials() async throws -> ProvisionerHealth {
-        guard let aws = ShellRunner.locateBinary("aws") else {
+        guard let aws = try? resolvedAWSCLI() else {
             throw Error.cliMissing
         }
         let profileArgs = awsProfileArgs()
@@ -55,21 +68,28 @@ public final class AWSComputeProvisioner: ComputeProvisioner {
 
     public func provision(spec: RunnerSpec) async throws -> ExecutionHost {
         _ = try await validateCredentials()
-        guard let aws = ShellRunner.locateBinary("aws") else { throw Error.cliMissing }
+        let aws = try resolvedAWSCLI()
 
         let hostId = UUID()
         let instanceType = spec.instanceSize.ec2InstanceType
         let userData = cloudInitUserData(displayName: spec.displayName, hostId: hostId)
 
-        let args = awsProfileArgs(region: spec.region) + [
+        var args = awsProfileArgs(region: spec.region) + [
             "ec2", "run-instances",
             "--image-id", Self.defaultAMI(for: spec.region),
             "--instance-type", instanceType,
             "--count", "1",
+            "--associate-public-ip-address",
             "--tag-specifications", #"ResourceType=instance,Tags=[{Key=Name,Value=clawdmeter-runner-\#(hostId.uuidString.prefix(8))}]"#,
             "--user-data", userData,
             "--output", "json"
         ]
+        if spec.billingMode == .spot {
+            args += [
+                "--instance-market-options",
+                #"MarketType=spot,SpotOptions={SpotInstanceType=one-time,InstanceInterruptionBehavior=terminate}"#
+            ]
+        }
         let result = try await shellRunner.run(executable: aws, arguments: args, timeout: 120)
         struct RunInstances: Decodable {
             struct Reservation: Decodable {
@@ -107,9 +127,10 @@ public final class AWSComputeProvisioner: ComputeProvisioner {
     }
 
     public func start(host: ExecutionHost) async throws {
-        guard let instanceId = host.cloudResourceId, let aws = ShellRunner.locateBinary("aws") else {
+        guard let instanceId = host.cloudResourceId else {
             throw Error.instanceNotFound
         }
+        let aws = try resolvedAWSCLI()
         _ = try await shellRunner.run(
             executable: aws,
             arguments: awsProfileArgs(region: host.cloudRegion) + [
@@ -120,9 +141,10 @@ public final class AWSComputeProvisioner: ComputeProvisioner {
     }
 
     public func stop(host: ExecutionHost) async throws {
-        guard let instanceId = host.cloudResourceId, let aws = ShellRunner.locateBinary("aws") else {
+        guard let instanceId = host.cloudResourceId else {
             throw Error.instanceNotFound
         }
+        let aws = try resolvedAWSCLI()
         _ = try await shellRunner.run(
             executable: aws,
             arguments: awsProfileArgs(region: host.cloudRegion) + [
@@ -134,9 +156,9 @@ public final class AWSComputeProvisioner: ComputeProvisioner {
 
     public func deprovision(hostId: UUID) async throws {
         guard let host = hostStore.host(id: hostId),
-              let instanceId = host.cloudResourceId,
-              let aws = ShellRunner.locateBinary("aws")
+              let instanceId = host.cloudResourceId
         else { throw Error.instanceNotFound }
+        let aws = try resolvedAWSCLI()
         _ = try await shellRunner.run(
             executable: aws,
             arguments: awsProfileArgs(region: host.cloudRegion) + [
@@ -149,7 +171,10 @@ public final class AWSComputeProvisioner: ComputeProvisioner {
     }
 
     public func healthCheck(host: ExecutionHost) async throws -> ExecutionHostHealth {
-        guard let instanceId = host.cloudResourceId, let aws = ShellRunner.locateBinary("aws") else {
+        guard let instanceId = host.cloudResourceId else {
+            return .unreachable
+        }
+        guard let aws = try? resolvedAWSCLI() else {
             return .unreachable
         }
         let result = try await shellRunner.run(
@@ -183,12 +208,25 @@ public final class AWSComputeProvisioner: ComputeProvisioner {
     }
 
     private func cloudInitUserData(displayName: String, hostId: UUID) -> String {
+        let installURL = ProcessInfo.processInfo.environment["CLAWDMETER_CONTINUUM_INSTALL_URL"]
+            ?? "https://raw.githubusercontent.com/clawdmeter/clawdmeter/main/tools/continuum-agent/install-linux.sh"
+        let binaryURL = ProcessInfo.processInfo.environment["CLAWDMETER_CONTINUUM_BINARY_URL"] ?? ""
+        let binaryExport = binaryURL.isEmpty
+            ? ""
+            : "export CONTINUUM_AGENT_BINARY_URL=\"\(binaryURL)\"\n"
         let script = """
         #!/bin/bash
+        set -euo pipefail
         mkdir -p /etc/clawdmeter
-        echo "HOST_DISPLAY_NAME=\(displayName)" >> /etc/clawdmeter/env
-        echo "EXECUTION_HOST_ID=\(hostId.uuidString)" >> /etc/clawdmeter/env
-        curl -fsSL https://raw.githubusercontent.com/clawdmeter/clawdmeter/main/tools/continuum-agent/install-linux.sh | bash
+        cat > /etc/clawdmeter/env <<'ENVEOF'
+        HOST_DISPLAY_NAME=\(displayName)
+        EXECUTION_HOST_ID=\(hostId.uuidString)
+        CLAWDMETER_HOST_KIND=byocAWS
+        ENVEOF
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -y
+        apt-get install -y curl ca-certificates golang-go
+        \(binaryExport)curl -fsSL "\(installURL)" | bash
         """
         return Data(script.utf8).base64EncodedString()
     }

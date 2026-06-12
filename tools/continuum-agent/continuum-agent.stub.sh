@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Placeholder until the standalone Linux binary ships (R1 1B-b).
+# Legacy fallback when no Linux binary or Go toolchain is available.
 set -euo pipefail
-echo "continuum-agent stub: standalone Linux daemon not bundled in this workspace yet."
-echo "Use Mac LaunchAgent (install-mac.sh) for headless daemon validation."
+echo "continuum-agent stub: install Go or set CONTINUUM_AGENT_BINARY_URL, then re-run install-linux.sh." >&2
+echo "Build locally: tools/continuum-agent/build-linux.sh" >&2
 exit 1
