@@ -153,7 +153,7 @@ public struct ComposerModelPicker: View {
             switch choice {
             case .builtin(let vendor):
                 return enabledVendors.contains(vendor)
-            case .custom:
+            case .custom, .opencodePartner:
                 return true
             }
         }
@@ -177,6 +177,8 @@ public struct ComposerModelPicker: View {
             return .vendor(vendor)
         case .custom(let providerId):
             return .customProvider(providerId)
+        case .opencodePartner(let partnerId):
+            return .opencodePartner(partnerId)
         }
     }
 
@@ -300,6 +302,12 @@ public struct ComposerModelPicker: View {
                 label: ProviderChoice.custom(providerId).displayName(in: catalog),
                 size: 22
             )
+        case .opencodePartner(let partnerId):
+            OpenCodeProviderLogoView(
+                providerId: partnerId,
+                fallbackLabel: ProviderChoice.opencodePartner(partnerId).displayName(in: catalog),
+                size: 22
+            )
         }
     }
 
@@ -311,6 +319,8 @@ public struct ComposerModelPicker: View {
             return .builtin(vendor)
         case .customProvider(let providerId):
             return .custom(providerId)
+        case .opencodePartner(let partnerId):
+            return .opencodePartner(partnerId)
         }
     }
 
@@ -557,6 +567,8 @@ public struct ComposerModelPicker: View {
             return "No models available for \(vendor.displayName)."
         case .customProvider(let providerId):
             return "No models available for \(ProviderChoice.custom(providerId).displayName(in: catalog))."
+        case .opencodePartner(let partnerId):
+            return "No models available for \(ProviderChoice.opencodePartner(partnerId).displayName(in: catalog))."
         }
     }
 
@@ -621,6 +633,7 @@ public struct ComposerModelPicker: View {
             case .favorites: return initialChoice
             case .vendor(let vendor): return .builtin(vendor)
             case .customProvider(let providerId): return .custom(providerId)
+            case .opencodePartner(let partnerId): return .opencodePartner(partnerId)
             }
         }()
         let modelDisplay: String = {
@@ -815,6 +828,11 @@ public struct ComposerModelPicker: View {
             return ProviderModelPickerSupport
                 .entries(for: choice, catalog: catalog, query: "")
                 .map { VisibleRowEntry(choice: choice, model: $0) }
+        case .opencodePartner(let partnerId):
+            let choice = ProviderChoice.opencodePartner(partnerId)
+            return ProviderModelPickerSupport
+                .entries(for: choice, catalog: catalog, query: "")
+                .map { VisibleRowEntry(choice: choice, model: $0) }
         }
     }
 
@@ -834,6 +852,10 @@ public struct ComposerModelPicker: View {
             return ProviderModelPickerSupport
                 .entries(for: .custom(providerId), catalog: catalog, query: trimmed)
                 .isEmpty
+        case .opencodePartner(let partnerId):
+            return ProviderModelPickerSupport
+                .entries(for: .opencodePartner(partnerId), catalog: catalog, query: trimmed)
+                .isEmpty
         }
     }
 
@@ -845,6 +867,8 @@ public struct ComposerModelPicker: View {
             return vendor.rawValue
         case .customProvider(let providerId):
             return "custom-\(providerId)"
+        case .opencodePartner(let partnerId):
+            return "opencode-partner-\(partnerId)"
         }
     }
 
@@ -864,6 +888,7 @@ public enum RailKey: Hashable {
     case favorites
     case vendor(ChatVendor)
     case customProvider(String)
+    case opencodePartner(String)
 }
 
 private struct RailEntry: Identifiable {

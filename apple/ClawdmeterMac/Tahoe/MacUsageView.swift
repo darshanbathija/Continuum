@@ -27,6 +27,9 @@ public struct MacUsageView: View {
     /// Multi-account: one extra gauge column per secondary account
     /// (Settings → Providers → Add account). Empty in Previews.
     var secondaryColumns: [SecondaryTahoeColumn] = []
+    /// Wire v30: loopback client for host-run-minute analytics.
+    var agentClient: AgentControlClient?
+    @State private var hostRunMinutes: HostRunMinutesResponse?
     /// v0.29.32: spend/token analytics read other apps' data, so they're gated
     /// behind an explicit "Get access from your Mac" tap. Mirrors the persisted
     /// flag; flipped locally so the view swaps in the charts on grant.
@@ -42,7 +45,8 @@ public struct MacUsageView: View {
         grokModel: AppModel? = nil,
         opencodeModel: AppModel? = nil,
         usageHistoryStore: UsageHistoryStore? = nil,
-        secondaryColumns: [SecondaryTahoeColumn] = []
+        secondaryColumns: [SecondaryTahoeColumn] = [],
+        agentClient: AgentControlClient? = nil
     ) {
         self.data = data
         self.claudeModel = claudeModel
@@ -53,6 +57,7 @@ public struct MacUsageView: View {
         self.opencodeModel = opencodeModel
         self.usageHistoryStore = usageHistoryStore
         self.secondaryColumns = secondaryColumns
+        self.agentClient = agentClient
     }
 
     public var body: some View {
@@ -81,6 +86,16 @@ public struct MacUsageView: View {
 
                     TahoeHair()
 
+                    if let hostRunMinutes {
+                        HostRunMinutesSection(
+                            response: hostRunMinutes,
+                            hostNames: Dictionary(
+                                uniqueKeysWithValues: (agentClient?.executionHosts ?? []).map { ($0.id, $0.displayName) }
+                            )
+                        )
+                        .padding(.horizontal, 6).padding(.bottom, 18)
+                    }
+
                     AnalyticsRow(usageHistoryStore: usageHistoryStore)
                         .padding(.top, 14)
 
@@ -101,6 +116,15 @@ public struct MacUsageView: View {
         .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
             enabledProviderIDs = ProviderEnablement.enabledProviderIDs()
         }
+        .task {
+            await refreshHostRunMinutes()
+        }
+    }
+
+    @MainActor
+    private func refreshHostRunMinutes() async {
+        guard let client = agentClient, client.supportsExecutionHosts else { return }
+        hostRunMinutes = await client.refreshHostRunMinutes()
     }
 
     private struct LiveColumn: Identifiable {

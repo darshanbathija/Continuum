@@ -23,6 +23,11 @@ extension Notification.Name {
 @MainActor
 final class AppRuntime: ObservableObject {
 
+    /// LaunchAgent / continuum-agent mode: daemon only, no UI chrome.
+    static var isHeadlessAgentMode: Bool {
+        ProcessInfo.processInfo.arguments.contains("--headless-agent")
+    }
+
     let claudeModel: AppModel
     let codexModel: AppModel
     let geminiModel: AppModel
@@ -550,6 +555,9 @@ final class AppRuntime: ObservableObject {
             Task { @MainActor [self] in
                 self.sessionsRefreshTask = self.sessionsModel.startPeriodicRefresh()
                 self.sessionScheduler.start()
+                if !Self.isHeadlessAgentMode {
+                    HandoffAutoSuggestService.shared.startMonitoring()
+                }
                 runtimeLogger.info("A7 deferred subsystems started (sessions refresh + scheduler)")
             }
             // v0.27.0: openDesignDaemon.ensureRunning() removed along with

@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Clawdmeter BYOC AWS runner — IAM role + launch template for EC2 agent hosts (R2).
+
+Parameters:
+  ClawdmeterRunnerRoleName:
+    Type: String
+    Default: ClawdmeterRunnerRole
+  AllowedRegions:
+    Type: CommaDelimitedList
+    Default: us-east-1,us-west-2,eu-west-1
+
+Resources:
+  ClawdmeterRunnerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref ClawdmeterRunnerRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ClawdmeterRunnerMinimal
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeTags
+                Resource: '*'
+
+  ClawdmeterRunnerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref ClawdmeterRunnerRole
+
+  ClawdmeterRunnerLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: clawdmeter-runner
+      LaunchTemplateData:
+        InstanceType: t4g.small
+        IamInstanceProfile:
+          Arn: !GetAtt ClawdmeterRunnerInstanceProfile.Arn
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: clawdmeter-runner
+              - Key: clawdmeter:managed
+                Value: 'true'
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            set -euo pipefail
+            curl -fsSL https://raw.githubusercontent.com/clawdmeter/clawdmeter/main/tools/continuum-agent/install-linux.sh | bash
+
+Outputs:
+  LaunchTemplateId:
+    Description: EC2 launch template for Clawdmeter runners
+    Value: !Ref ClawdmeterRunnerLaunchTemplate
+  InstanceProfileArn:
+    Description: IAM instance profile for runner EC2 instances
+    Value: !GetAtt ClawdmeterRunnerInstanceProfile.Arn
+  AllowedRegions:
+    Description: Regions Clawdmeter supports for BYOC deploy
+    Value: !Join [',', !Ref AllowedRegions]

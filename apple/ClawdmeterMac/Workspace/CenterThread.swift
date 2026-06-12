@@ -230,6 +230,13 @@ struct CenterThread: View {
                             .lineLimit(1)
                             .accessibilityIdentifier("code.header.checkpoint-status")
                     }
+                    if let executionHostRunLine {
+                        Text("· \(executionHostRunLine)")
+                            .font(TahoeFont.body(10.5))
+                            .foregroundStyle(t.fg3)
+                            .lineLimit(1)
+                            .accessibilityIdentifier("code.center.header.execution-host")
+                    }
                 }
             }
             Spacer()
@@ -329,13 +336,27 @@ struct CenterThread: View {
     // owns mode-selection now.
 
     private var headerAccessibilityValue: String {
-        [
+        var parts = [
             liveSession.id.uuidString,
             headerLabel(for: liveSession),
             model.displayAgent(for: liveSession, catalog: catalog).rawValue,
             model.displayModelId(for: liveSession, catalog: catalog) ?? "",
             headerConfigurationSummary
-        ].joined(separator: " ")
+        ]
+        if let executionHostRunLine {
+            parts.append(executionHostRunLine)
+        }
+        return parts.joined(separator: " ")
+    }
+
+    /// R1 1E: "Running on VPS · 42 min" in session detail header.
+    private var executionHostRunLine: String? {
+        guard let label = liveSession.executionHostLabel else { return nil }
+        if let minutes = HostRunMinuteStore.shared.billableMinutes(forSession: liveSession.id),
+           minutes > 0 {
+            return "Running on \(label) · \(minutes) min"
+        }
+        return "Running on \(label)"
     }
 
     private var workspaceDraftDefaults: ComposerStore.ChipDefaults {

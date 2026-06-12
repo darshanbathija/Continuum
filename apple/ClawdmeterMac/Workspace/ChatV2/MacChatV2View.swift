@@ -2596,6 +2596,11 @@ private struct ComposerBar: View {
                 return true
             }
             return entry.available
+        case .opencodePartner(let partnerId):
+            guard client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled }) else {
+                return false
+            }
+            return OpencodeProcessManager.shared.binaryPath != nil
         }
     }
 
@@ -2611,6 +2616,15 @@ private struct ComposerBar: View {
             guard isChoiceAvailable(choice) else {
                 return providerMatrix?.customProviders.first(where: { $0.id == providerId && !$0.available })?.reason
                     ?? "\(label) is unavailable."
+            }
+            return nil
+        case .opencodePartner(let partnerId):
+            let label = choice.displayName(in: client.modelCatalog)
+            guard client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled }) else {
+                return "Connect \(label) in Settings → Providers."
+            }
+            guard isChoiceAvailable(choice) else {
+                return "\(label) is unavailable — install opencode on PATH."
             }
             return nil
         }
@@ -2634,6 +2648,10 @@ private struct ComposerBar: View {
                 }
             case .custom(let providerId):
                 if client.modelCatalog.customProviders.contains(where: { $0.id == providerId && $0.enabled }) {
+                    choices.append(choice)
+                }
+            case .opencodePartner(let partnerId):
+                if client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled }) {
                     choices.append(choice)
                 }
             }

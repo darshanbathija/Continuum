@@ -49,6 +49,21 @@ public final class AgentControlServer {
     /// iOS new-session flow doesn't need to ship explicit defaults.
     let workspaceStore: WorkspaceStore
     let customProviderStore: CustomProviderStore?
+    /// Wire v30: registered execution hosts (local Mac + remote devices).
+    let executionHostStore: ExecutionHostStore
+    lazy var executionHostCoordinator: ExecutionHostCoordinator = ExecutionHostCoordinator(
+        hostStore: executionHostStore,
+        remoteClient: MultiHostRelayRequestBridge.makeRemoteClient()
+    )
+    lazy var sessionHandoffService: SessionHandoffService = SessionHandoffService(
+        registry: registry,
+        hostStore: executionHostStore,
+        coordinator: executionHostCoordinator
+    )
+    lazy var awsComputeProvisioner: AWSComputeProvisioner = AWSComputeProvisioner(
+        hostStore: executionHostStore
+    )
+    private let hostRunMinuteStore: HostRunMinuteStore
     private let repoEnvResolver: RepoEnvRuntimeResolver?
     /// Wire v24: vendor CLI/MCP provisioning. Optional for tests that
     /// instantiate only the session daemon surface.
@@ -272,6 +287,8 @@ public final class AgentControlServer {
         chatFileResolver: SessionFileResolver? = nil,
         workspaceStore: WorkspaceStore? = nil,
         customProviderStore: CustomProviderStore? = nil,
+        executionHostStore: ExecutionHostStore? = nil,
+        hostRunMinuteStore: HostRunMinuteStore? = nil,
         repoEnvResolver: RepoEnvRuntimeResolver? = nil,
         vendorProvisioningService: VendorProvisioningService? = nil,
         mobileCommandOutbox: MobileCommandOutbox? = nil,
@@ -291,6 +308,8 @@ public final class AgentControlServer {
         // can inject an isolated tmpdir-backed store.
         self.workspaceStore = workspaceStore ?? WorkspaceStore()
         self.customProviderStore = customProviderStore
+        self.executionHostStore = executionHostStore ?? ExecutionHostStore.shared
+        self.hostRunMinuteStore = hostRunMinuteStore ?? HostRunMinuteStore.shared
         self.repoEnvResolver = repoEnvResolver
         self.vendorProvisioningService = vendorProvisioningService
         self.codeRunProfiles = CodeRunProfileService(repoEnvResolver: repoEnvResolver)
@@ -374,6 +393,7 @@ public final class AgentControlServer {
         // ~/.clawdmeter pidfile or another live daemon's children.
         if writesServerMetadata {
             HarnessProcessReaper.shared.reapOrphans()
+            executionHostStore.refreshLocalHostMetadata()
         }
         // Track A: start the idle PTY sweeper (a no-op until the
         // clawdmeter.claude.idleSuspend.enabled flag is on).
@@ -411,6 +431,12 @@ public final class AgentControlServer {
             await outbox.replayFromAuditLog()
         }
         startAutopilotSweep()
+        if writesServerMetadata {
+            AWSCloudIdleMonitor.shared.start(
+                provisioner: awsComputeProvisioner,
+                sessionsProvider: { [weak self] in self?.registry.sessions ?? [] }
+            )
+        }
         #if DEBUG
         installTerminalWSDropObserverForTesting()
         #endif
@@ -438,6 +464,7 @@ public final class AgentControlServer {
         #endif
         autopilotSweepTask?.cancel()
         autopilotSweepTask = nil
+        AWSCloudIdleMonitor.shared.stop()
         serverLogger.info("Server stopped")
     }
 
@@ -1456,6 +1483,56 @@ public final class AgentControlServer {
         t.register(method: "GET", pattern: "/provider-instances") { [weak self] _, conn, _ in
             await self?.handleGetProviderInstances(connection: conn)
         }
+        // Wire v30: multi-device execution host registry.
+        t.register(method: "GET", pattern: "/execution-hosts") { [weak self] _, conn, _ in
+            self?.handleGetExecutionHosts(connection: conn)
+        }
+        t.register(method: "GET", pattern: "/execution-hosts/self") { [weak self] _, conn, _ in
+            self?.handleGetExecutionHostSelf(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/execution-hosts") { [weak self] req, conn, _ in
+            self?.handlePostExecutionHost(request: req, connection: conn)
+        }
+        t.register(method: "PATCH", pattern: "/execution-hosts/:id") { [weak self] req, conn, params in
+            self?.handlePatchExecutionHost(
+                hostId: params["id"] ?? "",
+                request: req,
+                connection: conn
+            )
+        }
+        t.register(method: "DELETE", pattern: "/execution-hosts/:id") { [weak self] _, conn, params in
+            self?.handleDeleteExecutionHost(hostId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "POST", pattern: "/execution-hosts/pair/tailscale") { [weak self] req, conn, _ in
+            await self?.handlePairTailscaleExecutionHost(request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/execution-hosts/pair/relay") { [weak self] req, conn, _ in
+            self?.handlePairRelayExecutionHost(request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/execution-hosts/:id/health") { [weak self] _, conn, params in
+            await self?.handleProbeExecutionHostHealth(hostId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "GET", pattern: "/usage/host-minutes") { [weak self] _, conn, _ in
+            self?.handleGetHostRunMinutes(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/compute/aws/validate") { [weak self] _, conn, _ in
+            await self?.handleValidateAWSCompute(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/compute/aws/provision") { [weak self] req, conn, _ in
+            await self?.handleProvisionAWSCompute(request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/compute/aws/:id/stop") { [weak self] _, conn, params in
+            await self?.handleStopAWSCompute(hostId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "POST", pattern: "/compute/aws/:id/start") { [weak self] _, conn, params in
+            await self?.handleStartAWSCompute(hostId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "DELETE", pattern: "/compute/aws/:id") { [weak self] _, conn, params in
+            await self?.handleTerminateAWSCompute(hostId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/handoff") { [weak self] req, conn, params in
+            await self?.handleSessionHandoff(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
         t.register(method: "POST", pattern: "/chat-providers/refresh") { [weak self] _, conn, _ in
             await self?.handleRefreshChatProviders(connection: conn)
         }
@@ -1526,7 +1603,10 @@ public final class AgentControlServer {
                 : await OpenRouterModelProbe.shared.currentState().models
             catalog = catalog.replacingOpenRouter(openRouterModels)
         }
+        let partnerSummaries = await OpenCodePartnerModelProbe.shared.summaries()
+        catalog = catalog.replacingOpenCodePartners(partnerSummaries)
         let enabledIDs = ProviderEnablement.enabledProviderIDs(for: .code)
+            + partnerSummaries.filter(\.enabled).map { OpenCodePartnerSupport.enablementId(for: $0.id) }
         let readyModelProviderIDs = enabledIDs.filter { id in
             let root = ProviderRegistry.rootProviderID(for: id)
             if root == "grok" {
@@ -1546,6 +1626,7 @@ public final class AgentControlServer {
             grok: filtered.grok,
             enabledProviderIDs: enabledIDs,
             customProviders: customProviders,
+            opencodePartners: filtered.opencodePartners,
             updatedAt: filtered.updatedAt
         )
     }
@@ -4870,6 +4951,391 @@ public final class AgentControlServer {
         }
     }
 
+    // MARK: - Wire v30 execution hosts
+
+    private struct SpawnExecutionHostResolution {
+        let host: ExecutionHost
+        let isLocal: Bool
+    }
+
+    private func resolveSpawnExecutionHost(targetHostId: UUID?) -> SpawnExecutionHostResolution? {
+        let localId = executionHostStore.localHostIdValue()
+        let resolvedId = targetHostId ?? localId
+        guard let host = executionHostStore.host(id: resolvedId) else { return nil }
+        return SpawnExecutionHostResolution(host: host, isLocal: resolvedId == localId)
+    }
+
+    private func handleGetExecutionHosts(connection: NWConnection) {
+        let response = ExecutionHostListResponse(
+            hosts: executionHostStore.allHosts(),
+            localHostId: executionHostStore.localHostIdValue()
+        )
+        sendCodable(response, on: connection)
+    }
+
+    private func handleGetExecutionHostSelf(connection: NWConnection) {
+        let host = executionHostStore.localHost()
+        sendCodable(host, on: connection)
+    }
+
+    private func handlePostExecutionHost(request: HTTPRequest, connection: NWConnection) {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let req = try? decoder.decode(RegisterExecutionHostRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        guard req.host.kind != .localMac else {
+            sendResponse(.badRequest(detail: "local_mac_is_implicit"), on: connection)
+            return
+        }
+        sendCodable(executionHostStore.upsert(req.host), on: connection)
+        if let saved = executionHostStore.host(id: req.host.id) {
+            broadcastExecutionHostRegistered(saved)
+        }
+    }
+
+    private func handlePatchExecutionHost(
+        hostId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) {
+        guard let uuid = UUID(uuidString: hostId),
+              var host = executionHostStore.host(id: uuid)
+        else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let req = try? decoder.decode(PatchExecutionHostRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        if let name = req.displayName {
+            host.displayName = name
+        }
+        if let health = req.health {
+            host.health = health
+        }
+        if let checkedAt = req.lastHealthCheckAt {
+            host.lastHealthCheckAt = checkedAt
+        }
+        sendCodable(executionHostStore.upsert(host), on: connection)
+    }
+
+    private func handleDeleteExecutionHost(hostId: String, connection: NWConnection) {
+        guard let uuid = UUID(uuidString: hostId) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        if uuid == executionHostStore.localHostIdValue() {
+            sendResponse(.badRequest(detail: "cannot_remove_local_host"), on: connection)
+            return
+        }
+        guard executionHostStore.remove(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        MultiHostRelayStore.shared.remove(hostId: uuid)
+        sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
+    }
+
+    private func handlePairTailscaleExecutionHost(request: HTTPRequest, connection: NWConnection) async {
+        let decoder = JSONDecoder()
+        guard let req = try? decoder.decode(PairTailscaleExecutionHostRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        let hostname = req.tailscaleHostname.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !hostname.isEmpty else {
+            sendResponse(.badRequest(detail: "hostname_required"), on: connection)
+            return
+        }
+        let hostId = UUID()
+        var transports: [ExecutionHostTransport] = [.tailscaleDirect]
+        if req.relayAlsoEnabled { transports.append(.relay) }
+        let host = ExecutionHost(
+            id: hostId,
+            displayName: req.displayName,
+            kind: .tailscaleHost,
+            primaryTransport: .tailscaleDirect,
+            preferredTransports: transports,
+            health: .unknown,
+            tailscaleHostname: hostname,
+            tailscalePort: req.port,
+            relayAlsoEnabled: req.relayAlsoEnabled,
+            daemonWireVersion: AgentControlWireVersion.current
+        )
+        let saved = executionHostStore.upsert(host)
+        MultiHostRelayStore.shared.save(
+            record: MultiHostRelayStore.Record(
+                hostId: hostId,
+                sid: hostname,
+                relayUrl: "tailscale-direct"
+            ),
+            iosToken: req.pairingToken
+        )
+        Task.detached(priority: .utility) { @MainActor in
+            await self.executionHostCoordinator.refreshHealth(clientOnTailnet: true)
+        }
+        broadcastExecutionHostRegistered(saved)
+        sendCodable(saved, on: connection)
+    }
+
+    private func handlePairRelayExecutionHost(request: HTTPRequest, connection: NWConnection) {
+        let decoder = JSONDecoder()
+        guard let req = try? decoder.decode(PairRelayExecutionHostRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        let relayUrl = req.relayUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sid = req.sid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !relayUrl.isEmpty, !sid.isEmpty, !req.pairingToken.isEmpty else {
+            sendResponse(.badRequest(detail: "relay_url_sid_token_required"), on: connection)
+            return
+        }
+        let hostId = UUID()
+        let host = ExecutionHost(
+            id: hostId,
+            displayName: req.displayName,
+            kind: .vps,
+            primaryTransport: .relay,
+            preferredTransports: [.relay],
+            health: .unknown,
+            relayEndpoint: relayUrl,
+            relayPairingSid: sid,
+            sshHostAlias: req.sshHostAlias,
+            relayAlsoEnabled: true,
+            daemonWireVersion: AgentControlWireVersion.current
+        )
+        let saved = executionHostStore.upsert(host)
+        MultiHostRelayStore.shared.save(
+            record: MultiHostRelayStore.Record(hostId: hostId, sid: sid, relayUrl: relayUrl),
+            iosToken: req.pairingToken,
+            derivedSymmetricKeyBase64URL: req.derivedSymmetricKeyBase64URL
+        )
+        broadcastExecutionHostRegistered(saved)
+        sendCodable(saved, on: connection)
+    }
+
+    private func handleProbeExecutionHostHealth(hostId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: hostId) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        await executionHostCoordinator.refreshHealth(clientOnTailnet: true)
+        guard let host = executionHostStore.host(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        sendCodable(host, on: connection)
+    }
+
+    private func handleGetHostRunMinutes(connection: NWConnection) {
+        var activeCounts: [UUID: Int] = [:]
+        for session in registry.sessions where session.archivedAt == nil && session.status != .done {
+            if let hostId = session.executionHostId {
+                activeCounts[hostId, default: 0] += 1
+            }
+        }
+        let response = HostRunMinutesResponse(
+            hosts: hostRunMinuteStore.summaries(activeCountsByHost: activeCounts),
+            records: hostRunMinuteStore.allRecords()
+        )
+        sendCodable(response, on: connection)
+    }
+
+    private func handleValidateAWSCompute(connection: NWConnection) async {
+        do {
+            let health = try await awsComputeProvisioner.validateCredentials()
+            sendCodable(health, on: connection)
+        } catch {
+            sendCodable(ProvisionerHealth(ok: false, message: error.localizedDescription), on: connection)
+        }
+    }
+
+    private func handleProvisionAWSCompute(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(AWSProvisionRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        do {
+            let host = try await awsComputeProvisioner.provision(spec: req.spec)
+            broadcastExecutionHostRegistered(host)
+            let status = CloudProvisionStatus(
+                hostId: host.id,
+                phase: .launching,
+                message: "EC2 instance launching",
+                instanceId: host.cloudResourceId,
+                estimatedHourlyUSD: req.spec.billingMode == .spot ? 0.005 : 0.017
+            )
+            sendCodable(AWSProvisionResponse(host: host, status: status), on: connection)
+        } catch {
+            sendResponse(HTTPResponse(
+                status: 502,
+                reason: "Bad Gateway",
+                contentType: "application/json",
+                body: Data(#"{"error":"aws_provision_failed","detail":"\#(error.localizedDescription)"}"#.utf8)
+            ), on: connection)
+        }
+    }
+
+    private func handleStopAWSCompute(hostId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: hostId),
+              let host = executionHostStore.host(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        do {
+            try await awsComputeProvisioner.stop(host: host)
+            sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleStartAWSCompute(hostId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: hostId),
+              let host = executionHostStore.host(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        do {
+            try await awsComputeProvisioner.start(host: host)
+            sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleTerminateAWSCompute(hostId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: hostId) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        do {
+            try await awsComputeProvisioner.deprovision(hostId: uuid)
+            sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func broadcastExecutionHostRegistered(_ host: ExecutionHost) {
+        AgentEventStream.recordEvent(
+            sessionId: executionHostStore.localHostIdValue(),
+            kind: .executionHostRegistered,
+            payload: [
+                "hostId": host.id.uuidString,
+                "displayName": host.displayName,
+                "kind": host.kind.rawValue
+            ]
+        )
+    }
+
+    func broadcastHandoffPhaseChanged(sessionId: UUID, phase: HandoffState.Phase) {
+        AgentEventStream.recordEvent(
+            sessionId: sessionId,
+            kind: .handoffPhaseChanged,
+            payload: [
+                "sessionId": sessionId.uuidString,
+                "phase": phase.rawValue
+            ]
+        )
+    }
+
+    private func handleSessionHandoff(
+        sessionId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: sessionId) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        let decoder = JSONDecoder()
+        guard let req = try? decoder.decode(HandoffSessionRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        do {
+            let response = try await sessionHandoffService.handoff(
+                sessionId: uuid,
+                targetHostId: req.targetHostId,
+                clientOnTailnet: true
+            )
+            sendCodable(response, on: connection)
+        } catch SessionHandoffError.gitDirty(let message) {
+            sendResponse(HTTPResponse(
+                status: 409,
+                reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"git_dirty","detail":"\#(message)"}"#.utf8)
+            ), on: connection)
+        } catch SessionHandoffError.gitPushFailed(let message) {
+            sendResponse(HTTPResponse(
+                status: 502,
+                reason: "Bad Gateway",
+                contentType: "application/json",
+                body: Data(#"{"error":"git_push_failed","detail":"\#(message)"}"#.utf8)
+            ), on: connection)
+        } catch SessionHandoffError.targetHostUnreachable {
+            sendResponse(HTTPResponse(
+                status: 503,
+                reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"target_host_unreachable"}"#.utf8)
+            ), on: connection)
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleRemotePostSession(
+        req: NewSessionRequest,
+        spawnHost: SpawnExecutionHostResolution,
+        connection: NWConnection
+    ) async {
+        if spawnHost.host.kind == .byocAWS {
+            do {
+                try await AWSCloudIdleMonitor.shared.ensureRunning(
+                    host: spawnHost.host,
+                    provisioner: awsComputeProvisioner
+                )
+            } catch {
+                sendResponse(HTTPResponse(
+                    status: 503,
+                    reason: "Service Unavailable",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"aws_start_failed","detail":"\#(error.localizedDescription)"}"#.utf8)
+                ), on: connection)
+                return
+            }
+        }
+        do {
+            let session = try await executionHostCoordinator.forwardSessionCreate(
+                hostId: spawnHost.host.id,
+                request: req,
+                clientOnTailnet: true
+            )
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(session) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            sendResponse(HTTPResponse(
+                status: 503,
+                reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"remote_spawn_failed"}"#.utf8)
+            ), on: connection)
+        }
+    }
+
     /// Historical analytics snapshot — same data the Mac dashboard's
     /// Analytics view shows. Served verbatim so iPhone renders identical
     /// totals + daily chart + by-repo split. Replaces iCloud KV sync
@@ -4998,13 +5464,18 @@ public final class AgentControlServer {
     // MARK: - Session endpoints (Phase 2)
 
     private func handleGetSessions(connection: NWConnection) {
-        let sessions = registry.sessions
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        if let body = try? encoder.encode(sessions) {
-            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
-        } else {
-            sendResponse(.internalError, on: connection)
+        Task { @MainActor in
+            await executionHostCoordinator.refreshHealth()
+            let merged = await executionHostCoordinator.mergedSessions(localSessions: registry.sessions)
+            let activeIds = Set(merged.filter { $0.archivedAt == nil && $0.status != .done }.map(\.id))
+            hostRunMinuteStore.tickOpenSessions(activeSessionIds: activeIds)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(merged) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
         }
     }
 
@@ -5409,6 +5880,23 @@ public final class AgentControlServer {
             return
         }
 
+        guard let spawnHost = resolveSpawnExecutionHost(targetHostId: req.targetHostId) else {
+            sendResponse(HTTPResponse(
+                status: 422, reason: "Unprocessable Entity",
+                contentType: "application/json",
+                body: Data(#"{"error":"execution_host_unknown"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        guard spawnHost.isLocal else {
+            await handleRemotePostSession(
+                req: req,
+                spawnHost: spawnHost,
+                connection: connection
+            )
+            return
+        }
+
         if let reason = providerDisabledReason(provider: req.agent) {
             sendProviderDisabled(provider: req.agent, reason: reason, on: connection)
             return
@@ -5747,6 +6235,7 @@ public final class AgentControlServer {
                 tmuxPaneId: nil,
                 planMode: effectivePlanMode,
                 mode: req.useWorktree ? .worktree : .local,
+                parentSessionId: req.parentSessionId,
                 effort: req.effort,
                 ownsWorktree: worktreePath != nil,
                 envSetId: resolvedEnv?.set?.id,
@@ -7811,10 +8300,15 @@ public final class AgentControlServer {
               !id.isEmpty, id != "opencode-default" else { return nil }
         if id.contains("/") {
             let parts = id.split(separator: "/", maxSplits: 1).map(String.init)
-            if parts.count == 2, parts[0] == "opencode-go" {
+            guard parts.count == 2 else { return nil }
+            switch parts[0] {
+            case "opencode-go":
                 return ["providerID": "opencode-go", "modelID": parts[1]]
+            case "openrouter":
+                return ["providerID": "openrouter", "modelID": id]
+            default:
+                return ["providerID": parts[0], "modelID": parts[1]]
             }
-            return ["providerID": "openrouter", "modelID": id]
         }
         return ["providerID": "opencode-go", "modelID": id]
     }

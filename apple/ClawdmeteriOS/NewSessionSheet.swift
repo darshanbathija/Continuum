@@ -130,6 +130,16 @@ struct NewSessionSheet: View {
                 }
                 .task { providerInstances = await client.fetchProviderInstances() }
 
+                if client.supportsExecutionHosts, client.executionHosts.count > 1 {
+                    Section("Device") {
+                        ExecutionHostPickerSection(
+                            hosts: client.executionHosts,
+                            localHostId: client.localExecutionHostId,
+                            selectedHostId: $selectedHostId
+                        )
+                    }
+                }
+
                 Section("Run mode") {
                     // v0.7.9: Mode picker removed. Every new session
                     // lands in a city-named worktree by default; the
@@ -191,6 +201,9 @@ struct NewSessionSheet: View {
                 await client.refreshHealth()
                 await client.refreshModelCatalog()
                 await client.refreshProviderDefaults()
+                if client.supportsExecutionHosts {
+                    await client.refreshExecutionHosts()
+                }
                 if repoKey.isEmpty, let first = client.repos.first {
                     repoKey = first.key
                 }
@@ -338,6 +351,8 @@ struct NewSessionSheet: View {
         }
     }
 
+    @State private var selectedHostId: UUID?
+
     private func startSession() {
         guard !repoKey.isEmpty, let effectiveAgent else { return }
         isStarting = true
@@ -353,7 +368,8 @@ struct NewSessionSheet: View {
                 effort: currentModelSupportsEffort ? effort : nil,
                 abPair: customProviderId == nil && runAsABPair ? abPairPartner(for: effectiveAgent) : nil,
                 providerInstanceId: selectedAccountWireId,
-                customProviderId: customProviderId
+                customProviderId: customProviderId,
+                targetHostId: selectedHostId
             ))
             await MainActor.run {
                 isStarting = false

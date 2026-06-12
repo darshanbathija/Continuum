@@ -75,6 +75,7 @@ public enum SessionGrouping: String, Codable, CaseIterable, Sendable {
     case date
     case status
     case agent
+    case host
     case none
 
     public var displayName: String {
@@ -83,6 +84,7 @@ public enum SessionGrouping: String, Codable, CaseIterable, Sendable {
         case .date:   return "Date"
         case .status: return "Status"
         case .agent:  return "Agent"
+        case .host:   return "Device"
         case .none:   return "None"
         }
     }

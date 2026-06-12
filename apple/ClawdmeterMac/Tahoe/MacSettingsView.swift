@@ -329,6 +329,11 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var deviceSettings: some View {
+        SettingsCard(title: "Execution hosts",
+                     sub: "Mac, VPS, and Tailscale devices that can run agent sessions.") {
+            ExecutionHostSettingsView(client: runtime?.loopbackClient)
+        }
+
         if supportsAnyAutoRevive {
             SettingsCard(title: "Quota & sync",
                          sub: "Behavior that affects the menu-bar agent and the paired iPhone.") {
@@ -1313,7 +1318,8 @@ struct SettingsProviderRowsWithDeviceStatus: View {
     @State private var deviceStatuses: [String: ProviderDeviceStatus] = [:]
     @State private var isRefreshingDiscovery = false
     @State private var setupTerminal: SetupTerminalSession?
-    @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
+    @State private var showOpenCodeProviderPicker = false
+    @State private var openCodeAuthSetup: OpenCodeAuthSetupRequest?
     @State private var showOpenCodeGoSetupPanel = false
     @State private var showOpenRouterSetupPanel = false
     @State private var openCodeGoKeyDraft = ""
@@ -1358,8 +1364,21 @@ struct SettingsProviderRowsWithDeviceStatus: View {
             }
         }
         .task { await refreshDiscovery() }
-        .sheet(item: $opencodeSetupCommand) { command in
-            OpencodeSetupSheet(command: command) {
+        .sheet(isPresented: $showOpenCodeProviderPicker) {
+            OpenCodeProviderPickerSheet { request in
+                openCodeAuthSetup = request
+            }
+        }
+        .sheet(item: $openCodeAuthSetup) { request in
+            OpencodeSetupSheet(
+                command: request.command,
+                providerID: request.providerID,
+                providerName: request.providerName
+            ) {
+                ProviderEnablement.setEnabled(
+                    OpenCodePartnerSupport.enablementId(for: request.providerID),
+                    true
+                )
                 Task { await refreshDiscovery() }
             }
         }
@@ -1382,6 +1401,7 @@ struct SettingsProviderRowsWithDeviceStatus: View {
         await CursorModelProbe.shared.invalidate()
         await OpenCodeGoModelProbe.shared.invalidate()
         await OpenRouterModelProbe.shared.invalidate()
+        await OpenCodePartnerModelProbe.shared.invalidate()
     }
 
     private func performSetup(providerId: String, action: ProviderDeviceSetupAction) async {
@@ -1397,7 +1417,7 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                 NSWorkspace.shared.open(URL(string: "https://antigravity.google")!)
             }
         case .openOpencodeSignIn:
-            await MainActor.run { opencodeSetupCommand = .signIn }
+            await MainActor.run { showOpenCodeProviderPicker = true }
         case .addOpenRouterKey:
             await MainActor.run {
                 showOpenRouterSetupPanel = true
@@ -1660,7 +1680,7 @@ enum ProviderSettingsCopy {
         case .cursor:
             return "Cursor agent models via your Cursor subscription"
         case .opencode:
-            return "Curated models including Claude, GPT, Gemini and more"
+            return "OpenCode Go subscription models (Kimi, GLM, DeepSeek, …)"
         case .openrouter:
             return "Hundreds of models through a single API key"
         case .grok:
@@ -1787,9 +1807,13 @@ struct ProviderPreferenceRows: View {
         }
     }
 
+    private var connectedOpenCodePartners: [OpenCodePartnerWireSummary] {
+        catalog.opencodePartners.filter(\.enabled)
+    }
+
     private var connectDisconnectLayout: some View {
         VStack(alignment: .leading, spacing: 22) {
-            if !connectedVendors.isEmpty {
+            if !connectedVendors.isEmpty || !connectedOpenCodePartners.isEmpty {
                 ProviderSettingsSubsection(title: "Connected providers") {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(connectedVendors, id: \.self) { vendor in
@@ -1804,7 +1828,24 @@ struct ProviderPreferenceRows: View {
                                 onSelectModel: { entry in update(vendor: vendor, model: entry.id) },
                                 onOpenModelMenu: { Task { await refreshCatalogIfAllowed(for: vendor) } }
                             )
-                            if vendor != connectedVendors.last {
+                            if vendor != connectedVendors.last || !connectedOpenCodePartners.isEmpty {
+                                TahoeHair()
+                            }
+                        }
+                        ForEach(connectedOpenCodePartners) { partner in
+                            OpenCodePartnerConnectedRow(
+                                partner: partner,
+                                snapshot: snapshot,
+                                catalog: catalog,
+                                onSelectModel: { entry in
+                                    update(choice: .opencodePartner(partner.id), model: entry.id)
+                                },
+                                onOpenModelMenu: { Task { await refreshCatalog() } },
+                                onDisconnect: {
+                                    Task { await disconnectOpenCodePartner(partner.id) }
+                                }
+                            )
+                            if partner.id != connectedOpenCodePartners.last?.id {
                                 TahoeHair()
                             }
                         }
@@ -1976,8 +2017,27 @@ struct ProviderPreferenceRows: View {
             if ProviderEnablement.isEnabled("openrouter") {
                 next = next.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
             }
+            next = next.replacingOpenCodePartners(await OpenCodePartnerModelProbe.shared.summaries())
             catalog = next
         }
+    }
+
+    private func disconnectOpenCodePartner(_ partnerId: String) async {
+        try? await OpencodeAuthFile.shared.removeProvider(providerId: partnerId)
+        ProviderEnablement.setEnabled(OpenCodePartnerSupport.enablementId(for: partnerId), false)
+        await OpencodeProcessManager.shared.refreshAuthStatus()
+        await OpenCodePartnerModelProbe.shared.invalidate()
+        await refreshAll()
+    }
+
+    private func update(choice: ProviderChoice, model: String) {
+        snapshot = localStore.setDefault(
+            forChoice: choice,
+            model: model,
+            effort: nil,
+            clearEffort: true,
+            catalog: catalog
+        )
     }
 
     private func invalidateProviderCaches(for id: String) async {
@@ -1988,6 +2048,8 @@ struct ProviderPreferenceRows: View {
             await OpenCodeGoModelProbe.shared.invalidate()
         } else if id == "openrouter" {
             await OpenRouterModelProbe.shared.invalidate()
+        } else if OpenCodePartnerSupport.partnerId(fromEnablementId: id) != nil {
+            await OpenCodePartnerModelProbe.shared.invalidate()
         }
     }
 
@@ -2226,6 +2288,107 @@ private struct PopularProviderRow: View {
         .frame(minHeight: 36)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.provider.\(providerId).popular")
+    }
+}
+
+private struct OpenCodePartnerConnectedRow: View {
+    @Environment(\.tahoe) private var t
+    let partner: OpenCodePartnerWireSummary
+    let snapshot: ProviderDefaultsSnapshot
+    let catalog: ModelCatalog
+    let onSelectModel: (ModelCatalogEntry) -> Void
+    let onOpenModelMenu: () -> Void
+    let onDisconnect: () -> Void
+
+    private var choice: ProviderChoice { .opencodePartner(partner.id) }
+    private var enablementId: String { OpenCodePartnerSupport.enablementId(for: partner.id) }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            AnyProviderGlyph(choice: choice, catalog: catalog, size: 28)
+            Text(partner.label)
+                .font(TahoeFont.body(13.5, weight: .semibold))
+                .foregroundStyle(t.fg)
+            Spacer(minLength: 12)
+            ProviderChoiceModelMenu(
+                choice: choice,
+                snapshot: snapshot,
+                catalog: catalog,
+                onSelectModel: onSelectModel,
+                onOpenModelMenu: onOpenModelMenu
+            )
+            Button("Disconnect") {
+                onDisconnect()
+            }
+            .buttonStyle(.plain)
+            .font(TahoeFont.body(12, weight: .semibold))
+            .foregroundStyle(t.fg2)
+            .help("Disconnect \(partner.label)")
+            .accessibilityIdentifier("settings.provider.\(enablementId).disconnect")
+        }
+        .frame(minHeight: 36)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings.provider.\(enablementId)")
+    }
+}
+
+private struct ProviderChoiceModelMenu: View {
+    @Environment(\.tahoe) private var t
+    let choice: ProviderChoice
+    let snapshot: ProviderDefaultsSnapshot
+    let catalog: ModelCatalog
+    let onSelectModel: (ModelCatalogEntry) -> Void
+    let onOpenModelMenu: () -> Void
+
+    private var selectedModelId: String? {
+        snapshot.modelId(forChoice: choice, catalog: catalog)
+    }
+
+    private var selectedEntry: ModelCatalogEntry? {
+        guard let selectedModelId else { return nil }
+        return choice.models(in: catalog).first { $0.id == selectedModelId || $0.cliAlias == selectedModelId }
+    }
+
+    var body: some View {
+        Menu {
+            let sections = ProviderModelPickerSupport.sections(for: choice, catalog: catalog, query: "")
+            if sections.isEmpty {
+                Text("No models available")
+            }
+            ForEach(sections) { section in
+                Section(section.title) {
+                    ForEach(section.entries) { entry in
+                        Button {
+                            onSelectModel(entry)
+                        } label: {
+                            HStack {
+                                Text(entry.displayName)
+                                if entry.id == selectedModelId {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(selectedEntry?.displayName ?? "Default model")
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                TahoeIcon("chevronDown", size: 9)
+            }
+            .foregroundStyle(t.fg)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(width: 200, alignment: .trailing)
+            .background(Color.white.opacity(0.055), in: Capsule())
+            .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
+        }
+        .menuStyle(.borderlessButton)
+        .simultaneousGesture(TapGesture().onEnded { onOpenModelMenu() })
+        .accessibilityIdentifier("settings.provider.\(choice.id).model")
     }
 }
 

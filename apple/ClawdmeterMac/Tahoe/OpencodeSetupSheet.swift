@@ -54,10 +54,15 @@ public struct OpencodeSetupSheet: View {
 
         /// Shell command suffix appended to the bundled opencode binary
         /// path. Composed with the sentinel-exit wrapper at runtime.
-        func shellTail(binary: String) -> String {
+        func shellTail(binary: String, providerID: String? = nil) -> String {
             switch self {
             case .signIn, .addProvider:
-                return "\(quoted(binary)) auth login"
+                guard let providerID else {
+                    // Never launch the interactive terminal picker — it has a
+                    // hover-reveal "+" that vanishes when you move to click it.
+                    return "echo 'Select a provider in the picker first.' >&2; exit 1"
+                }
+                return "\(quoted(binary)) auth login --provider \(quoted(providerID))"
             case .signOut:
                 // O6: opencode auth logout takes no --provider arg,
                 // signs out of all.
@@ -75,6 +80,8 @@ public struct OpencodeSetupSheet: View {
     }
 
     let command: Command
+    var providerID: String?
+    var providerName: String?
     var onCompletion: () -> Void = {}
 
     @State private var host: TerminalPtyHost?
@@ -86,10 +93,21 @@ public struct OpencodeSetupSheet: View {
 
     public init(
         command: Command,
+        providerID: String? = nil,
+        providerName: String? = nil,
         onCompletion: @escaping () -> Void = {}
     ) {
         self.command = command
+        self.providerID = providerID
+        self.providerName = providerName
         self.onCompletion = onCompletion
+    }
+
+    private var sheetTitle: String {
+        if let providerName {
+            return "Connect \(providerName)"
+        }
+        return command.title
     }
 
     public var body: some View {
@@ -130,7 +148,7 @@ public struct OpencodeSetupSheet: View {
         HStack(spacing: 10) {
             Image(systemName: "terminal")
                 .font(.system(size: 16, weight: .semibold))
-            Text(command.title)
+            Text(sheetTitle)
                 .font(.headline)
             Spacer()
             Button("Done") {
@@ -216,7 +234,7 @@ public struct OpencodeSetupSheet: View {
 
         let escapedSentinel = sentinel.path
             .replacingOccurrences(of: "'", with: "'\\''")
-        let shellCommand = "\(command.shellTail(binary: binary)); echo $? > '\(escapedSentinel)'"
+        let shellCommand = "\(command.shellTail(binary: binary, providerID: providerID)); echo $? > '\(escapedSentinel)'"
 
         do {
             let spawned = try await TerminalPtyRegistry.shared.spawnCommand(

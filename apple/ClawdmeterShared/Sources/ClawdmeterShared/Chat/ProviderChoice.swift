@@ -6,6 +6,7 @@ import Foundation
 public enum ProviderChoice: Hashable, Identifiable, Sendable {
     case builtin(ChatVendor)
     case custom(String)
+    case opencodePartner(String)
 
     public var id: String {
         switch self {
@@ -13,6 +14,8 @@ public enum ProviderChoice: Hashable, Identifiable, Sendable {
             return vendor.rawValue
         case .custom(let providerId):
             return "custom:\(providerId)"
+        case .opencodePartner(let partnerId):
+            return OpenCodePartnerSupport.enablementId(for: partnerId)
         }
     }
 
@@ -22,6 +25,9 @@ public enum ProviderChoice: Hashable, Identifiable, Sendable {
             let providerId = String(raw.dropFirst("custom:".count))
             guard !providerId.isEmpty else { return nil }
             return .custom(providerId)
+        }
+        if let partnerId = OpenCodePartnerSupport.partnerId(fromEnablementId: raw) {
+            return .opencodePartner(partnerId)
         }
         guard let vendor = ChatVendor(rawValue: raw) else { return nil }
         return .builtin(vendor)
@@ -33,6 +39,9 @@ public enum ProviderChoice: Hashable, Identifiable, Sendable {
             return vendor.displayName
         case .custom(let providerId):
             return catalog.customProviders.first(where: { $0.id == providerId })?.label ?? providerId
+        case .opencodePartner(let partnerId):
+            return catalog.opencodePartners.first(where: { $0.id == partnerId })?.label
+                ?? OpenCodePartnerSupport.displayName(for: partnerId)
         }
     }
 
@@ -42,6 +51,8 @@ public enum ProviderChoice: Hashable, Identifiable, Sendable {
             return vendor.models(in: catalog)
         case .custom(let providerId):
             return catalog.customProviders.first(where: { $0.id == providerId })?.entries ?? []
+        case .opencodePartner(let partnerId):
+            return catalog.opencodePartners.first(where: { $0.id == partnerId })?.entries ?? []
         }
     }
 
@@ -57,6 +68,8 @@ public enum ProviderChoice: Hashable, Identifiable, Sendable {
             case .anthropicCompatible: return .claude
             case .openAICompatible: return .codex
             }
+        case .opencodePartner:
+            return .opencode
         }
     }
 
@@ -72,6 +85,8 @@ public enum ProviderChoice: Hashable, Identifiable, Sendable {
                 return summary.entries.first?.id
             }
             return nil
+        case .opencodePartner(let partnerId):
+            return catalog.opencodePartners.first(where: { $0.id == partnerId })?.entries.first?.id
         }
     }
 
@@ -83,6 +98,23 @@ public enum ProviderChoice: Hashable, Identifiable, Sendable {
     public var customProviderId: String? {
         if case .custom(let id) = self { return id }
         return nil
+    }
+
+    public var opencodePartnerId: String? {
+        if case .opencodePartner(let id) = self { return id }
+        return nil
+    }
+
+    /// Upstream auth provider id used when routing through `opencode serve`.
+    public var billingProvider: String? {
+        switch self {
+        case .builtin(let vendor):
+            return vendor.billingProvider
+        case .custom(let providerId):
+            return providerId
+        case .opencodePartner(let partnerId):
+            return partnerId
+        }
     }
 
     /// Analytics bucket used to read trailing-30d usage for rail ordering.
@@ -98,6 +130,8 @@ public enum ProviderChoice: Hashable, Identifiable, Sendable {
             return ProviderDescriptor.byChatVendor[vendor]?.modelPickerRank ?? Int.max
         case .custom:
             return ProviderDescriptor.all.count
+        case .opencodePartner:
+            return ProviderDescriptor.all.count + 1
         }
     }
 
@@ -117,6 +151,12 @@ public enum ProviderChoice: Hashable, Identifiable, Sendable {
             if let customProviderId, !customProviderId.isEmpty,
                enabledChoices.contains(.custom(customProviderId)) {
                 return .custom(customProviderId)
+            }
+            if let partner = catalog.opencodePartners.first(where: { summary in
+                summary.entries.contains { $0.id == trimmed || $0.cliAlias == trimmed }
+            }),
+               enabledChoices.contains(.opencodePartner(partner.id)) {
+                return .opencodePartner(partner.id)
             }
             if let entry = catalog.entry(forId: trimmed, customProviderId: customProviderId),
                let vendor = ChatVendor.migrated(from: entry.provider),

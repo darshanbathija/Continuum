@@ -295,7 +295,8 @@ struct MacRootView: View {
                             grokModel: grokModel,
                             opencodeModel: runtime.opencodeModel,
                             usageHistoryStore: runtime.usageHistoryStore,
-                            secondaryColumns: runtime.tahoeSecondaryColumns
+                            secondaryColumns: runtime.tahoeSecondaryColumns,
+                            agentClient: runtime.loopbackClient
                         )
                         .modifier(TabSlotVisibility(active: tab == .usage))
                     }

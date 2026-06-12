@@ -52,6 +52,9 @@ public final class AgentControlClient: ObservableObject {
     /// v19 provider defaults: fetched from the paired Mac when available,
     /// otherwise backed by local UserDefaults so older Macs keep working.
     @Published public private(set) var providerDefaults: ProviderDefaultsSnapshot = .empty
+    /// Wire v30: registered execution hosts from the paired Mac hub daemon.
+    @Published public private(set) var executionHosts: [ExecutionHost] = []
+    @Published public private(set) var localExecutionHostId: UUID?
     /// Wire-version handshake (E8). Populated on /health refresh. iOS shows
     /// a mismatch banner when local `AgentControlWireVersion.current` differs.
     @Published public private(set) var serverVersion: String?
@@ -796,6 +799,9 @@ public final class AgentControlClient: ObservableObject {
         }
         await refreshModelCatalog()
         await refreshProviderDefaults()
+        if supportsExecutionHosts {
+            await refreshExecutionHosts()
+        }
     }
 
     @MainActor
@@ -905,6 +911,144 @@ public final class AgentControlClient: ObservableObject {
     /// v28: user-configured custom providers in catalog + spawn routes.
     public var supportsCustomProviders: Bool {
         AgentControlWireVersion.supportsCustomProviders(serverWireVersion: serverWireVersion)
+    }
+
+    /// Wire v30: execution-host registry + session `executionHostId` tags.
+    public var supportsExecutionHosts: Bool {
+        AgentControlWireVersion.supportsExecutionHosts(serverWireVersion: serverWireVersion)
+    }
+
+    @MainActor
+    public func refreshExecutionHosts() async {
+        guard supportsExecutionHosts else { return }
+        guard let request = makeRequest(path: "/execution-hosts") else { return }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let response = try decoder.decode(ExecutionHostListResponse.self, from: data)
+            executionHosts = response.hosts
+            localExecutionHostId = response.localHostId
+        } catch {
+            clientLogger.debug("refreshExecutionHosts failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    public func pairTailscaleExecutionHost(_ req: PairTailscaleExecutionHostRequest) async -> ExecutionHost? {
+        let encoder = JSONEncoder()
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(path: "/execution-hosts/pair/tailscale", method: "POST", body: body)
+        else { return nil }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let host = try decoder.decode(ExecutionHost.self, from: data)
+            await refreshExecutionHosts()
+            return host
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    public func pairRelayExecutionHost(_ req: PairRelayExecutionHostRequest) async -> ExecutionHost? {
+        let encoder = JSONEncoder()
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(path: "/execution-hosts/pair/relay", method: "POST", body: body)
+        else { return nil }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let host = try decoder.decode(ExecutionHost.self, from: data)
+            await refreshExecutionHosts()
+            return host
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func handoffSession(id: UUID, to targetHostId: UUID) async -> HandoffSessionResponse? {
+        let req = HandoffSessionRequest(targetHostId: targetHostId)
+        let encoder = JSONEncoder()
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(path: "/sessions/\(id.uuidString)/handoff", method: "POST", body: body)
+        else { return nil }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            let response = try decoder.decode(HandoffSessionResponse.self, from: data)
+            await refreshSessions()
+            return response
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func refreshHostRunMinutes() async -> HostRunMinutesResponse? {
+        guard supportsExecutionHosts else { return nil }
+        guard let request = makeRequest(path: "/usage/host-minutes") else { return nil }
+        do {
+            let data = try await sendChecked(request)
+            return try JSONDecoder().decode(HostRunMinutesResponse.self, from: data)
+        } catch {
+            clientLogger.debug("refreshHostRunMinutes failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    // MARK: - AWS BYOC (R2)
+
+    @MainActor
+    public func validateAWSCompute() async -> ProvisionerHealth? {
+        guard let request = makeRequest(path: "/compute/aws/validate", method: "POST", body: Data("{}".utf8))
+        else { return nil }
+        return await decodeResponse(request, as: ProvisionerHealth.self)
+    }
+
+    @MainActor
+    public func provisionAWSRunner(spec: RunnerSpec) async -> AWSProvisionResponse? {
+        let req = AWSProvisionRequest(spec: spec)
+        guard let body = try? JSONEncoder().encode(req),
+              let request = makeRequest(path: "/compute/aws/provision", method: "POST", body: body)
+        else { return nil }
+        return await decodeResponse(request, as: AWSProvisionResponse.self)
+    }
+
+    @MainActor
+    public func stopAWSRunner(hostId: UUID) async -> Bool {
+        guard let request = makeRequest(path: "/compute/aws/\(hostId.uuidString)/stop", method: "POST", body: Data("{}".utf8))
+        else { return false }
+        do {
+            _ = try await sendChecked(request)
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    @MainActor
+    public func terminateAWSRunner(hostId: UUID) async -> Bool {
+        guard let request = makeRequest(path: "/compute/aws/\(hostId.uuidString)", method: "DELETE")
+        else { return false }
+        do {
+            _ = try await sendChecked(request)
+            await refreshExecutionHosts()
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
     }
 
     // MARK: - Desktop event sync
@@ -1076,7 +1220,8 @@ public final class AgentControlClient: ObservableObject {
                 scheduleDesktopEventAuthoritativeRefresh()
             }
         case .sessionCreated, .statusChanged, .planReady, .doneDetected, .paused,
-             .tmuxServerLost, .tmuxServerRecovered, .unknown:
+             .tmuxServerLost, .tmuxServerRecovered, .executionHostRegistered,
+             .handoffPhaseChanged, .unknown:
             if scheduleAuthoritativeRefresh {
                 scheduleDesktopEventAuthoritativeRefresh()
             }
