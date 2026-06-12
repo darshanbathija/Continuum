@@ -931,16 +931,11 @@ private struct ChartHeader: View {
             }
             Spacer()
             if let total {
-                VStack(alignment: .trailing, spacing: 3) {
-                    Text(total.all)
-                        .font(TahoeFont.rounded(22, weight: .bold))
-                        .monospacedDigit()
-                        .tracking(-0.6)
-                        .foregroundStyle(t.fg)
-                    Text("\(total.delta) vs prior")
-                        .font(TahoeFont.mono(10.5))
-                        .foregroundStyle(total.delta.hasPrefix("+") ? Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0) : t.fg3)
-                }
+                Text(total.all)
+                    .font(TahoeFont.rounded(22, weight: .bold))
+                    .monospacedDigit()
+                    .tracking(-0.6)
+                    .foregroundStyle(t.fg)
             }
         }
     }
