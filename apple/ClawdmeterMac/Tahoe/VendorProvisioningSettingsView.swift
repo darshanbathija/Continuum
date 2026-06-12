@@ -464,35 +464,7 @@ private struct VendorProvisioningRow: View {
                     }
                 }
                 Spacer(minLength: 0)
-                HStack(spacing: 8) {
-                    ForEach(visibleActions) { action in
-                        Button {
-                            onAction(action)
-                        } label: {
-                            HStack(spacing: 5) {
-                                TahoeIcon(icon(for: action.kind), size: 10, weight: .bold)
-                                Text(action.label)
-                            }
-                        }
-                        .buttonStyle(isPrimaryAction(action) ? .borderedProminent : .bordered)
-                        .disabled(actionsDisabled && action.kind != .signup)
-                        .help(action.command ?? action.url?.absoluteString ?? action.label)
-                    }
-                    if onboarding.showsAddEnv {
-                        Button {
-                            onImport()
-                        } label: {
-                            HStack(spacing: 5) {
-                                TahoeIcon("tray", size: 10, weight: .bold)
-                                Text("Add Env")
-                            }
-                        }
-                        .buttonStyle(onboarding.step == .configureEnv ? .borderedProminent : .bordered)
-                        .disabled(actionsDisabled || !hasWorkspaces)
-                        .help(hasWorkspaces ? "Import env variables into repo env sets" : "Add a repository first")
-                        .accessibilityIdentifier("settings.provisioning.import.\(vendor.id)")
-                    }
-                }
+                actionsRow
             }
 
             if let status, !status.mcpMatches.isEmpty {
@@ -533,6 +505,59 @@ private struct VendorProvisioningRow: View {
             return .failed
         case .succeeded:
             return .succeeded
+        }
+    }
+
+    private var actionsRow: some View {
+        HStack(spacing: 8) {
+            ForEach(visibleActions) { action in
+                actionButton(action)
+            }
+            if onboarding.showsAddEnv {
+                addEnvButton
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ action: VendorProvisioningAction) -> some View {
+        let base = Button {
+            onAction(action)
+        } label: {
+            HStack(spacing: 5) {
+                TahoeIcon(icon(for: action.kind), size: 10, weight: .bold)
+                Text(action.label)
+            }
+        }
+        .disabled(actionsDisabled && action.kind != .signup)
+        .help(action.command ?? action.url?.absoluteString ?? action.label)
+        // if/else (not a ternary) keeps each button-style branch monomorphic —
+        // a ternary between .borderedProminent and .bordered times out the
+        // SwiftUI type-checker.
+        if isPrimaryAction(action) {
+            base.buttonStyle(.borderedProminent)
+        } else {
+            base.buttonStyle(.bordered)
+        }
+    }
+
+    @ViewBuilder
+    private var addEnvButton: some View {
+        let base = Button {
+            onImport()
+        } label: {
+            HStack(spacing: 5) {
+                TahoeIcon("tray", size: 10, weight: .bold)
+                Text("Add Env")
+            }
+        }
+        .disabled(actionsDisabled || !hasWorkspaces)
+        .help(hasWorkspaces ? "Import env variables into repo env sets" : "Add a repository first")
+        .accessibilityIdentifier("settings.provisioning.import.\(vendor.id)")
+        if onboarding.step == .configureEnv {
+            base.buttonStyle(.borderedProminent)
+        } else {
+            base.buttonStyle(.bordered)
         }
     }
 
@@ -640,7 +665,7 @@ private struct Badge: View {
     }
 }
 
-private struct VendorEnvImportSheet: View {
+struct VendorEnvImportSheet: View {
     @Environment(\.tahoe) private var t
 
     let vendor: VendorProvisioningVendor
