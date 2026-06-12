@@ -209,7 +209,7 @@ public struct IOSPairingView: View {
                 HStack(spacing: 6) {
                     Image(systemName: showAdvanced ? "chevron.down" : "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
-                    Text("Advanced: legacy Tailscale pairing")
+                    Text("Self-hosting: Tailscale pairing")
                         .font(TahoeFont.body(12, weight: .semibold))
                 }
                 .foregroundStyle(t.fg3)
@@ -217,17 +217,17 @@ public struct IOSPairingView: View {
                 .padding(.horizontal, 12)
             }
             .buttonStyle(.plain)
-            .accessibilityHint("Expand for legacy LAN/Tailscale pairing")
+            .accessibilityHint("Expand for Tailscale self-hosted pairing")
 
             if showAdvanced {
                 VStack(spacing: 6) {
-                    Text("Legacy `clawdmeter://` URLs from older Mac builds.")
+                    Text("Scan the Tailscale QR from Mac Settings → Pair iPhone → Self-hosting, or paste a `clawdmeter://` URL.")
                         .font(TahoeFont.body(11))
                         .foregroundStyle(t.fg3)
                     HStack(spacing: 6) {
-                        Button("Scan legacy QR") { legacyScanPresented = true }
+                        Button("Scan Tailscale QR") { legacyScanPresented = true }
                             .controlSize(.small)
-                        Button("Paste legacy URL") { legacyPastePresented = true }
+                        Button("Paste Tailscale URL") { legacyPastePresented = true }
                             .controlSize(.small)
                     }
                 }
@@ -287,7 +287,7 @@ private struct LegacyPasteURLSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Legacy Tailscale pairing — paste a `clawdmeter://` URL from an older Mac build.")
+                Text("Tailscale self-hosting — paste a `clawdmeter://` URL from Mac Settings → Pair iPhone → Self-hosting.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

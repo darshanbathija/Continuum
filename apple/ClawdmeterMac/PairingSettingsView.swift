@@ -8,22 +8,15 @@ import ClawdmeterShared
 /// iPhone scans, derives the shared key locally via HKDF-SHA256
 /// (`RelayPairingCrypto`) and persists. No Tailscale or LAN required.
 ///
-/// Stripped to the basics per user feedback: the legacy Tailscale pairing,
-/// allowed-roots, plugins inventory, verbose detail rows, and the security
-/// blurb were removed. The pane is now just "scan one QR" + Forget pairing.
+/// Default path is cloud relay pairing (one QR). Self-hosting — Tailscale-
+/// direct pairing with an optional custom relay grant token under Advanced —
+/// lives in `SelfHostingPairingSection`.
 struct PairingSettingsView: View {
 
     @ObservedObject var runtime: AppRuntime
     @ObservedObject var pairingService: RelayPairingService
     @State private var qrImage: NSImage?
     @State private var didCopyRelay: Bool = false
-    /// Relay creation-grant token entry. Empty after save; we never echo the
-    /// stored value back into the field (it lives in the Keychain).
-    @State private var grantTokenInput: String = ""
-    @State private var grantTokenIsStored: Bool = RelayGrantTokenStore.shared.isConfigured
-    @State private var didSaveGrantToken: Bool = false
-    @State private var isProvisioningGrantToken: Bool = false
-    @State private var grantProvisionFailed: Bool = false
     /// Step 1 of pairing: download QR before minting the relay auth bundle.
     @State private var confirmedAppInstall: Bool = ContinuumIOSAppStore.hasConfirmedInstall
     /// Live ticker so the "expires in N:NN" label re-renders without a state
@@ -51,14 +44,13 @@ struct PairingSettingsView: View {
                 }
             }
             TahoeHair()
-            relayGrantTokenSection
+            SelfHostingPairingSection(runtime: runtime)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
             confirmedAppInstall = ContinuumIOSAppStore.hasConfirmedInstall
             refreshRelayQR()
-            refreshGrantTokenState()
-            Task { await autoProvisionGrantTokenIfNeeded() }
+            Task { await ensureCloudRelayAccess() }
         }
         .onReceive(ticker) { if controlActiveState != .inactive { now = $0 } }
         .onChange(of: pairingService.bundleURL) { _, _ in refreshRelayQR() }
@@ -126,83 +118,11 @@ struct PairingSettingsView: View {
         }
     }
 
-    // MARK: - Relay grant token
-
-    /// Advanced override for operator/dev grant tokens. Normal installs auto-
-    /// provision a per-Mac token in the background on first launch.
-    private var relayGrantTokenSection: some View {
-        tahoeSection(
-            "Relay access token",
-            footer: "Clawdmeter auto-provisions a relay grant token for this Mac. Paste a custom token only if you run your own relay or need to replace the auto-provisioned one."
-        ) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    SecureField(grantTokenIsStored ? "Token saved — paste to replace" : "Relay grant token (optional override)", text: $grantTokenInput)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 360)
-                    Button("Save", action: saveGrantToken)
-                        .disabled(grantTokenInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    if grantTokenIsStored {
-                        Button("Remove", role: .destructive, action: clearGrantToken)
-                    }
-                }
-                HStack(spacing: 6) {
-                    if isProvisioningGrantToken {
-                        ProgressView().controlSize(.small)
-                        Text("Provisioning relay access…").foregroundStyle(.secondary)
-                    } else if didSaveGrantToken {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                        Text("Saved").foregroundStyle(.green)
-                    } else if grantTokenIsStored {
-                        Image(systemName: "checkmark.shield.fill").foregroundStyle(t.accent)
-                        Text("Relay access is ready for pairing.").foregroundStyle(.secondary)
-                    } else if grantProvisionFailed {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                        Text("Auto-provision failed — paste a relay grant token or retry Pair iPhone.").foregroundStyle(.secondary)
-                    } else {
-                        Image(systemName: "clock.fill").foregroundStyle(.secondary)
-                        Text("Setting up relay access…").foregroundStyle(.secondary)
-                    }
-                }
-                .font(.caption)
-            }
-        }
-    }
-
-    private func refreshGrantTokenState() {
-        grantTokenIsStored = RelayGrantTokenStore.shared.isConfigured
-    }
-
-    private func autoProvisionGrantTokenIfNeeded() async {
-        guard !RelayGrantTokenStore.shared.isConfigured else {
-            grantProvisionFailed = false
-            return
-        }
-        isProvisioningGrantToken = true
-        defer { isProvisioningGrantToken = false }
-        let ok = await RelayGrantProvisioner().ensureConfigured()
-        grantTokenIsStored = ok
-        grantProvisionFailed = !ok
-    }
-
-    private func saveGrantToken() {
-        let trimmed = grantTokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        if RelayGrantTokenStore.shared.setToken(trimmed) {
-            grantTokenInput = ""
-            grantTokenIsStored = true
-            grantProvisionFailed = false
-            didSaveGrantToken = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { didSaveGrantToken = false }
-        }
-    }
-
-    private func clearGrantToken() {
-        RelayGrantTokenStore.shared.clear()
-        grantTokenInput = ""
-        grantTokenIsStored = false
-        didSaveGrantToken = false
-        grantProvisionFailed = false
+    /// Cloud relay grant tokens auto-provision silently for the default pairing
+    /// path. Self-hosting overrides live under SelfHostingPairingSection.
+    private func ensureCloudRelayAccess() async {
+        guard !RelayGrantTokenStore.shared.isConfigured else { return }
+        _ = await RelayGrantProvisioner().ensureConfigured()
     }
 
     @ViewBuilder

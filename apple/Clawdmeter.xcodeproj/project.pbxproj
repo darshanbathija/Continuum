@@ -302,6 +302,7 @@
 		A8FCDD4B0B909A1F68D332CB /* AgentEventStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F29D979C11B37400CED7386D /* AgentEventStreamTests.swift */; };
 		A9091CC03FA61761EAD4182C /* TranscriptMessageGutterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F79145485F8E9408CC9E60F7 /* TranscriptMessageGutterTests.swift */; };
 		A9C33C7309E3C6A8B289CEB1 /* PairingSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4AB727DC3A2913C9B91A989 /* PairingSettingsView.swift */; };
+		A1B2C3D4E5F6012345678AC /* SelfHostingPairingSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6012345678AB /* SelfHostingPairingSection.swift */; };
 		AAF41D5370E2C47E6BFF58D8 /* SessionExportBundleWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D5E977D2DDE8E1370DA49A6 /* SessionExportBundleWriterTests.swift */; };
 		AB559B28BC1872C9A27D51B0 /* WorkspaceFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = C77ADCCCF27A10F5786160F6 /* WorkspaceFeedback.swift */; };
 		AD60F2F27D373CAB78AD12A5 /* iOSRunPreviewPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 313F07B5272EA210BFA9B557 /* iOSRunPreviewPane.swift */; };
@@ -938,6 +939,7 @@
 		F27564D3EF5304DFE17849AB /* CodeWorkspaceDraftComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeWorkspaceDraftComposer.swift; sourceTree = "<group>"; };
 		F29D979C11B37400CED7386D /* AgentEventStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentEventStreamTests.swift; sourceTree = "<group>"; };
 		F4AB727DC3A2913C9B91A989 /* PairingSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingSettingsView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6012345678AB /* SelfHostingPairingSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelfHostingPairingSection.swift; sourceTree = "<group>"; };
 		F536C384FF521BC4C8C2A722 /* PRCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRCoordinator.swift; sourceTree = "<group>"; };
 		F53B364B4BB9E6F7F3F9C8DC /* DoneDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneDetector.swift; sourceTree = "<group>"; };
 		F73B6460D4F0D48BA96F9D7A /* GrokUsageSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokUsageSourceTests.swift; sourceTree = "<group>"; };
@@ -1233,6 +1235,7 @@
 				4D4E6E7B93FF13BD93C26D90 /* PairingQRGenerator.swift */,
 				5A23F364449BE819FB2D8BA0 /* PairingQRPopoverContent.swift */,
 				F4AB727DC3A2913C9B91A989 /* PairingSettingsView.swift */,
+				A1B2C3D4E5F6012345678AB /* SelfHostingPairingSection.swift */,
 				F7744A52822D779D5A3A61FD /* ProviderConfig.swift */,
 				7F3AB01400D1F534506FEF4B /* SessionsView.swift */,
 				24E844E6256A865A0DFEEF18 /* UsageQueryService.swift */,
@@ -2339,6 +2342,7 @@
 				617DB0CB782DE699B87B7E10 /* PairingQRGenerator.swift in Sources */,
 				7BCB0D471FC2F297B29ED5CC /* PairingQRPopoverContent.swift in Sources */,
 				A9C33C7309E3C6A8B289CEB1 /* PairingSettingsView.swift in Sources */,
+				A1B2C3D4E5F6012345678AC /* SelfHostingPairingSection.swift in Sources */,
 				A570A995C1EE313DE7FA7EC7 /* PairingTokenStore.swift in Sources */,
 				D0FA4EF3B888EFA7C45DBC11 /* PathAllowList.swift in Sources */,
 				906808FD1730A88D3E1E065A /* PermissionModeChip.swift in Sources */,
