@@ -691,9 +691,9 @@ private struct TranscriptScroll: View {
     private func disclosureButton(_ turn: TranscriptTurn) -> some View {
         let isOpen = expandedTurns.contains(turn.id)
         if turn.hasCollapsedContent {
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton("transcript_disclosure_toggle", {
                 if isOpen { expandedTurns.remove(turn.id) } else { expandedTurns.insert(turn.id) }
-            } label: {
+            })) {
                 disclosureLabel(turn, icon: isOpen ? "chevron.down" : "chevron.right")
             }
             .buttonStyle(.plain)
@@ -911,17 +911,13 @@ private struct MessageRow: View {
             ForEach(Array(ModelFailureRecovery.actionDescriptors().enumerated()), id: \.offset) { _, descriptor in
                 switch descriptor.kind {
                 case .retry:
-                    Button(descriptor.visibleTitle) {
-                        onRetryFailedTurn?(retryPrompt)
-                    }
+                    Button(descriptor.visibleTitle, action: ContinuumAnalytics.wrapButton("retry_failed_turn", { onRetryFailedTurn?(retryPrompt) }))
                     .buttonStyle(.plain)
                     .font(TahoeFont.body(11, weight: .semibold))
                     .foregroundStyle(t.accent)
                     .accessibilityIdentifier(descriptor.accessibilityIdentifier)
                 case .retryInNewChat:
-                    Button(descriptor.visibleTitle) {
-                        onRetryFailedTurnInNewChat?(retryPrompt)
-                    }
+                    Button(descriptor.visibleTitle, action: ContinuumAnalytics.wrapButton("retry_failed_turn_new_chat", { onRetryFailedTurnInNewChat?(retryPrompt) }))
                     .buttonStyle(.plain)
                     .font(TahoeFont.body(11, weight: .semibold))
                     .foregroundStyle(t.accent)
@@ -934,9 +930,7 @@ private struct MessageRow: View {
 
     @ViewBuilder
     private func messageCopyMenu(_ message: ChatMessage) -> some View {
-        Button("Copy Message", systemImage: "doc.on.doc") {
-            UIPasteboard.general.string = message.body
-        }
+        Button("Copy Message", systemImage: "doc.on.doc", action: ContinuumAnalytics.wrapButton("copy_message", { UIPasteboard.general.string = message.body }))
     }
 }
 
@@ -1476,7 +1470,12 @@ private struct IOSChatModelSelectorSheet: View {
             .searchable(text: $query, prompt: "Search model name or raw id")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Done") { dismiss() }
+                    Button("Done", action: ContinuumAnalytics.wrapButton(
+                            "done",
+                            {
+ dismiss() 
+                            }
+                        ))
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if case .builtin(let vendor) = selectedChoice,
@@ -1549,9 +1548,7 @@ private struct IOSChatModelSelectorSheet: View {
 
     private var selectionSection: some View {
         Section {
-            Button(selectionActionLabel) {
-                store.toggleChoice(selectedChoice)
-            }
+            Button(selectionActionLabel, action: ContinuumAnalytics.wrapButton("toggle_provider_choice", { store.toggleChoice(selectedChoice) }))
             .disabled(!canToggleSelectedChoice)
         } footer: {
             Text(store.selectedChoiceCount == 1 ? "One provider creates a solo chat." : "Two or three providers create a broadcast.")

@@ -55,7 +55,12 @@ struct TahoeSourcesPreviewPane: View {
                         .accessibilityIdentifier(Self.emptyAccessibilityIdentifier)
                 } else {
                     ForEach(entries) { entry in
-                        Button(action: { open(entry) }) {
+                        Button(action: ContinuumAnalytics.wrapButton(
+                                "sources_preview_open_entry",
+                                {
+ open(entry) 
+                                }
+                            )) {
                             HStack(alignment: .top, spacing: 10) {
                                 TahoeIcon(entry.icon, size: 13)
                                     .foregroundStyle(t.accent)

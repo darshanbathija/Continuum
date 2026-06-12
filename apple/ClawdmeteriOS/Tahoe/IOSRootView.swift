@@ -214,7 +214,9 @@ public struct IOSRootView: View {
             )
         case nil:
             switch tab {
-            case .chat:      IOSChatV2View(agentClient: agentClient, outbox: outbox)
+            case .chat:
+                IOSChatV2View(agentClient: agentClient, outbox: outbox)
+                    .postHogScreenScope("chat")
             case .live:
                 IOSLiveView(
                     data: live,
@@ -224,6 +226,7 @@ public struct IOSRootView: View {
                     onOpenSettings: { settingsPresented = true },
                     agentClient: agentClient
                 )
+                .postHogScreenScope("live")
             case .analytics:
                 // v0.14.0 (plan v2.1 D1): fold Live gauges into Analytics
                 // as a permanent header. Settings sheet trigger moves here
@@ -237,6 +240,7 @@ public struct IOSRootView: View {
                 } onPairWithDesktop: {
                     pushedScreen = .pairing
                 }
+                .postHogScreenScope("analytics")
             case .code:
                 // v0.22.30: drop `focusedRepoKey:` — IOSCodeView init
                 // doesn't declare it yet (the parallel-agent's repo-
@@ -256,6 +260,7 @@ public struct IOSRootView: View {
                 .refreshable {
                     await agentClient.refreshAll()
                 }
+                .postHogScreenScope("code")
             }
         }
     }
@@ -286,7 +291,7 @@ public struct IOSTabBar: View {
             HStack(spacing: 4) {
                 ForEach(items, id: \.0) { (key, label, icon) in
                     let active = tab == key
-                    Button { tab = key } label: {
+                    Button(action: ContinuumAnalytics.wrapButton("tab_\(key.rawValue)", { tab = key })) {
                         HStack(spacing: 6) {
                             TahoeIcon(icon, size: 16)
                             Text(label)
@@ -360,7 +365,7 @@ public struct IOSRoundIconBtn: View {
     public init(_ icon: String, action: @escaping () -> Void = {}) { self.icon = icon; self.action = action }
 
     public var body: some View {
-        Button(action: action) {
+        Button(action: ContinuumAnalytics.wrapButton("round_icon_\(icon)", action)) {
             TahoeIcon(icon, size: 16)
                 .foregroundStyle(t.fg)
                 .frame(width: 38, height: 38)
@@ -410,7 +415,7 @@ public struct IOSUnpairedBanner: View {
                         .lineLimit(2)
                 }
                 Spacer()
-                Button(action: onPair) {
+                Button(action: ContinuumAnalytics.wrapButton("pair_with_mac", onPair)) {
                     Text("Pair with Mac")
                         .font(TahoeFont.body(12, weight: .bold))
                         .foregroundStyle(.white)

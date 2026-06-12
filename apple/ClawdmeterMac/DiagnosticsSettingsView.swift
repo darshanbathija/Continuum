@@ -141,9 +141,9 @@ struct DiagnosticsSettingsView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Button("Reveal") {
+                    Button("Reveal", action: ContinuumAnalytics.wrapButton("diagnostics_reveal_bundle", {
                         NSWorkspace.shared.activateFileViewerSelecting([supportBundleURL])
-                    }
+                    }))
                     .buttonStyle(.borderless)
                 }
             }
@@ -475,9 +475,9 @@ struct WireInspectorPane: View {
                     Task { await WireInspector.shared.setEnabled(on) }
                 }
                 Spacer()
-                Button("Clear") {
+                Button("Clear", action: ContinuumAnalytics.wrapButton("diagnostics_wire_clear", {
                     Task { await WireInspector.shared.clear(); await refresh() }
-                }
+                }))
                 .disabled(entries.isEmpty)
             }
             TextField("Filter path or peer", text: $query)

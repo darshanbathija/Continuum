@@ -124,6 +124,7 @@ private struct ProviderAccountMenuButton: NSViewRepresentable {
         }
 
         @objc func openMenu(_ sender: NSButton) {
+            ContinuumAnalytics.trackButton("composer_account_menu")
             button = sender
             sender.setAccessibilityValue("Open" as NSString)
             let menu = NSMenu()
@@ -149,8 +150,14 @@ private struct ProviderAccountMenuButton: NSViewRepresentable {
 
         @objc func selectAccount(_ item: NSMenuItem) {
             if item.representedObject is NSNull {
+                ContinuumAnalytics.trackButton("composer_account_select_primary")
                 onSelect(nil)
             } else if let wireId = item.representedObject as? String {
+                // wireId is "<kind>/<user-defined name>" — track only the
+                // provider kind, never the user's account name (PII + unbounded
+                // event cardinality).
+                let kind = wireId.split(separator: "/").first.map(String.init) ?? "unknown"
+                ContinuumAnalytics.trackButton("composer_account_select_secondary_\(kind)")
                 onSelect(wireId)
             }
         }

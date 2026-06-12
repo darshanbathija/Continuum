@@ -136,11 +136,11 @@ struct NewSessionMacSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("cancel_spawn", { dismiss() }))
                     .keyboardShortcut(.cancelAction)
-                Button(isSpawning ? "Starting…" : "Start") {
+                Button(isSpawning ? "Starting…" : "Start", action: ContinuumAnalytics.wrapButton("start_session", {
                     Task { await startSession() }
-                }
+                }))
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .tint(SessionsV2Theme.accent)

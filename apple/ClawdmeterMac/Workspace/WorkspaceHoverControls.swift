@@ -74,9 +74,13 @@ struct MessageCopyHoverButton: View {
     let onCopy: (String) -> Void
 
     var body: some View {
-        Button {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "message_copy",
+                {
             onCopy(text)
-        } label: {
+        
+                }
+            )) {
             Image(systemName: "doc.on.doc")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)

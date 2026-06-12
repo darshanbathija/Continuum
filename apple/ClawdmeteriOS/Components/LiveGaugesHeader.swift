@@ -134,7 +134,12 @@ private struct ProviderToggleHeader: View {
     @ViewBuilder
     private func providerButton(_ provider: LiveProvider) -> some View {
         let isActive = (selected == provider)
-        Button(action: { onPick(provider) }) {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "live_provider_\(provider.rawValue)",
+                {
+ onPick(provider) 
+                }
+            )) {
             VStack(spacing: 6) {
                 ProviderLogo(asset: logoAsset(for: provider), size: isActive ? 48 : 32)
                     .opacity(isActive ? 1.0 : 0.35)
@@ -247,7 +252,12 @@ private struct ClaudeSection: View {
 
     private var advancedCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(action: { withAnimation(.snappy) { advancedExpanded.toggle() } }) {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "toggle_advanced_gauges",
+                    {
+ withAnimation(.snappy) { advancedExpanded.toggle() } 
+                    }
+                )) {
                 HStack(spacing: 8) {
                     Image(systemName: advancedExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 12, weight: .semibold))
@@ -443,7 +453,7 @@ private struct FooterRow: View {
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
             Spacer()
-            Button(action: onRefresh) {
+            Button(action: ContinuumAnalytics.wrapButton("onrefresh", onRefresh)) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 14, weight: .semibold))
                     .frame(width: 32, height: 32)
@@ -508,13 +518,23 @@ private struct UnauthenticatedCard: View {
             Text("Open Continuum on your Mac while signed into the same Apple ID — your Claude token will sync over iCloud Keychain and this screen will fill in automatically.")
                 .font(.body)
                 .foregroundStyle(.secondary)
-            Button(action: { model.forcePoll() }) {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "force_poll",
+                    {
+ model.forcePoll() 
+                    }
+                )) {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
             .padding(.top, 4)
-            Button("Paste token instead") { showingSettings = true }
+            Button("Paste token instead", action: ContinuumAnalytics.wrapButton(
+                    "paste_token_instead",
+                    {
+ showingSettings = true 
+                    }
+                ))
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
         }
@@ -534,7 +554,12 @@ private struct ReauthCard: View {
             Text("Your Anthropic token expired. Open Settings to paste a fresh one.")
                 .font(.body)
                 .foregroundStyle(.secondary)
-            Button("Open Settings") { showingSettings = true }
+            Button("Open Settings", action: ContinuumAnalytics.wrapButton(
+                    "open_settings",
+                    {
+ showingSettings = true 
+                    }
+                ))
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .padding(.top, 8)

@@ -125,13 +125,17 @@ struct InheritedContextChips: View {
 
     private func chip(for session: AgentSession) -> some View {
         let selected = selectedSourceIds.contains(session.id)
-        return Button {
+        return Button(action: ContinuumAnalytics.wrapButton(
+                "toggle_inherited_context",
+                {
             if selected {
                 selectedSourceIds.remove(session.id)
             } else {
                 selectedSourceIds.insert(session.id)
             }
-        } label: {
+        
+                }
+            )) {
             switch style {
             case .card:
                 cardChipLabel(for: session, selected: selected)

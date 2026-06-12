@@ -68,7 +68,12 @@ struct iOSCheckpointPane: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") { dismiss() }
+                Button("Done", action: ContinuumAnalytics.wrapButton(
+                        "done",
+                        {
+ dismiss() 
+                        }
+                    ))
             }
         }
         .refreshable { await refresh() }
@@ -85,11 +90,20 @@ struct iOSCheckpointPane: View {
             get: { restoreTarget != nil },
             set: { if !$0 { restoreTarget = nil } }
         )) {
-            Button("Restore", role: .destructive) {
+            Button("Restore", role: .destructive, action: ContinuumAnalytics.wrapButton(
+                    "restore",
+                    {
                 Task { await restoreSelectedPreview() }
-            }
+            
+                    }
+                ))
             .disabled(isRestoring)
-            Button("Cancel", role: .cancel) { restoreTarget = nil }
+            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                    "cancel",
+                    {
+ restoreTarget = nil 
+                    }
+                ))
         } message: {
             Text("This applies the checkpoint to the Mac worktree. A safety checkpoint has already been created.")
         }
@@ -97,7 +111,12 @@ struct iOSCheckpointPane: View {
             get: { message != nil },
             set: { if !$0 { message = nil } }
         )) {
-            Button("OK", role: .cancel) { message = nil }
+            Button("OK", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                    "ok",
+                    {
+ message = nil 
+                    }
+                ))
         } message: {
             Text(message ?? "")
         }
@@ -184,10 +203,14 @@ struct iOSCheckpointPane: View {
                 }
             }
             Section {
-                Button(role: .destructive) {
+                Button(role: .destructive, action: ContinuumAnalytics.wrapButton(
+                        "restore_checkpoint",
+                        {
                     restoreTarget = preview
                     restorePreview = nil
-                } label: {
+                
+                        }
+                    )) {
                     Label("Restore to checkpoint", systemImage: "arrow.uturn.backward")
                 }
                 .disabled(preview.isBlocked || isRestoring)

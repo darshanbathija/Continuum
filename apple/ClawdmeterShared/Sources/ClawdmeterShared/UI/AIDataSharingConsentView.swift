@@ -79,8 +79,8 @@ public struct AIDataSharingConsentView: View {
                         .fixedSize(horizontal: false, vertical: true)
 
                     HStack(spacing: 16) {
-                        Button("Privacy Policy") { openURL(AIDataSharingConsent.privacyURL) }
-                        Button("Terms of Use") { openURL(AIDataSharingConsent.termsURL) }
+                        Button("Privacy Policy", action: ContinuumAnalytics.wrapButton("consent_privacy_policy", { openURL(AIDataSharingConsent.privacyURL) }))
+                        Button("Terms of Use", action: ContinuumAnalytics.wrapButton("consent_terms_of_use", { openURL(AIDataSharingConsent.termsURL) }))
                     }
                     .font(.callout.weight(.semibold))
                     .padding(.top, 2)
@@ -95,10 +95,10 @@ public struct AIDataSharingConsentView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("consent_agree", {
                     AIDataSharingConsent.hasConsented = true
                     onAgree()
-                } label: {
+                })) {
                     Text("I Agree")
                         .font(.headline)
                         .frame(maxWidth: .infinity)

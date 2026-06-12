@@ -92,7 +92,12 @@ struct iOSRunPreviewPane: View {
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { errorMessage = nil }
+            Button("OK", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                    "ok",
+                    {
+ errorMessage = nil 
+                    }
+                ))
         } message: {
             Text(errorMessage ?? "")
         }
@@ -267,9 +272,13 @@ struct iOSRunPreviewPane: View {
                     .lineLimit(2)
                     .truncationMode(.middle)
                     .multilineTextAlignment(.center)
-                Button("Open detected preview") {
+                Button("Open detected preview", action: ContinuumAnalytics.wrapButton(
+                        "open_detected_preview",
+                        {
                     openDetectedURL()
-                }
+                
+                        }
+                    ))
                 .buttonStyle(.borderedProminent)
             } else {
                 Text("No run preview yet")
@@ -427,7 +436,7 @@ struct iOSRunPreviewPane: View {
     }
 
     private func iconButton(_ systemName: String, disabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: ContinuumAnalytics.wrapButton("preview_icon_\(systemName.replacingOccurrences(of: ".", with: "_"))", action)) {
             Image(systemName: systemName)
                 .font(.system(size: 12, weight: .semibold))
                 .frame(width: 28, height: 28)

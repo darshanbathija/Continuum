@@ -30,9 +30,13 @@ struct ModelPicker: View {
             // Header showing the current provider.
             Section(providerSectionTitle) {
                 ForEach(modelsForAgent) { entry in
-                    Button {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "modelpicker_l33",
+                            {
                         onSelect(entry)
-                    } label: {
+                    
+                            }
+                        )) {
                         modelRow(entry: entry, isSelected: entry.id == selectedModelId)
                     }
                     .accessibilityLabel(rowAccessibilityLabel(entry: entry))

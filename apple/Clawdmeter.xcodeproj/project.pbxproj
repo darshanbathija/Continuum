@@ -328,6 +328,7 @@
 		B159F7CDA71BDFF3AB7E7375 /* iOSTerminalTabsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC90C2ABAFB600289ACFF55D /* iOSTerminalTabsView.swift */; };
 		B165EF5AFBBB3BAE43A86815 /* CodeRunProfileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBFE9C8CEE283AE1484C157A /* CodeRunProfileService.swift */; };
 		B2AFF30D50AAFD048BA3F087 /* SkillsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D09050E90DBA46BDABDB91C2 /* SkillsSettingsView.swift */; };
+		B414B028A9B494FD27B538C1 /* PostHogButtonTracking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97482D8DFF618962825647F5 /* PostHogButtonTracking.swift */; };
 		B49079C1A819C08F8AD06F3B /* TailscaleWhois.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C46A8561985C07E6E31A13 /* TailscaleWhois.swift */; };
 		B4B04F5DD549EA1FFA2804A6 /* OpencodeSupportedProviderCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 423F7412356A92E57475851F /* OpencodeSupportedProviderCatalogTests.swift */; };
 		B54FED090644474BC4C3CBBF /* deep-research-prompt.txt in Resources */ = {isa = PBXBuildFile; fileRef = 26B5538D5376C29DDF7CD413 /* deep-research-prompt.txt */; };
@@ -394,6 +395,7 @@
 		D969CDB0157529CA21FDC769 /* iOSCodexPlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DBB8377CD04D941834499FA /* iOSCodexPlanView.swift */; };
 		D9D0C23F96A52B7F41CBD04F /* TranscriptLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 112147989D4BC1A47AD29F81 /* TranscriptLoader.swift */; };
 		D9FB7E3A2C1CD0EF75B83BAE /* iOSSourcesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2A6E12E7475B6319B2F93C /* iOSSourcesPane.swift */; };
+		DA97523A79D3E0AA99AF6CCF /* PostHogButtonTracking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97482D8DFF618962825647F5 /* PostHogButtonTracking.swift */; };
 		DAA5D7DB02C59C5F9571BD39 /* RepoEnvVendorSecretsImporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85F55C883E5F75EF62E8168B /* RepoEnvVendorSecretsImporterTests.swift */; };
 		DABFFEDA21FC590B20240593 /* IdleSessionSweeperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30A02397E6ED803BAB94A505 /* IdleSessionSweeperTests.swift */; };
 		DBEF8189EAE4708372F1009E /* iOSComposerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 258860E4C81547276D4E7F3C /* iOSComposerBar.swift */; };
@@ -819,6 +821,7 @@
 		96A2F50347CBD669083BB20A /* SidecarAskCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarAskCoordinatorTests.swift; sourceTree = "<group>"; };
 		96C2DF0BC33E8B4A3197CFDD /* DaemonChatStoreRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonChatStoreRegistry.swift; sourceTree = "<group>"; };
 		96C446A0B7936EDEA144F30E /* SourcesPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesPane.swift; sourceTree = "<group>"; };
+		97482D8DFF618962825647F5 /* PostHogButtonTracking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostHogButtonTracking.swift; sourceTree = "<group>"; };
 		9757A0C3F17F56F77A6B3C94 /* SessionChatStorePendingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChatStorePendingTests.swift; sourceTree = "<group>"; };
 		976BD1912D2C80461031FF26 /* SessionLauncherModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLauncherModel.swift; sourceTree = "<group>"; };
 		9774FEA6CB01A7C62F0B8D17 /* CostBannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CostBannerView.swift; sourceTree = "<group>"; };
@@ -1250,6 +1253,7 @@
 		3B510F8DB65482BF3589875E /* ContinuumTelemetry */ = {
 			isa = PBXGroup;
 			children = (
+				97482D8DFF618962825647F5 /* PostHogButtonTracking.swift */,
 				B9D0949C7DA1C0E507005FD2 /* PostHogSetup.swift */,
 			);
 			path = ContinuumTelemetry;
@@ -2425,6 +2429,7 @@
 				1C9136F95CF63E2BE1E08C39 /* PlanRunner.swift in Sources */,
 				E835774AF3CCE85077A32357 /* PlanTrackerPane.swift in Sources */,
 				C25E52ACBC77D484C6E4A117 /* PluginRegistry.swift in Sources */,
+				DA97523A79D3E0AA99AF6CCF /* PostHogButtonTracking.swift in Sources */,
 				963A8464E04C965104646F9F /* PostHogSetup.swift in Sources */,
 				A5FF46A59A126E94CBFC121E /* ProviderAccountChip.swift in Sources */,
 				64EBFF77CBC2FADA193AA8C4 /* ProviderAccountsUI.swift in Sources */,
@@ -2567,6 +2572,7 @@
 				1F57B15A40CE4503F7909A98 /* PairingCTAButtons.swift in Sources */,
 				E42C70E146F11D56309CCED8 /* PairingScanView.swift in Sources */,
 				21394E54DBC8130457573563 /* PairingScannerView.swift in Sources */,
+				B414B028A9B494FD27B538C1 /* PostHogButtonTracking.swift in Sources */,
 				F5E8822B6775ADDA28BACB70 /* PostHogSetup.swift in Sources */,
 				19AC672180B4FBF70EB9FE37 /* RelayTransportFlag.swift in Sources */,
 				C33D35AB2C0B598EE86BC7BD /* RepoOnboardingErrorMessages.swift in Sources */,

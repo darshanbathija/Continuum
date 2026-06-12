@@ -46,7 +46,7 @@ struct CodeTitlebarPRControl: View {
 
     private var createPRButton: some View {
         HStack(spacing: 0) {
-            Button(action: enqueueCreatePRPrompt) {
+            Button(action: ContinuumAnalytics.wrapButton("create_pr", enqueueCreatePRPrompt)) {
                 HStack(spacing: 6) {
                     createPRIcon
                     Text("Create PR")
@@ -65,9 +65,14 @@ struct CodeTitlebarPRControl: View {
                 .frame(width: 0.5, height: 14)
 
             Menu {
-                Button("Create draft PR") {
+                Button("Create draft PR", action: ContinuumAnalytics.wrapButton(
+                        "create_draft_pr",
+                        {
+
                     enqueueDraftPRPrompt()
-                }
+                
+                        }
+                    ))
                 .accessibilityIdentifier("code.titlebar.create-pr.draft")
             } label: {
                 Image(systemName: "chevron.down")
@@ -99,9 +104,14 @@ struct CodeTitlebarPRControl: View {
 
     private func prLinkedControls(_ pr: PRMirror.PRState) -> some View {
         HStack(spacing: 6) {
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "open_pr",
+                    {
+
                 NSWorkspace.shared.open(pr.url)
-            } label: {
+            
+                    }
+                )) {
                 HStack(spacing: 5) {
                     Text("#\(pr.number)")
                         .font(TahoeFont.mono(12, weight: .semibold))
@@ -121,9 +131,14 @@ struct CodeTitlebarPRControl: View {
             .accessibilityIdentifier("code.titlebar.pr.link")
 
             if pr.state.uppercased() == "OPEN", canMerge {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "merge_pr",
+                        {
+
                     Task { await mergePullRequest() }
-                } label: {
+                
+                        }
+                    )) {
                     HStack(spacing: 5) {
                         Image(systemName: "arrow.triangle.merge")
                             .font(.system(size: 10, weight: .semibold))

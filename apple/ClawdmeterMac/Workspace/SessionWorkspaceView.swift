@@ -553,15 +553,21 @@ struct SessionWorkspaceView: View {
         var body: some View {
             ZStack {
                 ForEach(1...9, id: \.self) { index in
-                    Button("") {
+                    Button("", action: ContinuumAnalytics.wrapButton(
+                            "button",
+                            {
                         model.openVisibleSession(at: index)
-                    }
+                    
+                            }
+                        ))
                     .keyboardShortcut(KeyEquivalent(Character("\(index)")),
                                       modifiers: [.command, .option])
                         .opacity(0)
                         .frame(width: 0, height: 0)
                 }
-                Button("") {
+                Button("", action: ContinuumAnalytics.wrapButton(
+                        "button",
+                        {
                     if let session = model.openSession {
                         model.openDraftWorkspaceTab(
                             from: session,
@@ -576,31 +582,45 @@ struct SessionWorkspaceView: View {
                     } else if let draft = model.draftWorkspaceTab {
                         model.openDraftWorkspaceTab(from: draft)
                     }
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut("t", modifiers: [.command])
                 .opacity(0)
                 .frame(width: 0, height: 0)
 
-                Button("") {
+                Button("", action: ContinuumAnalytics.wrapButton(
+                        "button",
+                        {
                     guard let source = model.sourceForNewWorkspaceTerminalTab() else { return }
                     Task { await model.openOrCreateWorkspaceTerminalTab(from: source) }
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut("t", modifiers: [.command, .shift])
                 .opacity(0)
                 .frame(width: 0, height: 0)
 
-                Button("") {
+                Button("", action: ContinuumAnalytics.wrapButton(
+                        "button",
+                        {
                     guard model.openSession != nil else { return }
                     workbenchState.selectRightPane(.terminal)
                     workbenchState.setReviewPaneVisible(true)
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut("`", modifiers: [.control])
                 .opacity(0)
                 .frame(width: 0, height: 0)
 
-                Button("") {
+                Button("", action: ContinuumAnalytics.wrapButton(
+                        "button",
+                        {
                     NotificationCenter.default.post(name: .renameOpenSession, object: nil)
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .opacity(0)
                 .frame(width: 0, height: 0)

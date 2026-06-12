@@ -83,7 +83,12 @@ public struct IOSPairingView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Cancel") { legacyScanPresented = false }
+                        Button("Cancel", action: ContinuumAnalytics.wrapButton(
+                                "cancel",
+                                {
+ legacyScanPresented = false 
+                                }
+                            ))
                     }
                 }
             }
@@ -108,7 +113,7 @@ public struct IOSPairingView: View {
 
     private var header: some View {
         HStack(spacing: 0) {
-            Button(action: onClose) {
+            Button(action: ContinuumAnalytics.wrapButton("pairing_close", onClose)) {
                 TahoeIcon("x", size: 15).foregroundStyle(t.fg)
                     .frame(width: 44, height: 44)
                     .background { Capsule().fill(t.glassTintHi) }
@@ -235,7 +240,7 @@ public struct IOSPairingView: View {
 
     private var cloudCTAs: some View {
         Group {
-            Button { relayPastePresented = true } label: {
+            Button(action: ContinuumAnalytics.wrapButton("cloud_paste_url", { relayPastePresented = true })) {
                 TahoeGlass(radius: 6, tone: .chip) {
                     HStack(spacing: 10) {
                         TahoeIcon("link", size: 15).foregroundStyle(t.fg3)
@@ -254,7 +259,7 @@ public struct IOSPairingView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Paste Cloud pairing URL")
 
-            Button { relayScanPresented = true } label: {
+            Button(action: ContinuumAnalytics.wrapButton("cloud_scan_qr", { relayScanPresented = true })) {
                 TahoeAccentButton(size: .l) {
                     HStack(spacing: 6) {
                         TahoeIcon("qr", size: 14)
@@ -270,7 +275,7 @@ public struct IOSPairingView: View {
 
     private var tailscaleCTAs: some View {
         Group {
-            Button { legacyPastePresented = true } label: {
+            Button(action: ContinuumAnalytics.wrapButton("tailscale_paste_url", { legacyPastePresented = true })) {
                 TahoeGlass(radius: 6, tone: .chip) {
                     HStack(spacing: 10) {
                         TahoeIcon("link", size: 15).foregroundStyle(t.fg3)
@@ -289,7 +294,7 @@ public struct IOSPairingView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Paste Tailscale pairing URL")
 
-            Button { legacyScanPresented = true } label: {
+            Button(action: ContinuumAnalytics.wrapButton("tailscale_scan_qr", { legacyScanPresented = true })) {
                 TahoeAccentButton(size: .l) {
                     HStack(spacing: 6) {
                         TahoeIcon("qr", size: 14)
@@ -376,7 +381,9 @@ private struct LegacyPasteURLSheet: View {
                         .foregroundStyle(.red)
                         .font(.caption)
                 }
-                Button("Pair") {
+                Button("Pair", action: ContinuumAnalytics.wrapButton(
+                        "pair",
+                        {
                     let trimmed = pastedURL.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard let challenge = PairingScannerView.parse(urlString: trimmed) else {
                         pasteError = "Not a valid clawdmeter:// URL"
@@ -384,7 +391,9 @@ private struct LegacyPasteURLSheet: View {
                     }
                     onAccept(challenge)
                     isPresented = false
-                }
+                
+                        }
+                    ))
                 .buttonStyle(.borderedProminent)
                 .tint(SessionsV2Theme.accent)
                 .disabled(pastedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -395,7 +404,12 @@ private struct LegacyPasteURLSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Cancel") { isPresented = false }
+                    Button("Cancel", action: ContinuumAnalytics.wrapButton(
+                            "cancel",
+                            {
+ isPresented = false 
+                            }
+                        ))
                 }
             }
         }

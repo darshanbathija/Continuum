@@ -41,16 +41,25 @@ struct PRReviewPane: View {
             }
             Spacer()
             if let state = coordinator.snapshot {
-                Button(action: {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "prreviewpane_l44",
+                        {
                     NSWorkspace.shared.open(state.url)
-                }) {
+                
+                        }
+                    )) {
                     Image(systemName: "arrow.up.right.square")
                         .font(.system(size: 11))
                 }
                 .buttonStyle(PressableButtonStyle())
                 .help("Open in browser")
             }
-            Button(action: { coordinator.refreshNow() }) {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "prreviewpane_l53",
+                    {
+ coordinator.refreshNow() 
+                    }
+                )) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 11))
             }
@@ -105,13 +114,23 @@ struct PRReviewPane: View {
             }
             if state.state == "OPEN" {
                 HStack(spacing: 8) {
-                            Button(action: { Task { await coordinator.approve() } }) {
+                            Button(action: ContinuumAnalytics.wrapButton(
+                                    "prreviewpane_l108",
+                                    {
+ Task { await coordinator.approve() } 
+                                    }
+                                )) {
                                 Label("Approve PR", systemImage: "checkmark.seal.fill")
                                     .font(.system(size: 11, weight: .semibold))
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
-                    Button(action: { NSWorkspace.shared.open(state.url) }) {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "prreviewpane_l114",
+                            {
+ NSWorkspace.shared.open(state.url) 
+                            }
+                        )) {
                         Label("Open on GitHub", systemImage: "arrow.up.forward.app")
                             .font(.system(size: 11))
                     }
@@ -121,7 +140,9 @@ struct PRReviewPane: View {
                             snapshot: state,
                             canUseDaemonActions: coordinator.canUseDaemonActions
                         ) {
-                            Button(action: {
+                            Button(action: ContinuumAnalytics.wrapButton(
+                                    "prreviewpane_l124",
+                                    {
                                 Task {
                                     if let onBeforeMerge {
                                         guard await onBeforeMerge() else {
@@ -132,13 +153,19 @@ struct PRReviewPane: View {
                                     localActionError = nil
                                     await coordinator.merge()
                                 }
-                            }) {
+                            
+                                    }
+                                )) {
                                 Label("Merge", systemImage: "arrow.triangle.merge")
                                     .font(.system(size: 11))
                             }
                             .buttonStyle(.bordered)
                         } else {
-                            Button(action: {}) {
+                            Button(action: ContinuumAnalytics.wrapButton(
+                                    "prreviewpane_l141",
+                                    {
+                                    }
+                                )) {
                                 Label("Merge blocked", systemImage: "shield.slash")
                                     .font(.system(size: 11))
                             }
@@ -186,13 +213,23 @@ struct PRReviewPane: View {
                           text: $coordinator.manualURL)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11, design: .monospaced))
-                Button("Load") { coordinator.loadFromManualURL() }
+                Button("Load", action: ContinuumAnalytics.wrapButton(
+                        "load",
+                        {
+ coordinator.loadFromManualURL() 
+                        }
+                    ))
                     .buttonStyle(.borderless)
                     .font(.system(size: 11, weight: .semibold))
             }
             .padding(.horizontal, 18)
             if coordinator.canUseDaemonActions {
-                Button(action: { Task { await coordinator.createPR() } }) {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "prreviewpane_l195",
+                        {
+ Task { await coordinator.createPR() } 
+                        }
+                    )) {
                     Label("Create PR", systemImage: "arrow.triangle.pull")
                         .font(.system(size: 11, weight: .semibold))
                 }

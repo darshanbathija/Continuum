@@ -54,7 +54,7 @@ struct PairingSettingsView: View {
             if pairingMode.wrappedValue == .cloud, pairingService.phase != .unpaired {
                 TahoeHair()
                 HStack {
-                    Button("Forget pairing", role: .destructive) { pairingService.reset() }
+                    Button("Forget pairing", role: .destructive, action: ContinuumAnalytics.wrapButton("pairing_forget", { pairingService.reset() }))
                     Spacer()
                 }
             }
@@ -196,10 +196,10 @@ struct PairingSettingsView: View {
                     SecureField(grantTokenIsStored ? "Token saved — paste to replace" : "Relay grant token (optional override)", text: $grantTokenInput)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 360)
-                    Button("Save", action: saveGrantToken)
+                    Button("Save", action: ContinuumAnalytics.wrapButton("pairing_grant_token_save", saveGrantToken))
                         .disabled(grantTokenInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     if grantTokenIsStored {
-                        Button("Remove", role: .destructive, action: clearGrantToken)
+                        Button("Remove", role: .destructive, action: ContinuumAnalytics.wrapButton("pairing_grant_token_remove", clearGrantToken))
                     }
                 }
                 HStack(spacing: 6) {
@@ -273,9 +273,9 @@ struct PairingSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            Button("Pair iPhone") {
+            Button("Pair iPhone", action: ContinuumAnalytics.wrapButton("pairing_begin_cloud", {
                 Task { await pairingService.beginPairing() }
-            }
+            }))
             .keyboardShortcut(.defaultAction)
         }
         if let lastError = pairingService.lastError {
@@ -300,14 +300,14 @@ struct PairingSettingsView: View {
                             .foregroundStyle(ttlColor(ttl: bundle.ttl))
                     }
                     HStack(spacing: 8) {
-                        Button("Copy pairing URL", action: copyRelayURL)
+                        Button("Copy pairing URL", action: ContinuumAnalytics.wrapButton("pairing_copy_relay_url", copyRelayURL))
                         if didCopyRelay {
                             Text("Copied ✓")
                                 .font(.caption)
                                 .foregroundStyle(.green)
                         }
                         Spacer()
-                        Button("Regenerate", action: { Task { await pairingService.beginPairing() } })
+                        Button("Regenerate", action: ContinuumAnalytics.wrapButton("pairing_regenerate_relay", { Task { await pairingService.beginPairing() } }))
                     }
                     .padding(.top, 4)
                     if ProcessInfo.processInfo.environment["CLAWDMETER_DEBUG_PAIRING"] != nil {
@@ -349,18 +349,18 @@ struct PairingSettingsView: View {
                     }
                     hostReachabilityNote
                     HStack(spacing: 8) {
-                        Button("Copy pairing URL", action: copyTailscaleURL)
+                        Button("Copy pairing URL", action: ContinuumAnalytics.wrapButton("pairing_copy_tailscale_url", copyTailscaleURL))
                         if didCopyTailscale {
                             Text("Copied ✓")
                                 .font(.caption)
                                 .foregroundStyle(.green)
                         }
                         Spacer()
-                        Button("Refresh QR", action: refreshTailscaleState)
-                        Button("Regenerate token") {
+                        Button("Refresh QR", action: ContinuumAnalytics.wrapButton("pairing_refresh_tailscale_qr", refreshTailscaleState))
+                        Button("Regenerate token", action: ContinuumAnalytics.wrapButton("pairing_regenerate_tailscale_token", {
                             _ = PairingTokenStore.shared.regenerate()
                             refreshTailscaleState()
-                        }
+                        }))
                     }
                     .padding(.top, 4)
                     if ProcessInfo.processInfo.environment["CLAWDMETER_DEBUG_PAIRING"] != nil {

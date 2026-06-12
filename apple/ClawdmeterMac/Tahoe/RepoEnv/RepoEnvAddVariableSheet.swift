@@ -30,7 +30,7 @@ struct RepoEnvAddVariableSheet: View {
                         .foregroundStyle(t.fg3)
                 }
                 Spacer()
-                Button(action: onCancel) {
+                Button(action: ContinuumAnalytics.wrapButton("repo_env_add_close", onCancel)) {
                     TahoeIcon("x", size: 12, weight: .bold)
                 }
                 .buttonStyle(.borderless)
@@ -92,13 +92,13 @@ struct RepoEnvAddVariableSheet: View {
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 8)], alignment: .leading, spacing: 8) {
                                 ForEach(sets) { set in
                                     let selected = selectedSetIds.contains(set.id)
-                                    Button {
+                                    Button(action: ContinuumAnalytics.wrapButton("repo_env_add_toggle_set", {
                                         if selected {
                                             selectedSetIds.remove(set.id)
                                         } else {
                                             selectedSetIds.insert(set.id)
                                         }
-                                    } label: {
+                                    })) {
                                         HStack(spacing: 6) {
                                             if selected {
                                                 TahoeIcon("check", size: 8, weight: .bold)
@@ -151,7 +151,7 @@ struct RepoEnvAddVariableSheet: View {
             }
 
             HStack(spacing: 12) {
-                Button(action: onImport) {
+                Button(action: ContinuumAnalytics.wrapButton("repo_env_add_import_env", onImport)) {
                     HStack(spacing: 7) {
                         TahoeIcon("tray", size: 12)
                         Text("Import .env")
@@ -165,21 +165,21 @@ struct RepoEnvAddVariableSheet: View {
                     .foregroundStyle(t.fg3)
 
                 Spacer()
-                Button("Cancel", action: onCancel)
-                Button("Add Another") {
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("repo_env_add_cancel", onCancel))
+                Button("Add Another", action: ContinuumAnalytics.wrapButton("repo_env_add_another", {
                     if onSave(draft) {
                         key = ""
                         value = ""
                         note = ""
                     }
-                }
+                }))
                 .buttonStyle(.bordered)
                 .disabled(!canSave)
-                Button("Save") {
+                Button("Save", action: ContinuumAnalytics.wrapButton("repo_env_add_save", {
                     if onSave(draft) {
                         onCancel()
                     }
-                }
+                }))
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("settings.env.variable.save")
                 .disabled(!canSave)

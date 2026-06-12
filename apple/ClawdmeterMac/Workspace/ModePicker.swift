@@ -35,10 +35,15 @@ struct ModePicker: View {
     private func chip(_ option: SessionMode) -> some View {
         let isSelected = (option == mode)
         let isDisabled = (option == .cloud)
-        Button(action: {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "select_session_mode",
+                {
+
             guard !isDisabled, option != mode else { return }
             onChange(option)
-        }) {
+        
+                }
+            )) {
             HStack(spacing: 4) {
                 Image(systemName: icon(option))
                     .font(.system(size: 9, weight: .semibold))

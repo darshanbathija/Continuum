@@ -48,12 +48,15 @@ struct IOSQuickStartSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }.disabled(isCreating)
+                    Button("Cancel", action: ContinuumAnalytics.wrapButton(
+                            "cancel",
+                            {
+ dismiss() 
+                            }
+                        )).disabled(isCreating)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(isCreating ? "Creating…" : "Create") {
-                        Task { await create() }
-                    }
+                    Button(isCreating ? "Creating…" : "Create", action: ContinuumAnalytics.wrapButton("quick_start_create", { Task { await create() } }))
                     .disabled(!canCreate || isCreating)
                 }
             }

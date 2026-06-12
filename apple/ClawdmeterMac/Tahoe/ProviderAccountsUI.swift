@@ -98,7 +98,7 @@ struct ProviderAccountsSection: View {
             ),
             presenting: pendingRemoval
         ) { instance in
-            Button("Disconnect", role: .destructive) {
+            Button("Disconnect", role: .destructive, action: ContinuumAnalytics.wrapButton("provider_account_disconnect", {
                 Task {
                     if preferredWireId == instance.wireId {
                         setPreferredAccount(nil)
@@ -106,8 +106,8 @@ struct ProviderAccountsSection: View {
                     await runtime.removeInstance(instance, deleteConfigRoot: false)
                     await refresh()
                 }
-            }
-            Button("Disconnect + delete its data", role: .destructive) {
+            }))
+            Button("Disconnect + delete its data", role: .destructive, action: ContinuumAnalytics.wrapButton("provider_account_disconnect_delete_data", {
                 Task {
                     if preferredWireId == instance.wireId {
                         setPreferredAccount(nil)
@@ -115,8 +115,8 @@ struct ProviderAccountsSection: View {
                     await runtime.removeInstance(instance, deleteConfigRoot: true)
                     await refresh()
                 }
-            }
-            Button("Cancel", role: .cancel) {}
+            }))
+            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton("provider_account_disconnect_cancel", {}))
         } message: { instance in
             Text("“\(instance.name)” stops polling and disappears from account pickers. “Disconnect + delete its data” also deletes its sign-in and local history on this Mac.")
         }
@@ -190,9 +190,9 @@ struct ProviderAccountsSection: View {
                 .frame(height: 1)
                 .accessibilityHidden(true)
         } else {
-            Button("Disconnect") {
+            Button("Disconnect", action: ContinuumAnalytics.wrapButton("provider_account_prompt_disconnect", {
                 pendingRemoval = instance
-            }
+            }))
             .buttonStyle(.plain)
             .font(TahoeFont.body(12, weight: .semibold))
             .foregroundStyle(t.fg2)
@@ -208,9 +208,9 @@ struct ProviderAccountsSection: View {
         label: String,
         isSelected: Bool
     ) -> some View {
-        Button {
+        Button(action: ContinuumAnalytics.wrapButton("provider_account_set_code_default", {
             setPreferredAccount(instance.isPrimary ? nil : instance.wireId)
-        } label: {
+        })) {
             ZStack {
                 Image(systemName: "circle")
                     .font(.system(size: 14, weight: .regular))
@@ -376,11 +376,11 @@ struct AddProviderAccountSheet: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("add_account_cancel", { dismiss() }))
                     .buttonStyle(.bordered)
-                Button("Sign in…") {
+                Button("Sign in…", action: ContinuumAnalytics.wrapButton("add_account_sign_in", {
                     Task { await model.beginLogin(runtime: runtime, kind: kind) }
-                }
+                }))
                 .buttonStyle(.borderedProminent)
                 .disabled(model.name.trimmingCharacters(in: .whitespaces).isEmpty || loginCoordinator.isActive)
                 .keyboardShortcut(.defaultAction)
@@ -408,9 +408,9 @@ struct AddProviderAccountSheet: View {
                         SecureField("sk-ant-oat01-…", text: $model.pastedToken)
                             .textFieldStyle(.roundedBorder)
                             .font(TahoeFont.mono(11))
-                        Button("Use token") {
+                        Button("Use token", action: ContinuumAnalytics.wrapButton("add_account_use_token", {
                             model.acceptPastedToken()
-                        }
+                        }))
                         .buttonStyle(.bordered)
                         .disabled(model.pastedToken.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
@@ -423,10 +423,10 @@ struct AddProviderAccountSheet: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") {
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("add_account_auth_cancel", {
                     model.cancel()
                     dismiss()
-                }
+                }))
                 .buttonStyle(.bordered)
             }
         }
@@ -465,10 +465,10 @@ struct AddProviderAccountSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
-                Button("Done") {
+                Button("Done", action: ContinuumAnalytics.wrapButton("add_account_done", {
                     onComplete()
                     dismiss()
-                }
+                }))
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
             }

@@ -230,7 +230,12 @@ public struct IOSLiveView: View {
                         .font(TahoeFont.body(11.5))
                         .foregroundStyle(t.fg3)
                     Spacer()
-                    Button(action: { Task { await refresh() } }) {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "live_refresh",
+                            {
+ Task { await refresh() } 
+                            }
+                        )) {
                         Group {
                             if refreshing {
                                 ProgressView().controlSize(.small).tint(t.fg2)
@@ -345,7 +350,7 @@ private struct ProviderPill: View {
     private var tintMul: Double { provider == .codex ? 2.6 : 1.0 }
 
     var body: some View {
-        Button(action: onSelect) {
+        Button(action: ContinuumAnalytics.wrapButton("live_select_provider", onSelect)) {
             HStack(spacing: 6) {
                 TahoeProviderGlyph(provider: provider, size: 20)
                 Text(provider.displayName)

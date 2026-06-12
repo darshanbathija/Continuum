@@ -188,7 +188,7 @@ public struct IOSSessionDetailView: View {
         VStack(spacing: 0) {
             // Custom nav bar — title chip shows real session metadata.
             HStack(spacing: 10) {
-                Button(action: onBack) {
+                Button(action: ContinuumAnalytics.wrapButton("session_back", onBack)) {
                     TahoeIcon("chevL", size: 16).foregroundStyle(t.fg)
                         .frame(width: 40, height: 38)
                         .background { Capsule().fill(t.glassTintHi) }
@@ -331,7 +331,12 @@ public struct IOSSessionDetailView: View {
                             .disabled(session == nil && !data.isDemo)
                             Spacer(minLength: 4)
                             attachButton
-                            Button(action: { Task { await sendComposer() } }) {
+                            Button(action: ContinuumAnalytics.wrapButton(
+                                    "send_composer",
+                                    {
+ Task { await sendComposer() } 
+                                    }
+                                )) {
                                 ZStack {
                                     Circle().fill(sendButtonFill)
                                     if isDispatchingQueuedDraft {
@@ -357,9 +362,14 @@ public struct IOSSessionDetailView: View {
         .alert("Refine the plan", isPresented: $refineAlertShown) {
             TextField("What should change?", text: $refineText)
                 .textInputAutocapitalization(.sentences)
-            Button("Send", action: { Task { await sendRefine() } })
+            Button("Send", action: ContinuumAnalytics.wrapButton(
+                    "send",
+                    {
+ Task { await sendRefine() } 
+                    }
+                ))
                 .disabled(refineText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Button("Cancel", role: .cancel, action: { refineText = "" })
+            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton("refine_cancel", { refineText = "" }))
         } message: {
             Text("Your message is sent to the agent as a plan-mode follow-up. The agent revises the plan and you re-approve.")
         }
@@ -368,7 +378,12 @@ public struct IOSSessionDetailView: View {
                 get: { lastError != nil },
                 set: { if !$0 { lastError = nil } }
                ),
-               actions: { Button("OK", role: .cancel) { lastError = nil } },
+               actions: { Button("OK", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                       "ok",
+                       {
+ lastError = nil 
+                       }
+                   )) },
                message: { Text(lastError ?? "") })
         .sheet(isPresented: $configSheetPresented) {
             NavigationStack {
@@ -959,13 +974,13 @@ public struct IOSSessionDetailView: View {
     private func iosDisclosureButton(_ turn: TranscriptTurn) -> some View {
         let isOpen = expandedTranscriptTurns.contains(turn.id)
         if turn.hasCollapsedContent {
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton("transcript_disclosure_toggle", {
                 if isOpen {
                     expandedTranscriptTurns.remove(turn.id)
                 } else {
                     expandedTranscriptTurns.insert(turn.id)
                 }
-            } label: {
+            })) {
                 iosDisclosureLabel(turn, icon: isOpen ? "chevron.down" : "chevron.right")
             }
             .buttonStyle(.plain)
@@ -1274,10 +1289,14 @@ public struct IOSSessionDetailView: View {
                         .font(TahoeFont.mono(10.5, weight: .bold))
                         .foregroundStyle(t.fg4)
                     Spacer()
-                    Button("Clear") {
+                    Button("Clear", action: ContinuumAnalytics.wrapButton(
+                            "clear",
+                            {
                         queuedDrafts = []
                         persistQueuedDrafts()
-                    }
+                    
+                            }
+                        ))
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .buttonStyle(.plain)
                     .foregroundStyle(t.fg3)
@@ -1318,9 +1337,13 @@ public struct IOSSessionDetailView: View {
             .buttonStyle(.plain)
             .disabled(isSessionRunning || isDispatchingQueuedDraft)
 
-            Button(role: .destructive) {
+            Button(role: .destructive, action: ContinuumAnalytics.wrapButton(
+                    "remove_queued_draft",
+                    {
                 removeQueuedDraft(id: draft.id)
-            } label: {
+            
+                    }
+                )) {
                 TahoeIcon("x", size: 11, weight: .bold)
                     .foregroundStyle(.red.opacity(0.8))
                     .frame(width: 30, height: 30)
@@ -1719,24 +1742,19 @@ private struct IOSWireChatItemRow: View {
             }
         }
         .contextMenu {
-            Button("Copy Message", systemImage: "doc.on.doc") {
-                UIPasteboard.general.string = message.body
-            }
-            Button("Copy Message ID", systemImage: "number") {
-                UIPasteboard.general.string = message.id
-            }
+            Button("Copy Message", systemImage: "doc.on.doc", action: ContinuumAnalytics.wrapButton("copy_message", { UIPasteboard.general.string = message.body }))
+            Button("Copy Message ID", systemImage: "number", action: ContinuumAnalytics.wrapButton("copy_message_id", { UIPasteboard.general.string = message.id }))
             Button(
                 presentationStore.snapshot.messageBookmarks[sessionId]?.contains(message.id) == true ? "Remove Bookmark" : "Bookmark",
-                systemImage: "bookmark"
-            ) {
-                try? presentationStore.toggleMessageBookmark(sessionId: sessionId, messageId: message.id)
-            }
-            Button("Copy as Quote", systemImage: "quote.bubble") {
+                systemImage: "bookmark",
+                action: ContinuumAnalytics.wrapButton("toggle_message_bookmark", { try? presentationStore.toggleMessageBookmark(sessionId: sessionId, messageId: message.id) })
+            )
+            Button("Copy as Quote", systemImage: "quote.bubble", action: ContinuumAnalytics.wrapButton("copy_message_quote", {
                 UIPasteboard.general.string = message.body
                     .split(separator: "\n", omittingEmptySubsequences: false)
                     .map { "> \($0)" }
                     .joined(separator: "\n")
-            }
+            }))
         }
     }
 
@@ -1782,17 +1800,13 @@ private struct IOSWireChatItemRow: View {
             ForEach(Array(ModelFailureRecovery.actionDescriptors().enumerated()), id: \.offset) { _, descriptor in
                 switch descriptor.kind {
                 case .retry:
-                    Button(descriptor.visibleTitle) {
-                        onRetryFailedTurn?(retryPrompt)
-                    }
+                    Button(descriptor.visibleTitle, action: ContinuumAnalytics.wrapButton("retry_failed_turn", { onRetryFailedTurn?(retryPrompt) }))
                     .buttonStyle(.plain)
                     .font(TahoeFont.body(11, weight: .semibold))
                     .foregroundStyle(t.accent)
                     .accessibilityIdentifier(descriptor.accessibilityIdentifier)
                 case .retryInNewChat:
-                    Button(descriptor.visibleTitle) {
-                        onRetryFailedTurnInNewChat?(retryPrompt)
-                    }
+                    Button(descriptor.visibleTitle, action: ContinuumAnalytics.wrapButton("retry_failed_turn_new_chat", { onRetryFailedTurnInNewChat?(retryPrompt) }))
                     .buttonStyle(.plain)
                     .font(TahoeFont.body(11, weight: .semibold))
                     .foregroundStyle(t.accent)
@@ -1840,9 +1854,7 @@ private struct IOSWireChatItemRow: View {
     }
 
     private func markdownArtifactButton(path: String) -> some View {
-        Button {
-            onOpenMarkdownDocument(path)
-        } label: {
+        Button(action: ContinuumAnalytics.wrapButton("open_markdown_artifact", { onOpenMarkdownDocument(path) })) {
             HStack(spacing: 8) {
                 Image(systemName: "doc.richtext")
                     .font(.system(size: 12, weight: .semibold))

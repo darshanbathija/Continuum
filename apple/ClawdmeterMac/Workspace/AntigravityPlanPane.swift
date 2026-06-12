@@ -151,7 +151,12 @@ public struct AntigravityPlanPane: View {
             Label("Couldn't load Plan", systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.orange)
             Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
-            Button("Retry") { Task { await store.refresh() } }
+            Button("Retry", action: ContinuumAnalytics.wrapButton(
+                    "retry",
+                    {
+ Task { await store.refresh() } 
+                    }
+                ))
         }
     }
 
@@ -218,11 +223,15 @@ public struct AntigravityPlanPane: View {
             }
             Spacer()
             if !snapshot.brainUUID.isEmpty {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "antigravityplanpane_l221",
+                        {
                     if let url = URL(string: "antigravity://brain/\(snapshot.brainUUID)") {
                         NSWorkspace.shared.open(url)
                     }
-                } label: {
+                
+                        }
+                    )) {
                     Label("Open in Antigravity", systemImage: "arrow.up.right.square")
                         .font(.system(size: 11))
                 }

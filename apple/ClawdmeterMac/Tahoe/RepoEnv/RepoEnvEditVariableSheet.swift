@@ -35,7 +35,7 @@ struct RepoEnvEditVariableSheet: View {
                         .foregroundStyle(t.fg3)
                 }
                 Spacer()
-                Button(action: onCancel) {
+                Button(action: ContinuumAnalytics.wrapButton("repo_env_edit_close", onCancel)) {
                     TahoeIcon("x", size: 12, weight: .bold)
                 }
                 .buttonStyle(.borderless)
@@ -62,9 +62,7 @@ struct RepoEnvEditVariableSheet: View {
                                 .foregroundStyle(t.fg2)
                             Spacer()
                             if !mode.isRotate {
-                                Button("Reveal Current") {
-                                    revealCurrentValue()
-                                }
+                                Button("Reveal Current", action: ContinuumAnalytics.wrapButton("repo_env_edit_reveal_current", revealCurrentValue))
                                 .buttonStyle(.borderless)
                             }
                         }
@@ -114,10 +112,10 @@ struct RepoEnvEditVariableSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel", action: onCancel)
-                Button(mode.isRotate ? "Rotate" : "Save") {
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("repo_env_edit_cancel", onCancel))
+                Button(mode.isRotate ? "Rotate" : "Save", action: ContinuumAnalytics.wrapButton("repo_env_edit_save", {
                     _ = onSave(draft)
-                }
+                }))
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("settings.env.edit.save")
                 .disabled(!canSave)

@@ -32,7 +32,7 @@ struct QuickStartRepoSheet: View {
                 HStack {
                     TextField("Parent folder", text: $parent, prompt: Text("/Users/.../code"))
                         .textFieldStyle(.roundedBorder)
-                    Button("Choose…", action: chooseParent)
+                    Button("Choose…", action: ContinuumAnalytics.wrapButton("choose", chooseParent))
                         .disabled(isCreating)
                 }
             }
@@ -46,12 +46,21 @@ struct QuickStartRepoSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel", action: ContinuumAnalytics.wrapButton(
+                        "cancel",
+                        {
+ dismiss() 
+                        }
+                    ))
                     .keyboardShortcut(.cancelAction)
                     .disabled(isCreating)
-                Button(isCreating ? "Creating…" : "Create") {
+                Button(isCreating ? "Creating…" : "Create", action: ContinuumAnalytics.wrapButton(
+                        "iscreating_creating_create",
+                        {
                     Task { await create() }
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .disabled(!canCreate || isCreating)

@@ -90,7 +90,7 @@ struct PlanQueueSheet: View {
                     .foregroundStyle(t.fg3)
             }
             Spacer()
-            Button(action: onDismiss) {
+            Button(action: ContinuumAnalytics.wrapButton("plan_queue_close", onDismiss)) {
                 TahoeIcon("x", size: 12)
                     .foregroundStyle(t.fg3)
                     .frame(width: 30, height: 30)
@@ -243,7 +243,7 @@ private struct PlanQueueRowView: View {
     let onToggle: () -> Void
 
     var body: some View {
-        Button(action: onToggle) {
+        Button(action: ContinuumAnalytics.wrapButton("plan_queue_row_toggle", onToggle)) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: isChecked ? "checkmark.square.fill" : "square")
                     .font(.system(size: 16, weight: .medium))

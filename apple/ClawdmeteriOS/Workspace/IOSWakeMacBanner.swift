@@ -22,12 +22,10 @@ struct IOSWakeMacBanner: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack {
-                Button(isWaking ? "Waking…" : "Wake Mac") {
-                    Task { await wake() }
-                }
+                Button(isWaking ? "Waking…" : "Wake Mac", action: ContinuumAnalytics.wrapButton("wake_mac", { Task { await wake() } }))
                 .buttonStyle(.borderedProminent)
                 .disabled(isWaking)
-                Button("Dismiss", action: onDismiss)
+                Button("Dismiss", action: ContinuumAnalytics.wrapButton("dismiss", onDismiss))
                     .buttonStyle(.bordered)
             }
             if let lastResult {

@@ -267,7 +267,7 @@ struct RepoEnvVariablesSettingsView: View {
                     .frame(width: 170)
                     .accessibilityIdentifier("settings.env.new-set-name")
                     .onSubmit(createSet)
-                Button(action: createSet) {
+                Button(action: ContinuumAnalytics.wrapButton("repo_env_create_set", createSet)) {
                     TahoeIcon("plus", size: 12, weight: .bold)
                 }
                 .buttonStyle(.borderless)
@@ -277,12 +277,12 @@ struct RepoEnvVariablesSettingsView: View {
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 8)], alignment: .leading, spacing: 8) {
                 ForEach(sets) { set in
-                    Button {
+                    Button(action: ContinuumAnalytics.wrapButton("repo_env_select_set", {
                         guard let workspace = selectedWorkspace, let envStore else { return }
                         envStore.setActiveSet(workspaceId: workspace.id, setId: set.id)
                         materializeSelectedRepo()
                         refresh(selectFirstIfNeeded: false)
-                    } label: {
+                    })) {
                         HStack(spacing: 6) {
                             if set.isActive {
                                 TahoeIcon("check", size: 9, weight: .bold)
@@ -320,7 +320,7 @@ struct RepoEnvVariablesSettingsView: View {
                         .foregroundStyle(t.fg3)
                 }
                 Spacer(minLength: 0)
-                Button(action: { isImportingVariables = true }) {
+                Button(action: ContinuumAnalytics.wrapButton("repo_env_import_variables", { isImportingVariables = true })) {
                     HStack(spacing: 6) {
                         TahoeIcon("tray", size: 11, weight: .semibold)
                         Text("Import .env")
@@ -328,7 +328,7 @@ struct RepoEnvVariablesSettingsView: View {
                 }
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier("settings.env.import")
-                Button(action: { isAddingVariable = true }) {
+                Button(action: ContinuumAnalytics.wrapButton("repo_env_add_variable", { isAddingVariable = true })) {
                     HStack(spacing: 6) {
                         TahoeIcon("plus", size: 11, weight: .bold)
                         Text("Add Variable")
@@ -445,26 +445,24 @@ struct RepoEnvVariablesSettingsView: View {
                         .foregroundStyle(t.fg2)
                     Spacer(minLength: 0)
                     if let activeSet {
-                        Button("Enable in \(activeSet.name)") {
+                        Button("Enable in \(activeSet.name)", action: ContinuumAnalytics.wrapButton("repo_env_bulk_enable_in_set", {
                             setSelectedVariables(enabled: true, in: activeSet)
-                        }
+                        }))
                         .buttonStyle(.bordered)
-                        Button("Disable in \(activeSet.name)") {
+                        Button("Disable in \(activeSet.name)", action: ContinuumAnalytics.wrapButton("repo_env_bulk_disable_in_set", {
                             setSelectedVariables(enabled: false, in: activeSet)
-                        }
+                        }))
                         .buttonStyle(.bordered)
                     }
-                    Button("Enable All Sets") {
+                    Button("Enable All Sets", action: ContinuumAnalytics.wrapButton("repo_env_bulk_enable_all_sets", {
                         setSelectedVariables(enabledInAllSets: true)
-                    }
+                    }))
                     .buttonStyle(.bordered)
-                    Button("Delete", role: .destructive) {
-                        deleteSelectedVariables()
-                    }
+                    Button("Delete", role: .destructive, action: ContinuumAnalytics.wrapButton("repo_env_bulk_delete", deleteSelectedVariables))
                     .buttonStyle(.bordered)
-                    Button("Clear") {
+                    Button("Clear", action: ContinuumAnalytics.wrapButton("repo_env_bulk_clear_selection", {
                         selectedVariableIds.removeAll()
-                    }
+                    }))
                     .buttonStyle(.borderless)
                 }
                 .padding(.horizontal, 12)
@@ -613,37 +611,37 @@ struct RepoEnvVariablesSettingsView: View {
                 .frame(width: 78, alignment: .leading)
 
             Menu {
-                Button("Details") {
+                Button("Details", action: ContinuumAnalytics.wrapButton("repo_env_variable_details", {
                     detailVariable = variable
-                }
-                Button("Edit") {
+                }))
+                Button("Edit", action: ContinuumAnalytics.wrapButton("repo_env_variable_edit", {
                     editMode = .edit(variable)
-                }
-                Button("Rotate Value") {
+                }))
+                Button("Rotate Value", action: ContinuumAnalytics.wrapButton("repo_env_variable_rotate", {
                     editMode = .rotate(variable)
-                }
-                Button("Duplicate") {
+                }))
+                Button("Duplicate", action: ContinuumAnalytics.wrapButton("repo_env_variable_duplicate", {
                     duplicateVariable(variable)
-                }
-                Button("Copy Key") {
+                }))
+                Button("Copy Key", action: ContinuumAnalytics.wrapButton("repo_env_variable_copy_key", {
                     copyToPasteboard(variable.key)
-                }
+                }))
                 Divider()
-                Button("Enable in all sets") {
+                Button("Enable in all sets", action: ContinuumAnalytics.wrapButton("repo_env_variable_enable_all_sets", {
                     setVariable(variable.id, enabledInAllSets: true)
-                }
-                Button("Disable in all sets") {
+                }))
+                Button("Disable in all sets", action: ContinuumAnalytics.wrapButton("repo_env_variable_disable_all_sets", {
                     setVariable(variable.id, enabledInAllSets: false)
-                }
+                }))
                 if let activeSet {
-                    Button("Disable in \(activeSet.name)") {
+                    Button("Disable in \(activeSet.name)", action: ContinuumAnalytics.wrapButton("repo_env_variable_disable_in_set", {
                         setAssignment(variableId: variable.id, setId: activeSet.id, enabled: false)
-                    }
+                    }))
                 }
                 Divider()
-                Button("Delete", role: .destructive) {
+                Button("Delete", role: .destructive, action: ContinuumAnalytics.wrapButton("repo_env_variable_delete", {
                     deleteVariable(variable.id)
-                }
+                }))
             } label: {
                 TahoeIcon("ellipsis", size: 13, weight: .semibold)
                     .foregroundStyle(t.fg3)
@@ -667,9 +665,9 @@ struct RepoEnvVariablesSettingsView: View {
         HStack(spacing: 6) {
             ForEach(sets.prefix(3)) { set in
                 let enabled = assignmentEnabled(variableId: variable.id, setId: set.id)
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("repo_env_toggle_set_assignment", {
                     setAssignment(variableId: variable.id, setId: set.id, enabled: !enabled)
-                } label: {
+                })) {
                     HStack(spacing: 4) {
                         if enabled {
                             TahoeIcon("check", size: 7, weight: .bold)
@@ -699,9 +697,9 @@ struct RepoEnvVariablesSettingsView: View {
                 Menu {
                     ForEach(sets.dropFirst(3)) { set in
                         let enabled = assignmentEnabled(variableId: variable.id, setId: set.id)
-                        Button("\(enabled ? "Disable" : "Enable") \(set.name)") {
+                        Button("\(enabled ? "Disable" : "Enable") \(set.name)", action: ContinuumAnalytics.wrapButton("repo_env_overflow_toggle_set", {
                             setAssignment(variableId: variable.id, setId: set.id, enabled: !enabled)
-                        }
+                        }))
                     }
                 } label: {
                     Text("+\(sets.count - 3)")
@@ -798,9 +796,9 @@ struct RepoEnvVariablesSettingsView: View {
                                 .foregroundStyle(t.fg3)
                         }
                         Spacer(minLength: 0)
-                        Button("Adopt") { adoptManual(conflict) }
+                        Button("Adopt", action: ContinuumAnalytics.wrapButton("repo_env_conflict_adopt", { adoptManual(conflict) }))
                             .buttonStyle(.bordered)
-                        Button("Import") { importManual(conflict, shouldRemoveManualLine: false) }
+                        Button("Import", action: ContinuumAnalytics.wrapButton("repo_env_conflict_import", { importManual(conflict, shouldRemoveManualLine: false) }))
                             .buttonStyle(.borderless)
                     }
                 }

@@ -84,9 +84,13 @@ private struct TranscriptGutterMarkerButton: View {
     @Environment(\.tahoe) private var t
 
     var body: some View {
-        Button {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "gutter_marker_select",
+                {
             onSelect(marker.id)
-        } label: {
+        
+                }
+            )) {
             Capsule(style: .continuous)
                 .fill(isHovered ? t.fg2 : t.fg4.opacity(0.55))
                 .frame(width: isHovered ? 10 : 8, height: isHovered ? 2 : 1)
