@@ -4,7 +4,8 @@ import ClawdmeterShared
 
 /// Menu bar label renderer:
 ///
-///   27% 2h 00m 20s  ✦  28% 5d 16h
+///   27% 2h 00m 20s  ✦  28% 5d 16h   (weekly-cap providers)
+///   25%  ▣  95%                    (Cursor: Auto% [logo] API%)
 ///
 /// MenuBarExtra under macOS Tahoe truncates anything past the first ~1 Text or
 /// Image inside its label. The reliable pattern is to render the ENTIRE label
@@ -36,6 +37,11 @@ struct MenuBarGaugeView {
         // Part of the key: a no-weekly provider renders a different label
         // (session-only, no phantom weekly), so it can't share a cache slot.
         let hasWeekly: Bool
+        // Cursor's menu-bar label is a split gauge (Auto% [logo] API%) rather
+        // than the standard session-only layout. -2 = not a cursor label;
+        // -1 = cursor label but that bucket is nil/unavailable.
+        let cursorAutoPct: Int
+        let cursorApiPct: Int
     }
     nonisolated(unsafe) private static var labelCache: [LabelKey: NSImage] = [:]
     nonisolated(unsafe) private static var labelCacheOrder: [LabelKey] = []
@@ -64,7 +70,9 @@ struct MenuBarGaugeView {
             assetName: assetName,
             template: template,
             notStarted: notStarted,
-            hasWeekly: hasWeekly
+            hasWeekly: hasWeekly,
+            cursorAutoPct: usage.cursorQuota.map { $0.autoPct ?? -1 } ?? -2,
+            cursorApiPct: usage.cursorQuota.map { $0.apiPct ?? -1 } ?? -2
         )
         cacheLock.lock()
         if let cached = labelCache[key] {
@@ -91,35 +99,51 @@ struct MenuBarGaugeView {
         )
         badge.bounds = CGRect(x: 0, y: -4, width: badgeSize, height: badgeSize)
 
-        // Providers with no weekly window (Antigravity/Cursor) still need
-        // their provider badge; otherwise a lone Cursor item renders as
-        // text-only and looks like the logo/toggle failed.
-        if !hasWeekly {
+        if let quota = usage.cursorQuota {
+            // Cursor: Auto%  [logo]  API% — the monthly total alone isn't a
+            // useful at-a-glance read; the split buckets are.
+            composite.append(NSAttributedString(
+                string: cursorSplitPct(quota.autoPct, notStarted: notStarted),
+                attributes: textAttrs
+            ))
+            composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
             composite.append(NSAttributedString(attachment: badge))
             composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
-        }
-
-        // Session portion. When the 5h/monthly window isn't active, show a
-        // dash instead of a misleading "0% 5h" reading.
-        if notStarted {
-            composite.append(NSAttributedString(string: "—", attributes: textAttrs))
+            composite.append(NSAttributedString(
+                string: cursorSplitPct(quota.apiPct, notStarted: notStarted),
+                attributes: textAttrs
+            ))
         } else {
-            composite.append(NSAttributedString(
-                string: "\(usage.sessionPct)% \(compactTime(usage.sessionResetMins))",
-                attributes: textAttrs
-            ))
-        }
+            // Providers with no weekly window (Antigravity/Grok) still need
+            // their provider badge; otherwise a lone item renders as text-only
+            // and looks like the logo/toggle failed.
+            if !hasWeekly {
+                composite.append(NSAttributedString(attachment: badge))
+                composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
+            }
 
-        // Weekly-cap providers use the badge as a separator between session
-        // and weekly readings.
-        if hasWeekly {
-            composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
-            composite.append(NSAttributedString(attachment: badge))
-            composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
-            composite.append(NSAttributedString(
-                string: "\(usage.weeklyPct)% \(compactTime(usage.weeklyResetMins))",
-                attributes: textAttrs
-            ))
+            // Session portion. When the 5h/monthly window isn't active, show a
+            // dash instead of a misleading "0% 5h" reading.
+            if notStarted {
+                composite.append(NSAttributedString(string: "—", attributes: textAttrs))
+            } else {
+                composite.append(NSAttributedString(
+                    string: "\(usage.sessionPct)% \(compactTime(usage.sessionResetMins))",
+                    attributes: textAttrs
+                ))
+            }
+
+            // Weekly-cap providers use the badge as a separator between session
+            // and weekly readings.
+            if hasWeekly {
+                composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
+                composite.append(NSAttributedString(attachment: badge))
+                composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
+                composite.append(NSAttributedString(
+                    string: "\(usage.weeklyPct)% \(compactTime(usage.weeklyResetMins))",
+                    attributes: textAttrs
+                ))
+            }
         }
 
         let image = imageFromAttributedString(composite)
@@ -214,6 +238,12 @@ struct MenuBarGaugeView {
     }
 
     // MARK: - Countdowns
+
+    private static func cursorSplitPct(_ pct: Int?, notStarted: Bool) -> String {
+        if notStarted { return "—" }
+        guard let pct else { return "--" }
+        return "\(pct)%"
+    }
 
     static func compactTime(_ mins: Int) -> String {
         guard mins > 0 else { return "now" }
