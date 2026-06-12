@@ -1863,6 +1863,7 @@ public final class AgentControlServer {
     /// OR the pinned account is no longer registered — never a silent
     /// fall-back to the primary subscription.
     func claudeSpawnPlan(for session: AgentSession) async -> ClaudePtyRegistry.SpawnPlan? {
+        FffAgentSearchProvisioning.ensureProvisioned()
         let argv = AgentSpawner.argv(for: session)
         guard !argv.isEmpty else { return nil }
         let cwd = session.effectiveCwd
@@ -4457,6 +4458,9 @@ public final class AgentControlServer {
             return
         }
         childEnv = instanceEnv
+        if req.agent == .codex {
+            FffAgentSearchProvisioning.ensureCodexMCPConfig(in: childEnv)
+        }
 
         // Step 1: write-ahead the Clawdmeter session. The
         // runtime kind is inferred as `.acpGrok` from `agent: .grok`.

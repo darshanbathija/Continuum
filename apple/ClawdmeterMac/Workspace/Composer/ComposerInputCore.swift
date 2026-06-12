@@ -289,6 +289,8 @@ struct ComposerInputCore: View {
     @State private var rimPulse: Bool = false
     @State private var accountChoices: [ProviderInstanceId] = []
     @ObservedObject private var insertionInbox = ComposerInsertionInbox.shared
+    /// Optional repo root for FFF-backed `@` file mentions in the Code tab.
+    var repoRoot: String? = nil
     /// Optional: when set, MentionPicker uses these as the source of
     /// suggestions (parent passes session-derived sources + open sessions).
     var mentionSourceProvider: () -> (sessions: [AgentSession], sourceEntries: [SourceEntry]) = { ([], []) }
@@ -436,6 +438,8 @@ struct ComposerInputCore: View {
                     openSessions: sources.sessions,
                     sourceEntries: sources.sourceEntries,
                     vendorStatuses: vendorStatuses,
+                    repoRoot: repoRoot,
+                    recentPathActions: presentationStore.snapshot.recentPathActions,
                     query: $mentionQuery,
                     onSelect: applyMentionSelection,
                     onDismiss: { showingMentions = false }

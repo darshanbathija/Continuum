@@ -4,18 +4,20 @@ import ClawdmeterShared
 /// `@`-triggered popover. Scope-cut per Codex P1 finding:
 /// shows (a) supported provisioning vendors (env/credential sharing),
 /// (b) other open sessions, (c) files the agent has already cited
-/// in this session (`SourceEntry`s).
-/// A full repo-file walker is deferred to a follow-up TODO.
+/// in this session (`SourceEntry`s), and (d) repo files via FFF search.
 struct MentionPicker: View {
 
     let openSessions: [AgentSession]
     let sourceEntries: [SourceEntry]
     let vendorStatuses: [String: VendorProvisioningStatus]
+    var repoRoot: String? = nil
+    var recentPathActions: [String] = []
     @Binding var query: String
     let onSelect: (Suggestion) -> Void
     let onDismiss: () -> Void
 
     @State private var selectedIndex: Int = 0
+    @State private var repoFileMatches: [RepoFileMatch] = []
 
     enum Suggestion: Identifiable, Hashable {
         case vendor(VendorProvisioningVendor)
@@ -59,6 +61,9 @@ struct MentionPicker: View {
         all.append(contentsOf: VendorProvisioningCatalog.vendors(matchingMentionQuery: q).map { .vendor($0) })
         all.append(contentsOf: openSessions.map { .session($0) })
         all.append(contentsOf: sourceEntries.map { .file(path: $0.payload, label: $0.label) })
+        all.append(contentsOf: repoFileMatches.map {
+            .file(path: $0.path, label: ($0.path as NSString).lastPathComponent)
+        })
         guard !q.isEmpty else { return all }
         return all.filter {
             $0.label.lowercased().contains(q) || $0.sublabel.lowercased().contains(q)
@@ -83,7 +88,7 @@ struct MentionPicker: View {
             .padding(.vertical, 6)
             Divider()
             if filtered.isEmpty {
-                Text("No matches in vendors, open sessions, or agent-cited files.")
+                Text("No matches in vendors, open sessions, repo files, or agent-cited files.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
@@ -108,13 +113,36 @@ struct MentionPicker: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
         )
-        .onChange(of: query) { _, _ in selectedIndex = 0 }
+        .onChange(of: query) { _, _ in
+            selectedIndex = 0
+            Task { await refreshRepoFiles() }
+        }
+        .task(id: repoRoot) { await refreshRepoFiles() }
         .background(KeyMonitor(
             up: { selectedIndex = max(0, selectedIndex - 1) },
             down: { selectedIndex = min(max(0, filtered.count - 1), selectedIndex + 1) },
             enter: { if let pick = pickerAt(selectedIndex) { onSelect(pick) } },
             escape: onDismiss
         ))
+    }
+
+    private func refreshRepoFiles() async {
+        guard let repoRoot, !repoRoot.isEmpty else {
+            repoFileMatches = []
+            return
+        }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            repoFileMatches = []
+            return
+        }
+        let result = await RepoFileSearchService.shared.matches(
+            query: trimmed,
+            repoRoot: repoRoot,
+            recents: recentPathActions,
+            limit: 40
+        )
+        repoFileMatches = result.matches
     }
 
     private func pickerAt(_ idx: Int) -> Suggestion? {

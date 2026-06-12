@@ -144,6 +144,10 @@ public enum AgentSpawner {
             // swallowed (blank chat, no reply, no rollout). Ignore all ambient
             // MCP config so chat sessions boot straight to the input.
             argv += ["--strict-mcp-config"]
+        } else if let mcpConfig = FffAgentSearchProvisioning.claudeMCPConfigArgument() {
+            // Code tab: wire bundled fff-mcp so Claude's grep/glob-style tools
+            // route through FFF without touching the user's global MCP config.
+            argv += ["--mcp-config", mcpConfig]
         }
         argv.append(contentsOf: extraArgs)
         return argv

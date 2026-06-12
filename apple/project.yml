@@ -70,6 +70,10 @@ targets:
           # OpenCode provider. Keep it out of source scanning; the
           # Vendor folder reference copies it into Contents/Resources.
           - "Resources/Vendor/opencode/**"
+          # Bundled FFF C library for Code-tab repo file search.
+          - "Resources/Vendor/fff/**"
+          # Bundled opencode-fff-search plugin config + node_modules.
+          - "Resources/Vendor/opencode-fff/**"
       # v0.27.0: Resources/Vendor/open-design/** exclusion removed —
       # the bundled Open Design daemon was stripped along with the
       # Design tab.
@@ -161,6 +165,32 @@ targets:
           fi
         outputFiles:
           - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/opencode/opencode
+      - name: Download bundled FFF (if missing)
+        script: |
+          if [ "${CLAWDMETER_SKIP_BUNDLED_FFF:-0}" = "1" ]; then
+            echo "Skipping bundled FFF download (CLAWDMETER_SKIP_BUNDLED_FFF=1)"
+            exit 0
+          fi
+          REPO_ROOT="$(cd "$SRCROOT/.." && pwd)"
+          if [ ! -f "$REPO_ROOT/apple/ClawdmeterMac/Resources/Vendor/fff/libfff_c.dylib" ] \
+            || [ ! -x "$REPO_ROOT/apple/ClawdmeterMac/Resources/Vendor/fff/fff-mcp" ]; then
+            "$REPO_ROOT/tools/download-bundled-fff.sh"
+          fi
+        outputFiles:
+          - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/fff/libfff_c.dylib
+          - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/fff/fff-mcp
+      - name: Stage OpenCode FFF plugin (if missing)
+        script: |
+          if [ "${CLAWDMETER_SKIP_OPENCODE_FFF_PLUGIN:-0}" = "1" ]; then
+            echo "Skipping OpenCode FFF plugin staging (CLAWDMETER_SKIP_OPENCODE_FFF_PLUGIN=1)"
+            exit 0
+          fi
+          REPO_ROOT="$(cd "$SRCROOT/.." && pwd)"
+          if [ ! -f "$REPO_ROOT/apple/ClawdmeterMac/Resources/Vendor/opencode-fff/config/opencode.json" ]; then
+            "$REPO_ROOT/tools/stage-opencode-fff-plugin.sh"
+          fi
+        outputFiles:
+          - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/opencode-fff/config/opencode.json
       # v0.27.0: "Build bundled Open Design" preBuildScript removed —
       # the bundled Open Design daemon was stripped along with the
       # Design tab.
