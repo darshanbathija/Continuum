@@ -11,6 +11,7 @@
 		0127E090A7799D2F4A7BC9BB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 052C6AEF07A486E8A35669C5 /* Assets.xcassets */; };
 		0190050C63A0552D50548BA8 /* CodexPlanPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCF9A1F1CC3BBCFFE5BFE1B3 /* CodexPlanPane.swift */; };
 		01B028A41B041C03E1587068 /* AgentControlServerChatRouteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 614324F44782E06C1986B651 /* AgentControlServerChatRouteTests.swift */; };
+		01B45609544DA99E655C7953 /* PR instructions.md in Resources */ = {isa = PBXBuildFile; fileRef = 3FE5FC6C76E19B92D1D4F588 /* PR instructions.md */; };
 		024E7E6118D32B5F735F6477 /* DeepResearchArgvTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3F8ACE81523EC6C4A95705 /* DeepResearchArgvTests.swift */; };
 		02ABAFEED5AAA54ADA6094A2 /* ClawdmeteriOSWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96732148372DBB9D002F93B9 /* ClawdmeteriOSWidgets.swift */; };
 		02F877979649BE4348C031CE /* IOSPermissionResponder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7328B46D75569B7C07ED261D /* IOSPermissionResponder.swift */; };
@@ -89,6 +90,7 @@
 		2E603388D7C39029FA0C4B45 /* EffortDial.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7AA0E698CF4573D10A92B71 /* EffortDial.swift */; };
 		31765427EEF087E9CE8E31B0 /* PlanWaitingComplication.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DFF52BE1A5139A35BB3299F /* PlanWaitingComplication.swift */; };
 		318B1B95381CD925A72FBABE /* OpenCodeGoModelProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C225C9CD02B59CED2495F3 /* OpenCodeGoModelProbeTests.swift */; };
+		31D5837F9C14FF8D7E8B2F06 /* PRPromptResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E64A3327EB3D8085EB2E2F29 /* PRPromptResolverTests.swift */; };
 		31FEEAF814C3648A43502749 /* IOSRelayClientLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 847CE810DE526A21A84A2AA3 /* IOSRelayClientLifecycleTests.swift */; };
 		329903FBBBCFC4161FE3882F /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F3AB01400D1F534506FEF4B /* SessionsView.swift */; };
 		32A535E2FF277284D1278202 /* APNSPushDeviceTokenStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AEC59C2C86A7AC9DCBFCDED /* APNSPushDeviceTokenStoreTests.swift */; };
@@ -297,6 +299,7 @@
 		A3E64813552296DF90328B74 /* VendorProvisioningServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCF5A90BF0E2E2F414B2BCD6 /* VendorProvisioningServiceTests.swift */; };
 		A570A995C1EE313DE7FA7EC7 /* PairingTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4BDBE8D894DEC31C57C6929 /* PairingTokenStore.swift */; };
 		A5FF46A59A126E94CBFC121E /* ProviderAccountChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3792ADA750EEAA8CBFB4ACF6 /* ProviderAccountChip.swift */; };
+		A6BAB55F3B4B653E14901A5F /* PRPromptResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 869E6405B0D913CA2B623692 /* PRPromptResolver.swift */; };
 		A6C394CEAAD286B7CB3770F7 /* iOSPRPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6C8F116E380DC4E1696BCFE /* iOSPRPane.swift */; };
 		A72C99A824DF7B93FF4CFFC2 /* AgentSessionRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C1B8A7FA6946383349924D1 /* AgentSessionRegistry.swift */; };
 		A88B020A3B7C3D3DE662F476 /* EffortChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3F6CEC90F0534043F77A9D6 /* EffortChip.swift */; };
@@ -310,6 +313,7 @@
 		AEAD1B156672F74D8ED83E89 /* ComposerSendStopRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C44EC2EC48C0742D6CE2CF4B /* ComposerSendStopRenderingTests.swift */; };
 		B028C8D132320086B733BC2B /* IOSSessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D258CBFD20C2EA718B511CD /* IOSSessionDetailView.swift */; };
 		B081F058485D14758B82D037 /* DaemonChatStoreRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96C2DF0BC33E8B4A3197CFDD /* DaemonChatStoreRegistry.swift */; };
+		B11176D6BF8274A470EC841E /* CodeTitlebarPRControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A85E5A5CF72FD6642E636B2 /* CodeTitlebarPRControl.swift */; };
 		B1140B69FCDEDF11E75E8101 /* WorkspaceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2629B754AC3EEB1E6A245A9F /* WorkspaceStoreTests.swift */; };
 		B1229E9071AA35899C491A87 /* iOSOutboxPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17DA27537713FA84A9F94D39 /* iOSOutboxPane.swift */; };
 		B159F7CDA71BDFF3AB7E7375 /* iOSTerminalTabsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC90C2ABAFB600289ACFF55D /* iOSTerminalTabsView.swift */; };
@@ -639,6 +643,7 @@
 		3E0AF7F2D36777237BB36333 /* PermissionModeChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionModeChip.swift; sourceTree = "<group>"; };
 		3F1627364A3A4398D5A45B4A /* JSONLTail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONLTail.swift; sourceTree = "<group>"; };
 		3F390A788ACC767845A4786C /* Vendor */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Vendor; path = ClawdmeterMac/Resources/Vendor; sourceTree = SOURCE_ROOT; };
+		3FE5FC6C76E19B92D1D4F588 /* PR instructions.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "PR instructions.md"; sourceTree = "<group>"; };
 		412A35101FFC2DBB6623AD83 /* WorkspaceTerminalPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTerminalPane.swift; sourceTree = "<group>"; };
 		418BA8F3A23ADC9EA3D1AB73 /* AgentControlServer+VendorProvisioning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AgentControlServer+VendorProvisioning.swift"; sourceTree = "<group>"; };
 		41B60D6E8F440791CA97B015 /* CodexLogo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = CodexLogo.png; sourceTree = "<group>"; };
@@ -655,6 +660,7 @@
 		4880349C77CC6B6DDE3CE084 /* PlanRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanRunner.swift; sourceTree = "<group>"; };
 		49F781A75D25FE8478D4F1E4 /* PairingScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScannerView.swift; sourceTree = "<group>"; };
 		49FF764D16075FBD5CFDC73E /* QuickSpawnContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickSpawnContractTests.swift; sourceTree = "<group>"; };
+		4A85E5A5CF72FD6642E636B2 /* CodeTitlebarPRControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTitlebarPRControl.swift; sourceTree = "<group>"; };
 		4B2164B168973D3B024958E5 /* CustomProviderSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomProviderSettings.swift; sourceTree = "<group>"; };
 		4B2A6E12E7475B6319B2F93C /* iOSSourcesPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSSourcesPane.swift; sourceTree = "<group>"; };
 		4B5CD71EDF0C57482E26E894 /* RepoIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoIndexTests.swift; sourceTree = "<group>"; };
@@ -758,6 +764,7 @@
 		856C7552A929C04A22490BB6 /* GrokHeadlessDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokHeadlessDriverTests.swift; sourceTree = "<group>"; };
 		85E7DC29DED7B2A2FE149E9E /* IOSMarkdownDocumentTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSMarkdownDocumentTabView.swift; sourceTree = "<group>"; };
 		85F55C883E5F75EF62E8168B /* RepoEnvVendorSecretsImporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoEnvVendorSecretsImporterTests.swift; sourceTree = "<group>"; };
+		869E6405B0D913CA2B623692 /* PRPromptResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRPromptResolver.swift; sourceTree = "<group>"; };
 		87DB105B08B1AE734AF7FF4B /* TranscriptPathLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptPathLinks.swift; sourceTree = "<group>"; };
 		882E7B0B1D24591A17536772 /* TailscaleHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TailscaleHost.swift; sourceTree = "<group>"; };
 		88501FECEB4876BDEAAF06B7 /* AntigravityPlanPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityPlanPane.swift; sourceTree = "<group>"; };
@@ -925,6 +932,7 @@
 		E5A111E93A2442153968B84D /* CustomProviderStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomProviderStoreTests.swift; sourceTree = "<group>"; };
 		E5FF03F1E086BBE48B69349D /* RepoOnboardingError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoOnboardingError.swift; sourceTree = "<group>"; };
 		E64A02721C151458566CC7E3 /* ClawdmeterMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClawdmeterMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E64A3327EB3D8085EB2E2F29 /* PRPromptResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRPromptResolverTests.swift; sourceTree = "<group>"; };
 		E7B4A49792F41E40BE5183AF /* WorkbenchStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchStateTests.swift; sourceTree = "<group>"; };
 		E81AA8A300E81E7510331C1B /* WatchUsageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchUsageModel.swift; sourceTree = "<group>"; };
 		E8B01DA7617C0DFEA3F78CF4 /* ChatProviderAuthObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatProviderAuthObserver.swift; sourceTree = "<group>"; };
@@ -1324,6 +1332,7 @@
 				5B1DE3BECFAB2F957716D01F /* ModePicker.swift */,
 				1CFEA1EAB3B6FFE95E352655 /* PlanTrackerPane.swift */,
 				2C26322AF31DD69281D1B0B3 /* ProvisioningTrailView.swift */,
+				869E6405B0D913CA2B623692 /* PRPromptResolver.swift */,
 				93A894C6B7326CFA1F502397 /* PRReviewPane.swift */,
 				4353CCA0F5543AEB084A0406 /* QuickStartRepoSheet.swift */,
 				F0C71FABF0D6B86D4326D903 /* QuietDisclosure.swift */,
@@ -1432,6 +1441,7 @@
 				B5A629825BB527592CC870F4 /* PRCoordinatorTests.swift */,
 				EF1D26C6988F4C479B90EABC /* ProviderDeviceDiscoveryTests.swift */,
 				516F804D11D69CB1578D4A3F /* ProviderInstanceShellShimInstallerTests.swift */,
+				E64A3327EB3D8085EB2E2F29 /* PRPromptResolverTests.swift */,
 				49FF764D16075FBD5CFDC73E /* QuickSpawnContractTests.swift */,
 				8DEEC2B4DE21BBB70A317C55 /* RelayGrantProvisionerTests.swift */,
 				13951B634E1A812CE5D605E3 /* RelayPairingServiceTests.swift */,
@@ -1576,6 +1586,7 @@
 			isa = PBXGroup;
 			children = (
 				58B2791865D23423A7F4CC0F /* AnalyticsRangeAdapter.swift */,
+				4A85E5A5CF72FD6642E636B2 /* CodeTitlebarPRControl.swift */,
 				4B2164B168973D3B024958E5 /* CustomProviderSettings.swift */,
 				C2D094B6FFC14AA31CD6E63E /* KeyboardCheatSheet.swift */,
 				5E503A54446667EB3A1CEE00 /* MacCodeShell.swift */,
@@ -1676,6 +1687,7 @@
 				41B60D6E8F440791CA97B015 /* CodexLogo.png */,
 				26B5538D5376C29DDF7CD413 /* deep-research-prompt.txt */,
 				61DCEB1020CBB0E324C60959 /* GeminiLogo.svg */,
+				3FE5FC6C76E19B92D1D4F588 /* PR instructions.md */,
 				3F390A788ACC767845A4786C /* Vendor */,
 				4A2AC387B85935274B6855C9 /* Vendor */,
 			);
@@ -2053,6 +2065,7 @@
 				4A027F14FB57C10128699164 /* ClaudeLogo.svg in Resources */,
 				C97F41751616AF2672BAA590 /* CodexLogo.png in Resources */,
 				389C34543E4E3E857E98DC40 /* GeminiLogo.svg in Resources */,
+				01B45609544DA99E655C7953 /* PR instructions.md in Resources */,
 				F8FA8741CD3BB21488BF313B /* Vendor in Resources */,
 				655480897A54E74D89A8FF06 /* browser-overlay.js in Resources */,
 				5281DED2AAE3EF81A11A7207 /* clawdmeter-agents in Resources */,
@@ -2183,6 +2196,7 @@
 				9C68C34BF6B5F2B6EA290240 /* OpencodeSSEAdapterTests.swift in Sources */,
 				4093AB1AA42F19A94C6CCF68 /* OpencodeSendTests.swift in Sources */,
 				40413B717F409C644643AF73 /* PRCoordinatorTests.swift in Sources */,
+				31D5837F9C14FF8D7E8B2F06 /* PRPromptResolverTests.swift in Sources */,
 				5D4D53D748BC9DB41B3C88A7 /* PathAllowListTests.swift in Sources */,
 				453B70AABD9A8921BA9706FB /* PathValidatorMacTests.swift in Sources */,
 				8F810CE05FE7DB26AD6760E8 /* PlanApprovalStoreRolloverTest.swift in Sources */,
@@ -2270,6 +2284,7 @@
 				1A33BCE35CFE5B8AFC5BD284 /* ClawdmeterMacApp.swift in Sources */,
 				4C543601780662CF227769D6 /* CloneRepoSheet.swift in Sources */,
 				B165EF5AFBBB3BAE43A86815 /* CodeRunProfileService.swift in Sources */,
+				B11176D6BF8274A470EC841E /* CodeTitlebarPRControl.swift in Sources */,
 				9C0D9A47C3B7BA750DCC9E09 /* CodeWorkspaceDraftComposer.swift in Sources */,
 				51F807AB2E5043005973D0AD /* CodexAppServerDriver.swift in Sources */,
 				0190050C63A0552D50548BA8 /* CodexPlanPane.swift in Sources */,
@@ -2340,6 +2355,7 @@
 				53C6CA5A804E1310F3525782 /* OpencodeSetupSheet.swift in Sources */,
 				171C07FFCC37CF127B0480F7 /* PRCoordinator.swift in Sources */,
 				790A44E079CA0DB17DD6DE66 /* PRMirror.swift in Sources */,
+				A6BAB55F3B4B653E14901A5F /* PRPromptResolver.swift in Sources */,
 				71D2F5C5DA48D0A6A2076B75 /* PRReviewPane.swift in Sources */,
 				78CB6092D46948FB6C91E068 /* PairingDownloadAppStep.swift in Sources */,
 				D8B34E7787E3AD8CA73DAA4F /* PairingModePicker.swift in Sources */,

@@ -15,9 +15,18 @@ enum WorkbenchPaneTab: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var accessibilityKey: String { rawValue.lowercased() }
 
+    /// Right-pane tabs excluding deprecated surfaces.
+    static var visibleReviewPaneTabs: [WorkbenchPaneTab] {
+        [.plan, .diff, .sources, .browser, .terminal]
+    }
+
+    static func normalizedReviewPaneTab(_ tab: WorkbenchPaneTab) -> WorkbenchPaneTab {
+        tab == .pr ? .plan : tab
+    }
+
     init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = Self(rawValue: raw) ?? .plan
+        self = Self(rawValue: raw).map(Self.normalizedReviewPaneTab) ?? .plan
     }
 
     var systemImage: String {
@@ -333,14 +342,17 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         selectedSessionId = try c.decodeIfPresent(UUID.self, forKey: .selectedSessionId)
-        selectedRightPane = try c.decodeIfPresent(WorkbenchPaneTab.self, forKey: .selectedRightPane) ?? .plan
+        selectedRightPane = WorkbenchPaneTab.normalizedReviewPaneTab(
+            try c.decodeIfPresent(WorkbenchPaneTab.self, forKey: .selectedRightPane) ?? .plan
+        )
         showingReviewPane = try c.decodeIfPresent(Bool.self, forKey: .showingReviewPane) ?? false
         density = try c.decodeIfPresent(TranscriptDensity.self, forKey: .density) ?? .balanced
         workspaceWidth = try c.decodeIfPresent(Double.self, forKey: .workspaceWidth) ?? 1400
         sidebarWidth = try c.decodeIfPresent(Double.self, forKey: .sidebarWidth)
         centerWidth = try c.decodeIfPresent(Double.self, forKey: .centerWidth)
         reviewWidth = try c.decodeIfPresent(Double.self, forKey: .reviewWidth)
-        selectedRightPaneBySession = try c.decodeIfPresent([UUID: WorkbenchPaneTab].self, forKey: .selectedRightPaneBySession) ?? [:]
+        selectedRightPaneBySession = (try c.decodeIfPresent([UUID: WorkbenchPaneTab].self, forKey: .selectedRightPaneBySession) ?? [:])
+            .mapValues(WorkbenchPaneTab.normalizedReviewPaneTab)
         immersiveBrowserSessionId = try c.decodeIfPresent(UUID.self, forKey: .immersiveBrowserSessionId)
         queuedSends = try c.decodeIfPresent([QueuedWorkbenchSend].self, forKey: .queuedSends) ?? []
         runProfiles = try c.decodeIfPresent([UUID: RunProfileStateSnapshot].self, forKey: .runProfiles) ?? [:]
@@ -488,18 +500,19 @@ final class WorkbenchState: ObservableObject {
         update {
             $0.selectedSessionId = id
             if let id, let tab = $0.selectedRightPaneBySession[id] {
-                $0.selectedRightPane = tab
+                $0.selectedRightPane = WorkbenchPaneTab.normalizedReviewPaneTab(tab)
             }
         }
     }
 
     func selectRightPane(_ tab: WorkbenchPaneTab) {
+        let normalized = WorkbenchPaneTab.normalizedReviewPaneTab(tab)
         update {
-            $0.selectedRightPane = tab
+            $0.selectedRightPane = normalized
             if let sessionId = $0.selectedSessionId {
-                $0.selectedRightPaneBySession[sessionId] = tab
+                $0.selectedRightPaneBySession[sessionId] = normalized
             }
-            if tab != .browser {
+            if normalized != .browser {
                 $0.immersiveBrowserSessionId = nil
             }
         }

@@ -95,7 +95,7 @@ final class WorkbenchStateTests: XCTestCase {
         let state = WorkbenchState(store: WorkbenchStateStore(storeURL: storeURL))
 
         XCTAssertEqual(state.selectedSessionId, sessionId)
-        XCTAssertEqual(state.selectedRightPane, .pr)
+        XCTAssertEqual(state.selectedRightPane, .plan)
         XCTAssertEqual(state.density, .balanced)
         XCTAssertTrue(state.showingReviewPane)
         XCTAssertEqual(state.workspaceWidth, 1111)
