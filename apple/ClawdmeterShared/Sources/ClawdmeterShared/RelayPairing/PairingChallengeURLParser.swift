@@ -41,7 +41,15 @@ public enum PairingChallengeURLParser {
     }
 
     public static func isAllowedPairingHost(_ host: String) -> Bool {
+        // URL.host strips the brackets from `[fd7a:…]`, but accept either form
+        // so the Tailscale-IPv6 QR the builder can emit actually pairs.
+        var host = host
+        if host.hasPrefix("[") && host.hasSuffix("]") {
+            host = String(host.dropFirst().dropLast())
+        }
         if host == "localhost" || host == "127.0.0.1" || host == "::1" { return true }
+        // Tailscale ULA range fd7a:115c:a1e0::/48 (matches the daemon's IPv6 peer filter).
+        if host.lowercased().hasPrefix("fd7a:115c:a1e0:") { return true }
         if host.hasSuffix(".ts.net") || host.hasSuffix(".tailnet.ts.net") { return true }
         let parts = host.split(separator: ".")
         if parts.count == 4,

@@ -42,4 +42,19 @@ final class PairingChallengeURLParserTests: XCTestCase {
         )
         XCTAssertNil(PairingChallengeURLParser.parse(urlString: url))
     }
+
+    func testRoundTripsTailscaleIPv6BuilderOutput() throws {
+        let token = String(repeating: "d", count: 32)
+        let url = TailscalePairingURLBuilder.buildURL(
+            host: "[fd7a:115c:a1e0::2]",
+            httpPort: 21_731,
+            wsPort: 21_732,
+            token: token
+        )
+        let parsed = try XCTUnwrap(PairingChallengeURLParser.parse(urlString: url))
+        XCTAssertEqual(parsed.token, token)
+        XCTAssertTrue(PairingChallengeURLParser.isAllowedPairingHost("fd7a:115c:a1e0::2"))
+        XCTAssertTrue(PairingChallengeURLParser.isAllowedPairingHost("[fd7a:115c:a1e0::2]"))
+        XCTAssertFalse(PairingChallengeURLParser.isAllowedPairingHost("fd00:dead:beef::1"))
+    }
 }
