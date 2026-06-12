@@ -60,6 +60,12 @@ public enum ProviderInstanceShellShim {
     ) -> String {
         let quotedConfig = shellSingleQuoted(configRoot)
         let quotedService = shellSingleQuoted(tokenService)
+        // Single-quote the whole message: a secondary account's `name` (and
+        // thus wireId) can contain `$`, backtick, or `(` `)`, which would be
+        // shell-evaluated if interpolated into a double-quoted echo.
+        let quotedNoToken = shellSingleQuoted(
+            "No token for \(wireId) — re-authenticate in Continuum → Settings → Providers."
+        )
         return """
         #!/usr/bin/env bash
         \(shimMarkerPrefix)\(wireId)
@@ -70,7 +76,7 @@ public enum ProviderInstanceShellShim {
           exit 1
         fi
         TOKEN=$(security find-generic-password -s \(quotedService) -w 2>/dev/null) || {
-          echo "No token for \(wireId) — re-authenticate in Continuum → Settings → Providers." >&2
+          echo \(quotedNoToken) >&2
           exit 1
         }
         unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
