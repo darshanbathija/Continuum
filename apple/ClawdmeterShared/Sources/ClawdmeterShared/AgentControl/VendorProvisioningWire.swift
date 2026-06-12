@@ -297,6 +297,32 @@ public enum VendorProvisioningCatalog {
     public static func vendor(id: String) -> VendorProvisioningVendor? {
         vendors.first { $0.id == id }
     }
+
+    /// Vendors whose display name, id, or MCP alias matches a composer `@` query.
+    public static func vendors(matchingMentionQuery query: String) -> [VendorProvisioningVendor] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return vendors }
+        return vendors.filter { vendor in
+            vendor.displayName.lowercased().contains(q)
+                || vendor.id.lowercased().contains(q)
+                || vendor.mcpAliases.contains { $0.lowercased().contains(q) }
+        }
+    }
+
+    /// Best single-vendor match for an in-progress `@` token (used by the preview chip).
+    public static func bestVendorMatch(forMentionQuery query: String) -> VendorProvisioningVendor? {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard q.count >= 2 else { return nil }
+        if let exact = vendors.first(where: { $0.displayName.lowercased() == q || $0.id.lowercased() == q }) {
+            return exact
+        }
+        let prefixMatches = vendors.filter {
+            $0.displayName.lowercased().hasPrefix(q)
+                || $0.id.lowercased().hasPrefix(q)
+                || $0.mcpAliases.contains { $0.lowercased().hasPrefix(q) }
+        }
+        return prefixMatches.count == 1 ? prefixMatches.first : nil
+    }
 }
 
 // MARK: - Device status
@@ -355,6 +381,20 @@ public struct VendorProvisioningStatus: Codable, Hashable, Sendable {
         self.message = message
         self.mcpMatches = mcpMatches
         self.checkedAt = checkedAt
+    }
+
+    /// Composer `@` mention chip label — intentionally short ("connected" / "not connected").
+    public var mentionConnectionLabel: String {
+        switch cliStatus {
+        case .authenticated:
+            return "connected"
+        case .installed, .unauthenticated, .notInstalled, .unknown, .error:
+            return "not connected"
+        }
+    }
+
+    public var isMentionConnected: Bool {
+        cliStatus == .authenticated
     }
 }
 

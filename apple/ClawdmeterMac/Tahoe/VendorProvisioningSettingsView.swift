@@ -605,7 +605,7 @@ private struct Badge: View {
     }
 }
 
-private struct VendorEnvImportSheet: View {
+struct VendorEnvImportSheet: View {
     @Environment(\.tahoe) private var t
 
     let vendor: VendorProvisioningVendor
