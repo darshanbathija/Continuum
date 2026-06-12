@@ -135,12 +135,13 @@ public final class AppModel: ObservableObject {
     public func forcePoll() {
         Task { @MainActor [weak self] in
             guard let self else { return }
+            // Starting the model wires `onEvent` → consume; without this a
+            // not-yet-started secondary account gauge stayed at the nil-usage
+            // placeholder. The poll's event is consumed via `onEvent`; do NOT
+            // also consume the return value or every forced poll double-fires
+            // (duplicate Cursor canonical events downstream).
             if !isStarted { start() }
-            let event = await poller.forcePoll()
-            // Belt-and-suspenders: the poller also fires `onEvent`, but
-            // consume directly so a RunLoop scheduling miss can't leave
-            // secondary account gauges stuck at the nil-usage placeholder.
-            consume(event)
+            _ = await poller.forcePoll()
         }
     }
 
