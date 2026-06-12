@@ -313,13 +313,31 @@ struct UpdatePopoverContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
-            detail
+            detailIfNeeded
             actions
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(ContinuumTokens.surface1)
         .onAppear { coordinator.wrapped?.refreshReleaseMetadata() }
+    }
+
+    private var trimmedReleaseNotes: String? {
+        guard let notes = coordinator.wrapped?.releaseNotes?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !notes.isEmpty
+        else { return nil }
+        return notes
+    }
+
+    private var shouldShowInlineReleaseNotes: Bool {
+        guard let coordinator = coordinator.wrapped else { return false }
+        if trimmedReleaseNotes != nil { return true }
+        if coordinator.isLoadingReleaseMetadata {
+            if case .updateAvailable = coordinator.state { return true }
+            return false
+        }
+        return coordinator.releaseMetadataError != nil
     }
 
     @ViewBuilder
@@ -341,16 +359,21 @@ struct UpdatePopoverContent: View {
     }
 
     @ViewBuilder
-    private var detail: some View {
+    private var detailIfNeeded: some View {
         switch coordinator.wrapped?.state {
         case .updateAvailable(let update):
-            VStack(alignment: .leading, spacing: 8) {
-                if let title = update.title, !title.isEmpty {
-                    Text(title)
-                        .font(ContinuumFont.body(12, weight: .semibold))
-                        .foregroundStyle(ContinuumTokens.fg)
+            let hasTitle = update.title.map { !$0.isEmpty } ?? false
+            if hasTitle || shouldShowInlineReleaseNotes {
+                VStack(alignment: .leading, spacing: 8) {
+                    if hasTitle, let title = update.title {
+                        Text(title)
+                            .font(ContinuumFont.body(12, weight: .semibold))
+                            .foregroundStyle(ContinuumTokens.fg)
+                    }
+                    if shouldShowInlineReleaseNotes {
+                        releaseNotesView
+                    }
                 }
-                releaseNotesView
             }
         case .failed(let reason, _), .setupBlocked(let reason, _),
              .invalidAppcastSignature(let reason, _), .corruptedDownload(let reason, _):
@@ -379,7 +402,9 @@ struct UpdatePopoverContent: View {
                 .lineLimit(2)
                 .truncationMode(.middle)
         default:
-            releaseNotesView
+            if shouldShowInlineReleaseNotes {
+                releaseNotesView
+            }
         }
     }
 
@@ -392,7 +417,7 @@ struct UpdatePopoverContent: View {
                     .font(ContinuumFont.body(12))
                     .foregroundStyle(ContinuumTokens.fg2)
             }
-        } else if let notes = coordinator.wrapped?.releaseNotes, !notes.isEmpty {
+        } else if let notes = trimmedReleaseNotes {
             ScrollView {
                 Text(renderMarkdown(notes))
                     .font(ContinuumFont.body(12))
@@ -412,10 +437,6 @@ struct UpdatePopoverContent: View {
                 .font(ContinuumFont.body(12))
                 .foregroundStyle(ContinuumTokens.fg2)
                 .fixedSize(horizontal: false, vertical: true)
-        } else {
-            Text("No release notes to show for this version.")
-                .font(ContinuumFont.body(12))
-                .foregroundStyle(ContinuumTokens.fg2)
         }
     }
 
