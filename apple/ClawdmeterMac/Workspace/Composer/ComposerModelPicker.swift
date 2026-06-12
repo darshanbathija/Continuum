@@ -9,7 +9,7 @@
 //   │∎ │ ☆ GPT-5.4-Mini        ⌘3          │
 //   │…│ …                                  │
 //   ├──┴───────────────────────────────────┤
-//   │ ◉ GPT-5.4   Medium · Normal   Build  │
+//   │ ◉ GPT-5.4                                     │
 //   └──────────────────────────────────────┘
 //
 // Left rail: 32×32 provider icons + a "Starred" pseudo-entry at the top.
@@ -22,8 +22,8 @@
 // shortcuts are suppressed so they aren't bound to surprising cross-
 // provider rows.
 //
-// Bottom bar: visual-only summary of the current selection (model, mode,
-// permission). Effort mutation lives on the composer's `EffortChip`.
+// Bottom bar: visual-only summary of the current selection (model only).
+// Effort/mode/permission live on the composer's own chips.
 //
 // Deferred to v0.29.9 (intentionally out of scope, called out in PR body):
 //   • Bottom-bar chips become interactive (drive effort/mode/permission)
@@ -205,7 +205,6 @@ public struct ComposerModelPicker: View {
         .shadow(color: Color.black.opacity(0.35), radius: 24, x: 0, y: 12)
         .onAppear {
             searchFocused = true
-            focusedRowIndex = currentlySelectedRowIndex()
             NotificationCenter.default.post(
                 name: .composerModelPickerActiveChanged,
                 object: nil,
@@ -220,10 +219,10 @@ public struct ComposerModelPicker: View {
             )
         }
         .onChange(of: searchQuery) {
-            focusedRowIndex = visibleEntries.isEmpty ? nil : 0
+            focusedRowIndex = nil
         }
         .onChange(of: activeRail) {
-            focusedRowIndex = currentlySelectedRowIndex()
+            focusedRowIndex = nil
         }
     }
 
@@ -415,11 +414,6 @@ public struct ComposerModelPicker: View {
 
     @ViewBuilder
     private func modelRow(entry: VisibleRowEntry, index: Int) -> some View {
-        // Starred rail aggregates defaults across providers — highlighting
-        // every vendor's current model reads as "all selected". Only the
-        // keyboard-focused row gets accent chrome there.
-        let showsProviderSelection = activeRail != .favorites
-        let isSelected = showsProviderSelection && isCurrentlySelected(entry: entry)
         let isFav = entry.choice.chatVendor.map {
             defaultsStore.isFavorite(modelId: entry.model.id, vendor: $0)
         } ?? false
@@ -428,7 +422,6 @@ public struct ComposerModelPicker: View {
         // cross-provider list (would be surprising for the user).
         let shortcut: Character? = (searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && index < 9)
             ? Character("\(index + 1)") : nil
-        let isFocused = (focusedRowIndex == index)
         let isDragging = draggingFavoriteId == entry.compositeId
 
         HStack(spacing: 10) {
@@ -491,18 +484,6 @@ public struct ComposerModelPicker: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(isDragging ? 0.45 : 1.0)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? Color.white.opacity(0.10) : Color.clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(
-                    isFocused ? t.accent.opacity(0.55)
-                    : (isSelected ? t.accent.opacity(0.30) : Color.clear),
-                    lineWidth: isFocused ? 1.0 : 0.5
-                )
-        )
         .onDrag {
             guard isFavoritesRail else {
                 return NSItemProvider()
@@ -579,7 +560,7 @@ public struct ComposerModelPicker: View {
         }
     }
 
-    // MARK: - Bottom bar (visual-only chips, no chevrons; v0.29.9 wires interaction)
+    // MARK: - Bottom bar (visual-only model summary)
 
     private var bottomBar: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -594,10 +575,6 @@ public struct ComposerModelPicker: View {
             }
             HStack(spacing: 6) {
                 bottomChip { selectedModelChipContent }
-                if mode == .single {
-                    bottomChip { modeChipContent }
-                    bottomChip { permissionChipContent }
-                }
                 Spacer(minLength: 0)
             }
         }
@@ -714,28 +691,6 @@ public struct ComposerModelPicker: View {
         return true
     }
 
-    private var modeChipContent: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "hammer")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(t.fg3)
-            Text("Build")
-                .font(TahoeFont.body(11))
-                .foregroundStyle(t.fg3)
-        }
-    }
-
-    private var permissionChipContent: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "lock")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(t.fg3)
-            Text(PermissionMode.bypass.displayName)
-                .font(TahoeFont.body(11))
-                .foregroundStyle(t.fg3)
-        }
-    }
-
     // MARK: - Keyboard nav helpers
 
     private func moveFocus(by delta: Int) {
@@ -752,20 +707,6 @@ public struct ComposerModelPicker: View {
         guard let idx = focusedRowIndex,
               visibleEntries.indices.contains(idx) else { return }
         select(entry: visibleEntries[idx])
-    }
-
-    private func currentlySelectedRowIndex() -> Int? {
-        guard !visibleEntries.isEmpty else { return nil }
-        if activeRail == .favorites {
-            if let i = visibleEntries.firstIndex(where: { $0.choice == initialChoice && isCurrentlySelected(entry: $0) }) {
-                return i
-            }
-            return 0
-        }
-        if let i = visibleEntries.firstIndex(where: { isCurrentlySelected(entry: $0) }) {
-            return i
-        }
-        return 0
     }
 
     // MARK: - Selection
@@ -809,13 +750,6 @@ public struct ComposerModelPicker: View {
         }
         onSelectModel?(choice, entry.model.id, normalizedEffort)
         onClose()
-    }
-
-    private func isCurrentlySelected(entry: VisibleRowEntry) -> Bool {
-        let active = defaultsStore.modelId(forChoice: entry.choice, catalog: catalog)
-            ?? store.model(forChoice: entry.choice, catalog: catalog)
-            ?? entry.choice.chatVendor.flatMap { store.selectedModelByVendor[$0] }
-        return active == entry.model.id
     }
 
     // MARK: - Data: rail + filtered model list
