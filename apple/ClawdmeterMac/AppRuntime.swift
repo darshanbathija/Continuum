@@ -942,6 +942,10 @@ final class AppRuntime: ObservableObject {
             // the loader's root closures read the list per refresh.
             usageHistoryStore.forceRefresh()
         }
+        if !Self.deferProviderSideEffectsForTesting,
+           ProviderEnablement.isEnabled(instance.kind.rawValue) {
+            model.forcePoll()
+        }
         await syncProviderShellShims()
         let redactedRoot = instance.configRoot == nil
             ? "nil"
