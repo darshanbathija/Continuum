@@ -553,7 +553,6 @@ private struct CursorMonthlyMeters: View {
 
     var body: some View {
         VStack(spacing: 9) {
-            meter(label: "Monthly total", pct: quota.totalPct)
             meter(label: "Auto", pct: quota.autoPct)
             meter(label: "API", pct: quota.apiPct)
         }

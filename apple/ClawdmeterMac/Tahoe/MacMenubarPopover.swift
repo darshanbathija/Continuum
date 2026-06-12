@@ -543,7 +543,6 @@ private struct CursorMonthlyMenuBarMeters: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            cursorMeter(label: "Monthly total", pct: row.cursorQuota?.totalPct ?? Int(row.sessionPercent))
             cursorMeter(label: "Auto", pct: row.cursorQuota?.autoPct)
             cursorMeter(label: "API", pct: row.cursorQuota?.apiPct)
         }

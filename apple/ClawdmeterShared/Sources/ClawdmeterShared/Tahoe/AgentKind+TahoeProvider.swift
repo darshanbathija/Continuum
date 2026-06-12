@@ -61,6 +61,21 @@ public extension TahoeProvider {
         }
         return agent.tahoeProvider
     }
+
+    /// Header / chip glyph that follows the selected catalog model when set.
+    static func resolvedForModelEntry(
+        modelId: String?,
+        customProviderId: String?,
+        fallbackAgent: AgentKind,
+        catalog: ModelCatalog
+    ) -> TahoeProvider {
+        if let trimmed = modelId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmed.isEmpty,
+           let entry = catalog.entry(forId: trimmed, customProviderId: customProviderId) {
+            return resolved(agent: entry.provider, modelId: trimmed)
+        }
+        return resolved(agent: fallbackAgent, modelId: modelId)
+    }
 }
 
 public extension AgentSession {

@@ -274,8 +274,8 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var providerConfigurationSettings: some View {
-        SettingsCard(title: "Providers", sub: nil) {
-            SettingsProviderRowsWithDeviceStatus(runtime: runtime)
+        SettingsCard(title: "Providers", sub: "Connect subscriptions and API keys. Disconnect to stop polling and hide from pickers.") {
+            SettingsProviderRowsWithDeviceStatus(runtime: runtime, useConnectDisconnectLayout: true)
         }
 
         SettingsCard(title: "Custom providers", sub: "OpenAI- and Anthropic-compatible endpoints billed separately from built-in subscriptions.") {
@@ -1309,6 +1309,7 @@ private struct AccentPicker: View {
 struct SettingsProviderRowsWithDeviceStatus: View {
     @Environment(\.tahoe) private var t
     var runtime: AppRuntime?
+    var useConnectDisconnectLayout: Bool = false
     @State private var deviceStatuses: [String: ProviderDeviceStatus] = [:]
     @State private var isRefreshingDiscovery = false
     @State private var setupTerminal: SetupTerminalSession?
@@ -1330,6 +1331,7 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                 runtime: runtime,
                 showDeviceStatus: !deviceStatuses.isEmpty,
                 deviceStatuses: deviceStatuses,
+                useConnectDisconnectLayout: useConnectDisconnectLayout,
                 onSetupAction: { providerId, action in
                     Task { await performSetup(providerId: providerId, action: action) }
                 }
@@ -1623,12 +1625,108 @@ struct SettingsProviderRowsWithDeviceStatus: View {
     }
 }
 
+// MARK: - Provider settings copy (OpenCode-style layout)
+
+enum ProviderAuthType: String {
+    case subscription
+    case apiKey
+    case custom
+
+    var label: String {
+        switch self {
+        case .subscription: return "Subscription"
+        case .apiKey: return "API key"
+        case .custom: return "Custom"
+        }
+    }
+}
+
+enum ProviderSettingsCopy {
+    static func authType(for vendor: ChatVendor) -> ProviderAuthType {
+        switch vendor {
+        case .opencode, .openrouter: return .apiKey
+        default: return .subscription
+        }
+    }
+
+    static func description(for vendor: ChatVendor) -> String {
+        switch vendor {
+        case .claude:
+            return "Direct access to Claude models via your Anthropic subscription"
+        case .chatgpt:
+            return "Codex and ChatGPT models via your OpenAI subscription"
+        case .antigravity:
+            return "Gemini models via Google Antigravity"
+        case .cursor:
+            return "Cursor agent models via your Cursor subscription"
+        case .opencode:
+            return "Curated models including Claude, GPT, Gemini and more"
+        case .openrouter:
+            return "Hundreds of models through a single API key"
+        case .grok:
+            return "xAI Grok models via the grok CLI"
+        }
+    }
+
+    static func isRecommended(_ vendor: ChatVendor) -> Bool {
+        vendor == .opencode
+    }
+}
+
+struct ProviderAuthTypeBadge: View {
+    @Environment(\.tahoe) private var t
+    let authType: ProviderAuthType
+
+    var body: some View {
+        Text(authType.label)
+            .font(TahoeFont.body(10, weight: .bold))
+            .foregroundStyle(t.fg3)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(t.glassTintHi.opacity(0.55), in: Capsule(style: .continuous))
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(t.hairline, lineWidth: 0.5)
+            }
+    }
+}
+
+struct ProviderRecommendedBadge: View {
+    @Environment(\.tahoe) private var t
+
+    var body: some View {
+        Text("Recommended")
+            .font(TahoeFont.body(10, weight: .bold))
+            .foregroundStyle(t.accent)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(t.accentAlpha(0.12), in: Capsule(style: .continuous))
+    }
+}
+
+private struct ProviderSettingsSubsection<Content: View>: View {
+    @Environment(\.tahoe) private var t
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title.uppercased())
+                .font(TahoeFont.body(10, weight: .bold))
+                .tracking(0.6)
+                .foregroundStyle(t.fg4)
+            content
+        }
+    }
+}
+
 struct ProviderPreferenceRows: View {
     @Environment(\.tahoe) private var t
     let client: AgentControlClient?
     var runtime: AppRuntime?
     var showDeviceStatus: Bool = false
     var deviceStatuses: [String: ProviderDeviceStatus] = [:]
+    var useConnectDisconnectLayout: Bool = false
     var onSetupAction: ((String, ProviderDeviceSetupAction) -> Void)? = nil
     /// When non-nil, toggles read/write this staged set instead of mutating
     /// `ProviderEnablement` live. Onboarding stages selections so abandoning
@@ -1641,9 +1739,35 @@ struct ProviderPreferenceRows: View {
     @State private var catalog: ModelCatalog = .bundled
     @State private var enabledByProviderId: [String: Bool] = [:]
 
+    private var allVendors: [ChatVendor] {
+        ChatV2Store.defaultChatVendorOrder
+    }
+
+    private var connectedVendors: [ChatVendor] {
+        allVendors.filter { enabledBinding(for: $0).wrappedValue }
+    }
+
+    private var popularVendors: [ChatVendor] {
+        allVendors.filter { !enabledBinding(for: $0).wrappedValue }
+    }
+
     var body: some View {
+        Group {
+            if useConnectDisconnectLayout {
+                connectDisconnectLayout
+            } else {
+                legacyLayout
+            }
+        }
+        .task { await refreshAll() }
+        .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
+            refreshEnabledState()
+        }
+    }
+
+    private var legacyLayout: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(ChatV2Store.defaultChatVendorOrder, id: \.self) { vendor in
+            ForEach(allVendors, id: \.self) { vendor in
                 ProviderPreferenceRow(
                     vendor: vendor,
                     isEnabled: enabledBinding(for: vendor),
@@ -1651,23 +1775,77 @@ struct ProviderPreferenceRows: View {
                     catalog: catalog,
                     showDeviceStatus: showDeviceStatus,
                     deviceStatus: deviceStatuses[providerEnablementId(for: vendor)],
-                    // Multi-account: only Settings (which has the live
-                    // runtime) hosts the per-account list. Onboarding
-                    // passes nil and stays single-account.
                     accountsRuntime: runtime,
                     onSetupAction: onSetupAction,
                     onSelectModel: { entry in update(vendor: vendor, model: entry.id) },
                     onOpenModelMenu: { Task { await refreshCatalogIfAllowed(for: vendor) } }
                 )
-                if vendor != ChatV2Store.defaultChatVendorOrder.last {
+                if vendor != allVendors.last {
                     TahoeHair()
                 }
             }
         }
-        .task { await refreshAll() }
-        .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
-            refreshEnabledState()
+    }
+
+    private var connectDisconnectLayout: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            if !connectedVendors.isEmpty {
+                ProviderSettingsSubsection(title: "Connected providers") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(connectedVendors, id: \.self) { vendor in
+                            ConnectedProviderRow(
+                                vendor: vendor,
+                                isEnabled: enabledBinding(for: vendor),
+                                snapshot: snapshot,
+                                catalog: catalog,
+                                deviceStatus: deviceStatuses[providerEnablementId(for: vendor)],
+                                accountsRuntime: runtime,
+                                onSetupAction: onSetupAction,
+                                onSelectModel: { entry in update(vendor: vendor, model: entry.id) },
+                                onOpenModelMenu: { Task { await refreshCatalogIfAllowed(for: vendor) } }
+                            )
+                            if vendor != connectedVendors.last {
+                                TahoeHair()
+                            }
+                        }
+                    }
+                }
+            }
+            if !popularVendors.isEmpty {
+                ProviderSettingsSubsection(title: "Popular providers") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(popularVendors, id: \.self) { vendor in
+                            PopularProviderRow(
+                                vendor: vendor,
+                                onConnect: { connect(vendor: vendor) }
+                            )
+                            if vendor != popularVendors.last {
+                                TahoeHair()
+                            }
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    private func connect(vendor: ChatVendor) {
+        let binding = enabledBinding(for: vendor)
+        guard !binding.wrappedValue else { return }
+        binding.wrappedValue = true
+        let providerId = providerEnablementId(for: vendor)
+        guard let deviceStatus = deviceStatuses[providerId],
+              shouldOfferSetupActions(deviceStatus) else { return }
+        if let action = deviceStatus.setupActions.first {
+            onSetupAction?(providerId, action)
+        }
+    }
+
+    private func shouldOfferSetupActions(_ status: ProviderDeviceStatus) -> Bool {
+        guard onSetupAction != nil else { return false }
+        guard !status.setupActions.isEmpty else { return false }
+        if !status.authenticated { return true }
+        return !status.isReady
     }
 
     private func refreshAll() async {
@@ -1858,15 +2036,6 @@ private struct ProviderPreferenceRow: View {
     let onSelectModel: (ModelCatalogEntry) -> Void
     let onOpenModelMenu: () -> Void
 
-    private var selectedModelId: String? {
-        snapshot.modelId(for: vendor, catalog: catalog)
-    }
-
-    private var selectedEntry: ModelCatalogEntry? {
-        guard let selectedModelId else { return nil }
-        return vendor.models(in: catalog).first { $0.id == selectedModelId || $0.cliAlias == selectedModelId }
-    }
-
     private var providerId: String {
         ProviderRegistry.descriptor(chatVendor: vendor)?.id ?? vendor.backingProvider.rawValue
     }
@@ -1897,23 +2066,20 @@ private struct ProviderPreferenceRow: View {
                 TahoeToggleView(on: $isEnabled)
                     .help(isEnabled ? "Turn \(vendor.displayName) off" : "Turn \(vendor.displayName) on")
                     .accessibilityIdentifier("settings.provider.\(providerId).enabled")
-                modelMenu
+                ProviderModelMenu(
+                    vendor: vendor,
+                    snapshot: snapshot,
+                    catalog: catalog,
+                    onSelectModel: onSelectModel,
+                    onOpenModelMenu: onOpenModelMenu
+                )
             }
             if showDeviceStatus, let deviceStatus, shouldShowSetupActions(deviceStatus) {
-                HStack(spacing: 8) {
-                    ForEach(deviceStatus.setupActions) { action in
-                        Button {
-                            onSetupAction?(providerId, action)
-                        } label: {
-                            Text(action.label)
-                                .font(TahoeFont.body(11, weight: .semibold))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .accessibilityIdentifier("onboarding.provider.\(providerId).action.\(action.id)")
-                    }
-                }
-                .padding(.leading, 40)
+                ProviderSetupActionButtons(
+                    providerId: providerId,
+                    deviceStatus: deviceStatus,
+                    onSetupAction: onSetupAction
+                )
             }
             if isEnabled,
                let accountsRuntime,
@@ -1926,9 +2092,6 @@ private struct ProviderPreferenceRow: View {
         .accessibilityIdentifier("settings.provider.\(providerId)")
     }
 
-    /// When multi-account is enabled, the per-account list is the source of
-    /// truth — the provider-level "Signed in · … on PATH" line would make
-    /// a second account look like an afterthought.
     private var shouldHideDeviceStatusMessage: Bool {
         isEnabled
             && accountsRuntime != nil
@@ -1938,13 +2101,156 @@ private struct ProviderPreferenceRow: View {
     private func shouldShowSetupActions(_ status: ProviderDeviceStatus) -> Bool {
         guard onSetupAction != nil else { return false }
         guard !status.setupActions.isEmpty else { return false }
-        if !status.authenticated {
-            return true
-        }
+        if !status.authenticated { return true }
         return !status.isReady
     }
+}
 
-    private var modelMenu: some View {
+private struct ConnectedProviderRow: View {
+    @Environment(\.tahoe) private var t
+    let vendor: ChatVendor
+    @Binding var isEnabled: Bool
+    let snapshot: ProviderDefaultsSnapshot
+    let catalog: ModelCatalog
+    var deviceStatus: ProviderDeviceStatus?
+    var accountsRuntime: AppRuntime? = nil
+    var onSetupAction: ((String, ProviderDeviceSetupAction) -> Void)? = nil
+    let onSelectModel: (ModelCatalogEntry) -> Void
+    let onOpenModelMenu: () -> Void
+
+    private var providerId: String {
+        ProviderRegistry.descriptor(chatVendor: vendor)?.id ?? vendor.backingProvider.rawValue
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                AnyProviderGlyph(choice: .builtin(vendor), catalog: catalog, size: 28)
+                HStack(spacing: 8) {
+                    Text(vendor.displayName)
+                        .font(TahoeFont.body(13.5, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    ProviderAuthTypeBadge(authType: ProviderSettingsCopy.authType(for: vendor))
+                }
+                Spacer(minLength: 12)
+                ProviderModelMenu(
+                    vendor: vendor,
+                    snapshot: snapshot,
+                    catalog: catalog,
+                    onSelectModel: onSelectModel,
+                    onOpenModelMenu: onOpenModelMenu
+                )
+                Button("Disconnect") {
+                    isEnabled = false
+                }
+                .buttonStyle(.plain)
+                .font(TahoeFont.body(12, weight: .semibold))
+                .foregroundStyle(t.fg2)
+                .help("Disconnect \(vendor.displayName)")
+                .accessibilityIdentifier("settings.provider.\(providerId).disconnect")
+            }
+            if let deviceStatus, shouldShowSetupActions(deviceStatus) {
+                ProviderSetupActionButtons(
+                    providerId: providerId,
+                    deviceStatus: deviceStatus,
+                    onSetupAction: onSetupAction
+                )
+            }
+            if let accountsRuntime,
+               ProviderAccountsSection.supportsMultiAccount(vendor.backingProvider) {
+                ProviderAccountsSection(runtime: accountsRuntime, kind: vendor.backingProvider)
+            }
+        }
+        .frame(minHeight: 36)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings.provider.\(providerId)")
+    }
+
+    private func shouldShowSetupActions(_ status: ProviderDeviceStatus) -> Bool {
+        guard onSetupAction != nil else { return false }
+        guard !status.setupActions.isEmpty else { return false }
+        if !status.authenticated { return true }
+        return !status.isReady
+    }
+}
+
+private struct PopularProviderRow: View {
+    @Environment(\.tahoe) private var t
+    let vendor: ChatVendor
+    let onConnect: () -> Void
+
+    private var providerId: String {
+        ProviderRegistry.descriptor(chatVendor: vendor)?.id ?? vendor.backingProvider.rawValue
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            AnyProviderGlyph(choice: .builtin(vendor), catalog: .bundled, size: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(vendor.displayName)
+                        .font(TahoeFont.body(13.5, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    if ProviderSettingsCopy.isRecommended(vendor) {
+                        ProviderRecommendedBadge()
+                    }
+                }
+                Text(ProviderSettingsCopy.description(for: vendor))
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg3)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button {
+                onConnect()
+            } label: {
+                HStack(spacing: 4) {
+                    TahoeIcon("plus", size: 10, weight: .bold)
+                    Text("Connect")
+                }
+                .font(TahoeFont.body(12, weight: .semibold))
+                .foregroundStyle(t.fg)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(t.hairline, lineWidth: 0.5)
+                }
+            }
+            .buttonStyle(.plain)
+            .help("Connect \(vendor.displayName)")
+            .accessibilityIdentifier("settings.provider.\(providerId).connect")
+        }
+        .frame(minHeight: 36)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings.provider.\(providerId).popular")
+    }
+}
+
+private struct ProviderModelMenu: View {
+    @Environment(\.tahoe) private var t
+    let vendor: ChatVendor
+    let snapshot: ProviderDefaultsSnapshot
+    let catalog: ModelCatalog
+    let onSelectModel: (ModelCatalogEntry) -> Void
+    let onOpenModelMenu: () -> Void
+
+    private var providerId: String {
+        ProviderRegistry.descriptor(chatVendor: vendor)?.id ?? vendor.backingProvider.rawValue
+    }
+
+    private var selectedModelId: String? {
+        snapshot.modelId(for: vendor, catalog: catalog)
+    }
+
+    private var selectedEntry: ModelCatalogEntry? {
+        guard let selectedModelId else { return nil }
+        return vendor.models(in: catalog).first { $0.id == selectedModelId || $0.cliAlias == selectedModelId }
+    }
+
+    var body: some View {
         Menu {
             let sections = ProviderModelPickerSupport.sections(for: vendor, catalog: catalog, query: "")
             ForEach(sections) { section in
@@ -1974,13 +2280,36 @@ private struct ProviderPreferenceRow: View {
             .foregroundStyle(t.fg)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .frame(width: 240, alignment: .trailing)
+            .frame(width: 200, alignment: .trailing)
             .background(Color.white.opacity(0.055), in: Capsule())
             .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
         }
         .menuStyle(.borderlessButton)
         .simultaneousGesture(TapGesture().onEnded { onOpenModelMenu() })
         .accessibilityIdentifier("settings.provider.\(providerId).model")
+    }
+}
+
+private struct ProviderSetupActionButtons: View {
+    let providerId: String
+    let deviceStatus: ProviderDeviceStatus
+    var onSetupAction: ((String, ProviderDeviceSetupAction) -> Void)?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(deviceStatus.setupActions) { action in
+                Button {
+                    onSetupAction?(providerId, action)
+                } label: {
+                    Text(action.label)
+                        .font(TahoeFont.body(11, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("onboarding.provider.\(providerId).action.\(action.id)")
+            }
+        }
+        .padding(.leading, 40)
     }
 }
 

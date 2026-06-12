@@ -1416,10 +1416,6 @@ struct MacTitlebar: View {
         TahoeGlass(radius: 6, tone: .chip) {
             HStack(spacing: 2) {
                 UpdateAppControl(coordinator: updateCoordinator, compact: true)
-                codeActionButton(icon: "sliders", help: "Focus Code filters") {
-                    NotificationCenter.default.post(name: .focusSidebarSearch, object: nil)
-                }
-                .accessibilityIdentifier("code.titlebar.focus-filters")
                 paneMenuButton
             }
             .padding(.horizontal, 7)
@@ -1498,17 +1494,6 @@ struct MacTitlebar: View {
             }
         }
         .accessibilityIdentifier("code.titlebar.right-pane.\(tab.accessibilityKey)")
-    }
-
-    private func codeActionButton(icon: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            TahoeIcon(icon, size: 12)
-                .foregroundStyle(t.fg3)
-                .frame(width: 24, height: 24)
-                .background(t.hair2.opacity(0.65), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .help(help)
     }
 
     @ViewBuilder

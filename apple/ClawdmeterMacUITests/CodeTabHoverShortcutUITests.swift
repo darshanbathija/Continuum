@@ -460,15 +460,8 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         XCTAssertTrue(workspaceLeafRowElement().waitForExistence(timeout: 5), "Archived filter should show the archived worktree row.")
     }
 
-    func testCodeTabTitlebarFilterAndCommandKFocusSidebarSearch() throws {
+    func testCodeTabCommandKFocusSidebarSearch() throws {
         openCodeTab()
-
-        let titlebarFilter = element("code.titlebar.focus-filters")
-        XCTAssertTrue(titlebarFilter.waitForExistence(timeout: 10), "Code titlebar should expose a filter-focus control.")
-        titlebarFilter.click()
-        app.typeText("Preview")
-        XCTAssertTrue(element("code.sidebar.search.clear").waitForExistence(timeout: 5), "Clicking the titlebar filter control should focus sidebar search.")
-        element("code.sidebar.search.clear").click()
 
         let row = workspaceLeafRowElement()
         XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
@@ -725,7 +718,25 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             },
             "Selecting Gemini 3.5 Flash Thinking should update the draft chip instead of returning to a stale session."
         )
-        XCTAssertTrue(element("code.workspace.tab.draft").exists, "Model switching should keep the active workspace tab on the draft.")
+        let draftTab = element("code.workspace.tab.draft")
+        XCTAssertTrue(draftTab.exists, "Model switching should keep the active workspace tab on the draft.")
+        XCTAssertTrue(
+            accessibilityValue(of: draftTab).localizedCaseInsensitiveContains("gemini"),
+            "Draft tab subtitle should reflect the Antigravity provider selection. Actual: \(accessibilityValue(of: draftTab))"
+        )
+        let headerConfig = element("code.center.header.configuration")
+        XCTAssertTrue(headerConfig.waitForExistence(timeout: 5), "Draft workspace should expose the center header configuration row.")
+        XCTAssertTrue(
+            headerConfig.label.localizedCaseInsensitiveContains("Antigravity")
+                || headerConfig.label.localizedCaseInsensitiveContains("Gemini 3.5 Flash"),
+            "Header configuration should mirror the draft model picker. Actual: \(headerConfig.label)"
+        )
+        let headerState = firstElement("code.center.header.state")
+        XCTAssertTrue(
+            headerState.label.localizedCaseInsensitiveContains("gemini")
+                && headerState.label.localizedCaseInsensitiveContains("gemini-3-5-flash-thinking"),
+            "Header state marker should include the selected draft provider and model. Actual: \(headerState.label)"
+        )
     }
 
     func testDraftModelPickerSearchFavoriteShortcutAndUnsupportedEffortPaths() throws {

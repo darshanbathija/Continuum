@@ -142,15 +142,13 @@ struct ModelEffortChip: View {
     }
 
     private var currentPickerChoice: ProviderChoice {
-        if let customProviderId,
-           enabledChoices.contains(.custom(customProviderId)) {
-            return .custom(customProviderId)
-        }
-        if let migrated = ChatVendor.migrated(from: agent),
-           enabledChoices.contains(.builtin(migrated)) {
-            return .builtin(migrated)
-        }
-        return enabledChoices.first ?? .builtin(.chatgpt)
+        ProviderChoice.resolvedForDisplay(
+            modelId: selectedModelId,
+            customProviderId: customProviderId,
+            agent: agent,
+            catalog: catalog,
+            enabledChoices: enabledChoices
+        )
     }
 
 }
@@ -467,12 +465,6 @@ struct ContextUsagePopover: View {
                     fraction: nil
                 ))
             }
-            rows.append(planProgressRow(
-                id: "code.context-usage.row.cursor-total",
-                label: "Monthly total",
-                pct: quota.totalPct,
-                resetMins: quota.resetMins
-            ))
             if let pct = quota.autoPct {
                 rows.append(planProgressRow(
                     id: "code.context-usage.row.cursor-auto",

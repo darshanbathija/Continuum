@@ -1024,7 +1024,15 @@ struct SidebarPane: View {
     private func worktreeSubtitle(_ wt: WorktreeGroup) -> String {
         if wt.sessions.isEmpty {
             let key = WorkspaceKey(repoKey: wt.repoKey, workspacePath: wt.path)
-            if !model.workspaceDraftTabs(in: key).isEmpty { return "Draft" }
+            let drafts = model.workspaceDraftTabs(in: key)
+            if !drafts.isEmpty {
+                let names = drafts
+                    .sorted { $0.createdAt < $1.createdAt }
+                    .map { AgentKindUI.displayName(for: $0.agent) }
+                var chain: [String] = []
+                for n in names where chain.last != n { chain.append(n) }
+                return chain.isEmpty ? "Draft" : chain.joined(separator: " · ")
+            }
             if !model.workspaceTerminalTabs(in: key).isEmpty { return "Terminal" }
             if !model.workspaceDocumentTabs(in: key).isEmpty { return "Document" }
             return "Worktree"

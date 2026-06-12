@@ -100,4 +100,38 @@ public enum ProviderChoice: Hashable, Identifiable, Sendable {
             return ProviderDescriptor.all.count
         }
     }
+
+    /// Provider rail + chip glyph for the composer's current model selection.
+    /// Prefers the live `modelId` binding (which updates immediately on picker
+    /// toggles) over `agent`, which can lag behind during provisioning or
+    /// optimistic chip edits.
+    public static func resolvedForDisplay(
+        modelId: String?,
+        customProviderId: String?,
+        agent: AgentKind,
+        catalog: ModelCatalog,
+        enabledChoices: [ProviderChoice]
+    ) -> ProviderChoice {
+        if let trimmed = modelId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmed.isEmpty {
+            if let customProviderId, !customProviderId.isEmpty,
+               enabledChoices.contains(.custom(customProviderId)) {
+                return .custom(customProviderId)
+            }
+            if let entry = catalog.entry(forId: trimmed, customProviderId: customProviderId),
+               let vendor = ChatVendor.migrated(from: entry.provider),
+               enabledChoices.contains(.builtin(vendor)) {
+                return .builtin(vendor)
+            }
+        }
+        if let customProviderId, !customProviderId.isEmpty,
+           enabledChoices.contains(.custom(customProviderId)) {
+            return .custom(customProviderId)
+        }
+        if let migrated = ChatVendor.migrated(from: agent),
+           enabledChoices.contains(.builtin(migrated)) {
+            return .builtin(migrated)
+        }
+        return enabledChoices.first ?? .builtin(.chatgpt)
+    }
 }
