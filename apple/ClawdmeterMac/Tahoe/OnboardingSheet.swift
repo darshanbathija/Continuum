@@ -26,7 +26,6 @@ struct OnboardingSheet: View {
     @State private var isRefreshingDiscovery = false
     @State private var openCodeGoKeyDraft = ""
     @State private var openCodeGoWorkspaceDraft = ""
-    @State private var openCodeGoAuthCookieDraft = ""
     @State private var isSavingOpenCodeGoKey = false
     @State private var openCodeGoKeyMessage: String?
     @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
@@ -248,14 +247,12 @@ struct OnboardingSheet: View {
             Text("OpenCode Go")
                 .font(TahoeFont.body(12.5, weight: .semibold))
                 .foregroundStyle(t.fg)
-            Text("Paste your Go API key from opencode.ai/zen — that powers chat + code. Optional: add workspace ID + auth cookie for 5h / weekly / monthly meters (best-effort; OpenCode has not shipped a usage API yet, so meters may stay empty). The cookie is stored in your Keychain.")
+            Text("Paste your Go API key from opencode.ai/zen — that powers chat + code. Save also imports your opencode.ai browser login from Keychain for quota meters.")
                 .font(TahoeFont.body(11.5))
                 .foregroundStyle(t.fg3)
             SecureField("OpenCode Go API key", text: $openCodeGoKeyDraft)
                 .textFieldStyle(.roundedBorder)
             TextField("Workspace ID (from opencode.ai/workspace/…/go)", text: $openCodeGoWorkspaceDraft)
-                .textFieldStyle(.roundedBorder)
-            SecureField("Auth cookie (optional, for quota meters)", text: $openCodeGoAuthCookieDraft)
                 .textFieldStyle(.roundedBorder)
             HStack(spacing: 8) {
                 Button {
@@ -265,7 +262,7 @@ struct OnboardingSheet: View {
                         .font(TahoeFont.body(12, weight: .semibold))
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(openCodeGoKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSavingOpenCodeGoKey)
+                .disabled(!canSaveOpenCodeGoCredentials || isSavingOpenCodeGoKey)
             }
             if let openCodeGoKeyMessage {
                 Text(openCodeGoKeyMessage)
@@ -275,6 +272,7 @@ struct OnboardingSheet: View {
         }
         .padding(12)
         .background(t.glassTintHi.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onAppear { prefillOpenCodeGoWorkspaceDraft() }
     }
 
     // MARK: - Discovery
@@ -347,12 +345,12 @@ struct OnboardingSheet: View {
         case .openOpencodeSignIn:
             await MainActor.run { opencodeSetupCommand = .signIn }
         case .addOpenRouterKey, .addOpenCodeGoKey:
-            await MainActor.run { openCodeGoKeyDraft = "" }
-        case .configureOpenCodeGoQuota:
             await MainActor.run {
-                openCodeGoWorkspaceDraft = UserDefaults.standard.string(forKey: OpenCodeGoCredentials.workspaceDefaultsKey) ?? ""
-                openCodeGoAuthCookieDraft = UserDefaults.standard.string(forKey: OpenCodeGoCredentials.authCookieDefaultsKey) ?? ""
+                openCodeGoKeyDraft = ""
+                prefillOpenCodeGoWorkspaceDraft()
             }
+        case .configureOpenCodeGoQuota:
+            await MainActor.run { prefillOpenCodeGoWorkspaceDraft() }
         case .runCodexLogin, .runCursorAgentLogin, .installCodexCLI, .installCursorCLI,
              .installAgyCLI, .installGrokCLI:
             guard let command = action.shellCommand else { return }
@@ -373,27 +371,75 @@ struct OnboardingSheet: View {
         }
     }
 
+    private var canSaveOpenCodeGoCredentials: Bool {
+        let keyDraft = openCodeGoKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !keyDraft.isEmpty || OpenCodeGoCredentials.hasGoAuthFromDisk()
+    }
+
+    @MainActor
+    private func prefillOpenCodeGoWorkspaceDraft() {
+        guard openCodeGoWorkspaceDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if let workspace = OpenCodeGoBrowserAuthImporter.discoverWorkspaceId() {
+            openCodeGoWorkspaceDraft = workspace
+        }
+    }
+
     private func saveOpenCodeGoCredentials() async {
         let key = openCodeGoKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
+        guard !key.isEmpty || OpenCodeGoCredentials.hasGoAuthFromDisk() else { return }
         isSavingOpenCodeGoKey = true
         defer { isSavingOpenCodeGoKey = false }
-        do {
-            try await OpencodeAuthFile.shared.setAPIKey(providerId: "opencode-go", key: key)
-            let workspace = openCodeGoWorkspaceDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-            let cookie = openCodeGoAuthCookieDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !workspace.isEmpty, !cookie.isEmpty {
-                OpenCodeGoCredentials.saveDashboardQuotaConfig(workspaceId: workspace, authCookie: cookie)
+        var savedKey = false
+        if !key.isEmpty {
+            do {
+                try await OpencodeAuthFile.shared.setAPIKey(providerId: "opencode-go", key: key)
+                openCodeGoKeyDraft = ""
+                savedKey = true
+                stagedProviderIDs.insert("opencode")
+                runtime.opencodeModel.forcePoll()
+                await OpenCodeGoModelProbe.shared.invalidate()
+            } catch {
+                openCodeGoKeyMessage = error.localizedDescription
+                return
             }
-            openCodeGoKeyMessage = "OpenCode Go connected."
-            openCodeGoKeyDraft = ""
-            stagedProviderIDs.insert("opencode")
-            runtime.opencodeModel.forcePoll()
-            await OpenCodeGoModelProbe.shared.invalidate()
-            await refreshDiscovery()
-        } catch {
-            openCodeGoKeyMessage = error.localizedDescription
         }
+        switch await importOpenCodeGoQuotaFromKeychainOnSave() {
+        case .connected:
+            openCodeGoKeyMessage = savedKey ? "OpenCode Go connected." : "Quota tracking connected."
+        case .failed:
+            openCodeGoKeyMessage = savedKey
+                ? "API key saved. Couldn't read your opencode.ai login from Keychain — sign in at opencode.ai in Chrome, then Save again."
+                : "Couldn't read your opencode.ai login from Keychain. Sign in at opencode.ai in Chrome, then Save again."
+        case .invalidWorkspace:
+            openCodeGoKeyMessage = savedKey
+                ? "API key saved. Imported login was invalid — check the workspace ID."
+                : "Imported login was invalid. Check the workspace ID."
+        }
+        await refreshDiscovery()
+    }
+
+    private enum QuotaImportOutcome {
+        case connected
+        case failed
+        case invalidWorkspace
+    }
+
+    private func importOpenCodeGoQuotaFromKeychainOnSave() async -> QuotaImportOutcome {
+        let workspaceDraft = openCodeGoWorkspaceDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let imported = await Task.detached(priority: .userInitiated) {
+            OpenCodeGoBrowserAuthImporter.importDashboardCredentials(allowsUserInteraction: true)
+        }.value
+        guard let imported else { return .failed }
+        let workspace = workspaceDraft.isEmpty ? imported.workspaceId : workspaceDraft
+        guard OpenCodeGoCredentials.saveDashboardQuotaConfig(
+            workspaceId: workspace,
+            authCookie: imported.authCookie
+        ) else {
+            return .invalidWorkspace
+        }
+        openCodeGoWorkspaceDraft = workspace
+        runtime.opencodeModel.forcePoll()
+        return .connected
     }
 
     @MainActor
