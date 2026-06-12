@@ -5,9 +5,9 @@ final class DoneDetectorTests: XCTestCase {
 
     func test_nestedToolResultClearsPendingToolCall() {
         let sessionId = UUID()
-        var fired: [String] = []
+        let fired = LockedTestBox<[String]>([])
         let detector = DoneDetector(sessionId: sessionId, goal: "ship phase five") { _, trigger in
-            fired.append(trigger)
+            fired.update { $0.append(trigger) }
         }
         let start = Date(timeIntervalSince1970: 1_000)
 
@@ -43,6 +43,27 @@ final class DoneDetectorTests: XCTestCase {
         ], at: start.addingTimeInterval(2))
 
         XCTAssertEqual(trigger, "signal-a:goal+verb")
-        XCTAssertEqual(fired, ["signal-a:goal+verb"])
+        XCTAssertEqual(fired.snapshot, ["signal-a:goal+verb"])
+    }
+}
+
+private final class LockedTestBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value
+
+    init(_ value: Value) {
+        self.value = value
+    }
+
+    var snapshot: Value {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func update(_ body: (inout Value) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        body(&value)
     }
 }

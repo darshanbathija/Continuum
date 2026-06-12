@@ -220,7 +220,7 @@ public final class ProviderDefaultsStore: ObservableObject {
     /// Posted after any persist write so sibling store instances (Settings,
     /// Chat, SessionLauncher, loopback client) can refresh without an HTTP
     /// round trip through the daemon.
-    public static let changedNotification = Notification.Name("clawdmeter.providerDefaults.changed")
+    nonisolated public static let changedNotification = Notification.Name("clawdmeter.providerDefaults.changed")
 
     @Published public private(set) var snapshot: ProviderDefaultsSnapshot
 

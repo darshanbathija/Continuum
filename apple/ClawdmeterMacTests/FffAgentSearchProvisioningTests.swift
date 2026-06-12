@@ -53,6 +53,26 @@ final class FffAgentSearchProvisioningTests: XCTestCase {
         XCTAssertTrue(text.contains("[mcp_servers.other]"))
     }
 
+    func test_mergeCodexMCPSection_keepsEscapedExistingCommandSection() throws {
+        let command = #"/tmp/fff "quoted"/fff-mcp"#
+        let configURL = tempRoot.appendingPathComponent("config.toml")
+        try """
+        [mcp_servers.fff]
+        command = "/tmp/fff \\"quoted\\"/fff-mcp"
+        args = ["--keep"]
+
+        [mcp_servers.other]
+        command = "other-mcp"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        FffAgentSearchProvisioning.mergeCodexMCPSection(into: configURL, command: command)
+
+        let text = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(text.contains(#"command = "/tmp/fff \"quoted\"/fff-mcp""#))
+        XCTAssertTrue(text.contains(#"args = ["--keep"]"#))
+        XCTAssertTrue(text.contains("[mcp_servers.other]"))
+    }
+
     func test_codexHome_prefersEnvOverride() {
         let home = FffAgentSearchProvisioning.codexHome(from: ["CODEX_HOME": "/tmp/codex-pro"])
         XCTAssertEqual(home.path, "/tmp/codex-pro")

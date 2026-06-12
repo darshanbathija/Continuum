@@ -36,10 +36,14 @@ final class APNSGatewayIntegrationTests: XCTestCase {
         nonisolated(unsafe) static var observedRequests: [URLRequest] = []
         nonisolated(unsafe) static var observedBodies: [Data] = []
         nonisolated(unsafe) static var responseDelay: TimeInterval = 0
+        nonisolated(unsafe) static var observedResponseDelays: [TimeInterval] = []
+
+        private var stopped = false
 
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
         override func startLoading() {
+            stopped = false
             var captured = request.httpBody ?? Data()
             if captured.isEmpty, let stream = request.httpBodyStream {
                 stream.open()
@@ -54,33 +58,46 @@ final class APNSGatewayIntegrationTests: XCTestCase {
             }
             Self.observedRequests.append(request)
             Self.observedBodies.append(captured)
-            // Optional artificial delay to simulate gateway hop latency.
-            let work: @Sendable () -> Void = { [weak self] in
-                guard let self else { return }
-                guard let handler = Self.handler else {
-                    self.client?.urlProtocolDidFinishLoading(self)
-                    return
-                }
-                let (response, body) = handler(self.request)
-                self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                if let body { self.client?.urlProtocol(self, didLoad: body) }
-                self.client?.urlProtocolDidFinishLoading(self)
-            }
+            // Optional artificial delay to simulate gateway hop latency. Keep
+            // this synchronous so the URLProtocol cannot outlive URLSession's
+            // request-timeout bookkeeping under full-suite load.
+            let scheduledAt = Date()
             if Self.responseDelay > 0 {
-                DispatchQueue.global().asyncAfter(deadline: .now() + Self.responseDelay, execute: work)
-            } else {
-                work()
+                Thread.sleep(forTimeInterval: Self.responseDelay)
+                Self.observedResponseDelays.append(Date().timeIntervalSince(scheduledAt))
             }
+            guard !stopped else { return }
+            guard let handler = Self.handler else {
+                client?.urlProtocolDidFinishLoading(self)
+                return
+            }
+            let (response, body) = handler(request)
+            guard !stopped else { return }
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            if let body { client?.urlProtocol(self, didLoad: body) }
+            client?.urlProtocolDidFinishLoading(self)
         }
-        override func stopLoading() {}
+        override func stopLoading() {
+            stopped = true
+        }
     }
 
     override func setUp() async throws {
         try await super.setUp()
+        resetMockProtocol()
+    }
+
+    override func tearDown() async throws {
+        resetMockProtocol()
+        try await super.tearDown()
+    }
+
+    private func resetMockProtocol() {
         MockProtocol.handler = nil
         MockProtocol.observedRequests = []
         MockProtocol.observedBodies = []
         MockProtocol.responseDelay = 0
+        MockProtocol.observedResponseDelays = []
     }
 
     // MARK: - SLO assertion
@@ -100,6 +117,7 @@ final class APNSGatewayIntegrationTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockProtocol.self]
         let mockSession = URLSession(configuration: config)
+        defer { mockSession.invalidateAndCancel() }
         let client = APNSGatewayClient(urlSession: mockSession)
         await client._setEnvironment(.staging)
 
@@ -161,7 +179,9 @@ final class APNSGatewayIntegrationTests: XCTestCase {
         }
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockProtocol.self]
-        let client = APNSGatewayClient(urlSession: URLSession(configuration: config))
+        let mockSession = URLSession(configuration: config)
+        defer { mockSession.invalidateAndCancel() }
+        let client = APNSGatewayClient(urlSession: mockSession)
         await client._setEnvironment(.staging)
 
         let input = APNSGatewayClient.PushInput(
@@ -177,9 +197,12 @@ final class APNSGatewayIntegrationTests: XCTestCase {
         let triggerAt = Date()
         let outcome = await client.push(input, gatewayURL: stubURL)
         let elapsed = Date().timeIntervalSince(triggerAt)
+        let observedGatewayDelay = MockProtocol.observedResponseDelays.last ?? MockProtocol.responseDelay
+        let clientOverhead = elapsed - observedGatewayDelay
 
-        XCTAssertLessThan(elapsed, 2.0,
-                          "Even with 500ms gateway delay we MUST land under 2s (observed: \(elapsed)s)")
+        XCTAssertGreaterThanOrEqual(observedGatewayDelay, MockProtocol.responseDelay)
+        XCTAssertLessThan(clientOverhead, 1.5,
+                          "With 500ms gateway delay, APNS client overhead must leave room under the 2s SLO (observed: \(clientOverhead)s, gateway delay: \(observedGatewayDelay)s, total: \(elapsed)s)")
         XCTAssertEqual(outcome.response, .delivered)
     }
 
@@ -196,7 +219,9 @@ final class APNSGatewayIntegrationTests: XCTestCase {
         }
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockProtocol.self]
-        let client = APNSGatewayClient(urlSession: URLSession(configuration: config))
+        let mockSession = URLSession(configuration: config)
+        defer { mockSession.invalidateAndCancel() }
+        let client = APNSGatewayClient(urlSession: mockSession)
         await client._setEnvironment(.staging)
 
         let payloadKey = Data(repeating: 0x10, count: 32)
@@ -244,6 +269,7 @@ final class APNSGatewayIntegrationTests: XCTestCase {
             c.protocolClasses = [MockProtocol.self]
             return c
         }())
+        defer { session.invalidateAndCancel() }
 
         // 2. Seed the device-token store + pairing store + signing key.
         let tmpDir = FileManager.default.temporaryDirectory

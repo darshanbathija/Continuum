@@ -48,6 +48,8 @@ public enum BodyInvalidationCounter {
     /// type name (`"SidebarPane"`, `"ChatThreadScroll"`, …) but any
     /// stable string works.
     @MainActor private static var counts: [String: Int] = [:]
+    @MainActor private static var activeLease: UUID?
+    @MainActor private static var leaseWaiters: [(UUID, CheckedContinuation<UUID, Never>)] = []
 
     /// Increment the counter for `label` if `enabled`. Safe to call
     /// from any `View.body` — the call is a no-op when disabled, and
@@ -76,6 +78,32 @@ public enum BodyInvalidationCounter {
     /// starts from a known zero baseline.
     @MainActor public static func resetAll() {
         counts.removeAll()
+    }
+
+    /// Serialize tests that enable the global counter. Async XCTest methods
+    /// can interleave while they yield to SwiftUI's runloop; without a lease,
+    /// one counter test can reset/disable instrumentation while another is
+    /// mid-burst.
+    @MainActor public static func acquireTestLease() async -> UUID {
+        let id = UUID()
+        guard activeLease != nil else {
+            activeLease = id
+            return id
+        }
+        return await withCheckedContinuation { continuation in
+            leaseWaiters.append((id, continuation))
+        }
+    }
+
+    @MainActor public static func releaseTestLease(_ id: UUID) {
+        guard activeLease == id else { return }
+        guard !leaseWaiters.isEmpty else {
+            activeLease = nil
+            return
+        }
+        let next = leaseWaiters.removeFirst()
+        activeLease = next.0
+        next.1.resume(returning: next.0)
     }
 
     /// Reset a single counter. Useful when one test wants to measure a

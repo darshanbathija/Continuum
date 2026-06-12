@@ -14,6 +14,7 @@ struct RepoFilePickerView: View {
     @State private var error: String?
     @State private var searchBackend: RepoFileSearchBackend = .unavailable
     @State private var selectedIndex = 0
+    @State private var searchTask: Task<Void, Never>?
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -118,12 +119,13 @@ struct RepoFilePickerView: View {
         .background(ContinuumTokens.surface3, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(t.hairline, lineWidth: 0.75))
         .shadow(color: .black.opacity(0.24), radius: 34, x: 0, y: 20)
-        .task(id: repoRoot) { await refreshMatches(resetSelection: true) }
+        .task(id: repoRoot) { scheduleSearch(resetSelection: true) }
         .onAppear { focused = true }
         .onChange(of: query) { _, _ in
             selectedIndex = 0
-            Task { await refreshMatches(resetSelection: false) }
+            scheduleSearch(resetSelection: false)
         }
+        .onDisappear { searchTask?.cancel() }
         .background(KeyMonitor(
             up: { moveSelection(delta: -1) },
             down: { moveSelection(delta: 1) },
@@ -135,22 +137,45 @@ struct RepoFilePickerView: View {
     }
 
     @MainActor
-    private func refreshMatches(resetSelection: Bool) async {
-        guard let repoRoot, !repoRoot.isEmpty else {
+    private func scheduleSearch(resetSelection: Bool) {
+        searchTask?.cancel()
+        let requestedQuery = query
+        let requestedRoot = repoRoot
+        let recents = presentationStore.snapshot.recentPathActions
+        searchTask = Task { @MainActor in
+            await refreshMatches(
+                query: requestedQuery,
+                repoRoot: requestedRoot,
+                recents: recents,
+                resetSelection: resetSelection
+            )
+        }
+    }
+
+    @MainActor
+    private func refreshMatches(
+        query requestedQuery: String,
+        repoRoot requestedRoot: String?,
+        recents: [String],
+        resetSelection: Bool
+    ) async {
+        guard requestedQuery == query, requestedRoot == repoRoot, !Task.isCancelled else { return }
+        guard let requestedRoot, !requestedRoot.isEmpty else {
             filteredFiles = []
             error = "No open code session has a repo root."
             searchBackend = .unavailable
+            isLoading = false
             return
         }
 
         isLoading = true
         error = nil
-        let recents = presentationStore.snapshot.recentPathActions
         let result = await RepoFileSearchService.shared.matches(
-            query: query,
-            repoRoot: repoRoot,
+            query: requestedQuery,
+            repoRoot: requestedRoot,
             recents: recents
         )
+        guard requestedQuery == query, requestedRoot == repoRoot, !Task.isCancelled else { return }
         filteredFiles = result.matches
         searchBackend = result.backend
         error = result.error

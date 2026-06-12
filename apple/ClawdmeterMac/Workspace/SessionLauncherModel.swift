@@ -136,6 +136,9 @@ final class SessionLauncherModel: ObservableObject {
     }
 
     func defaultModelId(for agent: AgentKind) -> String? {
+        if let providerDefault = explicitProviderDefaultModel(for: agent) {
+            return providerDefault.modelId
+        }
         if let vendor = ChatVendor.migrated(from: agent),
            let model = providerDefaults.modelId(for: vendor, catalog: modelCatalog) {
             return model
@@ -164,6 +167,16 @@ final class SessionLauncherModel: ObservableObject {
 
     func chipDefaults(for agent: AgentKind) -> ComposerStore.ChipDefaults {
         let base = ComposerStore.ChipDefaults.for(agent: agent, catalog: modelCatalog)
+        if let providerDefault = explicitProviderDefaultModel(for: agent) {
+            let effort = providerDefaults.snapshot.effort(for: providerDefault.vendor) ?? base.effort
+            return ComposerStore.ChipDefaults(
+                agent: agent,
+                modelId: providerDefault.modelId,
+                effort: supportsEffort(modelId: providerDefault.modelId) ? effort : nil,
+                mode: base.mode,
+                planMode: base.planMode
+            )
+        }
         guard let vendor = ChatVendor.migrated(from: agent) else { return base }
         let model = providerDefaults.modelId(for: vendor, catalog: modelCatalog) ?? base.modelId
         let effort = providerDefaults.effort(for: vendor, catalog: modelCatalog) ?? base.effort
@@ -174,6 +187,27 @@ final class SessionLauncherModel: ObservableObject {
             mode: base.mode,
             planMode: base.planMode
         )
+    }
+
+    private func explicitProviderDefaultModel(for agent: AgentKind) -> (vendor: ChatVendor, modelId: String)? {
+        let entries = modelCatalog.entries(for: agent)
+        guard !entries.isEmpty else { return nil }
+        for vendor in Self.defaultVendors(for: agent) {
+            let choice = ProviderChoice.builtin(vendor)
+            guard let modelId = providerDefaults.snapshot.modelId(forChoice: choice),
+                  entries.contains(where: { $0.id == modelId || $0.cliAlias == modelId }) else {
+                continue
+            }
+            return (vendor, modelId)
+        }
+        return nil
+    }
+
+    private static func defaultVendors(for agent: AgentKind) -> [ChatVendor] {
+        ProviderDescriptor.all
+            .filter { $0.agent == agent }
+            .sorted { $0.modelPickerRank < $1.modelPickerRank }
+            .map(\.chatVendor)
     }
 
     func normalize(_ store: ComposerStore) {

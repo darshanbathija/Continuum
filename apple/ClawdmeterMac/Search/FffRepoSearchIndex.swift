@@ -1,9 +1,14 @@
 import Foundation
 
+private struct FffSearchHandle: @unchecked Sendable {
+    let pointer: OpaquePointer
+}
+
 actor FffRepoSearchIndex {
     private let repoRoot: String
     private let library: FffLibrary
-    private var handle: OpaquePointer?
+    private let workQueue = DispatchQueue(label: "com.clawdmeter.mac.fff-repo-search-index")
+    private var handle: FffSearchHandle?
     private var prepareTask: Task<Void, Error>?
     private var isReady = false
 
@@ -21,16 +26,17 @@ actor FffRepoSearchIndex {
 
         let repoRoot = repoRoot
         let library = library
+        let workQueue = workQueue
         let task = Task<Void, Error> {
-            let preparedHandle = try await Task.detached(priority: .utility) {
+            let preparedHandle = try await Self.perform(on: workQueue) {
                 let handle = try library.createInstance(basePath: repoRoot)
                 guard try library.waitForScan(handle, timeoutMs: timeoutMs) else {
                     library.destroy(handle)
                     throw FffLibraryError.loadFailed("FFF index scan timed out for \(repoRoot)")
                 }
-                return handle
-            }.value
-            await self.storePreparedHandle(preparedHandle)
+                return FffSearchHandle(pointer: handle)
+            }
+            self.storePreparedHandle(preparedHandle)
         }
         prepareTask = task
         defer { prepareTask = nil }
@@ -46,26 +52,44 @@ actor FffRepoSearchIndex {
         let searchQuery = trimmedNeedle.isEmpty ? "" : (parsed.path ?? query)
 
         let library = library
-        return try await Task.detached(priority: .userInitiated) {
+        let workQueue = workQueue
+        return try await Self.perform(on: workQueue) {
             try Self.runSearch(
                 library: library,
-                handle: handle,
+                handle: handle.pointer,
                 query: searchQuery,
                 parsedLine: parsed.line,
                 recents: recents,
                 limit: limit
             )
-        }.value
+        }
     }
 
-    private func storePreparedHandle(_ handle: OpaquePointer) {
+    private func storePreparedHandle(_ handle: FffSearchHandle) {
         self.handle = handle
         isReady = true
     }
 
     deinit {
         if let handle {
-            library.destroy(handle)
+            workQueue.sync {
+                library.destroy(handle.pointer)
+            }
+        }
+    }
+
+    private static func perform<T: Sendable>(
+        on queue: DispatchQueue,
+        _ body: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    continuation.resume(returning: try body())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
         }
     }
 

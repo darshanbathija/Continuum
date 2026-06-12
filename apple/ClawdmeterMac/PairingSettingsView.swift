@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import ClawdmeterShared
 
 /// Mac Settings → Pair iPhone. Users choose Continuum Cloud or Tailscale,

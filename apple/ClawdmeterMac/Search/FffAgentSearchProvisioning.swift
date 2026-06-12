@@ -158,10 +158,11 @@ enum FffAgentSearchProvisioning {
         let fm = FileManager.default
         let parent = configURL.deletingLastPathComponent()
         try? fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        let escapedCommand = escapeTOMLString(command)
 
         let desiredBlock = """
         \(codexSectionHeader)
-        command = "\(escapeTOMLString(command))"
+        command = "\(escapedCommand)"
 
         """
 
@@ -175,7 +176,7 @@ enum FffAgentSearchProvisioning {
         }
 
         if existing.contains(codexSectionHeader) {
-            if existing.contains("command = \"\(command)\"") {
+            if existing.contains("command = \"\(escapedCommand)\"") {
                 return
             }
             let updated = replaceCodexMCPSection(in: existing, with: desiredBlock)

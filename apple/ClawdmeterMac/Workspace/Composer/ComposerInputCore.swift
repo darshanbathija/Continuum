@@ -1257,7 +1257,7 @@ struct ComposerInputCore: View {
         if store.attachments.contains(where: { $0.sourceURL == url && $0.displayName == name }) {
             return
         }
-        try? store.attach(url: url, displayName: name, byteSize: byteSize, isImage: isImage)
+        _ = try? store.attach(url: url, displayName: name, byteSize: byteSize, isImage: isImage)
     }
 
     private func requestProgrammaticSend() {

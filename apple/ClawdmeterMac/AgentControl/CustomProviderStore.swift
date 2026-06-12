@@ -305,7 +305,7 @@ public final class CustomProviderStore: ObservableObject {
         let id = Self.mintId(from: normalizedBase, existingIds: Set(records.map(\.id)))
         let resolvedLabel = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let now = Date()
-        var record = CustomProviderRecord(
+        let record = CustomProviderRecord(
             id: id,
             label: resolvedLabel,
             kind: kind,
@@ -510,7 +510,7 @@ public final class CustomProviderStore: ObservableObject {
 
     public static func mintId(from baseURL: String, existingIds: Set<String>) -> String {
         let host = CustomProviderRecord.hostLabel(from: baseURL) ?? "provider"
-        var slug = host.lowercased().unicodeScalars.map { scalar -> Character in
+        let slug = host.lowercased().unicodeScalars.map { scalar -> Character in
             if CharacterSet.alphanumerics.contains(scalar) {
                 return Character(scalar)
             }

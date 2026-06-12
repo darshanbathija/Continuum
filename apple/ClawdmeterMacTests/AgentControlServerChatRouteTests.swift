@@ -102,9 +102,11 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     override func tearDown() async throws {
         await ChatProviderProbe.shared.clearAuthOverride(providerKey: "cursor")
         await ChatProviderProbe.shared.clearAuthOverride(providerKey: "opencode")
+        await ChatProviderProbe.shared.clearAuthOverride(providerKey: "openrouter")
         await ChatProviderProbe.shared.invalidate()
         await CursorModelProbe.shared.invalidate()
         await OpenCodeGoModelProbe.shared.invalidate()
+        await OpenRouterModelProbe.shared.clearStateOverride()
 
         server?.stop()
         server = nil
@@ -1050,10 +1052,10 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     }
 
     func test_frontierRouteAppliesOpenRouterAvailabilityGate() async throws {
-        enableProviderForTest("opencode")
-        await ChatProviderProbe.shared.setAuthOverride(
-            providerKey: "opencode",
+        enableProviderForTest("openrouter")
+        await OpenRouterModelProbe.shared.setStateOverride(
             authenticated: false,
+            discoverySucceeded: false,
             reason: "openrouter auth missing test"
         )
 
@@ -1197,10 +1199,10 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     }
 
     func test_openRouterRoute_returns503WhenProbeMarksUnavailable() async throws {
-        enableProviderForTest("opencode")
-        await ChatProviderProbe.shared.setAuthOverride(
-            providerKey: "opencode",
+        enableProviderForTest("openrouter")
+        await OpenRouterModelProbe.shared.setStateOverride(
             authenticated: false,
+            discoverySucceeded: false,
             reason: "openrouter auth missing test"
         )
 

@@ -68,7 +68,8 @@ public enum ProviderEnablement {
     }
 
     public static func isEnabled(_ vendor: ChatVendor) -> Bool {
-        isEnabled(vendor.backingProvider)
+        guard let descriptor = ProviderRegistry.descriptor(chatVendor: vendor) else { return false }
+        return isEnabled(descriptor.id)
     }
 
     public static func enabledChatVendors(

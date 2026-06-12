@@ -62,17 +62,22 @@ targets:
           # v0.7.1: bundled Node binary is added via the Copy Files
           # build phase below; exclude from default source scanning so
           # xcodegen doesn't try to compile it as a "source file".
+          - "Resources/Vendor/node"
           - "Resources/Vendor/node/**"
           # v0.7.15: same exclusion for the bundled uv binary used by
           # the Antigravity SDK toggle's Python venv provisioning.
+          - "Resources/Vendor/uv"
           - "Resources/Vendor/uv/**"
           # v0.30.0: bundled OpenCode is app infrastructure for the
           # OpenCode provider. Keep it out of source scanning; the
           # Vendor folder reference copies it into Contents/Resources.
+          - "Resources/Vendor/opencode"
           - "Resources/Vendor/opencode/**"
           # Bundled FFF C library for Code-tab repo file search.
+          - "Resources/Vendor/fff"
           - "Resources/Vendor/fff/**"
           # Bundled opencode-fff-search plugin config + node_modules.
+          - "Resources/Vendor/opencode-fff"
           - "Resources/Vendor/opencode-fff/**"
       # v0.27.0: Resources/Vendor/open-design/** exclusion removed —
       # the bundled Open Design daemon was stripped along with the

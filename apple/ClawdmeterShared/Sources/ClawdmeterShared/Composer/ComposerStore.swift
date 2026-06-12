@@ -527,20 +527,7 @@ public final class ComposerStore: ObservableObject {
         /// `codex` / `claude` slice is the default. Effort is cleared
         /// for models whose `supportsEffort` is false (Gemini today).
         public static func `for`(agent: AgentKind, catalog: ModelCatalog = .bundled) -> ChipDefaults {
-            let entry: ModelCatalogEntry?
-            switch agent {
-            case .claude: entry = catalog.claude.first
-            case .codex:  entry = catalog.codex.first
-            case .gemini: entry = catalog.gemini.first
-            case .opencode: entry = catalog.opencode.first
-            case .cursor: entry = catalog.cursor.first
-            case .grok: entry = catalog.grok.first
-            case .unknown:
-                // X3: forward-compat unknown agent — no catalog slice
-                // exists. Composer chips clear; the picker hides the
-                // chip until the user selects a known agent.
-                entry = nil
-            }
+            let entry = catalog.entries(for: agent).first
             let effort: ReasoningEffort? = (entry?.supportsEffort ?? false) ? .max : nil
             return ChipDefaults(
                 agent: agent,

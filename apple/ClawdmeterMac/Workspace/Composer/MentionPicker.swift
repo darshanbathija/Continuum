@@ -18,6 +18,7 @@ struct MentionPicker: View {
 
     @State private var selectedIndex: Int = 0
     @State private var repoFileMatches: [RepoFileMatch] = []
+    @State private var repoFileSearchTask: Task<Void, Never>?
 
     enum Suggestion: Identifiable, Hashable {
         case vendor(VendorProvisioningVendor)
@@ -57,17 +58,19 @@ struct MentionPicker: View {
 
     var filtered: [Suggestion] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        var all: [Suggestion] = []
-        all.append(contentsOf: VendorProvisioningCatalog.vendors(matchingMentionQuery: q).map { .vendor($0) })
-        all.append(contentsOf: openSessions.map { .session($0) })
-        all.append(contentsOf: sourceEntries.map { .file(path: $0.payload, label: $0.label) })
-        all.append(contentsOf: repoFileMatches.map {
-            .file(path: $0.path, label: ($0.path as NSString).lastPathComponent)
-        })
-        guard !q.isEmpty else { return all }
-        return all.filter {
+        let vendorSuggestions = VendorProvisioningCatalog.vendors(matchingMentionQuery: q).map { Suggestion.vendor($0) }
+        let sessionSuggestions = openSessions.map { Suggestion.session($0) }
+        let sourceSuggestions = sourceEntries.map { Suggestion.file(path: $0.payload, label: $0.label) }
+        let repoFileSuggestions = repoFileMatches.map {
+            Suggestion.file(path: $0.path, label: ($0.path as NSString).lastPathComponent)
+        }
+        guard !q.isEmpty else {
+            return vendorSuggestions + sessionSuggestions + sourceSuggestions + repoFileSuggestions
+        }
+        let literalSuggestions = (sessionSuggestions + sourceSuggestions).filter {
             $0.label.lowercased().contains(q) || $0.sublabel.lowercased().contains(q)
         }
+        return vendorSuggestions + literalSuggestions + repoFileSuggestions
     }
 
     var body: some View {
@@ -115,9 +118,10 @@ struct MentionPicker: View {
         )
         .onChange(of: query) { _, _ in
             selectedIndex = 0
-            Task { await refreshRepoFiles() }
+            scheduleRepoFileSearch()
         }
-        .task(id: repoRoot) { await refreshRepoFiles() }
+        .task(id: repoRoot) { scheduleRepoFileSearch() }
+        .onDisappear { repoFileSearchTask?.cancel() }
         .background(KeyMonitor(
             up: { selectedIndex = max(0, selectedIndex - 1) },
             down: { selectedIndex = min(max(0, filtered.count - 1), selectedIndex + 1) },
@@ -126,23 +130,46 @@ struct MentionPicker: View {
         ))
     }
 
-    private func refreshRepoFiles() async {
-        guard let repoRoot, !repoRoot.isEmpty else {
+    @MainActor
+    private func scheduleRepoFileSearch() {
+        repoFileSearchTask?.cancel()
+        let requestedQuery = query
+        let requestedRoot = repoRoot
+        let requestedRecents = recentPathActions
+        repoFileSearchTask = Task { @MainActor in
+            await refreshRepoFiles(
+                query: requestedQuery,
+                repoRoot: requestedRoot,
+                recentPathActions: requestedRecents
+            )
+        }
+    }
+
+    @MainActor
+    private func refreshRepoFiles(
+        query requestedQuery: String,
+        repoRoot requestedRoot: String?,
+        recentPathActions requestedRecents: [String]
+    ) async {
+        guard requestedQuery == query, requestedRoot == repoRoot, !Task.isCancelled else { return }
+        guard let requestedRoot, !requestedRoot.isEmpty else {
             repoFileMatches = []
             return
         }
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = requestedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             repoFileMatches = []
             return
         }
         let result = await RepoFileSearchService.shared.matches(
             query: trimmed,
-            repoRoot: repoRoot,
-            recents: recentPathActions,
+            repoRoot: requestedRoot,
+            recents: requestedRecents,
             limit: 40
         )
+        guard requestedQuery == query, requestedRoot == repoRoot, !Task.isCancelled else { return }
         repoFileMatches = result.matches
+        selectedIndex = min(selectedIndex, max(0, filtered.count - 1))
     }
 
     private func pickerAt(_ idx: Int) -> Suggestion? {

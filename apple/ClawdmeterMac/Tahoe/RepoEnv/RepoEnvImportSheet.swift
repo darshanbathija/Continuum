@@ -653,7 +653,7 @@ struct RepoEnvImportSheet: View {
 
             let variableCount = importable.count
             vendorProgress = .init(phase: .importing(current: 0, total: variableCount))
-            try await Task.yield()
+            await Task.yield()
             vendorProgress = .init(phase: .importing(current: variableCount, total: variableCount))
             let succeeded = onImport(draft)
             previews = []  // import done — don't retain fetched secret values in view state

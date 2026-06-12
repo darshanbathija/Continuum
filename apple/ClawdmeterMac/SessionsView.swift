@@ -892,7 +892,7 @@ public final class SessionsModel: ObservableObject {
         effort: ReasoningEffort?,
         slug: String
     ) {
-        Task { @MainActor in
+        Task { @MainActor [self] in
             var provisionedWorktree: WorktreeManager.ProvisionedWorktree?
             do {
                 let provisioned = try await WorktreeManager.shared.provision(

@@ -40,6 +40,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
     public var billingProvider: String? {
         switch self {
         case .opencode: return "opencode-go"
+        case .openrouter: return "openrouter"
         default: return nil
         }
     }
@@ -298,7 +299,8 @@ public final class ChatV2Store: ObservableObject {
         guard let providerIDs else { return defaultChatVendorOrder }
         let enabled = Set(providerIDs.map { ProviderRegistry.rootProviderID(for: $0) })
         return defaultChatVendorOrder.filter { vendor in
-            enabled.contains(ProviderRegistry.rootProviderID(for: vendor.backingProvider.rawValue))
+            guard let descriptor = ProviderRegistry.descriptor(chatVendor: vendor) else { return false }
+            return enabled.contains(descriptor.id)
         }
     }
 

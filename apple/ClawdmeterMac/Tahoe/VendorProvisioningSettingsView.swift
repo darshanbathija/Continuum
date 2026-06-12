@@ -300,8 +300,10 @@ struct VendorProvisioningSettingsView: View {
                 statuses: Array(statuses.values),
                 vendors: targets
             ) { update in
-                installProgressByVendor[update.vendorId] = update.phase
-                overallInstallProgress = update.overallProgress
+                Task { @MainActor in
+                    installProgressByVendor[update.vendorId] = update.phase
+                    overallInstallProgress = update.overallProgress
+                }
             }
             for (vendorId, failureMessage) in result.failedVendorIds {
                 installProgressByVendor[vendorId] = .failed(failureMessage)
