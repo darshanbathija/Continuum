@@ -74,6 +74,8 @@ public struct TranscriptEditedFileChipStripView: View {
     public let density: TranscriptDensity
 
     @State private var showAllFiles = false
+    /// File path whose hover diff-preview popover is open (macOS hover only).
+    @State private var hoveredPreviewPath: String?
 
     public init(
         turn: TranscriptTurn,
@@ -170,6 +172,27 @@ public struct TranscriptEditedFileChipStripView: View {
         )
         .help(file.filePath)
         .accessibilityLabel(fileChipAccessibilityLabel(file))
+        .onHover { hovering in
+            let hasPreview = !(file.preview ?? "").isEmpty
+            if hovering, hasPreview {
+                hoveredPreviewPath = file.filePath
+            } else if hoveredPreviewPath == file.filePath {
+                hoveredPreviewPath = nil
+            }
+        }
+        .popover(
+            isPresented: Binding(
+                get: { hoveredPreviewPath == file.filePath && !(file.preview ?? "").isEmpty },
+                set: { if !$0 { hoveredPreviewPath = nil } }
+            ),
+            arrowEdge: .bottom
+        ) {
+            if let preview = file.preview, !preview.isEmpty {
+                EditDiffHoverPreviewView(preview: preview, isTruncated: file.isPreviewTruncated)
+                    .frame(minWidth: 320, maxWidth: 560)
+                    .padding(8)
+            }
+        }
     }
 
     private func moreChip(_ overflow: TranscriptEditedFileChipStripModel.OverflowSummary) -> some View {

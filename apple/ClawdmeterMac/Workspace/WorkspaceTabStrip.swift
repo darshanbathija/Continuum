@@ -183,8 +183,12 @@ struct WorkspaceTabStrip: View {
         }
         .id(Self.newTabButtonId)
         .buttonStyle(PressableButtonStyle())
-        .help("New chat tab")
-        .accessibilityIdentifier("code.workspace.new-tab")
+        .codeHoverChrome(
+            cornerRadius: 6,
+            help: "New chat tab",
+            accessibilityLabel: "New chat tab",
+            accessibilityIdentifier: "code.workspace.new-tab"
+        )
         .contextMenu {
             Button("Chat") {
                 DispatchQueue.main.async {
@@ -372,7 +376,8 @@ struct WorkspaceTabStrip: View {
     }
 
     private func terminalSubtitle(for session: AgentSession) -> String {
-        let last = (WorkspaceKey.workspacePath(for: session) as NSString).lastPathComponent
-        return last.isEmpty ? "Shell" : "Shell - \(last)"
+        let branch = session.workspaceBranchLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !branch.isEmpty else { return "Terminal" }
+        return "Terminal - \(branch)"
     }
 }

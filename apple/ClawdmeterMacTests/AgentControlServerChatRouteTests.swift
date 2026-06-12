@@ -564,7 +564,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
 
         let panes = try XCTUnwrap(registry.session(id: session.id)?.terminalPanes)
         let primary = try XCTUnwrap(panes.first { $0.isPrimary })
-        XCTAssertEqual(primary.title, "Shell")
+        XCTAssertEqual(primary.title, "Terminal")
         let directHost = await TerminalPtyRegistry.shared.host(id: primary.paneId)
         let claudeHost = await ClaudePtyRegistry.shared.host(for: session.id)
         XCTAssertNotNil(directHost)
@@ -923,11 +923,11 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         let firstRefId = UUID()
         try await registry.replacePrimaryTerminalPane(
             sessionId: session.id,
-            pane: TerminalPaneRef(id: firstRefId, paneId: "pty-1", title: "Shell", isPrimary: true)
+            pane: TerminalPaneRef(id: firstRefId, paneId: "pty-1", title: "Terminal", isPrimary: true)
         )
         try await registry.replacePrimaryTerminalPane(
             sessionId: session.id,
-            pane: TerminalPaneRef(id: firstRefId, paneId: "pty-2", title: "Shell", isPrimary: true)
+            pane: TerminalPaneRef(id: firstRefId, paneId: "pty-2", title: "Terminal", isPrimary: true)
         )
 
         let panes = try XCTUnwrap(registry.session(id: session.id)?.terminalPanes)
