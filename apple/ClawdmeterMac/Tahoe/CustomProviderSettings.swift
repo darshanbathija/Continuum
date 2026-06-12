@@ -239,13 +239,13 @@ private struct CustomProviderRow: View {
                         Text(record.displayLabel)
                             .font(TahoeFont.body(13.5, weight: .semibold))
                             .foregroundStyle(t.fg)
-                        ProviderDeviceStatusBadge(status: statusInfo.0)
+                        ProviderAuthTypeBadge(authType: .custom)
                     }
                     Text(hostSubtitle)
                         .font(TahoeFont.body(11.5))
                         .foregroundStyle(t.fg3)
                         .lineLimit(1)
-                    if let message = statusInfo.1 {
+                    if let message = statusInfo.1, !isEnabled {
                         Text(message)
                             .font(TahoeFont.body(11.5))
                             .foregroundStyle(t.fg3)
@@ -263,10 +263,38 @@ private struct CustomProviderRow: View {
                         .controlSize(.small)
                         .accessibilityIdentifier("settings.provider.custom.\(record.id).delete")
                 }
-                TahoeToggleView(on: $isEnabled)
-                    .help(isEnabled ? "Turn \(record.displayLabel) off" : "Turn \(record.displayLabel) on")
-                    .accessibilityIdentifier("settings.provider.custom.\(record.id).enabled")
                 modelMenu
+                if isEnabled {
+                    Button("Disconnect") {
+                        isEnabled = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                    .help("Disconnect \(record.displayLabel)")
+                    .accessibilityIdentifier("settings.provider.custom.\(record.id).disconnect")
+                } else {
+                    Button {
+                        isEnabled = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            TahoeIcon("plus", size: 10, weight: .bold)
+                            Text("Connect")
+                        }
+                        .font(TahoeFont.body(12, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(t.hairline, lineWidth: 0.5)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help("Connect \(record.displayLabel)")
+                    .accessibilityIdentifier("settings.provider.custom.\(record.id).connect")
+                }
             }
         }
         .frame(minHeight: 36)
