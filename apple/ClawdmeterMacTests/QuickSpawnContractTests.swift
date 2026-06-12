@@ -110,6 +110,36 @@ final class QuickSpawnContractTests: XCTestCase {
         XCTAssertEqual(model.selectedRepoKey, RepoKey.other)
     }
 
+    /// ⌥-click "+" must open the sheet without leaving a background quick-spawn
+    /// row selected. `prepareNewSession` abandons any in-flight optimistic "+"
+    /// provisioning so the sheet spawn is the only active path.
+    func test_prepareNewSession_abandonsInFlightQuickSpawn() throws {
+        let (model, _) = try makeModel("option-click-abandon")
+        let repoKey = "/private/tmp/fake-repo-\(UUID().uuidString)"
+        model.repos = [
+            AgentRepo(
+                key: repoKey,
+                displayName: "Fake",
+                hasActiveSessions: false,
+                liveSessionCount: 0,
+                recentSessions: []
+            )
+        ]
+
+        let sessionId = UUID()
+        model.provisioningSessionIds.insert(sessionId)
+        model.provisioningProgress[sessionId] = ProvisioningProgress()
+        model.openSessionId = sessionId
+
+        model.prepareNewSession(in: repoKey)
+
+        XCTAssertTrue(model.showingNewSessionSheet)
+        XCTAssertEqual(model.selectedRepoKey, repoKey)
+        XCTAssertFalse(model.provisioningSessionIds.contains(sessionId))
+        XCTAssertNil(model.provisioningProgress[sessionId])
+        XCTAssertNil(model.openSessionId)
+    }
+
     /// An unknown repo key (not in `model.repos`) also routes to the
     /// sheet — quick-spawn has nothing to spawn into.
     func test_quickSpawnIntoUnknownRepo_routesToSheet() throws {
