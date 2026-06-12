@@ -401,7 +401,11 @@ struct SessionWorkspaceView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleCodeReviewPane)) { _ in
             animateWorkspaceChange(Self.reviewPaneToggleAnimation) {
-                workbenchState.setReviewPaneVisible(!workbenchState.showingReviewPane)
+                let willExpand = !workbenchState.showingReviewPane
+                if willExpand {
+                    workbenchState.selectRightPane(.plan)
+                }
+                workbenchState.setReviewPaneVisible(willExpand)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openCodeReviewPane)) { note in
