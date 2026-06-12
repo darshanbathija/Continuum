@@ -10,7 +10,6 @@ struct CodeWorkspaceDraftComposer: View {
     let workspaceDraft: WorkspaceDraftTab
 
     @StateObject private var store: ComposerStore
-    @State private var accountChoices: [ProviderInstanceId] = []
     @State private var selectedAccountWireId: String?
     @Environment(\.tahoe) private var t
 
@@ -62,7 +61,8 @@ struct CodeWorkspaceDraftComposer: View {
                     store.planMode = (newMode == .plan)
                 },
                 permissionMode: store.permissionMode,
-                placeholderOverride: "Ask to make changes, @mention files, run /commands"
+                placeholderOverride: "Ask to make changes, @mention files, run /commands",
+                selectedAccountWireId: $selectedAccountWireId
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -78,7 +78,6 @@ struct CodeWorkspaceDraftComposer: View {
         .onChange(of: store.agent) { _, _ in
             persistWorkspaceDraftChips()
         }
-        .task(id: store.agent) { await refreshAccountChoices() }
         .onChange(of: store.modelId) { _, _ in
             persistWorkspaceDraftChips()
         }
@@ -369,20 +368,5 @@ struct CodeWorkspaceDraftComposer: View {
         if let model = draft.suggestedModel { store.modelId = model }
         if let effort = draft.suggestedEffort { store.effort = effort }
         launcher.normalize(store)
-    }
-
-    private func refreshAccountChoices() async {
-        guard let registry = AppDelegate.runtime?.providerInstanceRegistry,
-              ProviderInstanceEnvironment.configDirVariable(for: store.agent) != nil else {
-            accountChoices = []
-            selectedAccountWireId = nil
-            return
-        }
-        let choices = await registry.instances(for: store.agent)
-        accountChoices = choices
-        selectedAccountWireId = CodePreferredAccountStore.providerInstanceId(
-            for: store.agent,
-            available: choices
-        )
     }
 }
