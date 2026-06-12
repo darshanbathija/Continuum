@@ -260,4 +260,79 @@ final class SessionFileResolverTests: XCTestCase {
         assertSameFile(resolver.recordedURL(for: session.id), rollout)
         assertSameFile(resolver.resolve(session: session), rollout)
     }
+
+    // MARK: - Codex cwd filter (spawn-mode hijack defense)
+
+    /// A rollout whose recorded `session_meta` cwd is a square mismatch
+    /// (spawn-mode tile / Terminal-launched codex in `~`) must never win
+    /// the activity-window scan, even when it's the newest candidate.
+    func testCodexForeignCwdRolloutDoesNotHijackWindowScan() throws {
+        let createdAt = Date().addingTimeInterval(-600)
+        let lastEventAt = Date().addingTimeInterval(-60)
+        let session = makeSession(agent: .codex, createdAt: createdAt, lastEventAt: lastEventAt)
+
+        let ownMeta = #"{"type":"session_meta","payload":{"cwd":"/tmp/test-repo"}}"#
+        let foreignMeta = #"{"type":"session_meta","payload":{"cwd":"/Users/someone"}}"#
+        let own = try writeRollout(
+            name: "rollout-own.jsonl",
+            mtime: createdAt.addingTimeInterval(30),
+            contents: ownMeta
+        )
+        // Foreign rollout is NEWER — pre-fix it would win the scan.
+        _ = try writeRollout(
+            name: "rollout-foreign.jsonl",
+            mtime: lastEventAt,
+            contents: foreignMeta
+        )
+
+        let resolver = SessionFileResolver(
+            codexSessionsRoot: tmpdir,
+            resolveClaudeURL: { _ in nil }
+        )
+        assertSameFile(resolver.resolve(session: session), own)
+    }
+
+    /// The cwd guard must also cover the cached-link auto-promotion path:
+    /// a foreign rollout appearing newer than the cached link must not
+    /// steal the session away from its recorded rollout.
+    func testCodexForeignCwdRolloutDoesNotStealCachedLink() throws {
+        let createdAt = Date().addingTimeInterval(-600)
+        let lastEventAt = Date().addingTimeInterval(-60)
+        let session = makeSession(agent: .codex, createdAt: createdAt, lastEventAt: lastEventAt)
+
+        let own = try writeRollout(
+            name: "rollout-own.jsonl",
+            mtime: createdAt.addingTimeInterval(30),
+            contents: #"{"type":"session_meta","payload":{"cwd":"/tmp/test-repo"}}"#
+        )
+        let resolver = SessionFileResolver(
+            codexSessionsRoot: tmpdir,
+            resolveClaudeURL: { _ in nil }
+        )
+        resolver.record(sessionId: session.id, rolloutURL: own)
+
+        _ = try writeRollout(
+            name: "rollout-foreign-newer.jsonl",
+            mtime: lastEventAt,
+            contents: #"{"type":"session_meta","payload":{"cwd":"/Users/someone"}}"#
+        )
+        assertSameFile(resolver.resolve(session: session), own)
+    }
+
+    /// Rollouts with no parseable cwd (legacy fixtures, truncated files)
+    /// keep matching — the guard only excludes a PROVEN mismatch.
+    func testCodexRolloutWithoutCwdStillMatches() throws {
+        let createdAt = Date().addingTimeInterval(-600)
+        let lastEventAt = Date().addingTimeInterval(-60)
+        let session = makeSession(agent: .codex, createdAt: createdAt, lastEventAt: lastEventAt)
+        let bare = try writeRollout(
+            name: "rollout-no-meta.jsonl",
+            mtime: createdAt.addingTimeInterval(30)
+        )
+        let resolver = SessionFileResolver(
+            codexSessionsRoot: tmpdir,
+            resolveClaudeURL: { _ in nil }
+        )
+        assertSameFile(resolver.resolve(session: session), bare)
+    }
 }
