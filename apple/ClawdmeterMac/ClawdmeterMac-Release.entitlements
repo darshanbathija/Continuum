@@ -143,10 +143,11 @@
 		     forgets every prior session. Read-only is enough; the
 		     migration writer will live in the container going forward. -->
 		<string>/Library/Application Support/Clawdmeter/</string>
-		<!-- v0.28.0: ShellRunner.locateBinary needs to read user-local
-		     CLI installs (cursor-agent, claude, etc.) from ~/.local/bin/
-		     so the Mac app can spawn them. Read-only is enough; we never
-		     install or modify binaries on the user's behalf. -->
+		<!-- v0.28.0: ShellRunner.locateBinary reads user-local CLI installs
+		     (cursor-agent, claude, etc.) from ~/.local/bin/. Write access
+		     for Continuum-managed provider-account shims (claude-work,
+		     codex-pro, …) lives in the read-write exception below — we
+		     never modify upstream CLI binaries themselves. -->
 		<string>/.local/bin/</string>
 		<!-- v0.28.0: Cursor agent CLI config + project state. The
 		     CursorTokenProvider reads cursor-agent's keychain entries
@@ -174,6 +175,21 @@
 		     not on PATH", breaking session spawn + the Claude provider
 		     probe. Read-only is enough; we never modify the install tree. -->
 		<string>/.local/share/claude/</string>
+	</array>
+
+	<!--
+	  v0.34.x: Provider-account shell shims.
+
+	  Multi-account v1 stores secondary Claude/Codex credentials in
+	  isolated config dirs. On add/remove, Continuum writes small
+	  wrapper scripts to ~/.local/bin/ (e.g. `claude-work`) so Terminal
+	  can launch the pinned account with one command. Only our marked
+	  shim files are created/removed — upstream CLI binaries are never
+	  touched.
+	-->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/.local/bin/</string>
 	</array>
 
 	<!--
