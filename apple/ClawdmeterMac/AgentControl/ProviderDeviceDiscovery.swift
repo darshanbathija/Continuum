@@ -16,13 +16,16 @@ public enum ProviderDeviceAuthStatus: String, Sendable, Equatable {
 /// Action the onboarding sheet can offer when a provider is not ready.
 public enum ProviderDeviceSetupAction: String, Sendable, Equatable, Identifiable {
     case importClaudeFromClaudeCode
+    case installClaudeCLI
     case installCodexCLI
     case runCodexLogin
     case installAgyCLI
+    case installGeminiCLI
     case openAntigravityApp
     case installCursorCLI
     case runCursorAgentLogin
     case openOpencodeSignIn
+    case installOpencodeCLI
     case addOpenRouterKey
     case addOpenCodeGoKey
     case configureOpenCodeGoQuota
@@ -33,13 +36,16 @@ public enum ProviderDeviceSetupAction: String, Sendable, Equatable, Identifiable
     public var label: String {
         switch self {
         case .importClaudeFromClaudeCode: return "Import from Claude Code"
+        case .installClaudeCLI: return "Install claude CLI"
         case .installCodexCLI: return "Install codex CLI"
         case .runCodexLogin: return "Log In"
         case .installAgyCLI: return "Install agy CLI"
+        case .installGeminiCLI: return "Install gemini CLI"
         case .openAntigravityApp: return "Open Antigravity"
         case .installCursorCLI: return "Install cursor-agent"
         case .runCursorAgentLogin: return "Log In"
         case .openOpencodeSignIn: return "Sign in to OpenCode"
+        case .installOpencodeCLI: return "Install opencode CLI"
         case .addOpenRouterKey: return "Add OpenRouter key"
         case .addOpenCodeGoKey: return "Add OpenCode Go key"
         case .configureOpenCodeGoQuota: return "Configure quota tracking"
@@ -48,8 +54,12 @@ public enum ProviderDeviceSetupAction: String, Sendable, Equatable, Identifiable
     }
 
     /// Shell one-liner for embedded terminal launch, when applicable.
+    /// This enum is the ONE install-command inventory — onboarding,
+    /// Settings → Providers, and the spawn-mode config sheet all read it.
     public var shellCommand: String? {
         switch self {
+        case .installClaudeCLI:
+            return "npm install -g @anthropic-ai/claude-code || echo 'npm not found — install Node first: https://nodejs.org'"
         case .installCodexCLI:
             return "npm install -g @openai/codex || echo 'npm not found — install Node first: https://nodejs.org'"
         case .runCodexLogin: return "codex login"
@@ -58,6 +68,10 @@ public enum ProviderDeviceSetupAction: String, Sendable, Equatable, Identifiable
             return "echo 'Install the Cursor CLI: curl https://cursor.com/install -fsS | bash' && open https://cursor.com"
         case .installAgyCLI:
             return "echo 'Install the Antigravity 2 agy CLI — see https://antigravity.google' && open https://antigravity.google"
+        case .installGeminiCLI:
+            return "npm install -g @google/gemini-cli || echo 'npm not found — install Node first: https://nodejs.org'"
+        case .installOpencodeCLI:
+            return "echo 'Install OpenCode: https://opencode.ai' && open https://opencode.ai"
         case .installGrokCLI:
             return "echo 'Install the grok CLI from https://x.ai' && open https://x.ai"
         case .importClaudeFromClaudeCode, .openAntigravityApp, .openOpencodeSignIn,

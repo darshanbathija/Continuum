@@ -51,6 +51,12 @@ public final class SessionFileResolver: @unchecked Sendable {
     /// for the session (likely belong to a different session entirely).
     private let activityGrace: TimeInterval
     private let lock = NSLock()
+    /// Rollout-header cwd cache. `session_meta.payload.cwd` is written once
+    /// at rollout creation and never changes, so a per-path cache is safe.
+    /// Bounded FIFO — resolves touch only window-matched candidates.
+    private var rolloutCwdCache: [String: String?] = [:]
+    private var rolloutCwdCacheOrder: [String] = []
+    private let rolloutCwdCacheCap = 512
 
     public init(
         codexSessionsRoot: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
@@ -170,6 +176,7 @@ public final class SessionFileResolver: @unchecked Sendable {
     private func findCodexRollout(for session: AgentSession, modifiedAfter: Date?) -> URL? {
         let windowStart = session.createdAt
         let windowEnd = session.lastEventAt.addingTimeInterval(activityGrace)
+        let sessionCwd = Self.canonicalPath(session.effectiveCwd)
         guard let enumerator = FileManager.default.enumerator(
             at: codexSessionsRoot,
             includingPropertiesForKeys: [.contentModificationDateKey],
@@ -182,12 +189,126 @@ public final class SessionFileResolver: @unchecked Sendable {
             let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             guard date >= windowStart, date <= windowEnd else { continue }
             if let after = modifiedAfter, date <= after { continue }
+            // mtime alone is hijackable: spawn-mode tiles (and any
+            // Terminal-launched codex) mass-produce rollouts inside a live
+            // session's activity window, and the newest one would silently
+            // re-point this session's transcript at a foreign conversation.
+            // Require the rollout's own recorded cwd to match the session.
+            // `.noMeta` (real lines, legacy format) stays accepted for
+            // back-compat; `.empty` (mid-creation, no transcript value) is
+            // never selected — picking one would cache a foreign file into
+            // codexLinks before its cwd is even knowable.
+            switch cachedRolloutParse(at: url) {
+            case .empty:
+                continue
+            case .cwd(let recordedCwd) where Self.canonicalPath(recordedCwd) != sessionCwd:
+                continue
+            default:
+                break
+            }
             if date > newestDate {
                 newestDate = date
                 newest = url
             }
         }
         return newest
+    }
+
+    /// The cwd a Codex rollout records about itself (`session_meta` /
+    /// `turn_context` payload), parsed once per file and cached — it is
+    /// written at rollout creation and never changes. A rollout probed in
+    /// the instant between file creation and the meta flush parses as
+    /// `.empty`; that result is NOT cached, so the next scan re-probes
+    /// instead of permanently exempting the file from the cwd guard.
+    private func cachedRolloutParse(at url: URL) -> RolloutCwdParse {
+        lock.lock()
+        if let cached = rolloutCwdCache[url.path] {
+            lock.unlock()
+            if let cwd = cached { return .cwd(cwd) }
+            return .noMeta
+        }
+        lock.unlock()
+        let parsed = Self.parseRolloutCwdResult(at: url)
+        if case .empty = parsed {
+            return .empty
+        }
+        let value: String? = {
+            if case .cwd(let cwd) = parsed { return cwd }
+            return nil
+        }()
+        lock.lock()
+        if rolloutCwdCache[url.path] == nil {
+            rolloutCwdCacheOrder.append(url.path)
+        }
+        rolloutCwdCache[url.path] = value
+        while rolloutCwdCacheOrder.count > rolloutCwdCacheCap {
+            rolloutCwdCache.removeValue(forKey: rolloutCwdCacheOrder.removeFirst())
+        }
+        lock.unlock()
+        return parsed
+    }
+
+    /// Head-parse outcome. `.empty` (no bytes / unreadable — likely a file
+    /// mid-creation) must not be conflated with `.noMeta` (real lines,
+    /// no meta — legacy/foreign format): only the latter is cacheable.
+    enum RolloutCwdParse: Equatable {
+        case cwd(String)
+        case noMeta
+        case empty
+    }
+
+    /// Convenience used by tests and call sites that only need the value.
+    static func parseRolloutCwd(at url: URL) -> String? {
+        if case .cwd(let cwd) = parseRolloutCwdResult(at: url) { return cwd }
+        return nil
+    }
+
+    /// Scan the head of a rollout file for the first `session_meta` /
+    /// `turn_context` line carrying a `cwd`. Reads at most 64KB — the
+    /// meta line is the first line Codex writes.
+    ///
+    /// `.noMeta` (cacheable) requires at least one COMPLETE,
+    /// JSON-parseable line: a file probed mid-write of its first line
+    /// (bytes present, no terminating newline, or only malformed
+    /// fragments) classifies `.empty` so the verdict is re-probed —
+    /// caching it would permanently exempt the rollout from the cwd
+    /// guard once its real meta line lands.
+    static func parseRolloutCwdResult(at url: URL) -> RolloutCwdParse {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return .empty }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 64 * 1024), !data.isEmpty else { return .empty }
+        // A line that parses as JSON is complete (a mid-write fragment
+        // won't parse); only a file with at least one complete parsed
+        // line earns the cacheable `.noMeta` verdict.
+        var sawParsedLine = false
+        for lineData in data.split(separator: UInt8(ascii: "\n")).prefix(20) {
+            guard let root = try? JSONSerialization.jsonObject(with: Data(lineData)) as? [String: Any] else { continue }
+            sawParsedLine = true
+            let type = root["type"] as? String
+            guard type == "session_meta" || type == "turn_context" else { continue }
+            if let payload = root["payload"] as? [String: Any],
+               let cwd = payload["cwd"] as? String,
+               !cwd.isEmpty {
+                return .cwd(cwd)
+            }
+        }
+        return sawParsedLine ? .noMeta : .empty
+    }
+
+    /// Path comparison form: standardized + symlink-resolved, then
+    /// `/private`-prefix-normalized. Foundation's `resolvingSymlinksInPath`
+    /// is asymmetric about the macOS `/private` firmlink family —
+    /// `/tmp/x` and `/private/tmp/x` do NOT resolve to the same string —
+    /// so both spellings are folded to the prefix-less form explicitly.
+    private static func canonicalPath(_ path: String) -> String {
+        var resolved = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+        for prefix in ["/private/tmp", "/private/var", "/private/etc"] {
+            if resolved == prefix || resolved.hasPrefix(prefix + "/") {
+                resolved = String(resolved.dropFirst("/private".count))
+                break
+            }
+        }
+        return resolved
     }
 
     // MARK: - Gemini resolution

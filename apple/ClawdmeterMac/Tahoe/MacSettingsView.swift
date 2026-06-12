@@ -1483,7 +1483,8 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                 prefillOpenCodeGoWorkspaceDraft()
             }
         case .runCodexLogin, .runCursorAgentLogin, .installCodexCLI, .installCursorCLI,
-             .installAgyCLI, .installGrokCLI:
+             .installAgyCLI, .installGrokCLI, .installClaudeCLI, .installGeminiCLI,
+             .installOpencodeCLI:
             guard let command = action.shellCommand else { return }
             await launchSetupTerminal(title: action.label, command: command)
         }
@@ -1505,14 +1506,8 @@ struct SettingsProviderRowsWithDeviceStatus: View {
 
     @MainActor
     private func launchSetupTerminal(title: String, command: String) async {
-        let wrapped = "\(command); echo ''; echo 'Press Done when finished.'"
         do {
-            let host = try await TerminalPtyRegistry.shared.spawnCommand(
-                wrapped,
-                cwd: NSHomeDirectory(),
-                title: title
-            )
-            setupTerminal = SetupTerminalSession(id: host.id.uuidString, title: title, host: host)
+            setupTerminal = try await SetupTerminalSession.launch(title: title, command: command)
         } catch {
             let script = "tell application \"Terminal\" to do script \"\(command.replacingOccurrences(of: "\"", with: "\\\""))\""
             NSAppleScript(source: script)?.executeAndReturnError(nil)

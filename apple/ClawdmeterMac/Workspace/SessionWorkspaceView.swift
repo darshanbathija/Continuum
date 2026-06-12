@@ -30,6 +30,9 @@ struct SessionWorkspaceView: View {
     @StateObject private var launcher = SessionLauncherModel()
     @ObservedObject var workbenchState: WorkbenchState
     @StateObject private var browserControllers = BrowserWorkspaceControllerStore()
+    /// Spawn mode: grid of agent terminals in ~ (process-wide store so the
+    /// PTYs survive tab switches and view teardown).
+    @ObservedObject private var spawnStore = SpawnModeStore.shared
     /// Workspace-level width, measured via GeometryReader. Drives responsive
     /// pane collapsing so even when the user opens the review pane it only
     /// renders if the window has room for it without clipping content.
@@ -49,20 +52,29 @@ struct SessionWorkspaceView: View {
     private static let gutterThreshold: CGFloat = 900
     private static let reviewPaneToggleAnimation = Animation.easeOut(duration: 0.22)
 
+    /// Spawn grids own the full center width — the review pane (and its
+    /// expand gutter) stays collapsed while a spawn group is open.
+    private var isSpawnGridActive: Bool {
+        spawnStore.selectedGroup != nil
+    }
+
     private var effectiveShowReviewPane: Bool {
         !isImmersiveBrowserActive
+            && !isSpawnGridActive
             && workbenchState.showingReviewPane
             && workbenchState.workspaceWidth >= Self.reviewPaneThreshold
     }
 
     private var effectiveShowGutter: Bool {
         !isImmersiveBrowserActive
+            && !isSpawnGridActive
             && !effectiveShowReviewPane
             && workbenchState.workspaceWidth >= Self.gutterThreshold
     }
 
     private var canHostReviewPaneColumn: Bool {
         !isImmersiveBrowserActive
+            && !isSpawnGridActive
             && workbenchState.workspaceWidth >= Self.reviewPaneThreshold
             && model.activeWorkspaceKey != nil
     }
@@ -149,7 +161,10 @@ struct SessionWorkspaceView: View {
                 TahoeGlass(radius: 8, tone: .panel) {
                     HStack(spacing: 0) {
                         ZStack(alignment: .bottom) {
-                            if isImmersiveBrowserActive, let session = model.openSession {
+                            if let spawnGroup = spawnStore.selectedGroup {
+                                SpawnGridView(store: spawnStore, group: spawnGroup)
+                                    .id(spawnGroup.id)
+                            } else if isImmersiveBrowserActive, let session = model.openSession {
                                 InAppBrowser(
                                     session: session,
                                     model: model,
@@ -209,7 +224,8 @@ struct SessionWorkspaceView: View {
                             // PermissionPromptCard + MacPermissionResponder.
                             // Replaces the deleted LegacyMacPermissionPromptCard
                             // that used to live in ChatSoloView.swift.
-                            if model.selectedWorkspaceDocumentTab == nil,
+                            if spawnStore.selectedGroupId == nil,
+                               model.selectedWorkspaceDocumentTab == nil,
                                model.selectedWorkspaceTerminalTab == nil,
                                let session = model.openSession,
                                let store = model.chatStore(for: session),
@@ -353,7 +369,29 @@ struct SessionWorkspaceView: View {
             browserControllers.prune(keeping: model.registry.sessions)
         }
         .onChange(of: model.openSessionId) { _, newValue in
-            workbenchState.selectSession(newValue)
+            // Don't persist the nil that opening a spawn grid forces —
+            // spawn groups die with the app, so clobbering the stored
+            // selection would land relaunch on an empty workspace.
+            if newValue != nil || spawnStore.selectedGroupId == nil {
+                workbenchState.selectSession(newValue)
+            }
+            if newValue != nil { spawnStore.selectedGroupId = nil }
+        }
+        // Spawn grids and the session/draft/terminal/document selections are
+        // mutually exclusive center-pane occupants. Opening any model-owned
+        // surface dismisses the spawn grid (the PTYs keep running; the group
+        // stays one click away in the sidebar).
+        .onChange(of: model.selectedWorkspaceDraftTabId) { _, newValue in
+            if newValue != nil { spawnStore.selectedGroupId = nil }
+        }
+        .onChange(of: model.selectedWorkspaceTerminalTabId) { _, newValue in
+            if newValue != nil { spawnStore.selectedGroupId = nil }
+        }
+        .onChange(of: model.selectedWorkspaceDocumentTabId) { _, newValue in
+            if newValue != nil { spawnStore.selectedGroupId = nil }
+        }
+        .onChange(of: model.openOutsideJSONLPath) { _, newValue in
+            if newValue != nil { spawnStore.selectedGroupId = nil }
         }
         .onChange(of: activeBrowserControllerKeys) { _, _ in
             browserControllers.prune(keeping: model.registry.sessions)
@@ -377,6 +415,23 @@ struct SessionWorkspaceView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .openWorkspaceSwitcher)) { _ in
             showingWorkspaceSwitcher = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .composeDraftIncoming)) { note in
+            // X1 compose-draft handoff lands on EmptyStateCenteredComposer /
+            // CodeWorkspaceDraftComposer — neither is mounted while a spawn
+            // grid owns the center pane, and the daemon has already ACKed
+            // the phone. Dismiss the grid and re-post once so the draft
+            // reaches a mounted composer instead of evaporating. (Second
+            // delivery is a no-op here: selectedGroupId is nil by then.)
+            guard spawnStore.selectedGroupId != nil else { return }
+            spawnStore.selectedGroupId = nil
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .composeDraftIncoming,
+                    object: note.object,
+                    userInfo: note.userInfo
+                )
+            }
         }
         .modifier(WorkspaceTabSpawnObservers(
             openChat: openNewWorkspaceChatTab,
@@ -440,7 +495,8 @@ struct SessionWorkspaceView: View {
     }
 
     private func restorePersistedSessionSelectionIfPossible() {
-        guard model.draftWorkspaceTab == nil,
+        guard spawnStore.selectedGroupId == nil,
+              model.draftWorkspaceTab == nil,
               model.openSessionId == nil,
               let selected = workbenchState.selectedSessionId,
               model.registry.sessions.contains(where: { $0.id == selected && $0.archivedAt == nil })
