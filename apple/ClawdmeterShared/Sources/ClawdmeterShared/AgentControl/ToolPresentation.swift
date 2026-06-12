@@ -18,6 +18,10 @@ public enum ToolPresentationTone: String, Codable, Sendable {
     case shell
     case web
     case agent
+    case search
+    case explore
+    case thinking
+    case delete
     case warning
 }
 
@@ -53,16 +57,51 @@ public enum ToolPresentationCatalog {
     public static func normalizedKind(for rawName: String) -> String {
         let lowered = rawName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch lowered {
-        case "bash", "shell", "exec", "exec_command", "command_execution":
+        case "bash", "shell", "exec", "exec_command", "command_execution",
+             "run_terminal_cmd", "runterminalcmd", "terminal":
             return "bash"
-        case "read", "view_file", "open_file", "list_dir", "glob", "grep":
+        case "read", "view_file", "open_file", "read_file":
             return "read"
-        case "write", "edit", "multiedit", "multi_edit", "apply_patch", "file_change":
+        case "grep", "rg", "ripgrep":
+            return "grep"
+        case "glob", "glob_file_search", "file_search":
+            return "glob"
+        case "list_dir", "listdir", "ls", "list_directory":
+            return "list_dir"
+        case "write", "file_change", "write_file", "create_file":
             return "write"
-        case "webfetch", "web_fetch", "websearch", "web_search":
-            return "web"
-        case "task", "spawn_agent", "askuserquestion":
-            return "agent"
+        case "edit", "strreplace", "searchreplace", "search_replace", "notebookedit":
+            return "edit"
+        case "multiedit", "multi_edit":
+            return "multiedit"
+        case "apply_patch", "applypatch":
+            return "apply_patch"
+        case "delete", "delete_file", "remove", "deletefile":
+            return "delete"
+        case "webfetch", "web_fetch", "fetch":
+            return "web_fetch"
+        case "websearch", "web_search", "search", "codebase_search",
+             "semanticsearch", "semantic_search":
+            return "web_search"
+        case "task", "spawn_agent", "subagent", "agent":
+            return "task"
+        case "askuserquestion", "ask_user_question":
+            return "ask_user"
+        case "think", "thinking", "reasoning", "extended_thinking":
+            return "thinking"
+        case "mcp_call_tool", "call_mcp_tool", "mcp", "list_mcp_resources",
+             "fetch_mcp_resource", "listmcptools":
+            return "mcp"
+        case "generate_image", "generateimage", "image_generation":
+            return "generate_image"
+        case "todowrite", "todo_write", "todo":
+            return "todo"
+        case "switchmode", "switch_mode", "plan":
+            return "switch_mode"
+        case "skill", "invokeskill":
+            return "skill"
+        case "await", "sleep", "wait":
+            return "await"
         default:
             return lowered.isEmpty ? "tool" : lowered
         }
@@ -97,26 +136,65 @@ public enum ToolPresentationCatalog {
         }
         switch kind {
         case "bash":
-            return ("Bash", "terminal", .shell, false)
+            return ("Bash", "terminal.fill", .shell, false)
         case "read":
-            return (displayName(rawName), "doc.text.magnifyingglass", .read, false)
+            return ("Read", "doc.text", .read, false)
+        case "grep":
+            return ("Grep", "line.3.horizontal.decrease.circle", .search, false)
+        case "glob":
+            return ("Glob", "sparkle.magnifyingglass", .explore, false)
+        case "list_dir":
+            return ("List", "folder", .explore, false)
         case "write":
-            return (displayName(rawName), "pencil.line", .write, false)
-        case "web":
-            return (displayName(rawName), "globe", .web, false)
-        case "agent":
-            return (displayName(rawName), "person.fill.questionmark", .agent, false)
+            return ("Write", "square.and.pencil", .write, false)
+        case "edit":
+            return ("Edit", "pencil", .write, false)
+        case "multiedit":
+            return ("MultiEdit", "pencil.and.scribble", .write, false)
+        case "apply_patch":
+            return ("Patch", "doc.badge.gearshape", .write, false)
+        case "delete":
+            return ("Delete", "trash", .delete, false)
+        case "web_fetch":
+            return ("Web fetch", "arrow.down.circle", .web, false)
+        case "web_search":
+            return ("Web search", "globe.americas.fill", .web, false)
+        case "task":
+            return ("Agent", "person.2.fill", .agent, false)
+        case "ask_user":
+            return ("Question", "questionmark.bubble.fill", .agent, false)
+        case "thinking":
+            return ("Thinking", "brain.head.profile", .thinking, false)
+        case "mcp":
+            return ("MCP", "puzzlepiece.extension.fill", .neutral, false)
+        case "generate_image":
+            return ("Image", "photo.artframe", .neutral, false)
+        case "todo":
+            return ("Todo", "checklist", .neutral, false)
+        case "switch_mode":
+            return ("Mode", "arrow.triangle.2.circlepath", .neutral, false)
+        case "skill":
+            return ("Skill", "sparkles", .agent, false)
+        case "await":
+            return ("Wait", "hourglass", .neutral, false)
         default:
             return (displayName(rawName), "wrench.adjustable", .neutral, false)
         }
     }
 
     private static func displayName(_ raw: String) -> String {
-        switch raw {
+        switch raw.lowercased() {
         case "web_search": return "Web search"
         case "web_fetch": return "Web fetch"
         case "exec_command": return "Bash"
-        default: return raw.isEmpty ? "Tool" : raw
+        case "glob_file_search": return "Glob"
+        case "list_dir": return "List"
+        case "askuserquestion", "ask_user_question": return "Question"
+        case "multiedit", "multi_edit": return "MultiEdit"
+        case "apply_patch": return "Patch"
+        default:
+            if raw.isEmpty { return "Tool" }
+            return raw.prefix(1).uppercased() + raw.dropFirst()
         }
     }
 }

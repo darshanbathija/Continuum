@@ -101,13 +101,25 @@ Per D21 mitigation suite — target: rotation within 1h of detection.
 
 ## CI deploy gates
 
-CI uses a scoped API token (Workers Scripts: Edit + KV: Edit, scoped to the two Worker names). Provisioned by:
+CI uses Wrangler OAuth credentials from a machine where `wrangler login` has been run. Provisioned by:
 
-1. Cloudflare Dashboard → My Profile → API Tokens → Create Token → "Edit Cloudflare Workers" template
-2. Restrict scope to **specific account + specific scripts** (`clawdmeter-relay` + `clawdmeter-apns-gateway`)
-3. Store in GitHub Actions secrets:
-   - `CLOUDFLARE_API_TOKEN` (repo-scoped)
-   - `CLOUDFLARE_ACCOUNT_ID` (repo-scoped)
+```bash
+./tools/setup-cloudflare-github-secrets.sh
+```
+
+That script reads `wrangler auth token` + the refresh token from `~/.wrangler/config/default.toml`, verifies with `wrangler deploy --dry-run`, and stores:
+
+- `CLOUDFLARE_API_TOKEN` — current OAuth access token (optional bootstrap; CI refreshes it)
+- `CLOUDFLARE_OAUTH_REFRESH_TOKEN` — long-lived refresh token (primary CI credential)
+- `CLOUDFLARE_ACCOUNT_ID` — from `wrangler whoami` (`1bad887b43fb6dbb2e08757324d7afe1`)
+
+Deploy workflows source `tools/cloudflare-ci-auth.sh` to exchange the refresh token for a fresh access token before each `wrangler deploy`.
+
+Manual override (Account API token from the dashboard) still works:
+
+```bash
+CLOUDFLARE_API_TOKEN='<paste token>' ./tools/setup-cloudflare-github-secrets.sh
+```
 
 The CI workflows in `.github/workflows/deploy-relay.yml` + `deploy-apns-gateway.yml` consume these.
 

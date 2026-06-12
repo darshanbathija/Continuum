@@ -1558,17 +1558,21 @@ private struct TranscriptScroll: View {
     @ViewBuilder
     private func compactChipStrip(_ turn: TranscriptTurn) -> some View {
         if !turn.outputArtifacts.isEmpty || !turn.editedFiles.isEmpty {
-            HStack(spacing: 7) {
-                ForEach(turn.outputArtifacts.prefix(4)) { artifact in
-                    Button {
-                        openArtifact(artifact)
-                    } label: {
-                        compactChip(icon: iconName(for: artifact.kind), title: artifact.filename)
+            VStack(alignment: .leading, spacing: 8) {
+                if !turn.outputArtifacts.isEmpty {
+                    HStack(spacing: 7) {
+                        ForEach(turn.outputArtifacts.prefix(4)) { artifact in
+                            Button {
+                                openArtifact(artifact)
+                            } label: {
+                                compactChip(icon: iconName(for: artifact.kind), title: artifact.filename)
+                            }
+                            .buttonStyle(PressableButtonStyle())
+                        }
                     }
-                    .buttonStyle(PressableButtonStyle())
                 }
-                ForEach(turn.editedFiles.prefix(4)) { file in
-                    compactChip(icon: "pencil.and.scribble", title: file.basename)
+                if !turn.editedFiles.isEmpty {
+                    TranscriptEditedFileChipStripView(turn: turn)
                 }
             }
             .padding(.leading, 38)
@@ -1698,49 +1702,28 @@ private struct MessageRow: View {
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.hairline, lineWidth: 0.5))
                 }
             case .toolCall, .toolResult:
-                HStack(alignment: .top, spacing: 7) {
-                    TahoeIcon("terminal", size: 10).foregroundStyle(t.fg3)
-                    Text(message.body)
-                        .font(TahoeFont.mono(10.5))
-                        .foregroundStyle(t.fg3)
-                        .lineLimit(5)
-                }
+                AgentToolActionRow(
+                    toolName: message.title,
+                    callBody: message.body,
+                    detail: message.detail,
+                    isError: message.isError
+                )
                 .padding(9)
                 .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
             case .meta:
-                Text(message.body)
-                    .font(TahoeFont.body(10.5))
-                    .foregroundStyle(t.fg4)
+                if message.title == "Thinking" {
+                    ThinkingActionRow(summary: message.body)
+                } else {
+                    Text(message.body)
+                        .font(TahoeFont.body(10.5))
+                        .foregroundStyle(t.fg4)
+                }
             }
         case .toolRun(_, let pairs):
-            VStack(alignment: .leading, spacing: 6) {
-                Text(pairs.count == 1 ? "Ran 1 command" : "Ran \(pairs.count) commands")
-                    .font(TahoeFont.body(10.5, weight: .semibold))
-                    .foregroundStyle(t.fg3)
+            VStack(alignment: .leading, spacing: 4) {
                 ForEach(pairs) { pair in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
-                            TahoeIcon("terminal", size: 10).foregroundStyle(t.fg3)
-                            Text(pair.call.title)
-                                .font(TahoeFont.mono(10.5, weight: .semibold))
-                                .foregroundStyle(t.fg2)
-                            Text(pair.call.body)
-                                .font(TahoeFont.mono(10.5))
-                                .foregroundStyle(t.fg3)
-                                .lineLimit(2)
-                                .truncationMode(.middle)
-                        }
-                        if let result = pair.result, !result.body.isEmpty {
-                            Text(result.body)
-                                .font(TahoeFont.mono(10.5))
-                                .foregroundStyle(result.isError ? .red : t.fg3)
-                                .lineLimit(6)
-                                .textSelection(.enabled)
-                        }
-                    }
-                    .padding(8)
-                    .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
-                    .id("pair:\(pair.id)")
+                    AgentToolActionRow(pair: pair)
+                        .id("pair:\(pair.id)")
                 }
             }
         }

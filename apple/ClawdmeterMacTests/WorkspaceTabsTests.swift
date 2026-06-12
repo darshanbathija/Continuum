@@ -1312,7 +1312,7 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertTrue(visibleTab.isPendingDirectShell || visibleTab.paneRefId != nil)
         if visibleTab.isPendingDirectShell {
             XCTAssertNil(visibleTab.paneRefId)
-            XCTAssertEqual(visibleTab.pendingTitle, "Shell")
+            XCTAssertEqual(visibleTab.pendingTitle, "Terminal")
         }
 
         let promoted = await waitUntil {
@@ -1404,7 +1404,7 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertTrue(promoted)
         let paneRefId = try XCTUnwrap(model.selectedWorkspaceTerminalTab?.paneRefId)
         let pane = try XCTUnwrap(registry.session(id: source.id)?.terminalPanes.first { $0.id == paneRefId })
-        XCTAssertEqual(pane.title, "Shell")
+        XCTAssertEqual(pane.title, "Terminal")
         XCTAssertFalse(pane.isPrimary)
         let host = await TerminalPtyRegistry.shared.host(id: pane.paneId)
         XCTAssertNotNil(host)

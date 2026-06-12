@@ -462,20 +462,22 @@ private struct PoppedChatThread: View {
     @ViewBuilder
     private func poppedChipStrip(_ turn: TranscriptTurn) -> some View {
         if !turn.outputArtifacts.isEmpty || !turn.editedFiles.isEmpty {
-            HStack(spacing: 6) {
-                ForEach(turn.outputArtifacts.prefix(4)) { artifact in
-                    Button {
-                        openPoppedArtifact(artifact)
-                    } label: {
-                        Label(artifact.filename, systemImage: artifact.kind == .markdown ? "doc.richtext" : "arrow.up.right.square")
-                            .font(.system(size: 10.5, weight: .semibold))
+            VStack(alignment: .leading, spacing: 8) {
+                if !turn.outputArtifacts.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(turn.outputArtifacts.prefix(4)) { artifact in
+                            Button {
+                                openPoppedArtifact(artifact)
+                            } label: {
+                                Label(artifact.filename, systemImage: artifact.kind == .markdown ? "doc.richtext" : "arrow.up.right.square")
+                                    .font(.system(size: 10.5, weight: .semibold))
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
-                ForEach(turn.editedFiles.prefix(4)) { file in
-                    Label(file.basename, systemImage: "pencil")
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                if !turn.editedFiles.isEmpty {
+                    TranscriptEditedFileChipStripView(turn: turn)
                 }
             }
             .padding(.horizontal, 34)
@@ -493,7 +495,7 @@ private struct PoppedChatThread: View {
     }
 
     private func openPoppedArtifact(_ artifact: TranscriptOutputArtifact) {
-        if artifact.kind == .markdown {
+        if TranscriptArtifactClassifier.opensInDocumentTab(forPath: artifact.path) {
             model.openWorkspaceDocumentTab(from: session, path: artifact.path)
             return
         }

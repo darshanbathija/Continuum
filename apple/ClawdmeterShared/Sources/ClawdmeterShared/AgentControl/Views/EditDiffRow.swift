@@ -49,13 +49,11 @@ public struct EditDiffRow: View {
         // on Watch today, so a compact summary line is enough here as a
         // future-proof placeholder if a Watch chat tab ever lands.
         HStack(spacing: 6) {
-            Image(systemName: verbIcon)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text("\(verb) \(stats.basename)")
+            ToolIconView(toolName: stats.kind == .write ? "Write" : "Edit", size: 12)
+            Text(verb)
                 .font(.system(size: 12, weight: .semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
+                .foregroundStyle(.primary)
+            FilePathChip(path: stats.filePath)
             if stats.additions > 0 {
                 Text("+\(stats.additions)")
                     .font(.system(size: 11, weight: .semibold))
@@ -117,15 +115,11 @@ public struct EditDiffRow: View {
             .padding(.top, 6)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: verbIcon)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14)
-                Text("\(verb) \(stats.basename)")
+                ToolIconView(toolName: stats.kind == .write ? "Write" : "Edit", size: 12)
+                Text(verb)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                FilePathChip(path: stats.filePath)
                 if stats.additions > 0 {
                     Text("+\(stats.additions)")
                         .font(.system(size: 11, weight: .semibold))
@@ -182,14 +176,6 @@ public struct EditDiffRow: View {
         }
     }
 
-    private var verbIcon: String {
-        switch stats.kind {
-        case .edit:      return "pencil"
-        case .multiEdit: return "pencil.and.scribble"
-        case .write:     return "square.and.pencil"
-        }
-    }
-
     private var additionsColor: Color {
         // Matches the green/red Claude Code's CLI uses for unified diffs.
         Color(red: 0x52 / 255.0, green: 0xC4 / 255.0, blue: 0x1A / 255.0)
@@ -200,22 +186,22 @@ public struct EditDiffRow: View {
     }
 }
 
-struct EditDiffPreviewLine: Identifiable, Equatable {
-    enum Kind: Equatable {
+public struct EditDiffPreviewLine: Identifiable, Equatable {
+    public enum Kind: Equatable {
         case context
         case addition
         case deletion
         case header
     }
 
-    let id: Int
-    let oldText: String?
-    let newText: String?
-    let kind: Kind
+    public let id: Int
+    public let oldText: String?
+    public let newText: String?
+    public let kind: Kind
 }
 
-enum EditDiffPreviewModel {
-    static func lines(from preview: String) -> [EditDiffPreviewLine] {
+public enum EditDiffPreviewModel {
+    public static func lines(from preview: String) -> [EditDiffPreviewLine] {
         var rows: [EditDiffPreviewLine] = []
         var index = 0
         for raw in preview.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
@@ -238,7 +224,7 @@ enum EditDiffPreviewModel {
         return rows
     }
 
-    static func hasSideBySideChanges(_ lines: [EditDiffPreviewLine]) -> Bool {
+    public static func hasSideBySideChanges(_ lines: [EditDiffPreviewLine]) -> Bool {
         lines.contains { $0.kind == .addition || $0.kind == .deletion }
     }
 }
