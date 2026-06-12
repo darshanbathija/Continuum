@@ -117,6 +117,7 @@ public final class IOSRelayPairingService: ObservableObject {
         self.summary = Self.makeSummary(for: record, phase: phase)
 
         iosPairingLogger.info("Pairing applied — sid=\(bundle.sid.prefix(8))…, keyFp=\(self.summary.keyFingerprintPrefix ?? "n/a")")
+        PostHogIdentity.onRelayPairingCompleted(record: record)
         return true
     }
 
@@ -129,6 +130,7 @@ public final class IOSRelayPairingService: ObservableObject {
         summary = .initial
         lastError = nil
         iosPairingLogger.info("iOS pairing state reset to .unpaired")
+        PostHogIdentity.refreshFromCurrentState()
     }
 
     // MARK: - Read-only accessors

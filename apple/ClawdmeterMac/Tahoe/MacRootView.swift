@@ -332,6 +332,7 @@ struct MacRootView: View {
                     // a tab on demand (lazy load). Subsequent visits
                     // re-show the already-mounted view in one frame.
                     visitedTabs.insert(tab)
+                    PostHogScreenTracking.screen(tab.rawValue.capitalized)
                     if tab == .usage {
                         refreshUsageTabData()
                     }
