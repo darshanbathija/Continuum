@@ -39,6 +39,8 @@ struct ProviderAccountsSection: View {
 
     @State private var instances: [ProviderInstanceId] = []
     @State private var statusByWireId: [String: Bool] = [:]
+    @State private var emailByWireId: [String: String] = [:]
+    @State private var preferredWireId: String?
     @State private var addSheetShown = false
     @State private var pendingRemoval: ProviderInstanceId?
 
@@ -46,13 +48,16 @@ struct ProviderAccountsSection: View {
         ProviderInstanceEnvironment.configDirVariable(for: kind) != nil
     }
 
-    private var secondaries: [ProviderInstanceId] {
-        instances.filter { !$0.isPrimary }
+    private var displayedAccounts: [ProviderInstanceId] {
+        instances
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(secondaries, id: \.wireId) { instance in
+            if displayedAccounts.count >= 2 {
+                accountListHeader
+            }
+            ForEach(displayedAccounts, id: \.wireId) { instance in
                 accountRow(instance)
             }
             Button {
@@ -60,7 +65,7 @@ struct ProviderAccountsSection: View {
             } label: {
                 HStack(spacing: 5) {
                     TahoeIcon("plus", size: 9, weight: .bold)
-                    Text(secondaries.isEmpty ? "Add another account…" : "Add account…")
+                    Text(displayedAccounts.count <= 1 ? "Add another account…" : "Add account…")
                         .font(TahoeFont.body(11, weight: .semibold))
                 }
             }
@@ -85,12 +90,18 @@ struct ProviderAccountsSection: View {
         ) { instance in
             Button("Remove account", role: .destructive) {
                 Task {
+                    if preferredWireId == instance.wireId {
+                        setPreferredAccount(nil)
+                    }
                     await runtime.removeInstance(instance, deleteConfigRoot: false)
                     await refresh()
                 }
             }
             Button("Remove + delete its data", role: .destructive) {
                 Task {
+                    if preferredWireId == instance.wireId {
+                        setPreferredAccount(nil)
+                    }
                     await runtime.removeInstance(instance, deleteConfigRoot: true)
                     await refresh()
                 }
@@ -101,50 +112,146 @@ struct ProviderAccountsSection: View {
         }
     }
 
-    private func accountRow(_ instance: ProviderInstanceId) -> some View {
+    private var accountListHeader: some View {
         HStack(spacing: 8) {
+            Text("\(displayedAccounts.count) accounts")
+                .font(TahoeFont.mono(10, weight: .semibold))
+                .kerning(0.6)
+                .foregroundStyle(t.fg3)
+            Spacer(minLength: 8)
+            Text("Code default")
+                .font(TahoeFont.mono(10, weight: .semibold))
+                .kerning(0.6)
+                .foregroundStyle(t.fg3)
+                .frame(width: codeDefaultColumnWidth, alignment: .center)
+            Color.clear
+                .frame(width: 9, height: 9)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var codeDefaultColumnWidth: CGFloat { 76 }
+
+    private func accountRow(_ instance: ProviderInstanceId) -> some View {
+        let label = settingsDisplayName(for: instance)
+        let email = emailByWireId[instance.wireId]
+        let showCodeDefault = displayedAccounts.count >= 2
+        return HStack(spacing: 8) {
             Circle()
                 .fill(statusByWireId[instance.wireId] == true ? ContinuumTokens.live : ContinuumTokens.error)
                 .frame(width: 6, height: 6)
-            Text(instance.name)
+            Text(label)
                 .font(TahoeFont.mono(11, weight: .medium))
                 .foregroundStyle(t.fg)
+            if let email {
+                Text(email)
+                    .font(TahoeFont.body(10.5))
+                    .foregroundStyle(t.fg3)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             if statusByWireId[instance.wireId] != true {
                 Text("Re-authenticate")
                     .font(TahoeFont.body(10.5))
                     .foregroundStyle(t.fg3)
             }
             Spacer(minLength: 8)
-            Button {
-                pendingRemoval = instance
-            } label: {
-                TahoeIcon("x", size: 9, weight: .bold)
-                    .foregroundStyle(t.fg3)
+            if showCodeDefault {
+                codeDefaultPicker(for: instance, label: label)
             }
-            .buttonStyle(.plain)
-            .help("Remove account “\(instance.name)”")
-            .accessibilityIdentifier("settings.provider.\(instance.wireId).remove")
+            if instance.isPrimary {
+                Color.clear
+                    .frame(width: 9, height: 9)
+                    .accessibilityHidden(true)
+            } else {
+                Button {
+                    pendingRemoval = instance
+                } label: {
+                    TahoeIcon("x", size: 9, weight: .bold)
+                        .foregroundStyle(t.fg3)
+                }
+                .buttonStyle(.plain)
+                .help("Remove account “\(label)”")
+                .accessibilityIdentifier("settings.provider.\(instance.wireId).remove")
+            }
         }
+        .accessibilityIdentifier("settings.provider.\(instance.wireId).account")
+    }
+
+    private func codeDefaultPicker(for instance: ProviderInstanceId, label: String) -> some View {
+        let isSelected = isPreferredForCode(instance)
+        return Button {
+            setPreferredAccount(instance.isPrimary ? nil : instance.wireId)
+        } label: {
+            Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isSelected ? t.fg : t.fg4)
+                .frame(width: codeDefaultColumnWidth, alignment: .center)
+        }
+        .buttonStyle(.plain)
+        .help(isSelected
+              ? "“\(label)” is the default Code account"
+              : "Use “\(label)” as the default Code account")
+        .accessibilityIdentifier("settings.provider.\(instance.wireId).codeDefault")
+    }
+
+    private func isPreferredForCode(_ instance: ProviderInstanceId) -> Bool {
+        if let preferredWireId {
+            return instance.wireId == preferredWireId
+        }
+        return instance.isPrimary
+    }
+
+    private func setPreferredAccount(_ wireId: String?) {
+        preferredWireId = wireId
+        CodePreferredAccountStore.setPreferred(wireId: wireId, for: kind)
+    }
+
+    /// Settings label for an account row. Named secondaries keep their slug;
+    /// the back-compat primary is always "default" so both accounts read
+    /// as peers.
+    private func settingsDisplayName(for instance: ProviderInstanceId) -> String {
+        instance.isPrimary ? "default" : instance.name
     }
 
     private func refresh() async {
         let all = await runtime.providerInstanceRegistry.instances(for: kind)
         var status: [String: Bool] = [:]
-        for instance in all where !instance.isPrimary {
+        var emails: [String: String] = [:]
+        for instance in all {
             status[instance.wireId] = Self.isAuthenticated(instance)
+            if status[instance.wireId] == true,
+               let email = await ProviderAccountEmailResolver.email(for: instance) {
+                emails[instance.wireId] = email
+            }
+        }
+        var storedPreferred = CodePreferredAccountStore.preferredWireId(for: kind)
+        if let storedPreferred, !all.contains(where: { $0.wireId == storedPreferred }) {
+            storedPreferred = nil
+            CodePreferredAccountStore.setPreferred(wireId: nil, for: kind)
         }
         instances = all
         statusByWireId = status
+        emailByWireId = emails
+        preferredWireId = storedPreferred
     }
 
     /// Per-account credential presence. Claude: token in the instance's
-    /// Keychain partition. Codex: a parseable auth.json under the
-    /// instance config root.
+    /// Keychain partition (primary also accepts Claude Code's Keychain
+    /// item). Codex: a parseable auth.json under the instance config root
+    /// (primary reads the default `~/.codex/auth.json`).
     static func isAuthenticated(_ instance: ProviderInstanceId) -> Bool {
         switch instance.kind {
         case .claude:
-            return PastedAnthropicTokenProvider.forInstance(instance).hasToken
+            if PastedAnthropicTokenProvider.forInstance(instance).hasToken { return true }
+            if instance.isPrimary {
+                return KeychainTokenProvider(allowsUserInteraction: false).hasToken
+            }
+            return false
         case .codex:
+            if instance.isPrimary {
+                return CodexTokenProvider().currentAccessToken != nil
+            }
             guard let root = instance.configRoot, !root.isEmpty else { return false }
             return CodexAuthProbe.validAuthExists(configRoot: URL(fileURLWithPath: root))
         default:
