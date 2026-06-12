@@ -493,7 +493,7 @@ private struct PoppedChatThread: View {
     }
 
     private func openPoppedArtifact(_ artifact: TranscriptOutputArtifact) {
-        if artifact.kind == .markdown {
+        if TranscriptArtifactClassifier.opensInDocumentTab(forPath: artifact.path) {
             model.openWorkspaceDocumentTab(from: session, path: artifact.path)
             return
         }

@@ -88,18 +88,45 @@ final class GeneratedArtifactDetectorTests: XCTestCase {
         ])
     }
 
-    func test_nonMarkdownArtifactsAreRejected() {
-        let writeArtifacts = GeneratedArtifactDetector.artifacts(
-            fromToolInput: ["path": "/tmp/output.txt"],
-            toolName: "write_file"
-        )
+    func test_nonArtifactSourceFilesAreRejected() {
         let patchArtifacts = GeneratedArtifactDetector.artifacts(
             fromToolInput: "*** Add File: Sources/App.swift\n+print(\"hi\")",
             toolName: "apply_patch"
         )
 
-        XCTAssertTrue(writeArtifacts.isEmpty)
         XCTAssertTrue(patchArtifacts.isEmpty)
+    }
+
+    func test_writeInputExtractsPdfHtmlAndImageArtifacts() {
+        let pdfArtifacts = GeneratedArtifactDetector.artifacts(
+            fromToolInput: ["path": "/tmp/output.pdf"],
+            toolName: "write_file"
+        )
+        let htmlArtifacts = GeneratedArtifactDetector.artifacts(
+            fromToolInput: ["file_path": "site/index.html"],
+            toolName: "Write"
+        )
+        let imageArtifacts = GeneratedArtifactDetector.artifacts(
+            fromToolInput: ["path": "./assets/shot.png"],
+            toolName: "save_file"
+        )
+        let textArtifacts = GeneratedArtifactDetector.artifacts(
+            fromToolInput: ["path": "/tmp/output.txt"],
+            toolName: "write_file"
+        )
+
+        XCTAssertEqual(pdfArtifacts, [
+            GeneratedArtifact(kind: .pdf, path: "/tmp/output.pdf", sourceToolName: "write_file")
+        ])
+        XCTAssertEqual(htmlArtifacts, [
+            GeneratedArtifact(kind: .html, path: "site/index.html", sourceToolName: "Write")
+        ])
+        XCTAssertEqual(imageArtifacts, [
+            GeneratedArtifact(kind: .image, path: "./assets/shot.png", sourceToolName: "save_file")
+        ])
+        XCTAssertEqual(textArtifacts, [
+            GeneratedArtifact(kind: .document, path: "/tmp/output.txt", sourceToolName: "write_file")
+        ])
     }
 
     func test_noExtensionPathCanBeMarkedMarkdownByMetadata() {
