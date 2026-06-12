@@ -38,9 +38,9 @@ public struct TahoeSegmentedControl<T: Hashable>: View {
 
     private func segmentButton(for item: T) -> some View {
         let isSel = item == selection
-        return Button {
+        return Button(action: ContinuumAnalytics.wrapButton("segment_\(label(item).lowercased().replacingOccurrences(of: " ", with: "_"))", {
             withAnimation(ContinuumMotion.segmented(reduceMotion: reduceMotion)) { selection = item }
-        } label: {
+        })) {
             segmentLabel(for: item, selected: isSel)
         }
         .buttonStyle(.plain)

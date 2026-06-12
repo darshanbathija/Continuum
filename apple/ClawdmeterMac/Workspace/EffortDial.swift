@@ -45,10 +45,14 @@ struct EffortDial: View {
     @ViewBuilder
     private func segment(_ effort: ReasoningEffort) -> some View {
         let isSelected = (effort == selected)
-        Button {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "effortdial_l48",
+                {
             guard !isSelected else { return }
             onChange(effort)
-        } label: {
+        
+                }
+            )) {
             Text(label(for: effort))
                 .font(.system(size: 10, weight: isSelected ? .semibold : .medium))
                 .padding(.horizontal, 6)

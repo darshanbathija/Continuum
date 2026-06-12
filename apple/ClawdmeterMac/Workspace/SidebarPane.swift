@@ -6,6 +6,7 @@ struct SidebarPane: View {
     @ObservedObject var model: SessionsModel
     @ObservedObject var workbenchState: WorkbenchState
     @ObservedObject var presentationStore: SessionPresentationStore
+    @ObservedObject private var spawnStore = SpawnModeStore.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -55,6 +56,12 @@ struct SidebarPane: View {
     @State private var renameWorktreeTarget: WorktreeGroup?
     @State private var renameWorktreeInput: String = ""
     @State private var showingRenameWorktreeAlert: Bool = false
+    /// Spawn mode (grid of agent terminals in ~) config sheet.
+    @State private var showingSpawnSheet: Bool = false
+    /// Close-spawn confirmation target (context menu path). Closing kills
+    /// every agent in the group, so live groups confirm first.
+    @State private var closeSpawnTarget: SpawnGroup?
+    @State private var showingCloseSpawnConfirm: Bool = false
     @State private var collapsedStatusGroupIDs: Set<String> = []
     @State private var collapsedPrioritySectionIDs: Set<String> = []
     @State private var sidebarViewportHeight: CGFloat = 0
@@ -94,6 +101,10 @@ struct SidebarPane: View {
     var body: some View {
         VStack(spacing: 0) {
             searchField
+            spawnButton
+            if !spawnStore.groups.isEmpty {
+                spawnGroupList
+            }
             sidebarHeader
             handoffAutoSuggestBanner
             TahoeHairline()
@@ -117,15 +128,25 @@ struct SidebarPane: View {
         ) { target in
             TextField("Name", text: $renameInput)
                 .textFieldStyle(.roundedBorder)
-            Button("Save") {
+            Button("Save", action: ContinuumAnalytics.wrapButton(
+                    "save",
+                    {
+
                 commitSessionRename(target, name: renameInput)
-            }
-            Button("Clear name", role: .destructive) {
+            
+                    }
+                ))
+            Button("Clear name", role: .destructive, action: ContinuumAnalytics.wrapButton("clear_name", {
                 commitSessionRename(target, name: nil)
-            }
-            Button("Cancel", role: .cancel) {
+            }))
+            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                    "cancel",
+                    {
+
                 resetSessionRenameState()
-            }
+            
+                    }
+                ))
         } message: { target in
             Text("Currently: \(sessionTitle(target))")
         }
@@ -138,24 +159,39 @@ struct SidebarPane: View {
         ) { target in
             TextField("Name", text: $renameJSONLInput)
                 .textFieldStyle(.roundedBorder)
-            Button("Save") {
+            Button("Save", action: ContinuumAnalytics.wrapButton(
+                    "save",
+                    {
+
                 let trimmed = renameJSONLInput.trimmingCharacters(in: .whitespacesAndNewlines)
                 model.renameJSONLAlias(path: target.path, name: trimmed.isEmpty ? nil : trimmed)
                 showingRenameJSONLAlert = false
                 renameJSONLTarget = nil
                 renameJSONLInput = ""
-            }
-            Button("Clear name", role: .destructive) {
+            
+                    }
+                ))
+            Button("Clear name", role: .destructive, action: ContinuumAnalytics.wrapButton(
+                    "clear_name",
+                    {
+
                 model.renameJSONLAlias(path: target.path, name: nil)
                 showingRenameJSONLAlert = false
                 renameJSONLTarget = nil
                 renameJSONLInput = ""
-            }
-            Button("Cancel", role: .cancel) {
+            
+                    }
+                ))
+            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                    "cancel",
+                    {
+
                 showingRenameJSONLAlert = false
                 renameJSONLTarget = nil
                 renameJSONLInput = ""
-            }
+            
+                    }
+                ))
         } message: { target in
             Text("Currently: \(recentTitle(target))")
         }
@@ -166,12 +202,17 @@ struct SidebarPane: View {
         ) { target in
             TextField("Name", text: $renameWorktreeInput)
                 .textFieldStyle(.roundedBorder)
-            Button("Save") {
+            Button("Save", action: ContinuumAnalytics.wrapButton("save", {
                 commitWorktreeRename(target, name: renameWorktreeInput)
-            }
-            Button("Cancel", role: .cancel) {
+            }))
+            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                    "cancel",
+                    {
+
                 resetWorktreeRenameState()
-            }
+            
+                    }
+                ))
         } message: { target in
             Text("Renames the workspace folder and git branch. Currently: \(target.branch)")
         }
@@ -182,28 +223,62 @@ struct SidebarPane: View {
         ) { target in
             TextField("Tag name", text: $colorTagInput)
                 .textFieldStyle(.roundedBorder)
-            Button("Save") {
+            Button("Save", action: ContinuumAnalytics.wrapButton(
+                    "save",
+                    {
+
                 try? presentationStore.setColorTag(target.id, tag: colorTagInput)
                 showingColorTagAlert = false
                 colorTagTarget = nil
                 colorTagInput = ""
-            }
-            Button("Clear tag", role: .destructive) {
+            
+                    }
+                ))
+            Button("Clear tag", role: .destructive, action: ContinuumAnalytics.wrapButton(
+                    "clear_tag",
+                    {
+
                 try? presentationStore.setColorTag(target.id, tag: nil)
                 showingColorTagAlert = false
                 colorTagTarget = nil
                 colorTagInput = ""
-            }
-            Button("Cancel", role: .cancel) {
+            
+                    }
+                ))
+            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                    "cancel",
+                    {
+
                 showingColorTagAlert = false
                 colorTagTarget = nil
                 colorTagInput = ""
-            }
+            
+                    }
+                ))
         } message: { target in
             Text("Use a short label like Review, Bug, Docs, or Ship for \(sessionTitle(target)).")
         }
         .sheet(item: $comparisonPair) { pair in
             SessionComparisonSheet(pair: pair, model: model)
+        }
+        // Close-spawn confirmation lives at the pane level (one dialog,
+        // Bool + presenting payload — same pattern as the rename alerts
+        // above). Attaching it per-row would mount N sibling dialogs all
+        // bound to the same Bool.
+        .confirmationDialog(
+            "Close \(closeSpawnTarget?.name ?? "spawn")?",
+            isPresented: $showingCloseSpawnConfirm,
+            presenting: closeSpawnTarget
+        ) { target in
+            Button("End all agents in \(target.name)", role: .destructive) {
+                spawnStore.closeGroup(id: target.id)
+                closeSpawnTarget = nil
+            }
+            Button("Cancel", role: .cancel) {
+                closeSpawnTarget = nil
+            }
+        } message: { target in
+            Text("Every terminal in \(target.name) ends immediately. Sessions are not recoverable.")
         }
         .sheet(item: $handoffSessionTarget) { session in
             if let client = AppDelegate.runtime?.loopbackClient {
@@ -312,7 +387,10 @@ struct SidebarPane: View {
     @ViewBuilder
     private var addRepoMenu: some View {
         Menu {
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "sidebar_open_project",
+                    {
+
                 Task {
                     do { _ = try await model.repoOnboarding.openLocalFolder() }
                     catch let err as RepoOnboardingError {
@@ -334,17 +412,29 @@ struct SidebarPane: View {
                         await MainActor.run { presentRepoOnboardingError(error) }
                     }
                 }
-            } label: {
+            
+                    }
+                )) {
                 Label("Open project", systemImage: "folder")
             }
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "sidebar_open_github_project",
+                    {
+
                 showingCloneRepoSheet = true
-            } label: {
+            
+                    }
+                )) {
                 Label("Open GitHub project", systemImage: "globe")
             }
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "sidebar_quick_start",
+                    {
+
                 showingQuickStartRepoSheet = true
-            } label: {
+            
+                    }
+                )) {
                 Label("Quick start", systemImage: "plus.rectangle.on.folder")
             }
         } label: {
@@ -393,7 +483,12 @@ struct SidebarPane: View {
         Menu {
             Section("Status") {
                 ForEach(SessionStatusFilter.allCases, id: \.self) { option in
-                    Button(action: { setStatusFilter(option) }) {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "sidebar_filter_status",
+                            {
+ setStatusFilter(option) 
+                            }
+                        )) {
                         Label(option.displayName, systemImage: statusFilter == option ? "checkmark" : "")
                     }
                     .accessibilityIdentifier("code.sidebar.filter.status.\(option.rawValue)")
@@ -401,32 +496,52 @@ struct SidebarPane: View {
             }
             Section("Group by") {
                 ForEach(SessionGrouping.allCases, id: \.self) { option in
-                    Button(action: { groupingRaw = option.rawValue }) {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "sidebar_filter_grouping",
+                            {
+ groupingRaw = option.rawValue 
+                            }
+                        )) {
                         Label(option.displayName, systemImage: grouping == option ? "checkmark" : "")
                     }
                 }
             }
             Section("Sort by") {
                 ForEach(SessionSorting.allCases, id: \.self) { option in
-                    Button(action: { sortingRaw = option.rawValue }) {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "sidebar_filter_sorting",
+                            {
+ sortingRaw = option.rawValue 
+                            }
+                        )) {
                         Label(option.displayName, systemImage: sorting == option ? "checkmark" : "")
                     }
                 }
             }
             Section("Projects") {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "sidebar_refresh_repo_list",
+                        {
+
                     Task { await model.refresh() }
-                } label: {
+                
+                        }
+                    )) {
                     Label("Refresh repo list", systemImage: "arrow.clockwise")
                 }
             }
             if isCustomised {
                 Divider()
-                Button("Reset filters") {
+                Button("Reset filters", action: ContinuumAnalytics.wrapButton(
+                        "reset_filters",
+                        {
+
                     setStatusFilter(.all)
                     groupingRaw = SessionGrouping.status.rawValue
                     sortingRaw = SessionSorting.recency.rawValue
-                }
+                
+                        }
+                    ))
             }
         } label: {
             TahoeIcon("filter", size: 12)
@@ -451,7 +566,12 @@ struct SidebarPane: View {
                 .focused($searchFocused)
                 .accessibilityIdentifier("code.sidebar.search")
             if !model.searchQuery.isEmpty {
-                Button(action: { model.searchQuery = "" }) {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "sidebar_clear_search",
+                        {
+ model.searchQuery = "" 
+                        }
+                    )) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 11))
                         .foregroundStyle(t.fg3)
@@ -482,6 +602,143 @@ struct SidebarPane: View {
         .onReceive(NotificationCenter.default.publisher(for: .focusSidebarSearch)) { _ in
             searchFocused = true
         }
+    }
+
+    // MARK: - Spawn mode (grid of agent terminals in ~)
+
+    /// Entry point for spawn mode. Sits between the search field and the
+    /// Projects header; the resulting spawn groups list above all projects
+    /// because they're home-directory agent batches, not repo sessions.
+    private var spawnButton: some View {
+        Button(action: { showingSpawnSheet = true }) {
+            HStack(spacing: 7) {
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                Text("Spawn")
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Spacer()
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(
+                t.dark ? Color.white.opacity(0.04) : Color.black.opacity(0.03),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(t.hairline, lineWidth: 0.5)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .help("Open a grid of agent terminal sessions in your home directory")
+        .accessibilityIdentifier("code.sidebar.spawn")
+        .sheet(isPresented: $showingSpawnSheet) {
+            SpawnConfigSheet(store: spawnStore, onSpawned: clearModelSelectionForSpawn)
+        }
+    }
+
+    private var spawnGroupList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Spawns")
+                .font(TahoeFont.body(11, weight: .bold))
+                .tracking(0.5)
+                .textCase(.uppercase)
+                .foregroundStyle(t.fg3)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 4)
+            // The Spawns section lives above the Projects scroll area, so it
+            // must bound its own height — many groups would otherwise
+            // squeeze the repo list to nothing.
+            if spawnStore.groups.count > 4 {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(spawnStore.groups) { group in
+                            spawnGroupRow(group)
+                        }
+                    }
+                }
+                .frame(maxHeight: 180)
+            } else {
+                ForEach(spawnStore.groups) { group in
+                    spawnGroupRow(group)
+                }
+            }
+        }
+        .padding(.bottom, 6)
+    }
+
+    private func spawnGroupRow(_ group: SpawnGroup) -> some View {
+        let isSelected = spawnStore.selectedGroupId == group.id
+        return Button(action: { selectSpawnGroup(group) }) {
+            HStack(spacing: 8) {
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(isSelected ? t.accent : t.fg3)
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(group.name)
+                        .font(TahoeFont.body(12, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text(group.agentSummary)
+                        .font(TahoeFont.mono(9.5))
+                        .foregroundStyle(t.fg3)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer()
+                Text("\(group.tiles.count)")
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(t.hair2, in: Capsule())
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                isSelected ? t.selection : Color.clear,
+                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .padding(.horizontal, 8)
+        .contextMenu {
+            Button(role: .destructive) {
+                if spawnStore.hasLiveTiles(in: group) {
+                    closeSpawnTarget = group
+                    showingCloseSpawnConfirm = true
+                } else {
+                    spawnStore.closeGroup(id: group.id)
+                }
+            } label: {
+                Label("Close spawn", systemImage: "xmark")
+            }
+        }
+        .accessibilityIdentifier("code.sidebar.spawn.row.\(group.name)")
+    }
+
+    /// Opening a spawn grid takes over the center pane — drop the session /
+    /// draft / terminal / document selection so SessionWorkspaceView's
+    /// branches fall through to the spawn branch (and the review pane stays
+    /// collapsed: no open session means no active workspace key).
+    private func selectSpawnGroup(_ group: SpawnGroup) {
+        spawnStore.selectedGroupId = group.id
+        clearModelSelectionForSpawn()
+    }
+
+    private func clearModelSelectionForSpawn() {
+        // Same five selections the model's own close path clears — reuse it
+        // so a future center-pane occupant can't be missed by spawn mode.
+        model.closeChatView()
     }
 
     private func setStatusFilter(_ filter: SessionStatusFilter) {
@@ -679,10 +936,15 @@ struct SidebarPane: View {
     /// ~/.claude + ~/.codex exactly like the prior behavior. The folder /
     /// cross-app prompts then fire with clear user intent, not on launch.
     private var discoverSessionsButton: some View {
-        Button(action: {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "sidebar_discover_parallel_sessions",
+                {
+
             discoverParallelSessions = true   // @AppStorage writes the shared key
             Task { await model.refresh() }
-        }) {
+        
+                }
+            )) {
             HStack(spacing: 8) {
                 TahoeIcon("search", size: 11)
                     .foregroundStyle(t.accent)
@@ -713,11 +975,16 @@ struct SidebarPane: View {
     /// `historyExpanded` AppStorage which conditionally renders the
     /// historyRepoSection list above this row.
     private func historyToggle(repoCount: Int) -> some View {
-        Button(action: {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "sidebar_toggle_history",
+                {
+
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
                 historyExpanded.toggle()
             }
-        }) {
+        
+                }
+            )) {
             HStack(spacing: 8) {
                 TahoeIcon(historyExpanded ? "chevD" : "chevR", size: 10)
                     .foregroundStyle(t.fg3)
@@ -939,7 +1206,10 @@ struct SidebarPane: View {
         // Sibling select + archive buttons (not nested) so clicking archive
         // never also opens the worktree row.
         HStack(spacing: 0) {
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "sidebar_open_worktree",
+                    {
+
                 // openSession() keeps any in-progress draft alive (don't clear it).
                 if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
                     model.openSession(primary)
@@ -950,8 +1220,12 @@ struct SidebarPane: View {
                 } else if let document = model.workspaceDocumentTabs(in: worktreeKey).last {
                     model.selectWorkspaceDocumentTab(document)
                 }
-            } label: {
-                HStack(spacing: 8) {
+
+                    }
+                )) {
+                HStack(spacing: 6) {
+                    GitHubBranchStatusIcon(worktreeBranchIconKind(for: wt), size: 14)
+                        .accessibilityIdentifier("code.worktree.branch-icon")
                     VStack(alignment: .leading, spacing: 1) {
                         Text(wt.branch)
                             .font(TahoeFont.body(12.5, weight: .medium))
@@ -965,7 +1239,7 @@ struct SidebarPane: View {
                     }
                     Spacer(minLength: 4)
                 }
-                .padding(.leading, 48)
+                .padding(.leading, 28)
                 .padding(.trailing, 8)
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1059,20 +1333,48 @@ struct SidebarPane: View {
 
     @ViewBuilder
     private func worktreeContextMenu(_ wt: WorktreeGroup) -> some View {
-        Button("Rename…", systemImage: "pencil") {
+        Button("Rename…", systemImage: "pencil", action: ContinuumAnalytics.wrapButton(
+                "rename",
+                {
+
             renameWorktreeTarget = wt
             renameWorktreeInput = wt.branch
             showingRenameWorktreeAlert = true
-        }
+        
+                }
+            ))
         .accessibilityIdentifier("code.worktree.rename")
         if !wt.sessions.isEmpty {
-            Button("Archive all sessions", systemImage: "archivebox") {
+            Button("Archive all sessions", systemImage: "archivebox", action: ContinuumAnalytics.wrapButton(
+                    "archive_all_sessions",
+                    {
+
                 let ids = wt.sessions.map(\.id)
                 Task { @MainActor in
                     try? await model.registry.archive(ids: ids)
                 }
+            
+                    }
+                ))
+        }
+    }
+
+    /// GitHub Octicon + Primer color for a sidebar worktree row. Reads
+    /// `prMirrorState` on sessions first, then the workbench PR cache.
+    private func worktreeBranchIconKind(for wt: WorktreeGroup) -> GitHubBranchIconKind {
+        var states: [PRStatus.State] = []
+        states.reserveCapacity(wt.sessions.count)
+        for session in wt.sessions {
+            if let state = session.prMirrorState?.state {
+                states.append(state)
+                continue
+            }
+            if let raw = workbenchState.snapshot.prCache[session.id]?.state,
+               let state = PRStatus.State(rawValue: raw.lowercased()) {
+                states.append(state)
             }
         }
+        return GitHubBranchIconKind.preferred(from: states)
     }
 
     /// The models running on a worktree, oldest→newest (the handoff chain) with
@@ -1169,15 +1471,25 @@ struct SidebarPane: View {
         // and quickSpawnInRepo fell back to the sheet — the key
         // canonicalization fix removed that fallback path and turned
         // this row into a redundant (and fixture-hostile) quick spawn.
-        Button { model.prepareNewSession(in: section.repo.key) } label: {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "sidebar_new_session_here",
+                {
+ model.prepareNewSession(in: section.repo.key) 
+                }
+            )) {
             Label("New session here", systemImage: "plus")
         }
         .accessibilityIdentifier("code.repo.settings.new-session")
         if !section.sessions.isEmpty {
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "sidebar_archive_all_sessions",
+                    {
+
                 let ids = section.sessions.map(\.id)
                 Task { try? await model.registry.archive(ids: ids) }
-            } label: {
+            
+                    }
+                )) {
                 Label("Archive all sessions (\(section.sessions.count))", systemImage: "archivebox")
             }
             .accessibilityIdentifier("code.repo.settings.archive-all")
@@ -1185,27 +1497,42 @@ struct SidebarPane: View {
         // Archive the WHOLE repo in one go: archive every session across all its
         // worktrees AND drop it from the Managed list, so the row disappears
         // entirely (sessions stay recoverable under the Archived filter).
-        Button(role: .destructive) {
+        Button(role: .destructive, action: ContinuumAnalytics.wrapButton(
+                "sidebar_archive_entire_repo",
+                {
+
             let ids = section.sessions.map(\.id)
             let workspaceId = workspace?.id
             Task {
                 if let workspaceId { _ = model.removeManagedWorkspace(id: workspaceId) }
                 try? await model.registry.archive(ids: ids)
             }
-        } label: {
+        
+                }
+            )) {
             Label("Archive entire repo", systemImage: "archivebox.fill")
         }
         .accessibilityIdentifier("code.repo.settings.archive-repo")
         Divider()
-        Button { openRepoSettings(for: section) } label: {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "sidebar_repo_settings",
+                {
+ openRepoSettings(for: section) 
+                }
+            )) {
             Label("Settings & Env Variables…", systemImage: "gearshape")
         }
         .accessibilityIdentifier("code.repo.settings.open-settings")
         if let ws = workspace {
             Divider()
-            Button(role: .destructive) {
+            Button(role: .destructive, action: ContinuumAnalytics.wrapButton(
+                    "sidebar_remove_repo",
+                    {
+
                 _ = model.removeManagedWorkspace(id: ws.id)
-            } label: {
+            
+                    }
+                )) {
                 Label("Remove “\(section.repo.displayName)” from list", systemImage: "trash")
             }
             .accessibilityIdentifier("code.repo.settings.remove")
@@ -1279,13 +1606,18 @@ struct SidebarPane: View {
     }
 
     private func externalRecentButton(_ recent: RecentSession, repo: AgentRepo) -> some View {
-        Button(action: {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "sidebar_open_external_recent",
+                {
+
             model.openOutsideSession(
                 recent: recent,
                 repoKey: repo.key,
                 repoDisplayName: repo.displayName
             )
-        }) {
+        
+                }
+            )) {
             recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path, repo: repo)
         }
         .buttonStyle(PressableButtonStyle())
@@ -1427,7 +1759,10 @@ struct SidebarPane: View {
             sessionRow(s, isOpen: model.openSessionId == s.id, depth: 0)
         }
         ForEach(group.recents) { recent in
-            Button(action: {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "sidebar_open_outside_session",
+                    {
+
                 // Resolve the repo display name from the recent's path.
                 let repo = model.repos.first(where: { $0.recentSessions.contains(recent) })
                 model.openOutsideSession(
@@ -1435,7 +1770,9 @@ struct SidebarPane: View {
                     repoKey: repo?.key ?? recent.path,
                     repoDisplayName: repo?.displayName ?? "Recent"
                 )
-            }) {
+            
+                    }
+                )) {
                 // Non-Repo grouping (Date / Status / Agent / None):
                 // no repo section header above this row, so surface
                 // the repo as an inline chip in the subtitle.
@@ -1478,22 +1815,32 @@ struct SidebarPane: View {
                         .padding(.leading, 24)
                         .padding(.top, 4)
                     ForEach(recentSessions) { recent in
-                        Button(action: {
+                        Button(action: ContinuumAnalytics.wrapButton(
+                                "sidebar_open_recent_session",
+                                {
+
                             model.openOutsideSession(
                                 recent: recent,
                                 repoKey: repo.key,
                                 repoDisplayName: repo.displayName
                             )
-                        }) {
+                        
+                                }
+                            )) {
                             recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path, repo: repo)
                         }
                         .buttonStyle(PressableButtonStyle())
                     }
                 }
                 if visibleSessions.isEmpty && recentSessions.isEmpty {
-                    Button(action: {
+                    Button(action: ContinuumAnalytics.wrapButton(
+                            "sidebar_quick_spawn",
+                            {
+
                         model.quickSpawnInRepo(repo.key)
-                    }) {
+                    
+                            }
+                        )) {
                         HStack(spacing: 6) {
                             Image(systemName: "plus.circle")
                                 .foregroundStyle(.secondary)
@@ -1573,14 +1920,24 @@ struct SidebarPane: View {
         }
         .help(recent.path)
         .contextMenu {
-            Button("Open read-only", systemImage: "doc.text") {
+            Button("Open read-only", systemImage: "doc.text", action: ContinuumAnalytics.wrapButton(
+                    "open_read_only",
+                    {
+
                 model.openOutsideSession(recent: recent, repoKey: repo.key, repoDisplayName: repo.displayName)
-            }
-            Button("Rename…", systemImage: "pencil") {
+            
+                    }
+                ))
+            Button("Rename…", systemImage: "pencil", action: ContinuumAnalytics.wrapButton(
+                    "rename",
+                    {
+
                 renameJSONLTarget = recent
                 renameJSONLInput = recent.customName ?? ""
                 showingRenameJSONLAlert = true
-            }
+            
+                    }
+                ))
         }
     }
 
@@ -1731,7 +2088,7 @@ struct SidebarPane: View {
         onToggle: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 8) {
-            Button(action: onToggle) {
+            Button(action: ContinuumAnalytics.wrapButton("sidebar_toggle_repo", onToggle)) {
                 HStack(spacing: 8) {
                     TahoeIcon(isExpanded ? "chevD" : "chevR", size: 10)
                         .foregroundStyle(t.fg3)
@@ -1779,9 +2136,14 @@ struct SidebarPane: View {
             if let gearMenu {
                 gearMenu
             }
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "sidebar_repo_new_session",
+                    {
+
                 handleRepoNewSessionClick(repoKey: repo.key, onAdd: onAdd)
-            } label: {
+            
+                    }
+                )) {
                 TahoeIcon("plus", size: 11, weight: .bold)
                     .foregroundStyle(t.fg3)
                     .frame(width: 22, height: 22)
@@ -1830,10 +2192,15 @@ struct SidebarPane: View {
         let tag = presentationStore.snapshot.colorTags[session.id]
         let reasons = attentionReasons(for: session)
         let repoBadge = repoIdentityBadge(for: session)
-        return Button(action: {
+        return Button(action: ContinuumAnalytics.wrapButton(
+                "sidebar_open_session",
+                {
+
             model.openSession(session)
             try? presentationStore.markUnread(session.id, unread: false)
-        }) {
+        
+                }
+            )) {
             HStack(alignment: .top, spacing: 8) {
                 if depth > 0 {
                     Image(systemName: "arrow.turn.down.right")
@@ -2140,9 +2507,14 @@ struct SidebarPane: View {
         let isUnread = presentationStore.snapshot.unreadSessionIds.contains(session.id)
         let isMuted = presentationStore.snapshot.mutedSessionIds.contains(session.id)
         if session.status == .degraded {
-            Button("Revive session", systemImage: "arrow.clockwise.circle") {
+            Button("Revive session", systemImage: "arrow.clockwise.circle", action: ContinuumAnalytics.wrapButton(
+                    "revive_session",
+                    {
+
                 Task { @MainActor in await model.revive(sessionId: session.id) }
-            }
+            
+                    }
+                ))
             Divider()
         }
         if let client = AppDelegate.runtime?.loopbackClient,
@@ -2154,89 +2526,178 @@ struct SidebarPane: View {
             }
             Divider()
         }
-        Button(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin.fill") {
+        Button(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin.fill", action: ContinuumAnalytics.wrapButton(
+                "fill",
+                {
+
             try? presentationStore.togglePin(session.id)
-        }
+        
+                }
+            ))
         if isPinned {
-            Button("Move Pin Up", systemImage: "arrow.up") {
+            Button("Move Pin Up", systemImage: "arrow.up", action: ContinuumAnalytics.wrapButton(
+                    "move_pin_up",
+                    {
+
                 try? presentationStore.movePinnedSession(session.id, offset: -1)
-            }
-            Button("Move Pin Down", systemImage: "arrow.down") {
+            
+                    }
+                ))
+            Button("Move Pin Down", systemImage: "arrow.down", action: ContinuumAnalytics.wrapButton(
+                    "move_pin_down",
+                    {
+
                 try? presentationStore.movePinnedSession(session.id, offset: 1)
-            }
+            
+                    }
+                ))
         }
-        Button(isUnread ? "Mark Read" : "Mark Unread", systemImage: isUnread ? "circle" : "circle.fill") {
+        Button(isUnread ? "Mark Read" : "Mark Unread", systemImage: isUnread ? "circle" : "circle.fill", action: ContinuumAnalytics.wrapButton(
+                "fill",
+                {
+
             try? presentationStore.markUnread(session.id, unread: !isUnread)
-        }
-        Button(isMuted ? "Unmute Session" : "Mute Session", systemImage: isMuted ? "bell" : "bell.slash") {
+        
+                }
+            ))
+        Button(isMuted ? "Unmute Session" : "Mute Session", systemImage: isMuted ? "bell" : "bell.slash", action: ContinuumAnalytics.wrapButton(
+                "slash",
+                {
+
             try? presentationStore.setMuted(session.id, muted: !isMuted)
-        }
+        
+                }
+            ))
         Menu("Snooze", systemImage: "moon.zzz") {
-            Button("1 hour") { try? presentationStore.snooze(session.id, until: Date().addingTimeInterval(60 * 60)) }
-            Button("Today") { try? presentationStore.snooze(session.id, until: Calendar.current.startOfDay(for: Date()).addingTimeInterval(24 * 60 * 60)) }
-            Button("Clear Snooze") { try? presentationStore.snooze(session.id, until: nil) }
+            Button("1 hour", action: ContinuumAnalytics.wrapButton("1_hour", {
+                try? presentationStore.snooze(session.id, until: Date().addingTimeInterval(60 * 60))
+            }))
+            Button("Today", action: ContinuumAnalytics.wrapButton(
+                    "today",
+                    {
+ try? presentationStore.snooze(session.id, until: Calendar.current.startOfDay(for: Date()).addingTimeInterval(24 * 60 * 60)) 
+                    }
+                ))
+            Button("Clear Snooze", action: ContinuumAnalytics.wrapButton("clear_snooze", {
+                try? presentationStore.snooze(session.id, until: nil)
+            }))
         }
-        Button("Color Tag…", systemImage: "tag") {
+        Button("Color Tag…", systemImage: "tag", action: ContinuumAnalytics.wrapButton(
+                "color_tag",
+                {
+
             colorTagTarget = session
             colorTagInput = presentationStore.snapshot.colorTags[session.id] ?? ""
             showingColorTagAlert = true
-        }
+        
+                }
+            ))
         Divider()
-        Button("Pop out", systemImage: "rectangle.portrait.on.rectangle.portrait") {
+        Button("Pop out", systemImage: "rectangle.portrait.on.rectangle.portrait", action: ContinuumAnalytics.wrapButton(
+                "pop_out",
+                {
+
             NotificationCenter.default.post(
                 name: .popOutSession,
                 object: nil,
                 userInfo: ["sessionId": session.id]
             )
-        }
-        Button("Compare with Open Session", systemImage: "rectangle.split.2x1") {
+        
+                }
+            ))
+        Button("Compare with Open Session", systemImage: "rectangle.split.2x1", action: ContinuumAnalytics.wrapButton(
+                "compare_with_open_session",
+                {
+
             if let open = model.openSession, open.id != session.id {
                 comparisonPair = SessionComparisonPair(left: open, right: session)
             }
-        }
+        
+                }
+            ))
         .disabled(model.openSession == nil || model.openSession?.id == session.id)
-        Button("Copy session ID", systemImage: "doc.on.doc") {
+        Button("Copy session ID", systemImage: "doc.on.doc", action: ContinuumAnalytics.wrapButton(
+                "copy_session_id",
+                {
+
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(session.id.uuidString, forType: .string)
-        }
-        Button("Reveal JSONL in Finder", systemImage: "doc.text.magnifyingglass") {
+        
+                }
+            ))
+        Button("Reveal JSONL in Finder", systemImage: "doc.text.magnifyingglass", action: ContinuumAnalytics.wrapButton(
+                "reveal_jsonl_in_finder",
+                {
+
             if let url = model.chatStore(for: session)?.currentFileURL {
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             }
-        }
+        
+                }
+            ))
         .disabled(model.chatStore(for: session)?.currentFileURL == nil)
         if let raw = session.prMirrorState?.prURL, let url = URL(string: raw) {
-            Button("Open Pull Request", systemImage: "arrow.up.right.square") {
+            Button("Open Pull Request", systemImage: "arrow.up.right.square", action: ContinuumAnalytics.wrapButton(
+                    "open_pull_request",
+                    {
+
                 NSWorkspace.shared.open(url)
-            }
+            
+                    }
+                ))
         }
         Divider()
-        Button("Rename…", systemImage: "pencil") {
+        Button("Rename…", systemImage: "pencil", action: ContinuumAnalytics.wrapButton(
+                "rename",
+                {
+
             renameTarget = session
             renameInput = session.customName ?? presentationStore.snapshot.titleOverrides[session.id] ?? ""
             showingRenameAlert = true
-        }
+        
+                }
+            ))
         if session.archivedAt == nil {
-            Button("Archive", systemImage: "archivebox") {
+            Button("Archive", systemImage: "archivebox", action: ContinuumAnalytics.wrapButton(
+                    "archive",
+                    {
+
                 Task { @MainActor in
                     try? await model.registry.archive(id: session.id)
                 }
                 postArchiveUndoToast(for: session)
-            }
+            
+                    }
+                ))
         } else {
-            Button("Unarchive", systemImage: "archivebox.fill") {
+            Button("Unarchive", systemImage: "archivebox.fill", action: ContinuumAnalytics.wrapButton(
+                    "unarchive",
+                    {
+
                 Task { @MainActor in
                     try? await model.registry.unarchive(id: session.id)
                 }
-            }
+            
+                    }
+                ))
         }
-        Button("New sub-chat (⌘;)", systemImage: "bubble.left.and.bubble.right") {
+        Button("New sub-chat (⌘;)", systemImage: "bubble.left.and.bubble.right", action: ContinuumAnalytics.wrapButton(
+                "new_sub_chat",
+                {
+
             Task { _ = await model.spawnSubchat(parentId: session.id) }
-        }
+        
+                }
+            ))
         Divider()
-        Button("End session", role: .destructive) {
+        Button("End session", role: .destructive, action: ContinuumAnalytics.wrapButton(
+                "end_session",
+                {
+
             Task { await model.endSession(id: session.id) }
-        }
+        
+                }
+            ))
     }
 
     private func attentionReasons(for session: AgentSession) -> [AttentionReason] {
@@ -2429,7 +2890,12 @@ struct SidebarPane: View {
     }
 
     private var footer: some View {
-        Button(action: { model.prepareNewSession(in: nil) }) {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "sidebar_new_session",
+                {
+ model.prepareNewSession(in: nil) 
+                }
+            )) {
             HStack(spacing: 6) {
                 TahoeIcon("plus", size: 12, weight: .bold)
                 Text("New session")

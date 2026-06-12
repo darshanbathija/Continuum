@@ -151,9 +151,13 @@ struct ArtifactsPane: View {
 
     private func artifactCard(_ artifact: Artifact) -> some View {
         let descriptor = Self.artifactDescriptor(for: artifact)
-        return Button(action: {
+        return Button(action: ContinuumAnalytics.wrapButton(
+                "artifactspane_l154",
+                {
             openPreview(artifact.url, filename: descriptor.filename)
-        }) {
+        
+                }
+            )) {
             VStack(spacing: 6) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 6)
@@ -281,7 +285,7 @@ private struct QuickLookOverlay: View {
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.white)
                     Spacer()
-                    Button(action: onClose) {
+                    Button(action: ContinuumAnalytics.wrapButton("onclose", onClose)) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 18))
                             .foregroundStyle(.white)

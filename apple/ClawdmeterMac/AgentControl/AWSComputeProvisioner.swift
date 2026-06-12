@@ -67,21 +67,36 @@ public final class AWSComputeProvisioner: ComputeProvisioner {
     }
 
     public func provision(spec: RunnerSpec) async throws -> ExecutionHost {
+        // Defense-in-depth: reject a malformed displayName at the request
+        // boundary before it reaches the root-executed cloud-init heredoc.
+        // (The daemon wire handler validates too; this covers direct callers.)
+        guard Self.isValidDisplayName(spec.displayName) else {
+            throw Error.launchFailed("Invalid display name. Allowed: letters, digits, space, and _.- (1–64 chars).")
+        }
         _ = try await validateCredentials()
         let aws = try resolvedAWSCLI()
 
         let hostId = UUID()
         let instanceType = spec.instanceSize.ec2InstanceType
-        let userData = cloudInitUserData(displayName: spec.displayName, hostId: hostId)
+
+        // C fix: write the RAW (un-encoded) bash user-data to a temp file and
+        // pass `fileb://`. The AWS CLI base64-encodes `--user-data` itself, so
+        // handing it a pre-base64'd blob double-encodes and EC2 runs garbage.
+        // `fileb://` reads the file bytes verbatim and the CLI encodes once.
+        let rawUserData = cloudInitUserData(displayName: spec.displayName, hostId: hostId)
+        let userDataFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clawdmeter-userdata-\(hostId.uuidString).sh")
+        try Data(rawUserData.utf8).write(to: userDataFile, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: userDataFile) }
 
         var args = awsProfileArgs(region: spec.region) + [
             "ec2", "run-instances",
-            "--image-id", Self.defaultAMI(for: spec.region),
+            "--image-id", try Self.ami(for: spec.region),
             "--instance-type", instanceType,
             "--count", "1",
             "--associate-public-ip-address",
             "--tag-specifications", #"ResourceType=instance,Tags=[{Key=Name,Value=clawdmeter-runner-\#(hostId.uuidString.prefix(8))}]"#,
-            "--user-data", userData,
+            "--user-data", "fileb://\(userDataFile.path)",
             "--output", "json"
         ]
         if spec.billingMode == .spot {
@@ -207,7 +222,24 @@ public final class AWSComputeProvisioner: ComputeProvisioner {
         return args
     }
 
+    /// Validate a display name against the cloud-init-safe character set.
+    /// Used both here (defense-in-depth) and at the daemon wire boundary.
+    static func isValidDisplayName(_ name: String) -> Bool {
+        guard (1...64).contains(name.count) else { return false }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _.-")
+        return name.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+
     private func cloudInitUserData(displayName: String, hostId: UUID) -> String {
+        // A fix: `displayName` is interpolated into a root-executed user-data
+        // heredoc. A raw newline + `ENVEOF` would terminate the heredoc early
+        // and let an attacker inject arbitrary root shell. Strip to a safe set
+        // and cap length so the value can never escape the heredoc body.
+        let safeName = displayName.unicodeScalars
+            .filter { CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _.-").contains($0) }
+            .prefix(64)
+        let sanitizedDisplayName = String(String.UnicodeScalarView(safeName))
+
         let installURL = ProcessInfo.processInfo.environment["CLAWDMETER_CONTINUUM_INSTALL_URL"]
             ?? "https://raw.githubusercontent.com/clawdmeter/clawdmeter/main/tools/continuum-agent/install-linux.sh"
         let binaryURL = ProcessInfo.processInfo.environment["CLAWDMETER_CONTINUUM_BINARY_URL"] ?? ""
@@ -219,7 +251,7 @@ public final class AWSComputeProvisioner: ComputeProvisioner {
         set -euo pipefail
         mkdir -p /etc/clawdmeter
         cat > /etc/clawdmeter/env <<'ENVEOF'
-        HOST_DISPLAY_NAME=\(displayName)
+        HOST_DISPLAY_NAME=\(sanitizedDisplayName)
         EXECUTION_HOST_ID=\(hostId.uuidString)
         CLAWDMETER_HOST_KIND=byocAWS
         ENVEOF
@@ -228,16 +260,28 @@ public final class AWSComputeProvisioner: ComputeProvisioner {
         apt-get install -y curl ca-certificates golang-go
         \(binaryExport)curl -fsSL "\(installURL)" | bash
         """
-        return Data(script.utf8).base64EncodedString()
+        // Return the RAW bash. The caller passes it via `fileb://`; the AWS
+        // CLI does the single base64 encode of `--user-data`. Do NOT encode here.
+        return script
     }
 
-    /// Ubuntu 22.04 ARM64 AMIs (fallback; CloudFormation stack pins region-specific IDs).
-    static func defaultAMI(for region: String) -> String {
+    // SECURITY/CORRECTNESS TODO: these are PLACEHOLDER AMI IDs. The instance
+    // family is t4g.* (ARM64 / Graviton), so the AMI MUST be arm64 Ubuntu 22.04
+    // or every launch fails (the prior x86_64 IDs silently mismatched the arch).
+    // Fill in the real current per-region arm64 AMIs before the AWS BYOC path is
+    // used, e.g.:
+    //   aws ec2 describe-images --owners 099720109477 \
+    //     --filters Name=architecture,Values=arm64 \
+    //       Name=name,Values='ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*' \
+    //     --query 'sort_by(Images,&CreationDate)[-1].ImageId' --output text --region <region>
+    // Unknown regions now correctly THROW instead of silently falling back to us-east-1.
+    static func ami(for region: String) throws -> String {
         switch region {
-        case "us-east-1": return "ami-0c7217cdde317cfec"
-        case "us-west-2": return "ami-0efce993c3cfc3090"
-        case "eu-west-1": return "ami-0905a3c97561e0b69"
-        default: return "ami-0c7217cdde317cfec"
+        case "us-east-1": return "ami-0a0c8eebcdd6dcbd0"
+        case "us-west-2": return "ami-0c79a55dda52434da"
+        case "eu-west-1": return "ami-0e2f1c0a1b2c3d4e5"
+        default:
+            throw Error.launchFailed("Unsupported region \(region). Supported: us-east-1, us-west-2, eu-west-1.")
         }
     }
 }

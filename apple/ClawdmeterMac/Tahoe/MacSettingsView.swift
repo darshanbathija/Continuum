@@ -278,10 +278,6 @@ public struct MacSettingsView: View {
             SettingsProviderRowsWithDeviceStatus(runtime: runtime, useConnectDisconnectLayout: true)
         }
 
-        SettingsCard(title: "Custom providers", sub: "OpenAI- and Anthropic-compatible endpoints billed separately from built-in subscriptions.") {
-            CustomProviderSettingsSection(runtime: runtime)
-        }
-
         // One-time Full Disk Access opt-in. Continuum reads other tools' usage
         // (~/.codex, ~/.gemini, OpenCode); without access macOS re-prompts every
         // few minutes. The Release build is non-sandboxed (#230), so FDA durably
@@ -384,9 +380,9 @@ public struct MacSettingsView: View {
             }
             TahoeHair().padding(.vertical, 14)
             SettingsRow(label: "Test chime", hint: "Plays the configured in-app chime without sending a banner.") {
-                Button("Play") {
+                Button("Play", action: ContinuumAnalytics.wrapButton("settings_test_chime", {
                     ChimeAudioPlayer.shared.playCompletion()
-                }
+                }))
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
@@ -447,9 +443,9 @@ public struct MacSettingsView: View {
                                     .textFieldStyle(.roundedBorder)
                                     .font(TahoeFont.mono(11))
                                     .frame(width: 96)
-                                Button("Reset") {
+                                Button("Reset", action: ContinuumAnalytics.wrapButton("settings_shortcut_reset", {
                                     try? presentationStore.setShortcutOverride(id: shortcut.id, chord: nil)
-                                }
+                                }))
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .disabled(presentationStore.snapshot.shortcutOverrides[shortcut.id] == nil)
@@ -566,39 +562,49 @@ private enum ProviderSettingsTab: String, CaseIterable, Identifiable {
 }
 
 private struct ProviderSettingsTabBar: View {
-    @Environment(\.tahoe) private var t
     var selection: ProviderSettingsTab
     var onSelect: (ProviderSettingsTab) -> Void
 
     var body: some View {
         HStack(spacing: 4) {
             ForEach(ProviderSettingsTab.allCases) { tab in
-                let isSelected = tab == selection
-                Button {
-                    onSelect(tab)
-                } label: {
-                    Text(tab.title)
-                        .font(TahoeFont.body(12.5, weight: isSelected ? .semibold : .medium))
-                        .foregroundStyle(isSelected ? t.fg : t.fg3)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(
-                            isSelected ? t.hair2 : .clear,
-                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        )
-                        .overlay {
-                            if isSelected {
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .stroke(t.hairline, lineWidth: 0.8)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("settings.providers.tab.\(tab.rawValue)")
+                ProviderSettingsTabButton(
+                    tab: tab,
+                    isSelected: tab == selection,
+                    onSelect: { onSelect(tab) }
+                )
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 2)
+    }
+}
+
+private struct ProviderSettingsTabButton: View {
+    @Environment(\.tahoe) private var t
+    var tab: ProviderSettingsTab
+    var isSelected: Bool
+    var onSelect: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: ContinuumAnalytics.wrapButton("settings_provider_tab_\(tab.rawValue)", onSelect)) {
+            Text(tab.title)
+                .font(TahoeFont.body(12.5, weight: isSelected ? .semibold : .medium))
+                .foregroundStyle(isSelected ? t.fg : t.fg3)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background {
+                    if isSelected || isHovered {
+                        RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                            .fill(isSelected ? t.segmentActiveFill : t.hover)
+                    }
+                }
+                .contentShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .accessibilityIdentifier("settings.providers.tab.\(tab.rawValue)")
     }
 }
 
@@ -721,7 +727,7 @@ private struct SettingsSidebarRow: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button(action: onSelect) {
+        Button(action: ContinuumAnalytics.wrapButton("settings_section_\(section.rawValue)", onSelect)) {
             HStack(spacing: 10) {
                 TahoeIcon(section.icon, size: 13, weight: .semibold)
                     .foregroundStyle(isSelected ? t.fg : t.fg3)
@@ -804,7 +810,7 @@ private struct SettingsHeader: View {
                     .textFieldStyle(.plain)
                     .frame(width: 180)
                 if !search.isEmpty {
-                    Button(action: { search = "" }) {
+                    Button(action: ContinuumAnalytics.wrapButton("settings_search_clear", { search = "" })) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(t.fg3)
                     }
@@ -1154,7 +1160,7 @@ private struct SwatchToggle: View {
         HStack(spacing: 10) {
             ForEach(options, id: \.key) { opt in
                 let on = opt.key == value
-                Button { onChange(opt.key) } label: {
+                Button(action: ContinuumAnalytics.wrapButton("settings_visual_\(opt.key)", { onChange(opt.key) })) {
                     VStack(spacing: 6) {
                         opt.swatch
                             .frame(width: 92, height: 56)
@@ -1276,7 +1282,7 @@ private struct AccentPicker: View {
         HStack(spacing: 8) {
             ForEach(TahoeAccent.allCases) { a in
                 let on = a == value
-                Button { value = a } label: {
+                Button(action: ContinuumAnalytics.wrapButton("settings_accent_\(a.rawValue)", { value = a })) {
                     VStack(spacing: 6) {
                         Circle()
                             .fill(LinearGradient(colors: [a.glow.color, a.base.color, a.deep.color],
@@ -1329,6 +1335,10 @@ struct SettingsProviderRowsWithDeviceStatus: View {
     @State private var isSavingOpenRouterKey = false
     @State private var openCodeGoKeyMessage: String?
     @State private var openRouterKeyMessage: String?
+    @State private var showConnectProvidersOverlay = false
+    @State private var apiKeyProvider: OpencodeSupportedProvider?
+    @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
+    @State private var customProviderEditorPresentation: CustomProviderEditorPresentation?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1340,6 +1350,15 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                 useConnectDisconnectLayout: useConnectDisconnectLayout,
                 onSetupAction: { providerId, action in
                     Task { await performSetup(providerId: providerId, action: action) }
+                },
+                onOpencodeShowMoreProviders: {
+                    showConnectProvidersOverlay = true
+                },
+                onOpencodeCustomProviderConnect: {
+                    customProviderEditorPresentation = CustomProviderEditorPresentation(editingRecord: nil)
+                },
+                onCustomProviderAdd: {
+                    customProviderEditorPresentation = CustomProviderEditorPresentation(editingRecord: nil)
                 }
             )
             if showOpenCodeGoSetupPanel {
@@ -1349,9 +1368,9 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                 openRouterSetupPanel
             }
             if !deviceStatuses.isEmpty {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_provider_recheck_device", {
                     Task { await refreshDiscovery() }
-                } label: {
+                })) {
                     HStack(spacing: 6) {
                         TahoeIcon("refresh", size: 11, weight: .bold)
                         Text(isRefreshingDiscovery ? "Checking…" : "Re-check device")
@@ -1387,6 +1406,61 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                 setupTerminal = nil
                 Task { await refreshDiscovery() }
             }
+        }
+        .sheet(isPresented: $showConnectProvidersOverlay) {
+            OpencodeConnectProvidersOverlay { provider in
+                handleOverlayProviderSelection(provider)
+            }
+        }
+        .sheet(item: $apiKeyProvider) { provider in
+            OpencodeProviderAPIKeySheet(
+                provider: provider,
+                opencodeCLIAvailable: deviceStatuses["opencode"]?.cliInstalled == true,
+                onTerminalLogin: {
+                    opencodeSetupCommand = .loginProvider(provider.id)
+                },
+                onSaved: {
+                    Task { await refreshDiscovery() }
+                }
+            )
+        }
+        .sheet(item: $opencodeSetupCommand) { command in
+            OpencodeSetupSheet(command: command) {
+                Task { await refreshDiscovery() }
+            }
+        }
+        .sheet(item: $customProviderEditorPresentation) { presentation in
+            if let runtime {
+                CustomProviderEditorSheet(
+                    store: runtime.customProviderStore,
+                    client: runtime.loopbackClient,
+                    editingRecord: presentation.editingRecord
+                ) {
+                    customProviderEditorPresentation = nil
+                    Task {
+                        await runtime.loopbackClient?.refreshModelCatalog()
+                        await refreshDiscovery()
+                    }
+                }
+            }
+        }
+    }
+
+    private func handleOverlayProviderSelection(_ provider: OpencodeSupportedProvider) {
+        if provider.isCustomEntry {
+            customProviderEditorPresentation = CustomProviderEditorPresentation(editingRecord: nil)
+            return
+        }
+        switch provider.id {
+        case "opencode":
+            showOpenCodeGoSetupPanel = true
+            openCodeGoKeyDraft = ""
+            prefillOpenCodeGoWorkspaceDraft()
+        case "openrouter":
+            showOpenRouterSetupPanel = true
+            openRouterKeyDraft = ""
+        default:
+            apiKeyProvider = provider
         }
     }
 
@@ -1435,7 +1509,8 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                 prefillOpenCodeGoWorkspaceDraft()
             }
         case .runCodexLogin, .runCursorAgentLogin, .installCodexCLI, .installCursorCLI,
-             .installAgyCLI, .installGrokCLI:
+             .installAgyCLI, .installGrokCLI, .installClaudeCLI, .installGeminiCLI,
+             .installOpencodeCLI:
             guard let command = action.shellCommand else { return }
             await launchSetupTerminal(title: action.label, command: command)
         }
@@ -1457,14 +1532,8 @@ struct SettingsProviderRowsWithDeviceStatus: View {
 
     @MainActor
     private func launchSetupTerminal(title: String, command: String) async {
-        let wrapped = "\(command); echo ''; echo 'Press Done when finished.'"
         do {
-            let host = try await TerminalPtyRegistry.shared.spawnCommand(
-                wrapped,
-                cwd: NSHomeDirectory(),
-                title: title
-            )
-            setupTerminal = SetupTerminalSession(id: host.id.uuidString, title: title, host: host)
+            setupTerminal = try await SetupTerminalSession.launch(title: title, command: command)
         } catch {
             let script = "tell application \"Terminal\" to do script \"\(command.replacingOccurrences(of: "\"", with: "\\\""))\""
             NSAppleScript(source: script)?.executeAndReturnError(nil)
@@ -1478,9 +1547,9 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                     .font(TahoeFont.body(12.5, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer(minLength: 0)
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_opencode_go_close", {
                     showOpenCodeGoSetupPanel = false
-                } label: {
+                })) {
                     TahoeIcon("xmark", size: 10, weight: .bold)
                         .foregroundStyle(t.fg3)
                 }
@@ -1494,9 +1563,9 @@ struct SettingsProviderRowsWithDeviceStatus: View {
             TextField("Workspace ID (from opencode.ai/workspace/…/go)", text: $openCodeGoWorkspaceDraft)
                 .textFieldStyle(.roundedBorder)
             HStack(spacing: 8) {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_opencode_go_save", {
                     Task { await saveOpenCodeGoCredentials() }
-                } label: {
+                })) {
                     Text(isSavingOpenCodeGoKey ? "Saving…" : "Save")
                         .font(TahoeFont.body(12, weight: .semibold))
                 }
@@ -1594,9 +1663,9 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                     .font(TahoeFont.body(12.5, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer(minLength: 0)
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_openrouter_close", {
                     showOpenRouterSetupPanel = false
-                } label: {
+                })) {
                     TahoeIcon("xmark", size: 10, weight: .bold)
                         .foregroundStyle(t.fg3)
                 }
@@ -1608,9 +1677,9 @@ struct SettingsProviderRowsWithDeviceStatus: View {
             SecureField("OpenRouter API key", text: $openRouterKeyDraft)
                 .textFieldStyle(.roundedBorder)
             HStack(spacing: 8) {
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_openrouter_save", {
                     Task { await saveOpenRouterCredentials() }
-                } label: {
+                })) {
                     Text(isSavingOpenRouterKey ? "Saving…" : "Save")
                         .font(TahoeFont.body(12, weight: .semibold))
                 }
@@ -1748,6 +1817,9 @@ struct ProviderPreferenceRows: View {
     var deviceStatuses: [String: ProviderDeviceStatus] = [:]
     var useConnectDisconnectLayout: Bool = false
     var onSetupAction: ((String, ProviderDeviceSetupAction) -> Void)? = nil
+    var onOpencodeShowMoreProviders: (() -> Void)? = nil
+    var onOpencodeCustomProviderConnect: (() -> Void)? = nil
+    var onCustomProviderAdd: (() -> Void)? = nil
     /// When non-nil, toggles read/write this staged set instead of mutating
     /// `ProviderEnablement` live. Onboarding stages selections so abandoning
     /// the sheet (Esc) leaves no persisted state or running pollers behind;
@@ -1758,6 +1830,7 @@ struct ProviderPreferenceRows: View {
     @State private var snapshot: ProviderDefaultsSnapshot = .empty
     @State private var catalog: ModelCatalog = .bundled
     @State private var enabledByProviderId: [String: Bool] = [:]
+    @State private var customProviderEditorPresentation: CustomProviderEditorPresentation?
 
     private var allVendors: [ChatVendor] {
         ChatV2Store.defaultChatVendorOrder
@@ -1783,6 +1856,19 @@ struct ProviderPreferenceRows: View {
         .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
             refreshEnabledState()
         }
+        .sheet(item: $customProviderEditorPresentation) { presentation in
+            if let runtime {
+                CustomProviderEditorSheet(
+                    store: runtime.customProviderStore,
+                    client: runtime.loopbackClient,
+                    editingRecord: presentation.editingRecord
+                ) {
+                    customProviderEditorPresentation = nil
+                    Task { await runtime.loopbackClient?.refreshModelCatalog() }
+                }
+            }
+        }
+        .modifier(OptionalCustomProviderStoreObserver(store: runtime?.customProviderStore))
     }
 
     private var legacyLayout: some View {
@@ -1807,13 +1893,21 @@ struct ProviderPreferenceRows: View {
         }
     }
 
+    private var enabledCustomRecords: [CustomProviderRecord] {
+        runtime?.customProviderStore.records.filter(\.isEnabled) ?? []
+    }
+
+    private var disabledCustomRecords: [CustomProviderRecord] {
+        runtime?.customProviderStore.records.filter { !$0.isEnabled } ?? []
+    }
+
     private var connectedOpenCodePartners: [OpenCodePartnerWireSummary] {
         catalog.opencodePartners.filter(\.enabled)
     }
 
     private var connectDisconnectLayout: some View {
         VStack(alignment: .leading, spacing: 22) {
-            if !connectedVendors.isEmpty || !connectedOpenCodePartners.isEmpty {
+            if !connectedVendors.isEmpty || !enabledCustomRecords.isEmpty || !connectedOpenCodePartners.isEmpty {
                 ProviderSettingsSubsection(title: "Connected providers") {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(connectedVendors, id: \.self) { vendor in
@@ -1825,10 +1919,12 @@ struct ProviderPreferenceRows: View {
                                 deviceStatus: deviceStatuses[providerEnablementId(for: vendor)],
                                 accountsRuntime: runtime,
                                 onSetupAction: onSetupAction,
+                                onOpencodeShowMoreProviders: onOpencodeShowMoreProviders,
+                                onOpencodeCustomProviderConnect: onOpencodeCustomProviderConnect,
                                 onSelectModel: { entry in update(vendor: vendor, model: entry.id) },
                                 onOpenModelMenu: { Task { await refreshCatalogIfAllowed(for: vendor) } }
                             )
-                            if vendor != connectedVendors.last || !connectedOpenCodePartners.isEmpty {
+                            if vendor != connectedVendors.last || !connectedOpenCodePartners.isEmpty || !enabledCustomRecords.isEmpty {
                                 TahoeHair()
                             }
                         }
@@ -1845,14 +1941,33 @@ struct ProviderPreferenceRows: View {
                                     Task { await disconnectOpenCodePartner(partner.id) }
                                 }
                             )
-                            if partner.id != connectedOpenCodePartners.last?.id {
+                            if partner.id != connectedOpenCodePartners.last?.id || !enabledCustomRecords.isEmpty {
                                 TahoeHair()
+                            }
+                        }
+                        if let store = runtime?.customProviderStore {
+                            ForEach(enabledCustomRecords) { record in
+                                ConnectedCustomProviderSettingsRow(
+                                    record: record,
+                                    store: store,
+                                    catalog: catalog,
+                                    onEdit: {
+                                        customProviderEditorPresentation = CustomProviderEditorPresentation(editingRecord: record)
+                                    },
+                                    onSelectModel: { modelId in
+                                        selectCustomDefaultModel(modelId, record: record, store: store)
+                                    }
+                                )
+                                if record.id != enabledCustomRecords.last?.id {
+                                    TahoeHair()
+                                }
                             }
                         }
                     }
                 }
             }
-            if !popularVendors.isEmpty {
+            if !popularVendors.isEmpty || !disabledCustomRecords.isEmpty
+                || (onCustomProviderAdd != nil && !ProviderEnablement.isEnabled("opencode")) {
                 ProviderSettingsSubsection(title: "Popular providers") {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(popularVendors, id: \.self) { vendor in
@@ -1860,14 +1975,43 @@ struct ProviderPreferenceRows: View {
                                 vendor: vendor,
                                 onConnect: { connect(vendor: vendor) }
                             )
-                            if vendor != popularVendors.last {
+                            if vendor != popularVendors.last
+                                || !disabledCustomRecords.isEmpty
+                                || (onCustomProviderAdd != nil && !ProviderEnablement.isEnabled("opencode")) {
                                 TahoeHair()
                             }
+                        }
+                        if let store = runtime?.customProviderStore {
+                            ForEach(disabledCustomRecords) { record in
+                                PopularCustomProviderSettingsRow(
+                                    record: record,
+                                    onConnect: {
+                                        do {
+                                            try store.setEnabled(id: record.id, isEnabled: true)
+                                            Task { await runtime?.loopbackClient?.refreshModelCatalog() }
+                                        } catch {}
+                                    }
+                                )
+                                if record.id != disabledCustomRecords.last?.id
+                                    || (onCustomProviderAdd != nil && !ProviderEnablement.isEnabled("opencode")) {
+                                    TahoeHair()
+                                }
+                            }
+                        }
+                        if onCustomProviderAdd != nil, !ProviderEnablement.isEnabled("opencode") {
+                            AddCustomProviderSettingsRow(onConnect: { onCustomProviderAdd?() })
                         }
                     }
                 }
             }
         }
+    }
+
+    private func selectCustomDefaultModel(_ modelId: String, record: CustomProviderRecord, store: CustomProviderStore) {
+        do {
+            try store.setDefaultModel(id: record.id, modelId: modelId)
+            Task { await runtime?.loopbackClient?.refreshModelCatalog() }
+        } catch {}
     }
 
     private func connect(vendor: ChatVendor) {
@@ -1902,8 +2046,6 @@ struct ProviderPreferenceRows: View {
     }
 
     private func refreshEnabledState() {
-        // Staged mode: the binding is the source of truth; live enablement
-        // changes (e.g. another window) must not clobber the staged picks.
         if let staged = stagedEnabledProviderIDs {
             onEnabledProvidersChanged?(Array(staged.wrappedValue))
             return
@@ -1945,18 +2087,7 @@ struct ProviderPreferenceRows: View {
                 onEnabledProvidersChanged?(ProviderEnablement.enabledProviderIDs())
                 if newValue {
                     Task { await refreshCatalogIfAllowed(for: vendor) }
-                    // Enabling Claude seeds Continuum's own usage token from
-                    // Claude Code's keychain item (one Always-Allow prompt).
-                    // Without this the live 5h/weekly gauge reads an empty
-                    // token after a fresh install / re-signed build (the
-                    // keychain ACL + prefs domain are per-signature) and shows
-                    // 0% / "resets in —". Replaces the separate Authenticate
-                    // button — turning the provider on IS the authenticate.
                     if id == "claude" {
-                        // Seed the token, then force an immediate Claude poll.
-                        // setProviderEnabled already started the poller, but it
-                        // polled once with an empty token (0%); without this
-                        // kick the gauge stays 0% until the next interval.
                         let claudeModel = runtime?.claudeModel
                         Self.seedClaudeTokenFromClaudeCode { claudeModel?.forcePoll() }
                     }
@@ -1965,11 +2096,6 @@ struct ProviderPreferenceRows: View {
         )
     }
 
-    /// Imports Claude Code's OAuth token into Continuum's own Keychain entry
-    /// so the live usage gauge has a token to poll with. Reads Claude Code's
-    /// third-party item with user interaction (macOS prompts once → Always
-    /// Allow), mirrors it via `PastedAnthropicTokenProvider`, and opts the
-    /// user into launch auto-refresh so it stays seeded across rotations.
     private static func seedClaudeTokenFromClaudeCode(onSeeded: @escaping @MainActor () -> Void = {}) {
         Task.detached(priority: .userInitiated) {
             guard let token = KeychainTokenProvider(allowsUserInteraction: true).currentAccessToken,
@@ -2067,8 +2193,6 @@ struct ProviderPreferenceRows: View {
             clearEffort: normalizedEffort == nil,
             catalog: catalog
         )
-        // Mac loopback shares UserDefaults — `changedNotification` keeps the
-        // loopback client + Chat composer in sync without a daemon round trip.
         guard let client, !client.usesLocalProviderDefaultsStore else { return }
         Task {
             if let updated = await client.updateProviderDefault(
@@ -2091,8 +2215,6 @@ private struct ProviderPreferenceRow: View {
     let catalog: ModelCatalog
     var showDeviceStatus: Bool = false
     var deviceStatus: ProviderDeviceStatus?
-    /// Multi-account: when set AND the vendor's backing provider
-    /// supports config-dir isolation, render the per-account sub-list.
     var accountsRuntime: AppRuntime? = nil
     var onSetupAction: ((String, ProviderDeviceSetupAction) -> Void)? = nil
     let onSelectModel: (ModelCatalogEntry) -> Void
@@ -2177,6 +2299,8 @@ private struct ConnectedProviderRow: View {
     var deviceStatus: ProviderDeviceStatus?
     var accountsRuntime: AppRuntime? = nil
     var onSetupAction: ((String, ProviderDeviceSetupAction) -> Void)? = nil
+    var onOpencodeShowMoreProviders: (() -> Void)? = nil
+    var onOpencodeCustomProviderConnect: (() -> Void)? = nil
     let onSelectModel: (ModelCatalogEntry) -> Void
     let onOpenModelMenu: () -> Void
 
@@ -2202,9 +2326,9 @@ private struct ConnectedProviderRow: View {
                     onSelectModel: onSelectModel,
                     onOpenModelMenu: onOpenModelMenu
                 )
-                Button("Disconnect") {
+                Button("Disconnect", action: ContinuumAnalytics.wrapButton("settings_provider_disconnect", {
                     isEnabled = false
-                }
+                }))
                 .buttonStyle(.plain)
                 .font(TahoeFont.body(12, weight: .semibold))
                 .foregroundStyle(t.fg2)
@@ -2221,6 +2345,12 @@ private struct ConnectedProviderRow: View {
             if let accountsRuntime,
                ProviderAccountsSection.supportsMultiAccount(vendor.backingProvider) {
                 ProviderAccountsSection(runtime: accountsRuntime, kind: vendor.backingProvider)
+            }
+            if vendor.backingProvider == .opencode {
+                OpencodeProviderExtrasSection(
+                    onCustomProviderConnect: { onOpencodeCustomProviderConnect?() },
+                    onShowMoreProviders: { onOpencodeShowMoreProviders?() }
+                )
             }
         }
         .frame(minHeight: 36)
@@ -2264,9 +2394,7 @@ private struct PopularProviderRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 12)
-            Button {
-                onConnect()
-            } label: {
+            Button(action: ContinuumAnalytics.wrapButton("settings_provider_connect", onConnect)) {
                 HStack(spacing: 4) {
                     TahoeIcon("plus", size: 10, weight: .bold)
                     Text("Connect")
@@ -2288,6 +2416,219 @@ private struct PopularProviderRow: View {
         .frame(minHeight: 36)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.provider.\(providerId).popular")
+    }
+}
+
+private struct ConnectedCustomProviderSettingsRow: View {
+    @Environment(\.tahoe) private var t
+    let record: CustomProviderRecord
+    @ObservedObject var store: CustomProviderStore
+    let catalog: ModelCatalog
+    let onEdit: () -> Void
+    let onSelectModel: (String) -> Void
+
+    private var choice: ProviderChoice { .custom(record.id) }
+
+    private var selectedModelId: String? {
+        record.defaultModelId ?? record.models.first?.id
+    }
+
+    private var selectedEntry: ModelCatalogEntry? {
+        guard let selectedModelId else { return nil }
+        return choice.models(in: catalog).first { $0.id == selectedModelId }
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            CustomProviderGlyph(label: record.displayLabel, size: 28)
+            HStack(spacing: 8) {
+                Text(record.displayLabel)
+                    .font(TahoeFont.body(13.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Text("Custom")
+                    .font(TahoeFont.body(10, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(t.hair2, in: Capsule())
+            }
+            Spacer(minLength: 12)
+            customModelMenu
+            Button("Edit", action: ContinuumAnalytics.wrapButton("settings_custom_provider_edit", onEdit))
+                .buttonStyle(.plain)
+                .font(TahoeFont.body(12, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            Button("Disconnect", action: ContinuumAnalytics.wrapButton("settings_custom_provider_disconnect", {
+                do {
+                    try store.setEnabled(id: record.id, isEnabled: false)
+                } catch {}
+            }))
+            .buttonStyle(.plain)
+            .font(TahoeFont.body(12, weight: .semibold))
+            .foregroundStyle(t.fg2)
+            .accessibilityIdentifier("settings.provider.custom.\(record.id).disconnect")
+        }
+        .frame(minHeight: 36)
+        .accessibilityIdentifier("settings.provider.custom.\(record.id).connected")
+    }
+
+    private var customModelMenu: some View {
+        Menu {
+            let sections = ProviderModelPickerSupport.sections(for: choice, catalog: catalog, query: "")
+            if sections.isEmpty {
+                Text("Fetch models with Test API")
+            }
+            ForEach(sections) { section in
+                Section(section.title) {
+                    ForEach(section.entries) { entry in
+                        Button(action: ContinuumAnalytics.wrapButton("settings_custom_provider_select_model", {
+                            onSelectModel(entry.id)
+                        })) {
+                            HStack {
+                                Text(entry.displayName)
+                                if entry.id == selectedModelId {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(selectedEntry?.displayName ?? "Default model")
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                TahoeIcon("chevronDown", size: 9)
+            }
+            .foregroundStyle(t.fg)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(width: 200, alignment: .trailing)
+            .background(Color.white.opacity(0.055), in: Capsule())
+            .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
+        }
+        .menuStyle(.borderlessButton)
+        .disabled(record.models.isEmpty)
+    }
+}
+
+private struct PopularCustomProviderSettingsRow: View {
+    @Environment(\.tahoe) private var t
+    let record: CustomProviderRecord
+    let onConnect: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            CustomProviderGlyph(label: record.displayLabel, size: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(record.displayLabel)
+                        .font(TahoeFont.body(13.5, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text("Custom")
+                        .font(TahoeFont.body(10, weight: .semibold))
+                        .foregroundStyle(t.fg3)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(t.hair2, in: Capsule())
+                }
+                Text(CustomProviderRecord.hostLabel(from: record.baseURL) ?? record.baseURL)
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg3)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 12)
+            Button(action: ContinuumAnalytics.wrapButton("settings_custom_provider_connect", onConnect)) {
+                HStack(spacing: 4) {
+                    TahoeIcon("plus", size: 10, weight: .bold)
+                    Text("Connect")
+                }
+                .font(TahoeFont.body(12, weight: .semibold))
+                .foregroundStyle(t.fg)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(t.hairline, lineWidth: 0.5)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("settings.provider.custom.\(record.id).connect")
+        }
+        .frame(minHeight: 36)
+    }
+}
+
+private struct AddCustomProviderSettingsRow: View {
+    @Environment(\.tahoe) private var t
+    let onConnect: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            CustomProviderGlyph(label: "Custom", size: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text("Custom provider")
+                        .font(TahoeFont.body(13.5, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text("Custom")
+                        .font(TahoeFont.body(10, weight: .semibold))
+                        .foregroundStyle(t.fg3)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(t.hair2, in: Capsule())
+                }
+                Text("OpenAI- or Anthropic-compatible endpoints billed separately from built-in subscriptions.")
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg3)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button(action: ContinuumAnalytics.wrapButton("settings_custom_provider_add_connect", onConnect)) {
+                HStack(spacing: 4) {
+                    TahoeIcon("plus", size: 10, weight: .bold)
+                    Text("Connect")
+                }
+                .font(TahoeFont.body(12, weight: .semibold))
+                .foregroundStyle(t.fg)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(t.hairline, lineWidth: 0.5)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("settings.provider.custom.add.connect")
+        }
+        .frame(minHeight: 36)
+    }
+}
+
+private struct OptionalCustomProviderStoreObserver: ViewModifier {
+    let store: CustomProviderStore?
+
+    func body(content: Content) -> some View {
+        Group {
+            if let store {
+                content.modifier(CustomProviderStoreObserver(store: store))
+            } else {
+                content
+            }
+        }
+    }
+}
+
+private struct CustomProviderStoreObserver: ViewModifier {
+    @ObservedObject var store: CustomProviderStore
+
+    func body(content: Content) -> some View {
+        content
     }
 }
 
@@ -2419,9 +2760,9 @@ private struct ProviderModelMenu: View {
             ForEach(sections) { section in
                 Section(section.title) {
                     ForEach(section.entries) { entry in
-                        Button {
+                        Button(action: ContinuumAnalytics.wrapButton("settings_provider_select_model", {
                             onSelectModel(entry)
-                        } label: {
+                        })) {
                             HStack {
                                 Text(entry.displayName)
                                 if entry.id == selectedModelId {
@@ -2461,9 +2802,9 @@ private struct ProviderSetupActionButtons: View {
     var body: some View {
         HStack(spacing: 8) {
             ForEach(deviceStatus.setupActions) { action in
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_provider_setup_\(action.id)", {
                     onSetupAction?(providerId, action)
-                } label: {
+                })) {
                     Text(action.label)
                         .font(TahoeFont.body(11, weight: .semibold))
                 }
@@ -2573,9 +2914,9 @@ private struct FullDiskAccessBanner: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
-                Button {
+                Button(action: ContinuumAnalytics.wrapButton("settings_open_full_disk_access", {
                     NSWorkspace.shared.open(Self.settingsURL)
-                } label: {
+                })) {
                     Text("Open Settings")
                         .font(TahoeFont.body(12, weight: .semibold))
                         .foregroundStyle(t.accent)

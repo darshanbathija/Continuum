@@ -41,6 +41,9 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: "2.9.2"
+  PostHog:
+    url: https://github.com/PostHog/posthog-ios.git
+    from: "3.60.0"
 
 targets:
   # ───────────────────────────────────────────────────────────────
@@ -94,6 +97,7 @@ targets:
         type: folder
         buildPhase: resources
         optional: true
+      - path: ContinuumTelemetry
     dependencies:
       - package: ClawdmeterShared
         product: ClawdmeterShared
@@ -101,6 +105,8 @@ targets:
         product: SwiftTerm
       - package: Sparkle
         product: Sparkle
+      - package: PostHog
+        product: PostHog
       - target: ClawdmeterMacWidgets
         embed: true
     preBuildScripts:
@@ -208,11 +214,14 @@ targets:
         excludes:
           - "Info.plist"
           - "ClawdmeteriOS.entitlements"
+      - path: ContinuumTelemetry
     dependencies:
       - package: ClawdmeterShared
         product: ClawdmeterShared
       - package: SwiftTerm
         product: SwiftTerm
+      - package: PostHog
+        product: PostHog
       - target: ClawdmeteriOSWidgets
         embed: true
       # Companion watch app rides inside the iOS app's Watch/ folder so it

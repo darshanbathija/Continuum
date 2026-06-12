@@ -37,32 +37,30 @@ public struct TahoeQuotaBar: View {
     public var body: some View {
         if dense {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline, spacing: 1) {
-                    Text("\(Int(percent))")
-                        .font(ContinuumFont.display(22, weight: .bold))
-                        .monospacedDigit()
-                        .foregroundStyle(metricColor)
-                    Text("%")
-                        .font(ContinuumFont.body(11, weight: .semibold))
-                        .foregroundStyle(t.fg3)
-                }
+                percentMetric(
+                    numSize: 22,
+                    suffixFont: ContinuumFont.body(11, weight: .semibold),
+                    spacing: 1,
+                    minimumScale: 0.75
+                )
                 TahoeRailMeter(percent: percent, provider: provider)
             }
             .frame(width: size, alignment: .leading)
         } else {
-            let numSize = size * 0.36
+            let digits = String(Int(percent)).count
+            // Three-digit values (100%) need a slightly smaller base size so
+            // they stay on one line beside the billing-period label in narrow
+            // Usage columns (five cards share one row on Mac).
+            let numSize = size * 0.36 * (digits >= 3 ? 0.88 : 1)
             VStack(alignment: .leading, spacing: size * 0.08) {
                 HStack(alignment: .firstTextBaseline) {
-                    HStack(alignment: .firstTextBaseline, spacing: 2) {
-                        Text("\(Int(percent))")
-                            .font(ContinuumFont.display(numSize, weight: .bold))
-                            .monospacedDigit()
-                            .tracking(-1.5)
-                            .foregroundStyle(metricColor)
-                        Text("%")
-                            .font(ContinuumFont.display(numSize * 0.5, weight: .semibold))
-                            .foregroundStyle(t.fg3)
-                    }
+                    percentMetric(
+                        numSize: numSize,
+                        suffixFont: ContinuumFont.display(numSize * 0.5, weight: .semibold),
+                        spacing: 2,
+                        minimumScale: 0.65
+                    )
+                    .layoutPriority(1)
                     Spacer(minLength: 8)
                     if let label {
                         VStack(alignment: .trailing, spacing: 2) {
@@ -70,12 +68,16 @@ public struct TahoeQuotaBar: View {
                                 .font(ContinuumFont.etched(10.5))
                                 .tracking(0.95)               // ~0.09em at 10.5px
                                 .foregroundStyle(t.fg3)
+                                .lineLimit(1)
                             if let sublabel {
                                 Text(sublabel)
                                     .font(ContinuumFont.mono(10.5))
                                     .foregroundStyle(t.fg4)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
                             }
                         }
+                        .layoutPriority(-1)
                     }
                 }
                 TahoeRailMeter(percent: percent, provider: provider)
@@ -84,6 +86,30 @@ public struct TahoeQuotaBar: View {
             // sublabels differ ("resets in 3h 31m" vs "usage limit").
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// Big `%` readout — kept on one line; scales down instead of wrapping
+    /// ("10" / "0" on two lines) when the parent column is narrow.
+    @ViewBuilder
+    private func percentMetric(
+        numSize: CGFloat,
+        suffixFont: Font,
+        spacing: CGFloat,
+        minimumScale: CGFloat
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: spacing) {
+            Text("\(Int(percent))")
+                .font(ContinuumFont.display(numSize, weight: .bold))
+                .monospacedDigit()
+                .tracking(numSize >= 40 ? -1.5 : 0)
+                .foregroundStyle(metricColor)
+            Text("%")
+                .font(suffixFont)
+                .foregroundStyle(t.fg3)
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(minimumScale)
+        .allowsTightening(true)
     }
 }
 

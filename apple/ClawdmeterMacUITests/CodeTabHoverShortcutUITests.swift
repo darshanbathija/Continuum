@@ -473,43 +473,34 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         element("code.sidebar.search.clear").click()
     }
 
-    func testTitlebarRightPaneMenuSelectsEveryPaneAndCollapse() throws {
+    func testTitlebarRightPaneToggleExpandsToPlanAndCollapses() throws {
         openCodeTab()
 
         let row = workspaceLeafRowElement()
         XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
         row.click()
 
-        let menu = element("code.titlebar.right-pane")
-        XCTAssertTrue(menu.waitForExistence(timeout: 10), "Code titlebar should expose the right-pane menu.")
+        let expand = element("code.titlebar.right-pane.expand")
+        XCTAssertTrue(expand.waitForExistence(timeout: 10), "Code titlebar should expose the right-pane expand control.")
 
-        for target in [
-            ("plan", "Plan"),
-            ("diff", "Diff"),
-            ("terminal", "Terminal"),
-            ("sources", "Sources"),
-            ("artifacts", "Artifacts"),
-            ("pr", "PR"),
-            ("browser", "Browser"),
-        ] {
-            menu.click()
-            clickMenuItem(identifier: "code.titlebar.right-pane.\(target.0)", title: target.1)
+        expand.click()
+        XCTAssertTrue(element("code.review.pane").waitForExistence(timeout: 5), "Expanding the right pane should reveal the review pane.")
+        XCTAssertTrue(
+            element("code.review.selected.plan").waitForExistence(timeout: 5),
+            "Expanding the right pane should open Plan by default."
+        )
 
-            let pane = element("code.review.pane")
-            XCTAssertTrue(pane.waitForExistence(timeout: 5), "Selecting \(target.1) from the titlebar menu should reveal the review pane.")
-            XCTAssertTrue(
-                element("code.review.selected.\(target.0)").waitForExistence(timeout: 5),
-                "Selecting \(target.1) should update the review pane selection."
-            )
-        }
+        let collapse = element("code.titlebar.right-pane.collapse")
+        XCTAssertTrue(collapse.waitForExistence(timeout: 5), "Expanded right pane should expose the collapse control.")
+        collapse.click()
+        XCTAssertTrue(waitForNonExistence(element("code.review.pane"), timeout: 5), "Collapsing the right pane should hide the review pane.")
 
-        menu.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        clickMenuItem(identifier: "code.titlebar.right-pane.collapse", title: "Collapse pane")
-        XCTAssertTrue(waitForNonExistence(element("code.review.pane"), timeout: 5), "Collapse pane should hide the review pane.")
-
-        menu.click()
-        clickMenuItem(identifier: "code.titlebar.right-pane.expand", title: "Expand pane")
-        XCTAssertTrue(element("code.review.pane").waitForExistence(timeout: 5), "Expand pane should reveal the review pane again.")
+        element("code.titlebar.right-pane.expand").click()
+        XCTAssertTrue(element("code.review.pane").waitForExistence(timeout: 5), "Expanding again should reveal the review pane.")
+        XCTAssertTrue(
+            element("code.review.selected.plan").waitForExistence(timeout: 5),
+            "Re-expanding the right pane should open Plan by default."
+        )
     }
 
     func testCenterHeaderDensityMenuUpdatesTranscriptDensity() throws {
@@ -1102,13 +1093,10 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             }
             element("code.review.gutter.terminal").click()
         } else {
-            let rightPaneMenu = element("code.titlebar.right-pane")
-            XCTAssertTrue(rightPaneMenu.waitForExistence(timeout: 5), "Code titlebar should expose the right-pane menu.")
-            rightPaneMenu.click()
-            for title in ["Plan", "Diff", "Terminal", "Sources", "Artifacts", "Browser"] {
-                XCTAssertTrue(app.menuItems[title].waitForExistence(timeout: 5), "Right-pane menu should list \(title).")
-            }
-            app.menuItems["Terminal"].click()
+            let expand = element("code.titlebar.right-pane.expand")
+            XCTAssertTrue(expand.waitForExistence(timeout: 5), "Code titlebar should expose the right-pane expand control.")
+            expand.click()
+            element("code.review.tab.terminal").click()
         }
 
         XCTAssertTrue(element("code.review.pane").waitForExistence(timeout: 5), "Opening a review target should reveal the review pane.")
@@ -1547,10 +1535,13 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         if gutter.waitForExistence(timeout: 1) {
             gutter.click()
         } else {
-            let rightPaneMenu = element("code.titlebar.right-pane")
-            XCTAssertTrue(rightPaneMenu.waitForExistence(timeout: 5), "Code titlebar should expose the right-pane menu.", file: file, line: line)
-            rightPaneMenu.click()
-            clickMenuItem(identifier: "code.titlebar.right-pane.\(key)", title: title, file: file, line: line)
+            let expand = element("code.titlebar.right-pane.expand")
+            if expand.waitForExistence(timeout: 1) {
+                expand.click()
+            }
+            let tab = element("code.review.tab.\(key)")
+            XCTAssertTrue(tab.waitForExistence(timeout: 5), "Expanded review pane should expose the \(title) tab.", file: file, line: line)
+            tab.click()
         }
 
         XCTAssertTrue(element("code.review.pane").waitForExistence(timeout: 5), "Opening \(title) should reveal the review pane.", file: file, line: line)

@@ -9,6 +9,14 @@ Parameters:
     Type: String
     Default: ''
     Description: Optional prebuilt continuum-agent-linux-arm64 URL (skips on-box Go compile)
+  # SECURITY TODO: pin this to a reviewed commit SHA (not the moving `main`
+  # branch) and confirm the clawdmeter GitHub org is owned by us before
+  # production use — a `main` pin lets whoever controls the repo/org ship
+  # arbitrary code to every runner this template launches.
+  ContinuumAgentRef:
+    Type: String
+    Default: main
+    Description: Git ref (SHA recommended) of the install-linux.sh bootstrap to fetch
   AllowedRegions:
     Type: CommaDelimitedList
     Default: us-east-1,us-west-2,eu-west-1
@@ -69,7 +77,10 @@ Resources:
               if [[ -n "$BINARY_URL" ]]; then
                 export CONTINUUM_AGENT_BINARY_URL="$BINARY_URL"
               fi
-              curl -fsSL https://raw.githubusercontent.com/clawdmeter/clawdmeter/main/tools/continuum-agent/install-linux.sh | bash
+              # SECURITY TODO: pin ContinuumAgentRef to a reviewed SHA and confirm
+              # the clawdmeter org is owned before production use (see Parameters).
+              export CONTINUUM_AGENT_REF='${ContinuumAgentRef}'
+              curl -fsSL "https://raw.githubusercontent.com/clawdmeter/clawdmeter/${ContinuumAgentRef}/tools/continuum-agent/install-linux.sh" | bash
 
 Outputs:
   LaunchTemplateId:

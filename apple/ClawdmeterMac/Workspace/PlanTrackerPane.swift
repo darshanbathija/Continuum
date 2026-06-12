@@ -87,7 +87,7 @@ struct PlanTrackerPane: View {
                 .foregroundStyle(.secondary)
             Spacer()
             if canApprovePendingPlan {
-                Button("Approve & run", action: onApprove)
+                Button("Approve & run", action: ContinuumAnalytics.wrapButton("approve_run", onApprove))
                     .buttonStyle(.borderedProminent)
                     .tint(terraCotta)
                     .controlSize(.small)
@@ -161,12 +161,17 @@ struct PlanTrackerPane: View {
 
     private func stepRow(_ step: PlanStep) -> some View {
         let effectivelyComplete = manualOverride[step.id] ?? step.isComplete
-        return Button(action: {
+        return Button(action: ContinuumAnalytics.wrapButton(
+                "plan_step_toggle",
+                {
+
             // Tap inverts the CURRENT shown state (not the heuristic
             // alone), so once the user explicitly sets a step's status
             // it sticks even if the heuristic later re-evaluates.
             manualOverride[step.id] = !effectivelyComplete
-        }) {
+        
+                }
+            )) {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: effectivelyComplete ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 13))

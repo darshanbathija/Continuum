@@ -3,3 +3,6 @@
 // Xcode 27 rejects WATCHOS_DEPLOYMENT_TARGET 8.0 from swift-markdown/cmark-gfm.
 WATCHOS_DEPLOYMENT_TARGET = 10.0
 EXCLUDED_ARCHS[sdk=watchos*] = armv7k
+
+#include "PostHog.xcconfig"
+#include? "Local.xcconfig"

@@ -140,9 +140,12 @@ struct TahoeReviewPlanPane: View {
                         .padding(.vertical, 12)
                     HStack(spacing: 8) {
                         Spacer(minLength: 8)
-                        TahoeAccentButton(size: .m, disabled: !approveAction.isEnabled) {
-                            onApprove?()
-                        } label: {
+                        TahoeAccentButton(
+                            size: .m,
+                            disabled: !approveAction.isEnabled,
+                            analyticsName: "plan_approve",
+                            action: { onApprove?() }
+                        ) {
                             Text(approveAction.visibleTitle)
                         }
                         .accessibilityLabel(approveAction.accessibilityLabel)

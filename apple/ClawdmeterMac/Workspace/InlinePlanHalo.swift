@@ -126,13 +126,13 @@ struct InlinePlanHalo: View {
                     TahoeHairline()
 
                     HStack(spacing: 8) {
-                        TahoeGhostButton(size: .m, action: onRefine) {
+                        TahoeGhostButton(size: .m, analyticsName: "plan_refine_chat", action: onRefine) {
                             TahoeIcon("chat", size: 11)
                             Text(refineAction.visibleTitle)
                         }
                         .accessibilityLabel(refineAction.accessibilityLabel)
                         .accessibilityIdentifier(refineAction.accessibilityIdentifier)
-                        TahoeGhostButton(size: .m, action: onRefine) {
+                        TahoeGhostButton(size: .m, analyticsName: "plan_refine_edit", action: onRefine) {
                             Text(editAction.visibleTitle)
                         }
                         .accessibilityLabel(editAction.accessibilityLabel)
@@ -154,7 +154,7 @@ struct InlinePlanHalo: View {
                             }
                             .frame(maxWidth: 190)
                         }
-                        TahoeAccentButton(size: .m, disabled: !approveAction.isEnabled, action: onApprove) {
+                        TahoeAccentButton(size: .m, disabled: !approveAction.isEnabled, analyticsName: "plan_approve", action: onApprove) {
                             Text(approveAction.visibleTitle)
                             Text("⇧⏎")
                                 .fontWeight(.regular)

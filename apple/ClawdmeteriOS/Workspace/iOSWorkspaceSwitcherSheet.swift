@@ -119,7 +119,12 @@ struct iOSWorkspaceSwitcherSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") { dismiss() }
+                    Button("Close", action: ContinuumAnalytics.wrapButton(
+                            "close",
+                            {
+ dismiss() 
+                            }
+                        ))
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -144,12 +149,30 @@ struct iOSWorkspaceSwitcherSheet: View {
                 isPresented: $addRepoDialogPresented,
                 titleVisibility: .visible
             ) {
-                Button("Open Project on Mac") {
+                Button("Open Project on Mac", action: ContinuumAnalytics.wrapButton(
+                        "open_project_on_mac",
+                        {
                     Task { await triggerOpenLocalOnMac() }
-                }
-                Button("Open GitHub Project") { showingCloneSheet = true }
-                Button("Quick Start") { showingQuickStartSheet = true }
-                Button("Cancel", role: .cancel) {}
+                
+                        }
+                    ))
+                Button("Open GitHub Project", action: ContinuumAnalytics.wrapButton(
+                        "open_github_project",
+                        {
+ showingCloneSheet = true 
+                        }
+                    ))
+                Button("Quick Start", action: ContinuumAnalytics.wrapButton(
+                        "quick_start",
+                        {
+ showingQuickStartSheet = true 
+                        }
+                    ))
+                Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                        "cancel",
+                        {
+                        }
+                    ))
             } message: {
                 Text("Each option runs on your paired Mac.")
             }

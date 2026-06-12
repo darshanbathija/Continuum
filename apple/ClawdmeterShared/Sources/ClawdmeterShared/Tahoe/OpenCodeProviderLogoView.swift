@@ -149,12 +149,15 @@ public struct OpenCodeProviderLogoView: View {
         guard let data = await OpenCodeProviderLogoLoader.shared.svgData(for: providerId) else {
             return nil
         }
+        // F fix: models.dev serves SVG. Only AppKit's NSImage can rasterize
+        // SVG data; UIImage(data:) returns nil for SVG on iOS/watchOS, so the
+        // UIKit branch always produced a blank image. Fall through to the
+        // monogram on UIKit platforms instead of attempting a decode that
+        // can't succeed.
+        // TODO: ship rasterized PNG logos so iOS/watch can render the brand mark.
         #if canImport(AppKit)
         guard let nsImage = NSImage(data: data), nsImage.isValid else { return nil }
         return Image(nsImage: nsImage)
-        #elseif canImport(UIKit)
-        guard let uiImage = UIImage(data: data) else { return nil }
-        return Image(uiImage: uiImage)
         #else
         return nil
         #endif

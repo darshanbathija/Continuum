@@ -87,7 +87,7 @@ struct PairingDownloadAppStep: View {
     }
 
     private var confirmButton: some View {
-        Button(action: onConfirmInstall) {
+        Button(action: ContinuumAnalytics.wrapButton("pairing_confirm_app_installed", onConfirmInstall)) {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle")
                 Text("I've installed the app")

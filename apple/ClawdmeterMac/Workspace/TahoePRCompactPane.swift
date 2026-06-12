@@ -161,9 +161,19 @@ struct TahoePRCompactPane: View {
                         .foregroundStyle(t.fg3)
                         .accessibilityIdentifier("code.pr.subtitle")
                         .contextMenu {
-                            Button("Copy PR URL") { copy(state.url.absoluteString) }
+                            Button("Copy PR URL", action: ContinuumAnalytics.wrapButton(
+                                    "copy_pr_url",
+                                    {
+ copy(state.url.absoluteString) 
+                                    }
+                                ))
                                 .accessibilityIdentifier(actionMenu.copyURL.accessibilityIdentifier)
-                            Button("Copy PR Number") { copy("#\(state.number)") }
+                            Button("Copy PR Number", action: ContinuumAnalytics.wrapButton(
+                                    "copy_pr_number",
+                                    {
+ copy("#\(state.number)") 
+                                    }
+                                ))
                                 .accessibilityIdentifier(actionMenu.copyNumber.accessibilityIdentifier)
                         }
 
@@ -208,20 +218,55 @@ struct TahoePRCompactPane: View {
                     }
 
                     Menu {
-                        Button(actionMenu.openGitHub.title) { NSWorkspace.shared.open(state.url) }
+                        Button(actionMenu.openGitHub.title, action: ContinuumAnalytics.wrapButton(
+                                "title",
+                                {
+ NSWorkspace.shared.open(state.url) 
+                                }
+                            ))
                             .accessibilityIdentifier(actionMenu.openGitHub.accessibilityIdentifier)
-                        Button(actionMenu.openChecks.title) { openChecks(state) }
+                        Button(actionMenu.openChecks.title, action: ContinuumAnalytics.wrapButton(
+                                "title",
+                                {
+ openChecks(state) 
+                                }
+                            ))
                             .accessibilityIdentifier(actionMenu.openChecks.accessibilityIdentifier)
-                        Button(actionMenu.openDeployments.title) { openDeployments(state) }
+                        Button(actionMenu.openDeployments.title, action: ContinuumAnalytics.wrapButton(
+                                "title",
+                                {
+ openDeployments(state) 
+                                }
+                            ))
                             .accessibilityIdentifier(actionMenu.openDeployments.accessibilityIdentifier)
-                        Button(actionMenu.copyURL.title) { copy(state.url.absoluteString) }
+                        Button(actionMenu.copyURL.title, action: ContinuumAnalytics.wrapButton(
+                                "title",
+                                {
+ copy(state.url.absoluteString) 
+                                }
+                            ))
                             .accessibilityIdentifier(actionMenu.copyURL.accessibilityIdentifier)
-                        Button(actionMenu.copyNumber.title) { copy("#\(state.number)") }
+                        Button(actionMenu.copyNumber.title, action: ContinuumAnalytics.wrapButton(
+                                "title",
+                                {
+ copy("#\(state.number)") 
+                                }
+                            ))
                             .accessibilityIdentifier(actionMenu.copyNumber.accessibilityIdentifier)
-                        Button(actionMenu.rerunFailedChecks.title) { Task { await rerunFailedChecks(state) } }
+                        Button(actionMenu.rerunFailedChecks.title, action: ContinuumAnalytics.wrapButton(
+                                "title",
+                                {
+ Task { await rerunFailedChecks(state) } 
+                                }
+                            ))
                             .disabled(!actionMenu.rerunFailedChecks.isEnabled)
                             .accessibilityIdentifier(actionMenu.rerunFailedChecks.accessibilityIdentifier)
-                        Button(actionMenu.askAgentToFixChecks.title) { enqueueFixChecksPrompt(state) }
+                        Button(actionMenu.askAgentToFixChecks.title, action: ContinuumAnalytics.wrapButton(
+                                "title",
+                                {
+ enqueueFixChecksPrompt(state) 
+                                }
+                            ))
                             .accessibilityIdentifier(actionMenu.askAgentToFixChecks.accessibilityIdentifier)
                     } label: {
                         HStack(spacing: 6) {
@@ -360,13 +405,28 @@ struct TahoePRCompactPane: View {
         .accessibilityIdentifier(CheckRowDescriptor.rowAccessibilityIdentifier)
         .contextMenu {
             if let open = descriptor.open, let raw = descriptor.url, let url = URL(string: raw) {
-                Button(open.title) { NSWorkspace.shared.open(url) }
+                Button(open.title, action: ContinuumAnalytics.wrapButton(
+                        "title",
+                        {
+ NSWorkspace.shared.open(url) 
+                        }
+                    ))
                     .accessibilityIdentifier(open.accessibilityIdentifier)
             }
-            Button(descriptor.copyName.title) { copy(descriptor.name) }
+            Button(descriptor.copyName.title, action: ContinuumAnalytics.wrapButton(
+                    "title",
+                    {
+ copy(descriptor.name) 
+                    }
+                ))
                 .accessibilityIdentifier(descriptor.copyName.accessibilityIdentifier)
             if let rerun = descriptor.rerun, let runID = Self.runID(from: descriptor.url) {
-                Button(rerun.title) { Task { await rerunCheck(runID: runID, state: coordinator.snapshot) } }
+                Button(rerun.title, action: ContinuumAnalytics.wrapButton(
+                        "title",
+                        {
+ Task { await rerunCheck(runID: runID, state: coordinator.snapshot) } 
+                        }
+                    ))
                     .accessibilityIdentifier(rerun.accessibilityIdentifier)
             }
         }

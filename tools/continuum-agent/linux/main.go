@@ -7,6 +7,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
@@ -200,6 +201,9 @@ func runServe() error {
 	if err != nil {
 		return err
 	}
+	if cfg.token == "" {
+		return fmt.Errorf("refusing to serve without an auth token")
+	}
 	store, err := newSessionStore(cfg.dataDir)
 	if err != nil {
 		return err
@@ -251,6 +255,9 @@ func runServe() error {
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	if pairing, err := loadRelayPairing(cfg.dataDir); err == nil && pairing.SID != "" {
@@ -335,15 +342,18 @@ func binaryAvailable(name string) bool {
 	return err == nil
 }
 
+// authorize fails CLOSED: an empty configured token rejects every request, and
+// the bearer comparison is constant-time to avoid leaking the token via timing.
 func authorize(r *http.Request, token string) bool {
 	if token == "" {
-		return true
-	}
-	header := r.Header.Get("Authorization")
-	if !strings.HasPrefix(header, "Bearer ") {
 		return false
 	}
-	return strings.TrimPrefix(header, "Bearer ") == token
+	h := r.Header.Get("Authorization")
+	const p = "Bearer "
+	if !strings.HasPrefix(h, p) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(h, p)), []byte(token)) == 1
 }
 
 func writeJSON(w http.ResponseWriter, payload any) {

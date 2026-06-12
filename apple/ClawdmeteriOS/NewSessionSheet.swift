@@ -169,11 +169,16 @@ struct NewSessionSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { isPresented = false }
+                    Button("Cancel", action: ContinuumAnalytics.wrapButton(
+                            "cancel",
+                            {
+ isPresented = false 
+                            }
+                        ))
                 }
                 ToolbarItem(placement: .bottomBar) {
                     HStack(spacing: 8) {
-                        Button(action: openOnMac) {
+                        Button(action: ContinuumAnalytics.wrapButton("openonmac", openOnMac)) {
                             Label("Open on Mac", systemImage: "desktopcomputer")
                                 .font(.subheadline)
                         }
@@ -181,7 +186,7 @@ struct NewSessionSheet: View {
                         .disabled(goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !client.isConfigured || effectiveAgent == nil)
                         .help("Send the prompt to the paired Mac's empty-state composer instead of starting a session here.")
                         .accessibilityLabel("Send draft to Mac")
-                        Button(action: startSession) {
+                        Button(action: ContinuumAnalytics.wrapButton("startsession", startSession)) {
                             if isStarting {
                                 ProgressView()
                             } else {
@@ -223,7 +228,12 @@ struct NewSessionSheet: View {
                     get: { openOnMacUnsupportedAlert != nil },
                     set: { if !$0 { openOnMacUnsupportedAlert = nil } }
                    ),
-                   actions: { Button("OK", role: .cancel) { openOnMacUnsupportedAlert = nil } },
+                   actions: { Button("OK", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                           "ok",
+                           {
+ openOnMacUnsupportedAlert = nil 
+                           }
+                       )) },
                    message: { Text(openOnMacUnsupportedAlert ?? "") })
             // v0.7.4: present the SDK-resumed response inline when the Mac
             // returns `.deliveredWithCodexResume`. Dismissing the sheet
@@ -541,9 +551,7 @@ private struct CodexResumeResultSheet: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Divider()
-                    Button {
-                        UIPasteboard.general.string = result.threadId
-                    } label: {
+                    Button(action: ContinuumAnalytics.wrapButton("copy_codex_thread_id", { UIPasteboard.general.string = result.threadId })) {
                         Label("Copy thread ID", systemImage: "doc.on.doc")
                             .frame(maxWidth: .infinity)
                     }
@@ -555,7 +563,7 @@ private struct CodexResumeResultSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done", action: onDismiss)
+                    Button("Done", action: ContinuumAnalytics.wrapButton("done", onDismiss))
                 }
             }
             // v0.7.7 Handoff: advertise the thread to the user's Mac

@@ -90,7 +90,7 @@ func (s *sessionStore) persist() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, raw, 0o644)
+	return os.WriteFile(s.path, raw, 0o600)
 }
 
 func (s *sessionStore) list() []agentSession {
@@ -157,6 +157,8 @@ func handlePostSessions(w http.ResponseWriter, r *http.Request, cfg config, stor
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Cap request bodies at 1 MiB so a hostile/runaway client can't OOM the daemon.
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)

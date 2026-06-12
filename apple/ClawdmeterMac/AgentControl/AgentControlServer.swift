@@ -58,7 +58,16 @@ public final class AgentControlServer {
     lazy var sessionHandoffService: SessionHandoffService = SessionHandoffService(
         registry: registry,
         hostStore: executionHostStore,
-        coordinator: executionHostCoordinator
+        coordinator: executionHostCoordinator,
+        // E: stop the source's in-flight turn before archive on handoff, via the
+        // same dispatcher the Stop button uses, so the objective can't run on both hosts.
+        stopSourceTurn: { [weak self] sessionId in
+            guard let self else { return }
+            _ = await SessionInterruptDispatcher(
+                registry: self.registry,
+                chatStoreRegistry: self.chatStoreRegistry
+            ).interrupt(sessionId: sessionId)
+        }
     )
     lazy var awsComputeProvisioner: AWSComputeProvisioner = AWSComputeProvisioner(
         hostStore: executionHostStore
@@ -5184,6 +5193,19 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection)
             return
         }
+        // Security (A): reject a wire-supplied displayName that doesn't match
+        // ^[A-Za-z0-9 _.-]{1,64}$ at the boundary, before it reaches the
+        // root-executed cloud-init heredoc. Defense-in-depth alongside the
+        // provisioner's own sanitization.
+        guard AWSComputeProvisioner.isValidDisplayName(req.spec.displayName) else {
+            sendResponse(HTTPResponse(
+                status: 400,
+                reason: "Bad Request",
+                contentType: "application/json",
+                body: Data(#"{"error":"invalid_display_name","detail":"displayName must match ^[A-Za-z0-9 _.-]{1,64}$"}"#.utf8)
+            ), on: connection)
+            return
+        }
         do {
             let host = try await awsComputeProvisioner.provision(spec: req.spec)
             broadcastExecutionHostRegistered(host)
@@ -5310,6 +5332,20 @@ public final class AgentControlServer {
                 reason: "Service Unavailable",
                 contentType: "application/json",
                 body: Data(#"{"error":"target_host_unreachable"}"#.utf8)
+            ), on: connection)
+        } catch SessionHandoffError.alreadyArchived {
+            sendResponse(HTTPResponse(
+                status: 409,
+                reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"already_archived","detail":"Source session is already archived."}"#.utf8)
+            ), on: connection)
+        } catch SessionHandoffError.handoffInProgress {
+            sendResponse(HTTPResponse(
+                status: 409,
+                reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"handoff_in_progress","detail":"A handoff for this session is already in flight."}"#.utf8)
             ), on: connection)
         } catch {
             sendResponse(.internalError, on: connection)

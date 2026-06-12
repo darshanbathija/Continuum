@@ -26,7 +26,10 @@ public struct TahoeComposerChip: View {
         let fg: Color = tinted ? t.fg : t.fg2
         Group {
             if let action {
-                Button(action: action) { content(fg) }.buttonStyle(.plain)
+                let chipName = label.map {
+                    "composer_chip_" + $0.lowercased().replacingOccurrences(of: " ", with: "_")
+                } ?? "composer_chip_\(icon)"
+                Button(action: ContinuumAnalytics.wrapButton(chipName, action)) { content(fg) }.buttonStyle(.plain)
             } else {
                 content(fg)
             }
@@ -106,7 +109,7 @@ public struct TahoeDashTab: View {
     }
 
     public var body: some View {
-        Button(action: action) {
+        Button(action: ContinuumAnalytics.wrapButton("dash_tab_\(label.lowercased())", action)) {
             Text(label)
                 .font(ContinuumFont.body(12, weight: active ? .bold : .semibold))
                 .foregroundStyle(active ? t.fg : t.fg3)
@@ -148,7 +151,7 @@ public struct TahoeIconBtn: View {
     }
 
     public var body: some View {
-        Button(action: action) {
+        Button(action: ContinuumAnalytics.wrapButton("icon_btn_\(icon)", action)) {
             TahoeIcon(icon, size: 14)
                 .foregroundStyle(active ? t.fg : t.fg2)
                 .frame(width: 26, height: 22)

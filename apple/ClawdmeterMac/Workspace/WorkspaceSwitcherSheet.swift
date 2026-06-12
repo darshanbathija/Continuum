@@ -56,10 +56,10 @@ struct WorkspaceSwitcherSheet: View {
                     .font(.system(size: 13))
                     .focused($searchFocused)
                     .onSubmit { activateDefaultResult() }
-                Button("New") {
+                Button("New", action: ContinuumAnalytics.wrapButton("workspace_switcher_new", {
                     model.prepareNewSession(in: nil)
                     isPresented = false
-                }
+                }))
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
@@ -69,10 +69,10 @@ struct WorkspaceSwitcherSheet: View {
                 if let focusedSession,
                    let repoKey = focusedSession.repoKey {
                     Section("Current Repo") {
-                        Button {
+                        Button(action: ContinuumAnalytics.wrapButton("workspace_switcher_new_in_repo", {
                             openRepo(repoKey)
                             isPresented = false
-                        } label: {
+                        })) {
                             HStack(spacing: 8) {
                                 Image(systemName: "plus.circle.fill")
                                     .foregroundStyle(.green)
@@ -94,9 +94,9 @@ struct WorkspaceSwitcherSheet: View {
                 if !filteredSessions.isEmpty {
                     Section("Sessions") {
                         ForEach(filteredSessions) { session in
-                            Button {
+                            Button(action: ContinuumAnalytics.wrapButton("workspace_switcher_open_session", {
                                 openSession(session)
-                            } label: {
+                            })) {
                                 workspaceSessionRow(session)
                             }
                             .buttonStyle(PressableButtonStyle())
@@ -106,9 +106,9 @@ struct WorkspaceSwitcherSheet: View {
                 if !filteredRepos.isEmpty {
                     Section("Repos") {
                         ForEach(filteredRepos, id: \.key) { repo in
-                            Button {
+                            Button(action: ContinuumAnalytics.wrapButton("workspace_switcher_open_repo", {
                                 openRepo(repo.key)
-                            } label: {
+                            })) {
                                 HStack(spacing: 8) {
                                     Image(systemName: "folder.fill")
                                         .foregroundStyle(.secondary)
@@ -133,15 +133,11 @@ struct WorkspaceSwitcherSheet: View {
                 }
             }
             .listStyle(.sidebar)
-            Button("Open") {
-                activateDefaultResult()
-            }
+            Button("Open", action: ContinuumAnalytics.wrapButton("workspace_switcher_open", activateDefaultResult))
             .keyboardShortcut(.defaultAction)
             .opacity(0)
             .frame(width: 0, height: 0)
-            Button("Cancel") {
-                isPresented = false
-            }
+            Button("Cancel", action: ContinuumAnalytics.wrapButton("workspace_switcher_cancel", { isPresented = false }))
             .keyboardShortcut(.cancelAction)
             .opacity(0)
             .frame(width: 0, height: 0)

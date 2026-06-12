@@ -323,9 +323,13 @@ struct ChatItemRowContent: View {
     }
 
     private func generatedArtifactButton(_ artifact: GeneratedArtifact) -> some View {
-        Button {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "open_generated_artifact",
+                {
             actions.onOpenMarkdownDocument(artifact.path)
-        } label: {
+        
+                }
+            )) {
             HStack(spacing: 7) {
                 Image(systemName: artifact.systemImageName)
                     .font(.system(size: 11, weight: .semibold))
@@ -386,19 +390,32 @@ struct ChatItemRowContent: View {
 
     @ViewBuilder
     private func messageActions(_ msg: SessionChatStore.ChatMessage) -> some View {
-        Button("Copy Message", systemImage: "doc.on.doc") {
+        Button("Copy Message", systemImage: "doc.on.doc", action: ContinuumAnalytics.wrapButton(
+                "copy_message",
+                {
             actions.onCopy(msg.body)
-        }
-        Button("Quote Reply", systemImage: "quote.bubble") {
+        
+                }
+            ))
+        Button("Quote Reply", systemImage: "quote.bubble", action: ContinuumAnalytics.wrapButton(
+                "quote_reply",
+                {
             actions.onQuoteReply(msg.body)
-        }
+        
+                }
+            ))
         Button(payload.isBookmarked ? "Remove Bookmark" : "Bookmark",
-               systemImage: payload.isBookmarked ? "bookmark.slash" : "bookmark") {
+               systemImage: payload.isBookmarked ? "bookmark.slash" : "bookmark",
+               action: ContinuumAnalytics.wrapButton("toggle_bookmark", {
             actions.onToggleBookmark(msg.id)
-        }
-        Button("Copy Message ID", systemImage: "number") {
+        }))
+        Button("Copy Message ID", systemImage: "number", action: ContinuumAnalytics.wrapButton(
+                "copy_message_id",
+                {
             actions.onCopy(msg.id)
-        }
+        
+                }
+            ))
     }
 
     private func userBubble(_ msg: SessionChatStore.ChatMessage) -> some View {
@@ -518,17 +535,17 @@ struct ChatItemRowContent: View {
             ForEach(Array(actionDescriptors.enumerated()), id: \.offset) { _, descriptor in
                 switch descriptor.kind {
                 case .retry:
-                    Button(descriptor.visibleTitle) {
+                    Button(descriptor.visibleTitle, action: ContinuumAnalytics.wrapButton("retry_failed_turn", {
                         actions.onRetryFailedTurn(retryPrompt)
-                    }
+                    }))
                     .buttonStyle(PressableButtonStyle())
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .foregroundStyle(t.accent)
                     .accessibilityIdentifier(descriptor.accessibilityIdentifier)
                 case .retryInNewChat:
-                    Button(descriptor.visibleTitle) {
+                    Button(descriptor.visibleTitle, action: ContinuumAnalytics.wrapButton("retry_failed_turn_new_chat", {
                         actions.onRetryFailedTurnInNewChat(retryPrompt)
-                    }
+                    }))
                     .buttonStyle(PressableButtonStyle())
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .foregroundStyle(t.accent)
@@ -579,9 +596,13 @@ struct ChatItemRowContent: View {
     }
 
     private func bodyArtifactButton(path: String) -> some View {
-        Button {
+        Button(action: ContinuumAnalytics.wrapButton(
+                "open_body_artifact",
+                {
             actions.onOpenMarkdownDocument(path)
-        } label: {
+        
+                }
+            )) {
             HStack(spacing: 7) {
                 Image(systemName: TranscriptArtifactClassifier.systemImageName(forPath: path))
                     .font(.system(size: 11, weight: .semibold))

@@ -7,8 +7,22 @@ UNIT_NAME="continuum-agent.service"
 USER_NAME="${CONTINUUM_AGENT_USER:-${SUDO_USER:-root}}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
+# SECURITY TODO: before production use, pin CONTINUUM_AGENT_REF to a reviewed
+# commit SHA (not a moving branch) and confirm the GitHub org below is owned by
+# us. A `main` pin lets whoever controls the repo/org ship arbitrary code to
+# every box that runs this installer. Overridable via the env var for testing.
+CONTINUUM_AGENT_REF="${CONTINUUM_AGENT_REF:-main}"
+
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Run as root or with sudo." >&2
+  exit 1
+fi
+
+# Refuse to install the daemon to run as root — it spawns untrusted agent
+# processes, so it must run under a dedicated unprivileged user.
+if [[ "$USER_NAME" == "root" ]]; then
+  echo "error: refusing to install continuum-agent as root." >&2
+  echo "Create a dedicated unprivileged user and re-run with CONTINUUM_AGENT_USER=<user>." >&2
   exit 1
 fi
 
@@ -77,7 +91,7 @@ install_binary() {
     echo "Building continuum-agent from upstream source (piped install)…"
     local tmp
     tmp="$(mktemp -d)"
-    local base="${CONTINUUM_AGENT_SOURCE_BASE:-https://raw.githubusercontent.com/clawdmeter/clawdmeter/main/tools/continuum-agent/linux}"
+    local base="${CONTINUUM_AGENT_SOURCE_BASE:-https://raw.githubusercontent.com/clawdmeter/clawdmeter/${CONTINUUM_AGENT_REF}/tools/continuum-agent/linux}"
     local files=(main.go sessions.go spawn.go relay_client.go relay_pair.go go.mod go.sum)
     local file
     for file in "${files[@]}"; do
@@ -122,8 +136,15 @@ ExecStart=${INSTALL_DIR}/continuum-agent serve
 Restart=always
 RestartSec=5
 Environment=CLAWDMETER_DATA_DIR=${INSTALL_DIR}/data
-Environment=CLAWDMETER_BIND_ALL=1
+# Default to localhost/tailnet bind. Set CLAWDMETER_BIND_ALL=1 in
+# /etc/clawdmeter/env only if the box is behind a trusted network boundary.
 EnvironmentFile=-/etc/clawdmeter/env
+# Hardening: drop privilege-escalation and confine the writable surface.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=${INSTALL_DIR}
 
 [Install]
 WantedBy=multi-user.target

@@ -59,6 +59,7 @@ struct ClawdmeterMacApp: App {
     }
 
     init() {
+        PostHogSetup.configureIfNeeded()
         // Hand the AppDelegate a reference to the runtime so its
         // applicationDidFinishLaunching has the models in hand. The delegate
         // creates the menu bar status items based on user prefs.
@@ -119,39 +120,85 @@ struct ClawdmeterMacApp: App {
         // MacRootView so client-local shortcut overrides can replace defaults.
         .commands {
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…") {
+                Button("Settings…", action: ContinuumAnalytics.wrapButton(
+                        "settings",
+                        {
                     NotificationCenter.default.post(
                         name: .clawdmeterSwitchTab,
                         object: nil,
                         userInfo: ["tab": "settings"]
                     )
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut(",", modifiers: .command)
             }
             CommandGroup(after: .appInfo) {
-                Button("Check for Updates…") {
+                Button("Check for Updates…", action: ContinuumAnalytics.wrapButton(
+                        "check_for_updates",
+                        {
                     runtime.updateCoordinator.refreshUpdateStatus()
-                }
+                
+                        }
+                    ))
             }
             CommandGroup(after: .toolbar) {
-                Button("Chat") { Self.postSwitchTab("chat") }
-                Button("Usage") { Self.postSwitchTab("usage") }
-                Button("Code") { Self.postSwitchTab("code") }
-                Button("Settings") { Self.postSwitchTab("settings") }
+                Button("Chat", action: ContinuumAnalytics.wrapButton(
+                        "chat",
+                        {
+ Self.postSwitchTab("chat") 
+                        }
+                    ))
+                Button("Usage", action: ContinuumAnalytics.wrapButton(
+                        "usage",
+                        {
+ Self.postSwitchTab("usage") 
+                        }
+                    ))
+                Button("Code", action: ContinuumAnalytics.wrapButton(
+                        "code",
+                        {
+ Self.postSwitchTab("code") 
+                        }
+                    ))
+                Button("Settings", action: ContinuumAnalytics.wrapButton(
+                        "settings",
+                        {
+ Self.postSwitchTab("settings") 
+                        }
+                    ))
                 Divider()
-                Button("Command Palette") {
+                Button("Command Palette", action: ContinuumAnalytics.wrapButton(
+                        "command_palette",
+                        {
                     NotificationCenter.default.post(name: .clawdmeterOpenGlobalPalette, object: nil)
-                }
-                Button("Keyboard Shortcuts") {
+                
+                        }
+                    ))
+                Button("Keyboard Shortcuts", action: ContinuumAnalytics.wrapButton(
+                        "keyboard_shortcuts",
+                        {
                     NotificationCenter.default.post(name: .clawdmeterOpenShortcutSheet, object: nil)
-                }
-                Button("Open File…") {
+                
+                        }
+                    ))
+                Button("Open File…", action: ContinuumAnalytics.wrapButton(
+                        "open_file",
+                        {
                     NotificationCenter.default.post(name: .clawdmeterOpenFilePicker, object: nil)
-                }
-                Button("Export Open Session…") {
+                
+                        }
+                    ))
+                Button("Export Open Session…", action: ContinuumAnalytics.wrapButton(
+                        "export_open_session",
+                        {
                     NotificationCenter.default.post(name: .clawdmeterExportSession, object: nil)
-                }
-                Button("Search Code") {
+                
+                        }
+                    ))
+                Button("Search Code", action: ContinuumAnalytics.wrapButton(
+                        "search_code",
+                        {
                     NotificationCenter.default.post(
                         name: .clawdmeterSwitchTab,
                         object: nil,
@@ -161,32 +208,62 @@ struct ClawdmeterMacApp: App {
                         name: .clawdmeterFocusCodeSearch,
                         object: nil
                     )
-                }
-                Button("New Workspace Chat Tab") {
+                
+                        }
+                    ))
+                Button("New Workspace Chat Tab", action: ContinuumAnalytics.wrapButton(
+                        "new_workspace_chat_tab",
+                        {
                     Self.postSwitchTab("code")
                     NotificationCenter.default.post(name: .clawdmeterOpenWorkspaceChatTab, object: nil)
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut("t", modifiers: [.command])
-                Button("New Workspace Terminal") {
+                Button("New Workspace Terminal", action: ContinuumAnalytics.wrapButton(
+                        "new_workspace_terminal",
+                        {
                     Self.postSwitchTab("code")
                     NotificationCenter.default.post(name: .clawdmeterOpenWorkspaceTerminalTab, object: nil)
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut("t", modifiers: [.command, .shift])
-                Button("Find in Transcript") {
+                Button("Find in Transcript", action: ContinuumAnalytics.wrapButton(
+                        "find_in_transcript",
+                        {
                     NotificationCenter.default.post(name: .transcriptFind, object: nil)
-                }
-                Button("Next Transcript Match") {
+                
+                        }
+                    ))
+                Button("Next Transcript Match", action: ContinuumAnalytics.wrapButton(
+                        "next_transcript_match",
+                        {
                     NotificationCenter.default.post(name: .transcriptNextMatch, object: nil)
-                }
-                Button("Previous Transcript Match") {
+                
+                        }
+                    ))
+                Button("Previous Transcript Match", action: ContinuumAnalytics.wrapButton(
+                        "previous_transcript_match",
+                        {
                     NotificationCenter.default.post(name: .transcriptPreviousMatch, object: nil)
-                }
-                Button("Next Attention Session") {
+                
+                        }
+                    ))
+                Button("Next Attention Session", action: ContinuumAnalytics.wrapButton(
+                        "next_attention_session",
+                        {
                     NotificationCenter.default.post(name: .sessionNextAttention, object: nil)
-                }
-                Button("Toggle Review Pane") {
+                
+                        }
+                    ))
+                Button("Toggle Review Pane", action: ContinuumAnalytics.wrapButton(
+                        "toggle_review_pane",
+                        {
                     NotificationCenter.default.post(name: .toggleCodeReviewPane, object: nil)
-                }
+                
+                        }
+                    ))
             }
         }
         // v0.22.6 fix: hide the native macOS titlebar so the Tahoe
@@ -285,7 +362,7 @@ struct PoppedOutSessionView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
-            Button(action: toggleStayOnTop) {
+            Button(action: ContinuumAnalytics.wrapButton("toggle_stay_on_top", toggleStayOnTop)) {
                 Image(systemName: "pin")
                     .font(.system(size: 11))
             }
@@ -364,7 +441,7 @@ private struct PoppedChatThread: View {
                     .padding(.horizontal, 10).padding(.vertical, 8)
                     .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                     .lineLimit(1...5)
-                Button(action: send) {
+                Button(action: ContinuumAnalytics.wrapButton("send_message", send)) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 20))
                         .foregroundStyle(composerText.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(SessionsV2Theme.accent))
@@ -398,13 +475,17 @@ private struct PoppedChatThread: View {
     private func poppedDisclosureRow(_ turn: TranscriptTurn) -> some View {
         let isOpen = expandedTurns.contains(turn.id)
         if turn.hasCollapsedContent {
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "toggle_turn_disclosure",
+                    {
                 if isOpen {
                     expandedTurns.remove(turn.id)
                 } else {
                     expandedTurns.insert(turn.id)
                 }
-            } label: {
+            
+                    }
+                )) {
                 Label(
                     turn.summary.disclosureLabel,
                     systemImage: isOpen ? "chevron.down" : "chevron.right"
@@ -481,9 +562,13 @@ private struct PoppedChatThread: View {
                 if !turn.outputArtifacts.isEmpty {
                     HStack(spacing: 6) {
                         ForEach(turn.outputArtifacts.prefix(4)) { artifact in
-                            Button {
+                            Button(action: ContinuumAnalytics.wrapButton(
+                                    "open_popped_artifact",
+                                    {
                                 openPoppedArtifact(artifact)
-                            } label: {
+                            
+                                    }
+                                )) {
                                 Label(artifact.filename, systemImage: artifact.kind == .markdown ? "doc.richtext" : "arrow.up.right.square")
                                     .font(.system(size: 10.5, weight: .semibold))
                             }
@@ -587,8 +672,18 @@ struct PreferencesView: View {
             }
 
             Section {
-                Button("Force poll Claude") { claudeModel.forcePoll() }
-                Button("Force poll Codex") { codexModel.forcePoll() }
+                Button("Force poll Claude", action: ContinuumAnalytics.wrapButton(
+                        "force_poll_claude",
+                        {
+ claudeModel.forcePoll() 
+                        }
+                    ))
+                Button("Force poll Codex", action: ContinuumAnalytics.wrapButton(
+                        "force_poll_codex",
+                        {
+ codexModel.forcePoll() 
+                        }
+                    ))
             } header: {
                 Text("Diagnostics")
             }

@@ -256,17 +256,22 @@ struct ExecutionHostSettingsView: View {
             return
         }
         let script = "curl -fsSL https://raw.githubusercontent.com/clawdmeter/clawdmeter/main/tools/continuum-agent/install-linux.sh | bash"
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = [alias, script]
+        // D fix: the install SSH can run for minutes. Drive it through the
+        // async, argv-only ShellRunner so the @MainActor isn't blocked on
+        // `waitUntilExit()` (which froze the whole UI). The `await` hops the
+        // blocking work off the main actor; we update state after it returns.
+        let ssh = ShellRunner.locateBinary("ssh") ?? "/usr/bin/ssh"
         do {
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus == 0 {
+            let result = try await ShellRunner.shared.run(
+                executable: ssh,
+                arguments: [alias, script],
+                timeout: 600
+            )
+            if result.exitStatus == 0 {
                 showAddVPS = false
                 errorMessage = nil
             } else {
-                errorMessage = "SSH install exited with code \(process.terminationStatus)."
+                errorMessage = "SSH install exited with code \(result.exitStatus)."
             }
         } catch {
             errorMessage = error.localizedDescription

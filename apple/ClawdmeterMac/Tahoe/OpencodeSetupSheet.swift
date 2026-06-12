@@ -31,6 +31,7 @@ public struct OpencodeSetupSheet: View {
     public enum Command: Identifiable, Equatable {
         case signIn
         case addProvider
+        case loginProvider(String)
         case signOut
         case diagnostic
 
@@ -38,6 +39,7 @@ public struct OpencodeSetupSheet: View {
             switch self {
             case .signIn: return "signIn"
             case .addProvider: return "addProvider"
+            case .loginProvider(let providerID): return "loginProvider:\(providerID)"
             case .signOut: return "signOut"
             case .diagnostic: return "diagnostic"
             }
@@ -47,6 +49,8 @@ public struct OpencodeSetupSheet: View {
             switch self {
             case .signIn: return "Sign in to OpenCode"
             case .addProvider: return "Add OpenCode provider"
+            case .loginProvider(let providerID):
+                return "Sign in to \(OpencodeAuthFile.defaultDisplayName(for: providerID))"
             case .signOut: return "Sign out of OpenCode"
             case .diagnostic: return "OpenCode diagnostic"
             }
@@ -63,6 +67,9 @@ public struct OpencodeSetupSheet: View {
                     return "echo 'Select a provider in the picker first.' >&2; exit 1"
                 }
                 return "\(quoted(binary)) auth login --provider \(quoted(providerID))"
+            case .loginProvider(let providerID):
+                let escaped = providerID.replacingOccurrences(of: "'", with: "'\\''")
+                return "\(quoted(binary)) auth login --provider '\(escaped)'"
             case .signOut:
                 // O6: opencode auth logout takes no --provider arg,
                 // signs out of all.
@@ -151,9 +158,7 @@ public struct OpencodeSetupSheet: View {
             Text(sheetTitle)
                 .font(.headline)
             Spacer()
-            Button("Done") {
-                dismiss()
-            }
+            Button("Done", action: ContinuumAnalytics.wrapButton("opencode_setup_done", { dismiss() }))
             .keyboardShortcut(.cancelAction)
             .disabled(oauthInFlight)
         }
@@ -174,7 +179,7 @@ public struct OpencodeSetupSheet: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 480)
-            Button("Close") { dismiss() }
+            Button("Close", action: ContinuumAnalytics.wrapButton("opencode_setup_close", { dismiss() }))
                 .buttonStyle(.borderedProminent)
         }
         .frame(minWidth: 720, minHeight: 480)
@@ -205,12 +210,12 @@ public struct OpencodeSetupSheet: View {
             }
             Spacer()
             if oauthInFlight {
-                Button("Cancel") {
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("opencode_setup_cancel", {
                     if let host {
                         Task { await host.kill() }
                     }
                     dismiss()
-                }
+                }))
                 .keyboardShortcut(.escape, modifiers: [])
             }
         }
@@ -266,6 +271,7 @@ public struct OpencodeSetupSheet: View {
                 exitCode = code
                 if exitCode == 0 {
                     onCompletion()
+                    NotificationCenter.default.post(name: .opencodeAuthChanged, object: nil)
                 }
                 // Refresh provider manager state — triggers O5.
                 await OpencodeProcessManager.shared.reprobe()
@@ -297,4 +303,8 @@ public struct OpencodeSetupSheet: View {
             try? FileManager.default.removeItem(at: exitFile)
         }
     }
+}
+
+extension Notification.Name {
+    static let opencodeAuthChanged = Notification.Name("clawdmeter.opencodeAuth.changed")
 }

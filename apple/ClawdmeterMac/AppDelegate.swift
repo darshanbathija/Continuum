@@ -41,6 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowCloseObserver: NSObjectProtocol?
     private var showDashboardObserver: NSObjectProtocol?
 
+    /// True after the user closes the dashboard window and the app drops
+    /// to `.accessory` (menu-bar-only). While set, incidental activation
+    /// from a status-item click must not re-surface the dashboard.
+    fileprivate var isMenuBarOnlyMode = false
+
     /// Perf: `UserDefaults.didChangeNotification` (object:nil) fires on EVERY
     /// app-wide defaults write, so `applyVisibilityFromPrefs` must filter to
     /// the provider `menuBarShown` keys it cares about — otherwise unrelated pref
@@ -182,6 +187,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for observer in [prefsObserver, windowCloseObserver, showDashboardObserver] {
             if let observer { NotificationCenter.default.removeObserver(observer) }
         }
+        // Spawn-mode PTY children are session leaders; an agent that
+        // ignores the master-close SIGHUP would outlive the app and keep
+        // burning quota with no UI handle. Signal them synchronously —
+        // no waits, termination won't give us time to reap.
+        SpawnModeStore.shared.terminateAllForAppQuit()
         // F2-wire: opportunistic WAL checkpoint on normal exit so the
         // orchestration log's sidecar files (`-wal`/`-shm`) don't accrete
         // unbounded across reboots, and so a normal exit gives the next
@@ -262,6 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Cmd+W). Drops the app to `.accessory` so the Dock icon disappears,
     /// leaving the menu bar items as the only visible surface.
     private func didCloseDashboard() {
+        isMenuBarOnlyMode = true
         // A tiny delay lets SwiftUI finish tearing down the window before
         // we change the activation policy — avoids visual flicker.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -269,10 +280,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// When the user collapses a menu-bar popover, macOS activates the app
+    /// and SwiftUI may auto-present the dashboard scene. In menu-bar-only
+    /// mode that is unwanted — keep the dashboard hidden.
+    fileprivate func dismissDashboardIfShownInMenuBarOnlyMode() {
+        guard isMenuBarOnlyMode else { return }
+        // Defer one turn so we run after any auto-present triggered by
+        // activation / transient popover teardown.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, self.isMenuBarOnlyMode else { return }
+            var dismissed = false
+            for window in NSApp.windows where window.title == Self.dashboardWindowTitle && window.isVisible {
+                window.orderOut(nil)
+                dismissed = true
+            }
+            if dismissed {
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
+    }
+
     /// Re-surface the dashboard window. Restores the Dock icon (`.regular`)
     /// and asks SwiftUI to (re)open the `Window(id: "dashboard")` scene
     /// via a posted notification the `DashboardOpenerScene` listens to.
     fileprivate func showDashboard() {
+        isMenuBarOnlyMode = false
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -403,11 +435,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Per-provider controller
 
 @MainActor
-final class ProviderStatusController: NSObject {
+final class ProviderStatusController: NSObject, NSPopoverDelegate {
     private let model: AppModel
     private weak var runtime: AppRuntime?
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
+    private var outsideClickMonitor: Any?
     private var cancellables: Set<AnyCancellable> = []
 
     /// This controller's provider, derived from the AppModel config.
@@ -478,12 +511,21 @@ final class ProviderStatusController: NSObject {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.target = self
         item.button?.action = #selector(togglePopover(_:))
+        // Fire on mouse-down so the toggle runs before a transient popover
+        // auto-dismisses the click as an "outside" event — otherwise the
+        // second click sees `isShown == false` and re-opens instead of
+        // closing.
+        item.button?.sendAction(on: [.leftMouseDown])
         item.button?.image = currentImage()
         statusItem = item
 
         // Eagerly build the popover so the first click renders without delay.
         let pop = NSPopover()
-        pop.behavior = .transient
+        // `.transient` does not reliably dismiss on outside clicks when
+        // anchored to an NSStatusItem, and it races with the toggle
+        // handler above. We close on outside clicks ourselves.
+        pop.behavior = .applicationDefined
+        pop.delegate = self
         // The popover content is the app's always-dark glass card. Pin the
         // popover to dark appearance so its vibrancy material renders dark even
         // when the system is in light mode / sits over a light desktop — without
@@ -516,9 +558,7 @@ final class ProviderStatusController: NSObject {
                 onOpenDashboard: { [weak self] in
                     guard let self else { return }
                     self.popover?.performClose(nil)
-                    NotificationCenter.default.post(name: AppDelegate.openDashboardRequest, object: nil)
-                    NSApp.setActivationPolicy(.regular)
-                    NSApp.activate(ignoringOtherApps: true)
+                    NotificationCenter.default.post(name: AppDelegate.showDashboardNotification, object: nil)
                 },
                 onSyncIPhone: { [weak self] in
                     self?.showPairingPopover()
@@ -613,7 +653,8 @@ final class ProviderStatusController: NSObject {
     @objc private func togglePopover(_ sender: Any?) {
         guard let popover, let button = statusItem?.button else { return }
         if popover.isShown {
-            popover.performClose(sender)
+            closePopover(sender)
+            (NSApp.delegate as? AppDelegate)?.dismissDashboardIfShownInMenuBarOnlyMode()
         } else {
             // v0.22.10: kick a forcePoll on every provider before
             // showing the popover so the gauges reflect the latest
@@ -640,6 +681,37 @@ final class ProviderStatusController: NSObject {
             // Keep the popover keyed to the active window so menu bar
             // interaction doesn't immediately dismiss it.
             popover.contentViewController?.view.window?.becomeKey()
+            // Defer so the opening click doesn't hit the monitor.
+            DispatchQueue.main.async { [weak self] in
+                self?.startOutsideClickMonitor()
+            }
         }
+    }
+
+    private func closePopover(_ sender: Any?) {
+        stopOutsideClickMonitor()
+        popover?.performClose(sender)
+    }
+
+    private func startOutsideClickMonitor() {
+        stopOutsideClickMonitor()
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.popover?.isShown == true else { return }
+                self.closePopover(nil)
+                (NSApp.delegate as? AppDelegate)?.dismissDashboardIfShownInMenuBarOnlyMode()
+            }
+        }
+    }
+
+    private func stopOutsideClickMonitor() {
+        if let monitor = outsideClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            outsideClickMonitor = nil
+        }
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        stopOutsideClickMonitor()
     }
 }

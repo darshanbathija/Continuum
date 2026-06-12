@@ -67,28 +67,48 @@ struct MarkdownDocumentTabView: View {
                     .textSelection(.enabled)
             }
             Spacer()
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "markdown_open_in_editor",
+                    {
+
                 NSWorkspace.shared.open(URL(fileURLWithPath: tab.path))
-            } label: {
+            
+                    }
+                )) {
                 Image(systemName: "square.and.pencil")
             }
             .help("Open in Editor")
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "markdown_reveal_in_finder",
+                    {
+
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: tab.path)])
-            } label: {
+            
+                    }
+                )) {
                 Image(systemName: "folder")
             }
             .help("Reveal in Finder")
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "markdown_copy_path",
+                    {
+
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(tab.path, forType: .string)
-            } label: {
+            
+                    }
+                )) {
                 Image(systemName: "doc.on.doc")
             }
             .help("Copy Path")
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "markdown_refresh",
+                    {
+
                 Task { await loader.load(path: tab.path, force: true) }
-            } label: {
+            
+                    }
+                )) {
                 Image(systemName: "arrow.clockwise")
             }
             .help("Refresh")
@@ -435,27 +455,42 @@ private struct WorkspaceDocumentTabToolbar: View {
                     .textSelection(.enabled)
             }
             Spacer()
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "markdown_open_in_editor",
+                    {
+
                 NSWorkspace.shared.open(URL(fileURLWithPath: tab.path))
-            } label: {
+            
+                    }
+                )) {
                 Image(systemName: "square.and.pencil")
             }
             .help("Open in Editor")
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "markdown_reveal_in_finder",
+                    {
+
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: tab.path)])
-            } label: {
+            
+                    }
+                )) {
                 Image(systemName: "folder")
             }
             .help("Reveal in Finder")
-            Button {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "markdown_copy_path",
+                    {
+
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(tab.path, forType: .string)
-            } label: {
+            
+                    }
+                )) {
                 Image(systemName: "doc.on.doc")
             }
             .help("Copy Path")
             if let onRefresh {
-                Button(action: onRefresh) {
+                Button(action: ContinuumAnalytics.wrapButton("markdown_refresh", onRefresh)) {
                     Image(systemName: "arrow.clockwise")
                 }
                 .help("Refresh")

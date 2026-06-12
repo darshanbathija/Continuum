@@ -37,7 +37,12 @@ struct iOSArtifactsPane: View {
             get: { error != nil },
             set: { if !$0 { error = nil } }
         )) {
-            Button("OK", role: .cancel) { error = nil }
+            Button("OK", role: .cancel, action: ContinuumAnalytics.wrapButton(
+                    "ok",
+                    {
+ error = nil 
+                    }
+                ))
         } message: {
             Text(error ?? "")
         }

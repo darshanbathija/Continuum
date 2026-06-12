@@ -16,32 +16,16 @@ struct ReviewPaneGutter: View {
     @Binding var selectedTab: WorkbenchPaneTab
     let onExpand: (WorkbenchPaneTab) -> Void
 
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
 
     var body: some View {
         VStack(spacing: 6) {
             ForEach(WorkbenchPaneTab.visibleReviewPaneTabs) { tab in
-                Button(action: { onExpand(tab) }) {
-                    VStack(spacing: 2) {
-                        Image(systemName: tab.systemImage)
-                            .font(.system(size: 13))
-                        Text(tab.rawValue)
-                            .font(.system(size: 8, weight: .medium))
-                    }
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
-                    .background(
-                        selectedTab == tab
-                            ? Color.secondary.opacity(0.12)
-                            : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 6)
-                    )
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(PressableButtonStyle())
-                .help("Open \(tab.rawValue) pane")
-                .accessibilityIdentifier("code.review.gutter.\(tab.accessibilityKey)")
+                ReviewPaneGutterTab(
+                    tab: tab,
+                    isSelected: selectedTab == tab,
+                    onExpand: onExpand
+                )
             }
             Spacer()
         }
@@ -50,10 +34,50 @@ struct ReviewPaneGutter: View {
         .frame(width: 52)
         .background(t.glassTintHi.opacity(0.55))
     }
+}
 
-    private var gutterBg: Color {
-        colorScheme == .dark
-            ? Color(red: 0.10, green: 0.10, blue: 0.10)
-            : Color(red: 0.95, green: 0.95, blue: 0.95)
+private struct ReviewPaneGutterTab: View {
+    @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovered = false
+
+    let tab: WorkbenchPaneTab
+    let isSelected: Bool
+    let onExpand: (WorkbenchPaneTab) -> Void
+
+    var body: some View {
+        Button(action: ContinuumAnalytics.wrapButton("review_gutter_expand_\(tab.accessibilityKey)", { onExpand(tab) })) {
+            VStack(spacing: 2) {
+                Image(systemName: tab.systemImage)
+                    .font(.system(size: 13))
+                Text(tab.rawValue)
+                    .font(.system(size: 8, weight: .medium))
+            }
+            .foregroundStyle(.secondary)
+            .frame(width: 44, height: 44)
+            .background(
+                backgroundColor,
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .help("Open \(tab.rawValue) pane")
+        .accessibilityIdentifier("code.review.gutter.\(tab.accessibilityKey)")
+        .onHover { isHovered = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovered)
+    }
+
+    private var backgroundColor: Color {
+        if isSelected {
+            return Color.secondary.opacity(0.12)
+        }
+        if isHovered {
+            // Canonical row/control hover token (appearance-aware), per
+            // DESIGN.md — not the hairline color, which renders too strong
+            // in light mode.
+            return t.hover
+        }
+        return .clear
     }
 }

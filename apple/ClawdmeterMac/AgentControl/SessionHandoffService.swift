@@ -8,6 +8,12 @@ public enum SessionHandoffError: Error, Equatable {
     case gitDirty(String)
     case gitPushFailed(String)
     case remoteSpawnFailed(String)
+    /// The source session was already archived — handing it off again would
+    /// double-spawn a remote session for a session that no longer exists here.
+    case alreadyArchived
+    /// A handoff for this session is already in flight (push/spawn/attach
+    /// phase persisted) — a retry must not double-execute it.
+    case handoffInProgress
 }
 
 struct GitRepositorySnapshot: Sendable, Equatable {
@@ -54,24 +60,41 @@ public final class SessionHandoffService {
     private let registry: AgentSessionRegistry
     private let hostStore: ExecutionHostStore
     private let coordinator: ExecutionHostCoordinator
+    /// Stops the source session's in-flight turn before archiving it, so the
+    /// objective doesn't keep running on the source host after it's handed off
+    /// to the target (double-execution). Wired by the server to the same
+    /// interrupt path the Stop button uses; nil-tolerant for tests.
+    private let stopSourceTurn: (@MainActor (UUID) async -> Void)?
 
     public init(
         registry: AgentSessionRegistry,
         hostStore: ExecutionHostStore = .shared,
-        coordinator: ExecutionHostCoordinator
+        coordinator: ExecutionHostCoordinator,
+        stopSourceTurn: (@MainActor (UUID) async -> Void)? = nil
     ) {
         self.registry = registry
         self.hostStore = hostStore
         self.coordinator = coordinator
+        self.stopSourceTurn = stopSourceTurn
     }
 
     public func handoff(
         sessionId: UUID,
         targetHostId: UUID,
-        clientOnTailnet: Bool = false
+        clientOnTailnet: Bool = true
     ) async throws -> HandoffSessionResponse {
         guard let source = registry.session(id: sessionId) else {
             throw SessionHandoffError.sessionNotFound
+        }
+        // Idempotency (E): a retried handoff must not double-spawn the remote
+        // session. Refuse if the source is already archived, or if a handoff is
+        // already mid-flight for it (persisted phase is push/spawn/attach).
+        guard source.archivedAt == nil else {
+            throw SessionHandoffError.alreadyArchived
+        }
+        if let phase = source.handoff?.phase,
+           phase == .pushingBranch || phase == .spawningRemote || phase == .attached {
+            throw SessionHandoffError.handoffInProgress
         }
         guard let targetHost = hostStore.host(id: targetHostId) else {
             throw SessionHandoffError.targetHostUnknown
@@ -158,6 +181,12 @@ public final class SessionHandoffService {
                 startedAt: Date()
             )
         )
+        // E: stop the source session's in-flight turn so the objective doesn't
+        // keep running on BOTH hosts after the remote session is spawned. Uses
+        // the same interrupt path as the Stop button (SessionInterruptDispatcher,
+        // wired by the server). If unwired (tests), the archived/idempotency
+        // guards still prevent re-entry.
+        await stopSourceTurn?(sessionId)
         try await registry.archive(id: sessionId)
         Self.broadcastHandoffPhase(sessionId: sessionId, phase: .attached)
 

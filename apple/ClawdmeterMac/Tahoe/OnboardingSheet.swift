@@ -379,7 +379,8 @@ struct OnboardingSheet: View {
         case .configureOpenCodeGoQuota:
             await MainActor.run { prefillOpenCodeGoWorkspaceDraft() }
         case .runCodexLogin, .runCursorAgentLogin, .installCodexCLI, .installCursorCLI,
-             .installAgyCLI, .installGrokCLI:
+             .installAgyCLI, .installGrokCLI, .installClaudeCLI, .installGeminiCLI,
+             .installOpencodeCLI:
             guard let command = action.shellCommand else { return }
             await launchSetupTerminal(title: action.label, command: command)
         }
@@ -519,14 +520,8 @@ struct OnboardingSheet: View {
 
     @MainActor
     private func launchSetupTerminal(title: String, command: String) async {
-        let wrapped = "\(command); echo ''; echo 'Press Done when finished.'"
         do {
-            let host = try await TerminalPtyRegistry.shared.spawnCommand(
-                wrapped,
-                cwd: NSHomeDirectory(),
-                title: title
-            )
-            setupTerminal = SetupTerminalSession(id: host.id.uuidString, title: title, host: host)
+            setupTerminal = try await SetupTerminalSession.launch(title: title, command: command)
         } catch {
             // Best-effort fallback: open the user's Terminal.app with the command.
             let script = "tell application \"Terminal\" to do script \"\(command.replacingOccurrences(of: "\"", with: "\\\""))\""

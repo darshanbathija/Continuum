@@ -6,11 +6,7 @@ import ClawdmeterShared
 /// "Mode" menu (Ask permissions / Accept edits / Plan / Bypass).
 /// Replaces the standalone AutopilotChip + Plan-mode toggle.
 ///
-/// The chip's color encodes the active mode at a glance:
-///   • Ask permissions → secondary
-///   • Accept edits    → accent
-///   • Plan mode       → accent
-///   • Bypass          → yellow (matches Claude Code's "Auto" warning hue)
+/// The chip uses the same neutral pill styling for every mode.
 struct PermissionModeChip: View {
     let mode: PermissionMode
     /// Available modes vary by context — Cursor hides `.plan`, and read-only
@@ -53,8 +49,8 @@ struct PermissionModeChip: View {
         // "Ask permissions", "Plan mode", "Bypass permissions", etc. read centered.
         HStack(spacing: 4) {
             Text(mode.shortLabel)
-                .font(.system(size: 12, weight: mode == .bypass ? .bold : .semibold))
-                .foregroundStyle(mode == .bypass ? Color.yellow : .primary)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .fixedSize()
             Image(systemName: "chevron.down")
@@ -68,17 +64,13 @@ struct PermissionModeChip: View {
         .accessibilityValue(mode.shortLabel)
         .accessibilityIdentifier("code.composer.permission-mode")
         .background(
-            mode == .bypass
-                ? AnyShapeStyle(Color.yellow.opacity(isHovered ? 0.22 : 0.15))
-                : AnyShapeStyle(Color.secondary.opacity(isHovered ? 0.16 : 0.10)),
+            Color.secondary.opacity(isHovered ? 0.16 : 0.10),
             in: Capsule()
         )
         .overlay(
             Capsule()
                 .strokeBorder(
-                    mode == .bypass
-                        ? Color.yellow.opacity(0.5)
-                        : (isHovered ? Color.secondary.opacity(0.24) : Color.clear),
+                    isHovered ? Color.secondary.opacity(0.24) : Color.clear,
                     lineWidth: 1
                 )
                 .allowsHitTesting(false)
@@ -157,6 +149,7 @@ private struct PermissionModeMenuButton: NSViewRepresentable {
         }
 
         @objc func openMenu(_ sender: NSButton) {
+            ContinuumAnalytics.trackButton("composer_permission_menu")
             button = sender
             sender.setAccessibilityValue("Open" as NSString)
             let menu = NSMenu()
@@ -182,6 +175,7 @@ private struct PermissionModeMenuButton: NSViewRepresentable {
                 let raw = item.representedObject as? String,
                 let selectedMode = PermissionMode(rawValue: raw)
             else { return }
+            ContinuumAnalytics.trackButton("composer_permission_select_\(raw)")
             onSelect(selectedMode)
         }
 

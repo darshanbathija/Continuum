@@ -67,7 +67,31 @@ func safePathComponent(value string) string {
 	return safe
 }
 
+// isAllowedGitURL gates request-supplied remotes to safe transports. Rejects
+// option-injection (leading '-'), git's ext::/file:: pseudo-remotes, and bare
+// local paths so a caller can't reach arbitrary files or run helper commands.
+func isAllowedGitURL(u string) bool {
+	// Only https:// and ssh:// (git@host:path also ok). Reject ext::, file://,
+	// leading '-', and bare local paths.
+	if u == "" || strings.HasPrefix(u, "-") {
+		return false
+	}
+	if strings.HasPrefix(u, "https://") {
+		return true
+	}
+	if strings.HasPrefix(u, "ssh://") {
+		return true
+	}
+	if strings.HasPrefix(u, "git@") && strings.Contains(u, ":") {
+		return true
+	}
+	return false
+}
+
 func ensureGitWorkspace(base, remoteURL, branch, commit string) (string, error) {
+	if !isAllowedGitURL(remoteURL) {
+		return "", fmt.Errorf("disallowed remote url")
+	}
 	git, err := exec.LookPath("git")
 	if err != nil {
 		return "", fmt.Errorf("git is required to prepare remote workspace: %w", err)
@@ -80,7 +104,9 @@ func ensureGitWorkspace(base, remoteURL, branch, commit string) (string, error) 
 		if branch != "" {
 			args = append(args, "--branch", branch)
 		}
-		args = append(args, remoteURL, base)
+		// `--` ends option parsing so a remoteURL/base starting with '-' can't
+		// be reinterpreted as a git flag.
+		args = append(args, "--", remoteURL, base)
 		if out, err := runGit(git, "", args...); err != nil {
 			return "", fmt.Errorf("git clone: %s", strings.TrimSpace(string(out)))
 		}
@@ -97,14 +123,14 @@ func ensureGitWorkspace(base, remoteURL, branch, commit string) (string, error) 
 		}
 	}
 	if branch != "" {
-		if out, err := runGit(git, base, "checkout", "-B", branch, "origin/"+branch); err != nil {
-			if out2, err2 := runGit(git, base, "checkout", branch); err2 != nil {
+		if out, err := runGit(git, base, "checkout", "-B", branch, "--", "origin/"+branch); err != nil {
+			if out2, err2 := runGit(git, base, "checkout", "--", branch); err2 != nil {
 				return "", fmt.Errorf("git checkout: %s %s", strings.TrimSpace(string(out)), strings.TrimSpace(string(out2)))
 			}
 		}
 	}
 	if commit != "" {
-		if out, err := runGit(git, base, "reset", "--hard", commit); err != nil {
+		if out, err := runGit(git, base, "reset", "--hard", "--", commit); err != nil {
 			return "", fmt.Errorf("git reset: %s", strings.TrimSpace(string(out)))
 		}
 	}
@@ -116,7 +142,12 @@ func runGit(git, dir string, args ...string) ([]byte, error) {
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = os.Environ()
+	// Harden git: never prompt for credentials, and restrict transports to
+	// the same allowlist isAllowedGitURL enforces (defends submodules/redirects).
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_ALLOW_PROTOCOL=https:ssh",
+	)
 	return cmd.CombinedOutput()
 }
 
@@ -152,7 +183,7 @@ export CONTINUUM_SESSION=%q
 	} else {
 		script += "exec " + commandLine + "\n"
 	}
-	if err := os.WriteFile(runner, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(runner, []byte(script), 0o700); err != nil {
 		return processStart{}, err
 	}
 

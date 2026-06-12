@@ -463,7 +463,7 @@ struct InAppBrowser: View {
     private var chrome: some View {
         HStack(spacing: 6) {
             if isFullWorkspace {
-                Button(action: onCloseFullWorkspace) {
+                Button(action: ContinuumAnalytics.wrapButton("onclosefullworkspace", onCloseFullWorkspace)) {
                     Label("Back to Chat", systemImage: "chevron.left")
                         .font(.system(size: 11, weight: .semibold))
                 }
@@ -472,24 +472,38 @@ struct InAppBrowser: View {
                 .accessibilityIdentifier("code.browser.backToChat")
             }
 
-            Button(action: { controller.goBack() }) {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "inappbrowser_l475",
+                    {
+ controller.goBack() 
+                    }
+                )) {
                 Image(systemName: "chevron.left").font(.system(size: 11))
             }
             .disabled(!controller.canGoBack)
             .buttonStyle(.borderless)
             .accessibilityIdentifier("code.browser.back")
 
-            Button(action: { controller.goForward() }) {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "inappbrowser_l482",
+                    {
+ controller.goForward() 
+                    }
+                )) {
                 Image(systemName: "chevron.right").font(.system(size: 11))
             }
             .disabled(!controller.canGoForward)
             .buttonStyle(.borderless)
             .accessibilityIdentifier("code.browser.forward")
 
-            Button(action: {
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "inappbrowser_l489",
+                    {
                 if controller.isLoading { controller.stopLoading() }
                 else { controller.reload() }
-            }) {
+            
+                    }
+                )) {
                 Image(systemName: controller.isLoading ? "xmark" : "arrow.clockwise")
                     .font(.system(size: 11))
             }
@@ -503,9 +517,13 @@ struct InAppBrowser: View {
                 .accessibilityIdentifier("code.browser.url")
 
             if let snapshot = controller.runProfile.snapshot {
-                Button(action: {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "inappbrowser_l506",
+                        {
                     controller.load(snapshot.url)
-                }) {
+                
+                        }
+                    )) {
                     Image(systemName: runHealthIcon(snapshot.health))
                         .font(.system(size: 11))
                 }
@@ -514,7 +532,7 @@ struct InAppBrowser: View {
                 .accessibilityIdentifier("code.browser.detected-url")
             }
 
-            Button(action: controller.loadCurrentURL) {
+            Button(action: ContinuumAnalytics.wrapButton("loadcurrenturl", controller.loadCurrentURL)) {
                 Image(systemName: "arrow.right.circle")
                     .font(.system(size: 12, weight: .semibold))
             }
@@ -537,7 +555,7 @@ struct InAppBrowser: View {
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { startRun() }
                     .accessibilityIdentifier("code.browser.run-command")
-                Button(action: startRun) {
+                Button(action: ContinuumAnalytics.wrapButton("startrun", startRun)) {
                     Image(systemName: "play.fill")
                         .font(.system(size: 10, weight: .semibold))
                 }
@@ -545,7 +563,12 @@ struct InAppBrowser: View {
                 .disabled(!canStartRun)
                 .help("Start run profile")
                 .accessibilityIdentifier("code.browser.run-start")
-                Button(action: { controller.runProfile.stopRun(); workbenchState.recordRunProfile(controller.runProfile.stateSnapshot) }) {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "inappbrowser_l548",
+                        {
+ controller.runProfile.stopRun(); workbenchState.recordRunProfile(controller.runProfile.stateSnapshot) 
+                        }
+                    )) {
                     Image(systemName: "stop.fill")
                         .font(.system(size: 10, weight: .semibold))
                 }
@@ -553,7 +576,9 @@ struct InAppBrowser: View {
                 .disabled(controller.runProfile.status != .running && controller.runProfile.status != .starting)
                 .help("Stop run profile")
                 .accessibilityIdentifier("code.browser.run-stop")
-                Button(action: {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "inappbrowser_l556",
+                        {
                     let result = resolveRunEnvironment()
                     guard result.ok else {
                         workbenchState.recordRunProfile(controller.runProfile.stateSnapshot)
@@ -561,7 +586,9 @@ struct InAppBrowser: View {
                     }
                     controller.runProfile.restartRun(cwd: session.effectiveCwd, environment: result.environment)
                     workbenchState.recordRunProfile(controller.runProfile.stateSnapshot)
-                }) {
+                
+                        }
+                    )) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 10, weight: .semibold))
                         .accessibilityHidden(true)
@@ -572,7 +599,12 @@ struct InAppBrowser: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Restart run profile")
                 .accessibilityIdentifier("code.browser.restart")
-                Button(action: { controller.showingRunOutput.toggle() }) {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "inappbrowser_l575",
+                        {
+ controller.showingRunOutput.toggle() 
+                        }
+                    )) {
                     Image(systemName: controller.showingRunOutput ? "terminal.fill" : "terminal")
                         .font(.system(size: 10, weight: .semibold))
                 }
@@ -734,9 +766,13 @@ struct InAppBrowser: View {
                 .font(.system(size: 24))
                 .foregroundStyle(.secondary)
             if let snapshot = runProfile.snapshot {
-                Button(action: {
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "inappbrowser_l737",
+                        {
                     controller.load(snapshot.url)
-                }) {
+                
+                        }
+                    )) {
                     Label(snapshot.url.absoluteString, systemImage: runHealthIcon(snapshot.health))
                         .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
@@ -789,13 +825,22 @@ struct InAppBrowser: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") { controller.pendingComment = nil }
+                Button("Cancel", action: ContinuumAnalytics.wrapButton(
+                        "cancel",
+                        {
+ controller.pendingComment = nil 
+                        }
+                    ))
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("code.browser.comment.cancel")
-                Button("Add to chat") {
+                Button("Add to chat", action: ContinuumAnalytics.wrapButton(
+                        "add_to_chat",
+                        {
                     let store = model.composerStore(for: session, catalog: .bundled)
                     controller.stagePendingComment(into: store)
-                }
+                
+                        }
+                    ))
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .tint(SessionsV2Theme.accent)
