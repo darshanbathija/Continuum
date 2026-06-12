@@ -30,8 +30,7 @@ struct ReviewPaneGutter: View {
             Spacer()
         }
         .padding(.vertical, 10)
-        .padding(.horizontal, 4)
-        .frame(width: 52)
+        .frame(width: 36)
         .background(t.glassTintHi.opacity(0.55))
     }
 }
@@ -54,7 +53,7 @@ private struct ReviewPaneGutterTab: View {
                     .font(.system(size: 8, weight: .medium))
             }
             .foregroundStyle(.secondary)
-            .frame(width: 44, height: 44)
+            .frame(width: 36, height: 40)
             .background(
                 backgroundColor,
                 in: RoundedRectangle(cornerRadius: 6)

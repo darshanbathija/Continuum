@@ -325,7 +325,7 @@ struct MacRootView: View {
                         .modifier(TabSlotVisibility(active: tab == .settings))
                     }
                 }
-                .padding([.horizontal, .bottom], 10)
+                .padding(.bottom, 10)
                 // Tight gap under the titlebar (was 10pt + a ~28pt safe-area
                 // band; the band is gone now via the root .ignoresSafeArea).
                 .padding(.top, 6)

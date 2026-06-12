@@ -142,8 +142,6 @@ struct SessionWorkspaceView: View {
                     )
                 }
                 .frame(width: workbenchState.sidebarWidth)
-                .padding(.trailing, 5)
-
                 WorkbenchPaneResizeHandle(
                     getWidth: { workbenchState.sidebarWidth },
                     setWidth: { workbenchState.setSidebarWidth($0) },
@@ -151,7 +149,6 @@ struct SessionWorkspaceView: View {
                     maxWidth: WorkbenchState.maxSidebarWidth,
                     accessibilityIdentifier: "code.workspace.resize.sidebar"
                 )
-                .padding(.trailing, 5)
 
                 // Center pane carries the chat AND, when the review pane is
                 // collapsed, a thin right-edge gutter that doubles as the
@@ -259,7 +256,6 @@ struct SessionWorkspaceView: View {
                     .animation(reduceMotion ? nil : Self.reviewPaneToggleAnimation, value: effectiveShowGutter)
                 }
                 .frame(minWidth: WorkbenchState.minCenterWidth, maxWidth: .infinity)
-                .padding(.horizontal, 5)
 
                 if effectiveShowReviewPane {
                     WorkbenchPaneResizeHandle(
@@ -270,7 +266,6 @@ struct SessionWorkspaceView: View {
                         invertDrag: true,
                         accessibilityIdentifier: "code.workspace.resize.review"
                     )
-                    .padding(.leading, 5)
                 }
 
                 if canHostReviewPaneColumn, let session = resolvedReviewPaneSession {
@@ -322,11 +317,10 @@ struct SessionWorkspaceView: View {
                                value: effectiveShowReviewPane)
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.2),
                                value: workbenchState.selectedRightPane)
-                    .padding(.leading, effectiveShowReviewPane ? 5 : 0)
                 }
             }
             .animation(reduceMotion ? nil : Self.reviewPaneToggleAnimation, value: effectiveShowReviewPane)
-            .padding(10)
+            .padding(.vertical, 6)
         }
         .background(Color.clear)
         .background(
