@@ -495,7 +495,7 @@ final class SidebarProjectionCacheTests: XCTestCase {
             Self.recent(path: "/tmp/external-b.jsonl", lastModified: now.addingTimeInterval(-3_600)),
         ]
 
-        for grouping in [SessionGrouping.repo, .date, .agent, .status, .none] {
+        for grouping in [SessionGrouping.repo, .date, .agent, .status, .host, .none] {
             let projection = Self.buildProjection(
                 sessions: [],
                 repos: [Self.repo(key: repoKey, recents: recents)],

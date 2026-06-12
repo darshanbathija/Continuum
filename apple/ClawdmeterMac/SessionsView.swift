@@ -33,6 +33,9 @@ struct NewSessionMacSheet: View {
     @State private var errorMessage: String?
     // Conductor parity: per-repo setup script run in each new worktree.
     @State private var setupScript: String = ""
+    @State private var selectedHostId: UUID?
+    @State private var executionHosts: [ExecutionHost] = []
+    @State private var localExecutionHostId: UUID?
 
     init(model: SessionsModel, preselectedRepoKey: String? = nil) {
         self.model = model
@@ -119,6 +122,14 @@ struct NewSessionMacSheet: View {
                         }
                     }())
 
+                if !executionHosts.isEmpty {
+                    ExecutionHostPickerSection(
+                        hosts: executionHosts,
+                        localHostId: localExecutionHostId,
+                        selectedHostId: $selectedHostId
+                    )
+                }
+
                 // v0.7.9: Mode picker removed. Worktree is the only
                 // mode new sessions land in — the agent always runs
                 // in `.claude/worktrees/<city>/` on a branch named
@@ -161,6 +172,11 @@ struct NewSessionMacSheet: View {
             await launcher.refreshProviderAvailability()
             normalizeAgentAvailability()
             ensureSelectedModelIsAvailable()
+            if let client = AppDelegate.runtime?.loopbackClient, client.supportsExecutionHosts {
+                await client.refreshExecutionHosts()
+                executionHosts = client.executionHosts
+                localExecutionHostId = client.localExecutionHostId
+            }
         }
         .onChange(of: agent) { _, _ in
             selectedModelWasUserChosen = false
@@ -242,6 +258,28 @@ struct NewSessionMacSheet: View {
             break
         }
         do {
+            if let client = AppDelegate.runtime?.loopbackClient,
+               client.supportsExecutionHosts,
+               let targetId = selectedHostId,
+               targetId != localExecutionHostId {
+                let session = await client.createSession(NewSessionRequest(
+                    repoKey: repoPath,
+                    agent: agent,
+                    model: selectedModel,
+                    planMode: agent == .cursor ? false : planMode,
+                    goal: goal.isEmpty ? nil : goal,
+                    useWorktree: true,
+                    effort: supportsEffort(modelId: selectedModel) ? defaults.effort : nil,
+                    targetHostId: targetId
+                ))
+                guard let session else {
+                    errorMessage = client.lastError ?? "Remote spawn failed."
+                    return
+                }
+                model.openSessionId = session.id
+                dismiss()
+                return
+            }
             _ = try await model.spawnSession(
                 repoPath: repoPath,
                 agent: agent,

@@ -100,6 +100,7 @@ public struct IOSSessionDetailView: View {
     @State private var isDispatchingQueuedDraft: Bool = false
     @State private var dispatchedQueuedTurnForCurrentIdle: Bool = false
     @State private var chatPanePinned: Bool = true
+    @State private var hostRunMinutes: HostRunMinutesResponse?
     @State private var expandedTranscriptTurns: Set<String> = []
     @State private var projectionCache = SingleSlotProjectionCache<TranscriptProjectionCacheKey, TranscriptProjection>()
     @State private var attachments: [ComposerAttachment] = []
@@ -181,7 +182,15 @@ public struct IOSSessionDetailView: View {
         guard let realAgentSession else { return session?.subtitle ?? "—" }
         let status = session?.subtitle ?? realAgentSession.status.rawValue
         let model = effectiveModelId(for: realAgentSession) ?? "default"
-        return "\(status) · \(model) · \(effortText(for: realAgentSession))"
+        var parts = ["\(status) · \(model) · \(effortText(for: realAgentSession))"]
+        if let label = realAgentSession.executionHostLabel {
+            if let minutes = hostRunMinutes?.billableMinutes(forSession: sessionId), minutes > 0 {
+                parts.append("Running on \(label) · \(minutes) min")
+            } else {
+                parts.append("Running on \(label)")
+            }
+        }
+        return parts.joined(separator: " · ")
     }
 
     public var body: some View {
@@ -425,6 +434,10 @@ public struct IOSSessionDetailView: View {
             #endif
             await chatStore.refresh()
             chatStore.start()
+        }
+        .task {
+            guard agentClient.supportsExecutionHosts else { return }
+            hostRunMinutes = await agentClient.refreshHostRunMinutes()
         }
         .onChange(of: selectedTab) { _, newValue in
             UserDefaults.standard.set(newValue.rawValue, forKey: "clawdmeter.ios.session.\(sessionId).tab")

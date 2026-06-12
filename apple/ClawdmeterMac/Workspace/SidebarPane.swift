@@ -73,9 +73,17 @@ struct SidebarPane: View {
     @State private var colorTagInput: String = ""
     @State private var showingColorTagAlert = false
     @State private var comparisonPair: SessionComparisonPair?
+    @State private var handoffSessionTarget: AgentSession?
     @State private var externalActivityNow: Date = Date()
     @State private var requestedRepoIdentityKeys: Set<String> = []
     @StateObject private var worktreeDiffs = WorktreeDiffTracker()
+    @ObservedObject private var handoffAutoSuggest = HandoffAutoSuggestService.shared
+
+    /// Horizontal inset for sidebar chrome — kept minimal so repo rows use
+    /// the full pane width.
+    private enum SidebarLayout {
+        static let edgeInset: CGFloat = 2
+    }
 
     /// A11: single-slot cache for the sidebar projection. Persists across
     /// body re-evals (reference type held via @State) so SwiftUI ticking
@@ -104,6 +112,7 @@ struct SidebarPane: View {
                 spawnGroupList
             }
             sidebarHeader
+            handoffAutoSuggestBanner
             TahoeHairline()
             content
         }
@@ -277,6 +286,16 @@ struct SidebarPane: View {
         } message: { target in
             Text("Every terminal in \(target.name) ends immediately. Sessions are not recoverable.")
         }
+        .sheet(item: $handoffSessionTarget) { session in
+            if let client = AppDelegate.runtime?.loopbackClient {
+                HandoffExecutionHostSheet(
+                    client: client,
+                    sessionId: session.id,
+                    currentHostId: session.executionHostId,
+                    onDismiss: { handoffSessionTarget = nil }
+                )
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .renameOpenSession)) { _ in
             guard let session = model.openSession else { return }
             renameTarget = session
@@ -313,7 +332,7 @@ struct SidebarPane: View {
             filterMenu
             addRepoMenu
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.top, 8)
         .padding(.bottom, 6)
         .sheet(isPresented: $showingCloneRepoSheet) {
@@ -321,6 +340,49 @@ struct SidebarPane: View {
         }
         .sheet(isPresented: $showingQuickStartRepoSheet) {
             QuickStartRepoSheet(onboarding: model.repoOnboarding) { _ in }
+        }
+    }
+
+    /// R1 1D: nudge handoff when Mac battery is low and local sessions are running.
+    @ViewBuilder
+    private var handoffAutoSuggestBanner: some View {
+        if handoffAutoSuggest.shouldSuggestHandoff,
+           let session = handoffAutoSuggestCandidateSession {
+            HStack(spacing: 8) {
+                Image(systemName: "battery.25")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(handoffAutoSuggest.triggerReason == .willSleep
+                         ? "Mac sleeping soon — hand off session?"
+                         : "Battery low — hand off session?")
+                        .font(TahoeFont.body(11, weight: .semibold))
+                    if handoffAutoSuggest.triggerReason == .lowBattery,
+                       let pct = handoffAutoSuggest.batteryPercent {
+                        Text("\(pct)% remaining")
+                            .font(TahoeFont.body(10))
+                            .foregroundStyle(t.fg3)
+                    }
+                }
+                Spacer(minLength: 4)
+                Button("Hand off") {
+                    handoffSessionTarget = session
+                }
+                .font(TahoeFont.body(11, weight: .semibold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color.orange.opacity(0.12))
+        }
+    }
+
+    private var handoffAutoSuggestCandidateSession: AgentSession? {
+        guard let localId = AppDelegate.runtime?.loopbackClient?.localExecutionHostId else { return nil }
+        return model.registry.sessions.first { session in
+            session.archivedAt == nil
+                && (session.status == .running || session.status == .planning)
+                && (session.executionHostId == nil || session.executionHostId == localId)
         }
     }
 
@@ -540,7 +602,7 @@ struct SidebarPane: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(t.hairline, lineWidth: 0.5)
         )
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.top, 12)
         .padding(.bottom, 8)
         .onReceive(NotificationCenter.default.publisher(for: .focusSidebarSearch)) { _ in
@@ -580,7 +642,7 @@ struct SidebarPane: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.bottom, 8)
         .help("Open a grid of agent terminal sessions in your home directory")
         .accessibilityIdentifier("code.sidebar.spawn")
@@ -596,7 +658,7 @@ struct SidebarPane: View {
                 .tracking(0.5)
                 .textCase(.uppercase)
                 .foregroundStyle(t.fg3)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, SidebarLayout.edgeInset)
                 .padding(.bottom, 4)
             // The Spawns section lives above the Projects scroll area, so it
             // must bound its own height — many groups would otherwise
@@ -645,7 +707,7 @@ struct SidebarPane: View {
                     .padding(.vertical, 1)
                     .background(t.hair2, in: Capsule())
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, SidebarLayout.edgeInset)
             .padding(.vertical, 5)
             .background(
                 isSelected ? t.selection : Color.clear,
@@ -654,7 +716,7 @@ struct SidebarPane: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
-        .padding(.horizontal, 8)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .contextMenu {
             Button(role: .destructive) {
                 if spawnStore.hasLiveTiles(in: group) {
@@ -906,7 +968,7 @@ struct SidebarPane: View {
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
-            .padding(.horizontal, 12)
+            .padding(.horizontal, SidebarLayout.edgeInset)
             .padding(.top, 8)
             .padding(.bottom, 6)
         }
@@ -948,7 +1010,7 @@ struct SidebarPane: View {
                 }
             }
             .contentShape(Rectangle())
-            .padding(.horizontal, 12)
+            .padding(.horizontal, SidebarLayout.edgeInset)
             .padding(.top, 8)
             .padding(.bottom, 3)
         }
@@ -964,7 +1026,7 @@ struct SidebarPane: View {
                 .foregroundStyle(.tertiary)
             Spacer()
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.top, 8)
         .padding(.bottom, 3)
     }
@@ -973,7 +1035,7 @@ struct SidebarPane: View {
         Rectangle()
             .fill(t.hairline)
             .frame(height: 1)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, SidebarLayout.edgeInset)
             .padding(.top, 10)
             .padding(.bottom, 2)
     }
@@ -990,7 +1052,7 @@ struct SidebarPane: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.vertical, 24)
         .frame(maxWidth: .infinity)
     }
@@ -1013,7 +1075,6 @@ struct SidebarPane: View {
                 section.repo,
                 isExpanded: isExpanded,
                 sessionCount: section.sessions.count,
-                subtitle: workspaceSubtitle(for: section.workspacePath),
                 gearMenu: AnyView(workspaceGearMenu(section)),
                 onAdd: {
                     // Persistently un-collapse so the new session stays visible
@@ -1050,7 +1111,7 @@ struct SidebarPane: View {
     /// for accessories that are actually visible so branch names aren't
     /// squeezed when idle.
     private enum WorktreeRowChromeLayout {
-        static let trailingInset: CGFloat = 18
+        static let trailingInset: CGFloat = 4
         static let archiveWidth: CGFloat = 22
         static let accessorySpacing: CGFloat = 6
         static let provisioningWidth: CGFloat = 14
@@ -1183,8 +1244,8 @@ struct SidebarPane: View {
                     }
                     Spacer(minLength: 4)
                 }
-                .padding(.leading, 28)
-                .padding(.trailing, 8)
+                .padding(.leading, 20)
+                .padding(.trailing, SidebarLayout.edgeInset)
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -1225,7 +1286,7 @@ struct SidebarPane: View {
         .contextMenu {
             worktreeContextMenu(wt)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, SidebarLayout.edgeInset)
     }
 
     @ViewBuilder
@@ -1579,16 +1640,6 @@ struct SidebarPane: View {
         }
     }
 
-    /// Managed rows now represent a whole repo (all its worktrees nested), so
-    /// the subtitle is the repo's path (home-abbreviated) — informative and it
-    /// disambiguates same-named repos in different locations.
-    private func workspaceSubtitle(for repoPath: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        if repoPath == home { return "~" }
-        if repoPath.hasPrefix(home + "/") { return "~" + repoPath.dropFirst(home.count) }
-        return repoPath
-    }
-
     /// Pin-aware sort used by the legacy repo-grouped path's per-repo
     /// `repoSection(...)` lookups. The non-repo path receives this sort
     /// already applied via `currentProjection.visibleSessions`, but the
@@ -1624,7 +1675,7 @@ struct SidebarPane: View {
                 statusGroupHeader(group)
             }
             .disclosureGroupStyle(QuietDisclosure())
-            .padding(.horizontal, 12)
+            .padding(.horizontal, SidebarLayout.edgeInset)
             .padding(.top, 8)
             .padding(.bottom, 4)
         } else {
@@ -1661,7 +1712,7 @@ struct SidebarPane: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.top, 8)
         .padding(.bottom, 4)
     }
@@ -1793,7 +1844,7 @@ struct SidebarPane: View {
                                 .foregroundStyle(.secondary)
                             Spacer()
                         }
-                        .padding(.horizontal, 26)
+                        .padding(.horizontal, 8)
                         .padding(.vertical, 5)
                         .contentShape(Rectangle())
                     }
@@ -1840,8 +1891,8 @@ struct SidebarPane: View {
             }
             Spacer(minLength: 4)
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 14)
+        .padding(.leading, SidebarLayout.edgeInset)
+        .padding(.trailing, SidebarLayout.edgeInset)
         .padding(.vertical, 5)
         .background(
             isOpen
@@ -1853,7 +1904,7 @@ struct SidebarPane: View {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .stroke(isOpen ? terraCotta.opacity(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
         )
-        .padding(.horizontal, 6)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .contentShape(Rectangle())
         .onHover { inside in
             if inside {
@@ -2097,7 +2148,7 @@ struct SidebarPane: View {
             .help("New workspace — Codex · GPT-5.5 · extra-high effort · plan mode (option-click to customize)")
             .accessibilityIdentifier("code.repo.new-session")
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.vertical, subtitle == nil ? 6 : 5)
     }
 
@@ -2186,6 +2237,11 @@ struct SidebarPane: View {
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
                                 .background(colorTagTint(tag).opacity(0.14), in: Capsule())
+                        }
+                        if let hostLabel = session.executionHostLabel,
+                           let localId = AppDelegate.runtime?.loopbackClient?.localExecutionHostId,
+                           session.executionHostId != localId {
+                            ExecutionHostBadge(label: hostLabel)
                         }
                     }
                     // Daemon-computed "progress vs approved plan" bar.
@@ -2304,8 +2360,8 @@ struct SidebarPane: View {
                 // `SessionHoverActions` above — the duplicate inline button was
                 // removed so the row shows ONE clean Conductor-style icon.)
             }
-            .padding(.leading, 24 + CGFloat(depth) * 6)
-            .padding(.trailing, 24)
+            .padding(.leading, 8 + CGFloat(depth) * 6)
+            .padding(.trailing, 8)
             .padding(.vertical, 7)
             .background(isOpen
                 ? t.accentAlpha(colorScheme == .dark ? 0.18 : 0.12)
@@ -2315,7 +2371,7 @@ struct SidebarPane: View {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .stroke(isOpen ? t.accentAlpha(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
             )
-            .padding(.horizontal, 6)
+            .padding(.horizontal, SidebarLayout.edgeInset)
             .contentShape(Rectangle())
             .onHover { inside in
                 if inside {
@@ -2347,7 +2403,7 @@ struct SidebarPane: View {
                         postArchiveUndoToast(for: session)
                     }
                 )
-                .padding(.trailing, 16)
+                .padding(.trailing, SidebarLayout.edgeInset)
             }
         }
         .opacity(session.archivedAt != nil ? 0.6 : 1.0)
@@ -2454,6 +2510,15 @@ struct SidebarPane: View {
             
                     }
                 ))
+            Divider()
+        }
+        if let client = AppDelegate.runtime?.loopbackClient,
+           client.supportsExecutionHosts,
+           session.archivedAt == nil,
+           session.status != .done {
+            Button("Continue on…", systemImage: "arrow.right.circle") {
+                handoffSessionTarget = session
+            }
             Divider()
         }
         Button(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin.fill", action: ContinuumAnalytics.wrapButton(
@@ -2814,7 +2879,7 @@ struct SidebarPane: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.vertical, 24)
         .frame(maxWidth: .infinity)
     }
@@ -2844,7 +2909,7 @@ struct SidebarPane: View {
         }
         .buttonStyle(PressableButtonStyle())
         .keyboardShortcut("n", modifiers: [.command])
-        .padding(10)
+        .padding(SidebarLayout.edgeInset)
     }
 
     private var sidebarBg: Color {

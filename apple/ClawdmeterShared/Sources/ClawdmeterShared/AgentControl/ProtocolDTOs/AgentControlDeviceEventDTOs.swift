@@ -95,6 +95,10 @@ public enum AgentEventKind: String, Codable, Hashable, Sendable {
     /// Snapshot frame for cursor reconnect (sent when client's `?since=<seq>`
     /// is older than the retention window).
     case snapshot
+    /// Wire v30: a new execution host was registered.
+    case executionHostRegistered
+    /// Wire v30: handoff phase changed on a session.
+    case handoffPhaseChanged
     /// Forward-compatible fallback for event tags shipped by a newer daemon.
     case unknown
 

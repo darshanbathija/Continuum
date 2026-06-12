@@ -98,8 +98,22 @@ public struct AccessibilityPasteService {
     }
 
     private func attemptCommandVPaste(_ text: String) {
+        // Clipboard safety: snapshot the user's existing pasteboard before we
+        // overwrite it with the transcript to drive the synthetic ⌘V, then
+        // restore it after the keystroke lands. Without this, a copied secret
+        // is silently destroyed by every dictation paste. The caller decides
+        // the final clipboard state (the AX-fail path intentionally re-copies
+        // the transcript and shows a user-facing toast about it).
+        let pb = NSPasteboard.general
+        let saved = pb.pasteboardItems?.compactMap { item -> (NSPasteboard.PasteboardType, Data)? in
+            item.types.first.flatMap { type in item.data(forType: type).map { (type, $0) } }
+        }
+
         copyToPasteboard(text)
-        guard let source = CGEventSource(stateID: .combinedSessionState) else { return }
+        guard let source = CGEventSource(stateID: .combinedSessionState) else {
+            restorePasteboard(saved)
+            return
+        }
 
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
         keyDown?.flags = .maskCommand
@@ -107,5 +121,20 @@ public struct AccessibilityPasteService {
         keyUp?.flags = .maskCommand
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
+
+        // Restore after a short delay so the synthetic ⌘V reads the transcript
+        // before the original items return.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            restorePasteboard(saved)
+        }
+    }
+
+    private func restorePasteboard(_ saved: [(NSPasteboard.PasteboardType, Data)]?) {
+        guard let saved, !saved.isEmpty else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        for (type, data) in saved {
+            pb.setData(data, forType: type)
+        }
     }
 }

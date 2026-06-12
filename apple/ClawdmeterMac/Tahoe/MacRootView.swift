@@ -296,7 +296,8 @@ struct MacRootView: View {
                             grokModel: grokModel,
                             opencodeModel: runtime.opencodeModel,
                             usageHistoryStore: runtime.usageHistoryStore,
-                            secondaryColumns: runtime.tahoeSecondaryColumns
+                            secondaryColumns: runtime.tahoeSecondaryColumns,
+                            agentClient: runtime.loopbackClient
                         )
                         .postHogScreenScope("usage")
                         .modifier(TabSlotVisibility(active: tab == .usage))
@@ -325,7 +326,7 @@ struct MacRootView: View {
                         .modifier(TabSlotVisibility(active: tab == .settings))
                     }
                 }
-                .padding([.horizontal, .bottom], 10)
+                .padding(.bottom, 10)
                 // Tight gap under the titlebar (was 10pt + a ~28pt safe-area
                 // band; the band is gone now via the root .ignoresSafeArea).
                 .padding(.top, 6)

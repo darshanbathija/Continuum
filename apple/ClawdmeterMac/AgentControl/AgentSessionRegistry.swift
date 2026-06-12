@@ -301,9 +301,15 @@ public final class AgentSessionRegistry: ObservableObject {
         envSetName: String? = nil,
         providerInstanceId: String? = nil,
         customProviderId: String? = nil,
+        executionHostId: UUID? = nil,
+        executionHostLabel: String? = nil,
         id: UUID = UUID()
     ) async throws -> AgentSession {
         let now = Date()
+        let hostMeta = Self.executionHostMetadata(
+            executionHostId: executionHostId,
+            executionHostLabel: executionHostLabel
+        )
         let session = AgentSession(
             id: id,
             repoKey: repoKey,
@@ -336,7 +342,9 @@ public final class AgentSessionRegistry: ObservableObject {
             ownsWorktree: ownsWorktree,
             envSetId: envSetId,
             envSetName: envSetName,
-            customProviderId: customProviderId
+            customProviderId: customProviderId,
+            executionHostId: hostMeta.id,
+            executionHostLabel: hostMeta.label
         )
         // Write-ahead: receipt lands BEFORE in-memory mutation. If the
         // event store rejects the write, we propagate and the caller
@@ -345,6 +353,7 @@ public final class AgentSessionRegistry: ObservableObject {
         try await writeReceipt(kind: .sessionCreated, sessionId: id, session: session)
         nextEventSeqBySession[id] = 1
         sessions.append(session)
+        HostRunMinuteStore.shared.sessionStarted(session)
         save()
         return session
     }
@@ -367,10 +376,16 @@ public final class AgentSessionRegistry: ObservableObject {
         chatVendor: ChatVendor? = nil,
         billingProvider: String? = nil,
         providerInstanceId: String? = nil,
-        customProviderId: String? = nil
+        customProviderId: String? = nil,
+        executionHostId: UUID? = nil,
+        executionHostLabel: String? = nil
     ) async throws -> AgentSession {
         let id = UUID()
         let now = Date()
+        let hostMeta = Self.executionHostMetadata(
+            executionHostId: executionHostId,
+            executionHostLabel: executionHostLabel
+        )
         // v0.9: chat-mode Frontier children carry a slightly different
         // display label so the sidebar can group them visually under the
         // group's row. Defaults to the v0.8 "Chat — {Provider}" string.
@@ -412,7 +427,9 @@ public final class AgentSessionRegistry: ObservableObject {
             codexChatBackend: codexChatBackend,
             deepResearch: deepResearch,
             providerInstanceId: providerInstanceId,
-            customProviderId: customProviderId
+            customProviderId: customProviderId,
+            executionHostId: hostMeta.id,
+            executionHostLabel: hostMeta.label
         )
         // Write-ahead: see comment on `create(...)`. Chat sessions take
         // the same receipt path so replay reconstructs both `code` and
@@ -420,6 +437,7 @@ public final class AgentSessionRegistry: ObservableObject {
         try await writeReceipt(kind: .sessionCreated, sessionId: id, session: session)
         nextEventSeqBySession[id] = 1
         sessions.append(session)
+        HostRunMinuteStore.shared.sessionStarted(session)
         save()
         return session
     }
@@ -747,6 +765,9 @@ public final class AgentSessionRegistry: ObservableObject {
         // disappear within the click budget even when the event store is on.
         if didMutate {
             sessions = next
+            for id in ids {
+                HostRunMinuteStore.shared.sessionStopped(id)
+            }
             save()
             scheduleWorktreeReclaims(toReclaim)
         }
@@ -1066,7 +1087,11 @@ public final class AgentSessionRegistry: ObservableObject {
         frontierGroupId: UUID?? = nil,
         frontierChildIndex: Int?? = nil,
         planProgress: PlanProgress?? = nil,
-        customProviderId: String?? = nil
+        customProviderId: String?? = nil,
+        parentSessionId: UUID?? = nil,
+        executionHostId: UUID?? = nil,
+        executionHostLabel: String?? = nil,
+        handoff: HandoffState?? = nil
     ) -> AgentSession {
         AgentSession(
             id: s.id,
@@ -1089,7 +1114,7 @@ public final class AgentSessionRegistry: ObservableObject {
             archivedAt: Self.resolve(archivedAt, fallback: s.archivedAt),
             terminalPanes: terminalPanes ?? s.terminalPanes,
             scheduledFollowUps: scheduledFollowUps ?? s.scheduledFollowUps,
-            parentSessionId: s.parentSessionId,
+            parentSessionId: Self.resolve(parentSessionId, fallback: s.parentSessionId),
             workspaceId: s.workspaceId,
             runtimeCwd: Self.resolve(runtimeCwd, fallback: s.runtimeCwd),
             chatCwd: Self.resolve(chatCwd, fallback: s.chatCwd),
@@ -1122,8 +1147,38 @@ public final class AgentSessionRegistry: ObservableObject {
             ownsWorktree: ownsWorktree ?? s.ownsWorktree,
             envSetId: Self.resolve(envSetId, fallback: s.envSetId),
             envSetName: Self.resolve(envSetName, fallback: s.envSetName),
-            customProviderId: Self.resolve(customProviderId, fallback: s.customProviderId)
+            customProviderId: Self.resolve(customProviderId, fallback: s.customProviderId),
+            executionHostId: Self.resolve(executionHostId, fallback: s.executionHostId),
+            executionHostLabel: Self.resolve(executionHostLabel, fallback: s.executionHostLabel),
+            handoff: Self.resolve(handoff, fallback: s.handoff)
         )
+    }
+
+    /// Wire v30: tag legacy sessions with the local execution host.
+    private func backfillExecutionHostMetadata(_ loaded: [AgentSession]) -> [AgentSession] {
+        let local = ExecutionHostStore.shared.localHost()
+        return loaded.map { session in
+            guard session.executionHostId == nil else { return session }
+            return with(
+                session,
+                executionHostId: .some(local.id),
+                executionHostLabel: .some(local.displayName)
+            )
+        }
+    }
+
+    private static func executionHostMetadata(
+        executionHostId: UUID?,
+        executionHostLabel: String?
+    ) -> (id: UUID, label: String) {
+        if let executionHostId {
+            let label = executionHostLabel
+                ?? ExecutionHostStore.shared.host(id: executionHostId)?.displayName
+                ?? ExecutionHostStore.shared.localHost().displayName
+            return (executionHostId, label)
+        }
+        let local = ExecutionHostStore.shared.localHost()
+        return (local.id, local.displayName)
     }
 
     private static func reviewableApprovedPlanText(from session: AgentSession) -> String? {
@@ -1178,6 +1233,20 @@ public final class AgentSessionRegistry: ObservableObject {
             billingConfidence: billingConfidence,
             metadata: chatVendor.map { ["chatVendor": $0.rawValue] } ?? [:]
         )
+    }
+
+    /// Wire v30: replace a session row wholesale (handoff metadata updates).
+    public func replaceSession(_ session: AgentSession) async throws {
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: session.id, session: session)
+        update(id: session.id) { _ in session }
+    }
+
+    /// Wire v30: update handoff phase on the source session during migration.
+    public func updateHandoff(id: UUID, handoff: HandoffState?) async throws {
+        guard let s = session(id: id) else { return }
+        let projected = with(s, handoff: .some(handoff))
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
     }
 
     /// v0.5.4: set or clear the user-supplied display name. Empty /
@@ -1290,6 +1359,7 @@ public final class AgentSessionRegistry: ObservableObject {
             }
         }
         sessions.removeAll { $0.id == id }
+        HostRunMinuteStore.shared.sessionStopped(id)
         nextEventSeqBySession.removeValue(forKey: id)
         approvedAtBySession.removeValue(forKey: id)
         save()
@@ -1319,7 +1389,9 @@ public final class AgentSessionRegistry: ObservableObject {
     /// intermediate "kind on v4" wire shape).
     /// v6 (Track A): adds optional `claudeSessionId` (the Claude CLI session id
     /// for `--resume`). v5 files decode cleanly (decodeIfPresent → nil).
-    private static let currentSchemaVersion = 6
+    /// v7 (wire v30): adds optional `executionHostId`, `executionHostLabel`,
+    /// `handoff` on AgentSession. Decoder-tolerant — v6 files load cleanly.
+    private static let currentSchemaVersion = 7
 
     private func load() {
         guard FileManager.default.fileExists(atPath: storeURL.path) else { return }
@@ -1353,12 +1425,12 @@ public final class AgentSessionRegistry: ObservableObject {
             if deduped.count != loaded.count {
                 registryLogger.warning("Collapsed \(loaded.count - deduped.count) duplicate-id session(s) on load")
             }
-            self.sessions = deduped
+            self.sessions = backfillExecutionHostMetadata(deduped)
             // Restore per-session seq counters from the loaded data.
-            for session in deduped {
+            for session in self.sessions {
                 nextEventSeqBySession[session.id] = session.lastEventSeq + 1
             }
-            registryLogger.info("Loaded \(loaded.count) sessions from \(self.storeURL.path, privacy: .public)")
+            registryLogger.info("Loaded \(self.sessions.count) sessions from \(self.storeURL.path, privacy: .public)")
         } catch {
             registryLogger.error("Failed to load sessions.json: \(error.localizedDescription); starting empty")
         }

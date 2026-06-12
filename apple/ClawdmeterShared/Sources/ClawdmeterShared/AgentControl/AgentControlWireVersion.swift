@@ -17,7 +17,7 @@ public enum AgentControlWireVersion {
     /// Current wire version. Bump when adding a new WS op, REST endpoint, or
     /// DTO that older peers must explicitly gate. Historical bump notes live
     /// in docs/protocol-wire-version-history.md.
-    public static let current: Int = 29
+    public static let current: Int = 30
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -228,6 +228,10 @@ public enum AgentControlWireVersion {
     /// PR lands second, so it takes the next number; a Mac advertising
     /// 28 has multi-account but NOT custom providers.)
     public static let customProvidersMinimum: Int = 29
+
+    /// v30: minimum wire version exposing multi-device execution hosts
+    /// (`executionHostId` on sessions, `GET/POST /execution-hosts`).
+    public static let executionHostsMinimum: Int = 30
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -455,5 +459,12 @@ public enum AgentControlWireVersion {
     public static func supportsCustomProviders(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= customProvidersMinimum
+    }
+
+    /// Whether the paired Mac exposes execution-host registry endpoints and
+    /// tags sessions with `executionHostId`.
+    public static func supportsExecutionHosts(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= executionHostsMinimum
     }
 }

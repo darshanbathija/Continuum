@@ -188,6 +188,8 @@ public struct TahoeCodeSession: Identifiable, Hashable, Sendable {
     /// the plan has no extractable step markers — UI consumers treat all
     /// three the same and hide the bar.
     public var planProgress: PlanProgress?
+    /// Wire v30: denormalized device label for filter chips + badges.
+    public var executionHostLabel: String?
 
     public enum Status: String, Hashable, Sendable {
         case running, paused, done, planning, degraded
@@ -197,12 +199,14 @@ public struct TahoeCodeSession: Identifiable, Hashable, Sendable {
                 status: Status, mode: String, subtitle: String,
                 runtimePlanText: String? = nil,
                 commitBranch: String? = nil,
-                planProgress: PlanProgress? = nil) {
+                planProgress: PlanProgress? = nil,
+                executionHostLabel: String? = nil) {
         self.id = id; self.title = title; self.agent = agent
         self.model = model; self.status = status; self.mode = mode; self.subtitle = subtitle
         self.runtimePlanText = runtimePlanText
         self.commitBranch = commitBranch
         self.planProgress = planProgress
+        self.executionHostLabel = executionHostLabel
     }
 }
 

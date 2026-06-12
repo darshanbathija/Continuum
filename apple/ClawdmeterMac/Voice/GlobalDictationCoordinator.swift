@@ -82,7 +82,21 @@ public final class GlobalDictationCoordinator: ObservableObject {
             return
         }
 
-        let mode = context?.voicePreferences().fnGestureMode ?? .doubleTapOnly
+        // Privacy: only arm the system-wide Fn CGEvent tap when the user has
+        // actually opted into a Fn-driven dictation feature. The tap is the
+        // sole delivery path for the Fn double-tap/hold gesture, which feeds
+        // both the in-app composer and system-wide paste — so gate on either
+        // enablement flag rather than Accessibility trust alone.
+        let prefs = context?.voicePreferences()
+        let voiceEnabled = (prefs?.systemWideDictationEnabled ?? false)
+            || (prefs?.allowControlMShortcut ?? false)
+        guard voiceEnabled else {
+            hotkeyManager.stop()
+            isFnListenerActive = false
+            return
+        }
+
+        let mode = prefs?.fnGestureMode ?? .doubleTapOnly
         if mode != configuredGestureMode {
             hotkeyManager.configure(mode: mode)
             configuredGestureMode = mode

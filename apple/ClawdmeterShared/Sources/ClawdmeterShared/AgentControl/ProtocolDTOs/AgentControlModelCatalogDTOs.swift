@@ -186,6 +186,9 @@ public struct ModelCatalog: Codable, Sendable {
     /// Enablement lives on each summary's `enabled` flag — not filtered by
     /// `enabledProviderIDs`.
     public let customProviders: [CustomProviderWireSummary]
+    /// Authenticated OpenCode upstream partners (Anthropic, OpenAI, …) with
+    /// per-partner model lists — flat peers of OpenCode Go / OpenRouter.
+    public let opencodePartners: [OpenCodePartnerWireSummary]
     public let updatedAt: Date
 
     public init(
@@ -198,6 +201,7 @@ public struct ModelCatalog: Codable, Sendable {
         grok: [ModelCatalogEntry] = [],
         enabledProviderIDs: [String]? = nil,
         customProviders: [CustomProviderWireSummary] = [],
+        opencodePartners: [OpenCodePartnerWireSummary] = [],
         updatedAt: Date
     ) {
         self.claude = claude
@@ -209,6 +213,7 @@ public struct ModelCatalog: Codable, Sendable {
         self.grok = grok
         self.enabledProviderIDs = enabledProviderIDs
         self.customProviders = customProviders
+        self.opencodePartners = opencodePartners
         self.updatedAt = updatedAt
     }
 
@@ -303,6 +308,9 @@ public struct ModelCatalog: Codable, Sendable {
         return customProviders
             .flatMap(\.entries)
             .first { $0.id == id || $0.cliAlias == id }
+            ?? opencodePartners
+            .flatMap(\.entries)
+            .first { $0.id == id || $0.cliAlias == id }
     }
 
     /// Collision-safe lookup when a custom endpoint may serve a model id
@@ -374,6 +382,7 @@ public struct ModelCatalog: Codable, Sendable {
             grok: grok,
             enabledProviderIDs: enabledProviderIDs,
             customProviders: customProviders,
+            opencodePartners: opencodePartners,
             updatedAt: Date()
         )
     }
@@ -389,6 +398,7 @@ public struct ModelCatalog: Codable, Sendable {
             grok: grok,
             enabledProviderIDs: enabledProviderIDs,
             customProviders: customProviders,
+            opencodePartners: opencodePartners,
             updatedAt: Date()
         )
     }
@@ -404,6 +414,23 @@ public struct ModelCatalog: Codable, Sendable {
             grok: grok,
             enabledProviderIDs: enabledProviderIDs,
             customProviders: customProviders,
+            opencodePartners: opencodePartners,
+            updatedAt: Date()
+        )
+    }
+
+    public func replacingOpenCodePartners(_ partners: [OpenCodePartnerWireSummary]) -> ModelCatalog {
+        ModelCatalog(
+            claude: claude,
+            codex: codex,
+            gemini: gemini,
+            opencode: opencode,
+            openrouter: openrouter,
+            cursor: cursor,
+            grok: grok,
+            enabledProviderIDs: enabledProviderIDs,
+            customProviders: customProviders,
+            opencodePartners: partners,
             updatedAt: Date()
         )
     }
@@ -427,6 +454,9 @@ public struct ModelCatalog: Codable, Sendable {
             grok: allowed(.grok) ? grok : [],
             enabledProviderIDs: enabledIDs,
             customProviders: customProviders,
+            opencodePartners: opencodePartners.filter {
+                enabled.contains(OpenCodePartnerSupport.enablementId(for: $0.id))
+            },
             updatedAt: updatedAt
         )
     }
@@ -438,7 +468,7 @@ public struct ModelCatalog: Codable, Sendable {
     /// Codable throws on missing keys; decodeIfPresent + default returns
     /// an empty Gemini array.
     private enum CodingKeys: String, CodingKey {
-        case claude, codex, gemini, opencode, openrouter, cursor, grok, enabledProviderIDs, customProviders, updatedAt
+        case claude, codex, gemini, opencode, openrouter, cursor, grok, enabledProviderIDs, customProviders, opencodePartners, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -452,6 +482,7 @@ public struct ModelCatalog: Codable, Sendable {
         self.grok = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .grok) ?? []
         self.enabledProviderIDs = try c.decodeIfPresent([String].self, forKey: .enabledProviderIDs)
         self.customProviders = try c.decodeIfPresent([CustomProviderWireSummary].self, forKey: .customProviders) ?? []
+        self.opencodePartners = try c.decodeIfPresent([OpenCodePartnerWireSummary].self, forKey: .opencodePartners) ?? []
         self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
     }
 
@@ -466,6 +497,7 @@ public struct ModelCatalog: Codable, Sendable {
         try c.encode(grok, forKey: .grok)
         try c.encodeIfPresent(enabledProviderIDs, forKey: .enabledProviderIDs)
         try c.encode(customProviders, forKey: .customProviders)
+        try c.encode(opencodePartners, forKey: .opencodePartners)
         try c.encode(updatedAt, forKey: .updatedAt)
     }
 }
