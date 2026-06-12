@@ -2740,36 +2740,32 @@ public final class SessionsModel: ObservableObject {
         }
     }
 
-    /// A bound runtime cannot change provider mid-session — model plurality
-    /// lives in workspace tabs. Cross-provider picks open a sibling draft
-    /// configured for the picked provider/model instead of mutating the
-    /// running session: the old path respawned e.g. `claude --model
-    /// cursor-default`, which never becomes ready and strands the session
-    /// on "Connecting to Claude" with a Cursor chip.
-    @discardableResult
-    func openCrossProviderDraft(
-        from session: AgentSession,
+    /// Apply a cross-provider model pick to the session's composer store
+    /// without mutating the running runtime or opening a sibling tab.
+    func applyCrossProviderModelSelection(
+        sessionId: UUID,
         entry: ModelCatalogEntry,
-        effort: ReasoningEffort?
-    ) -> WorkspaceDraftTab? {
-        WorkspaceFeedback.info("New \(entry.displayName) tab in this worktree")
-        return openDraftWorkspaceTab(
-            from: session,
-            defaults: ComposerStore.ChipDefaults(
-                agent: entry.provider,
-                modelId: entry.id,
-                effort: entry.supportsEffort ? effort : nil,
-                mode: session.mode,
-                planMode: false
-            )
-        )
+        effort: ReasoningEffort?,
+        customProviderId: String? = nil
+    ) {
+        guard let session = registry.session(id: sessionId) else { return }
+        let store = composerStore(for: session, catalog: .bundled)
+        store.agent = entry.provider
+        store.modelId = entry.id
+        store.customProviderId = customProviderId
+        store.effort = entry.supportsEffort ? effort : nil
     }
 
     public func switchModel(sessionId: UUID, to entry: ModelCatalogEntry, effort: ReasoningEffort? = nil) async {
         // Cross-provider guard: never hand another provider's model id to the
-        // session's own runtime respawn.
+        // session's own runtime respawn — update the chip in place instead.
         if let session = registry.session(id: sessionId), entry.provider != session.agent {
-            openCrossProviderDraft(from: session, entry: entry, effort: effort)
+            applyCrossProviderModelSelection(
+                sessionId: sessionId,
+                entry: entry,
+                effort: effort,
+                customProviderId: session.customProviderId
+            )
             return
         }
         // Visible feedback within the click (sub-250ms): the chip already
