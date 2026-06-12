@@ -1439,75 +1439,29 @@ struct MacTitlebar: View {
         .fixedSize()
     }
 
-    /// Single right-pane menu. Replaces the older "bell + sidebar"
-    /// trio — the bell button was bound to a popover anchored on a
-    /// different chip and never showed reliably; the sidebar button
-    /// only ever opened the Plan pane. This Menu lists every workbench
-    /// tab plus a Collapse action so the user can open any pane in one
-    /// click and dismiss it from the same chip.
+    /// Toggle the right review pane. Expanding opens Plan by default;
+    /// individual tabs are reachable from the collapsed gutter or the
+    /// expanded tab strip. Keyboard shortcuts (⇧⌘P/D/F, ⌃`) still
+    /// deep-link to specific tabs via `.openCodeReviewPane`.
     @ViewBuilder
     private var paneMenuButton: some View {
-        Menu {
-            paneMenuItem(.plan,      shortcut: "⇧⌘P")
-            paneMenuItem(.diff,      shortcut: "⇧⌘D")
-            paneMenuItem(.terminal,  shortcut: "⌃`")
-            paneMenuItem(.sources)
-            paneMenuItem(.artifacts, shortcut: "⇧⌘F")
-            paneMenuItem(.browser)
-            Divider()
-            Button(action: {
-                NotificationCenter.default.post(name: .toggleCodeReviewPane, object: nil)
-            }) {
-                if workbenchState.showingReviewPane {
-                    Label("Collapse pane", systemImage: "sidebar.trailing")
-                } else {
-                    Label("Expand pane", systemImage: "sidebar.leading")
-                }
-            }
-            .accessibilityIdentifier(
-                workbenchState.showingReviewPane
-                    ? "code.titlebar.right-pane.collapse"
-                    : "code.titlebar.right-pane.expand"
-            )
-        } label: {
+        Button(action: {
+            NotificationCenter.default.post(name: .toggleCodeReviewPane, object: nil)
+        }) {
             TahoeIcon("sidebar", size: 12)
                 .foregroundStyle(t.fg3)
                 .frame(width: 24, height: 24)
                 .background(t.hair2.opacity(0.65), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .buttonStyle(PressableButtonStyle())
         .fixedSize()
-        .help("Right pane")
-        .accessibilityIdentifier("code.titlebar.right-pane")
-    }
-
-    /// Menu row that opens a specific workbench tab. `WorkbenchPaneTab`
-    /// owns its own systemImage so the icons stay aligned with the
-    /// tab strip and the deep-link / keyboard-shortcut routes already
-    /// registered for the Code scope.
-    @ViewBuilder
-    private func paneMenuItem(_ tab: WorkbenchPaneTab, shortcut: String? = nil) -> some View {
-        Button(action: {
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(
-                    name: .openCodeReviewPane,
-                    object: nil,
-                    userInfo: ["tab": tab.rawValue]
-                )
-            }
-        }) {
-            HStack {
-                Label(tab.rawValue, systemImage: tab.systemImage)
-                if let shortcut {
-                    Spacer()
-                    Text(shortcut)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .accessibilityIdentifier("code.titlebar.right-pane.\(tab.accessibilityKey)")
+        .help(workbenchState.showingReviewPane ? "Collapse right pane" : "Expand right pane")
+        .accessibilityLabel(workbenchState.showingReviewPane ? "Collapse right pane" : "Expand right pane")
+        .accessibilityIdentifier(
+            workbenchState.showingReviewPane
+                ? "code.titlebar.right-pane.collapse"
+                : "code.titlebar.right-pane.expand"
+        )
     }
 
     @ViewBuilder
