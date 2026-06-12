@@ -632,6 +632,21 @@ private struct SkillDetailPane: View {
                     .font(TahoeFont.body(13.5, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer()
+                if detail.command.filePath != nil {
+                    Button {
+                        shareSkill()
+                    } label: {
+                        HStack(spacing: 5) {
+                            TahoeIcon("share", size: 10)
+                            Text("Share")
+                                .font(TahoeFont.body(11, weight: .semibold))
+                        }
+                        .foregroundStyle(t.fg2)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Download skill as Markdown")
+                    .accessibilityIdentifier("settings.skills.share")
+                }
                 Button {
                     showSource.toggle()
                 } label: {
@@ -685,6 +700,16 @@ private struct SkillDetailPane: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: date)
+    }
+
+    private func shareSkill() {
+        do {
+            let url = try SkillShareWriter.export(detail: detail)
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            WorkspaceFeedback.success("Downloaded skill", detail: url.lastPathComponent)
+        } catch {
+            WorkspaceFeedback.failure("Couldn't download skill", detail: error.localizedDescription)
+        }
     }
 }
 

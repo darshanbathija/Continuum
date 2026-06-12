@@ -131,4 +131,74 @@ final class SkillPluginImporterTests: XCTestCase {
         let b = PaletteCommand(id: "qa", label: "qa", description: "", source: .gstack, filePath: nil)
         XCTAssertEqual(SkillCatalog.dedupedByID([a, b]).count, 2)
     }
+
+    func test_shareWriterSanitizesFilename() {
+        XCTAssertEqual(SkillShareWriter.sanitizedFilename(for: "plan/ceo:review"), "plan-ceo-review")
+        XCTAssertEqual(SkillShareWriter.sanitizedFilename(for: "   "), "skill")
+    }
+
+    func test_shareWriterExportsSkillMarkdown() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("skill-share-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let skillDir = root.appendingPathComponent("demo-skill", isDirectory: true)
+        try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
+        let source = skillDir.appendingPathComponent("SKILL.md")
+        try """
+        ---
+        name: demo-skill
+        description: Demo skill
+        ---
+        Body
+        """.write(to: source, atomically: true, encoding: .utf8)
+
+        let command = PaletteCommand(
+            id: "demo-skill",
+            label: "demo-skill",
+            description: "Demo skill",
+            source: .claudeGlobal,
+            filePath: source.path
+        )
+        let detail = SkillDetail(
+            command: command,
+            bodyMarkdown: "Body",
+            lastModified: nil,
+            children: []
+        )
+
+        let exported = try SkillShareWriter.export(detail: detail, outputRoot: root)
+        XCTAssertEqual(exported.lastPathComponent, "demo-skill.md")
+        XCTAssertEqual(try String(contentsOf: exported, encoding: .utf8), try String(contentsOf: source, encoding: .utf8))
+    }
+
+    func test_shareWriterDedupesExistingExport() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("skill-share-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let skillDir = root.appendingPathComponent("dup", isDirectory: true)
+        try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
+        let source = skillDir.appendingPathComponent("SKILL.md")
+        try "body".write(to: source, atomically: true, encoding: .utf8)
+        try "existing".write(to: root.appendingPathComponent("dup.md"), atomically: true, encoding: .utf8)
+
+        let detail = SkillDetail(
+            command: PaletteCommand(
+                id: "dup",
+                label: "dup",
+                description: "",
+                source: .claudeGlobal,
+                filePath: source.path
+            ),
+            bodyMarkdown: "body",
+            lastModified: nil,
+            children: []
+        )
+
+        let exported = try SkillShareWriter.export(detail: detail, outputRoot: root)
+        XCTAssertEqual(exported.lastPathComponent, "dup (1).md")
+    }
 }
