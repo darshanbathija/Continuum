@@ -81,6 +81,73 @@ public struct TranscriptTurn: Identifiable, Hashable, Sendable {
     public var hasCollapsedContent: Bool {
         !hiddenItems.isEmpty
     }
+
+    /// Per-file edit metadata for the end-of-turn chip strip. Walks the
+    /// lossless `expandedItems` tool pairs so the `+N more` expansion can
+    /// render inline diff previews via `EditDiffRow`.
+    public func editFileDetails() -> [TranscriptEditedFileDetail] {
+        let lookup = Self.editLookup(from: expandedItems)
+        return editedFiles.map { file in
+            if let match = lookup[file.filePath] {
+                return TranscriptEditedFileDetail(
+                    file: file,
+                    stats: match.stats,
+                    editDiff: match.editDiff,
+                    resultBody: match.resultBody
+                )
+            }
+            return TranscriptEditedFileDetail(
+                file: file,
+                stats: EditStats(
+                    kind: .edit,
+                    filePath: file.filePath,
+                    additions: file.additions,
+                    deletions: file.deletions
+                )
+            )
+        }
+    }
+
+    private struct EditLookupEntry: Sendable {
+        let stats: EditStats
+        let editDiff: EditDiff?
+        let resultBody: String?
+    }
+
+    private static func editLookup(from items: [ChatItem]) -> [String: EditLookupEntry] {
+        var out: [String: EditLookupEntry] = [:]
+        for item in items {
+            guard case .toolRun(_, let pairs) = item else { continue }
+            for pair in pairs {
+                if let stats = pair.call.editStats {
+                    out[stats.filePath] = EditLookupEntry(
+                        stats: stats,
+                        editDiff: pair.call.editDiff,
+                        resultBody: pair.result?.body
+                    )
+                }
+                for file in TranscriptEditedFile.from(pair.call) where out[file.filePath] == nil {
+                    let kind: EditStats.Kind
+                    switch pair.call.editDiff?.kind {
+                    case .write: kind = .write
+                    case .multiEdit: kind = .multiEdit
+                    default: kind = .edit
+                    }
+                    out[file.filePath] = EditLookupEntry(
+                        stats: EditStats(
+                            kind: kind,
+                            filePath: file.filePath,
+                            additions: file.additions,
+                            deletions: file.deletions
+                        ),
+                        editDiff: pair.call.editDiff,
+                        resultBody: pair.result?.body
+                    )
+                }
+            }
+        }
+        return out
+    }
 }
 
 public struct TranscriptTurnSummary: Hashable, Sendable {
@@ -274,6 +341,10 @@ public struct TranscriptEditedFile: Identifiable, Codable, Hashable, Sendable {
     public let additions: Int
     public let deletions: Int
     public let sourceToolName: String?
+    /// Capped edit preview/diff payload for hover peek. Nil when the
+    /// provider did not expose a preview for this file.
+    public let preview: String?
+    public let isPreviewTruncated: Bool
 
     public var id: String { filePath }
     public var basename: String {
@@ -281,40 +352,83 @@ public struct TranscriptEditedFile: Identifiable, Codable, Hashable, Sendable {
         return last.isEmpty ? filePath : last
     }
 
-    public init(filePath: String, additions: Int, deletions: Int, sourceToolName: String? = nil) {
+    public init(
+        filePath: String,
+        additions: Int,
+        deletions: Int,
+        sourceToolName: String? = nil,
+        preview: String? = nil,
+        isPreviewTruncated: Bool = false
+    ) {
         self.filePath = filePath
         self.additions = additions
         self.deletions = deletions
         self.sourceToolName = sourceToolName
+        self.preview = preview
+        self.isPreviewTruncated = isPreviewTruncated
     }
 
     public static func from(_ message: ChatMessage) -> [TranscriptEditedFile] {
         guard message.kind == .toolCall else { return [] }
         if let stats = message.editStats {
+            let previewPayload = previewPayload(for: stats.filePath, diff: message.editDiff)
             return [
                 TranscriptEditedFile(
                     filePath: stats.filePath,
                     additions: stats.additions,
                     deletions: stats.deletions,
-                    sourceToolName: message.title
+                    sourceToolName: message.title,
+                    preview: previewPayload.preview,
+                    isPreviewTruncated: previewPayload.isTruncated
                 )
             ]
         }
         guard let diff = message.editDiff else { return [] }
         if diff.kind == .applyPatch, let patch = diff.preview {
             let parsed = TranscriptPatchEditedFileParser.files(fromPatch: patch, sourceToolName: message.title)
-            if !parsed.isEmpty { return parsed }
+            if !parsed.isEmpty {
+                return parsed.map { file in
+                    TranscriptEditedFile(
+                        filePath: file.filePath,
+                        additions: file.additions,
+                        deletions: file.deletions,
+                        sourceToolName: file.sourceToolName,
+                        preview: TranscriptEditedFilePreviewSlicer.slice(preview: patch, filePath: file.filePath),
+                        isPreviewTruncated: diff.isTruncated
+                    )
+                }
+            }
         }
         guard let path = diff.filePath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !path.isEmpty else { return [] }
+        let previewPayload = previewPayload(for: path, diff: diff)
         return [
             TranscriptEditedFile(
                 filePath: path,
                 additions: diff.additions,
                 deletions: diff.deletions,
-                sourceToolName: message.title
+                sourceToolName: message.title,
+                preview: previewPayload.preview,
+                isPreviewTruncated: previewPayload.isTruncated
             )
         ]
+    }
+
+    private static func previewPayload(for filePath: String, diff: EditDiff?) -> (preview: String?, isTruncated: Bool) {
+        guard let diff, let raw = diff.preview?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return (nil, false)
+        }
+        if let diffPath = diff.filePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !diffPath.isEmpty,
+           diffPath != filePath,
+           diff.kind != .applyPatch {
+            return (nil, false)
+        }
+        let sliced = TranscriptEditedFilePreviewSlicer.slice(preview: raw, filePath: filePath)
+        guard !sliced.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return (nil, false)
+        }
+        return (sliced, diff.isTruncated)
     }
 }
 
@@ -712,7 +826,9 @@ public enum TranscriptTurnProjector {
                         filePath: file.filePath,
                         additions: existing.additions + file.additions,
                         deletions: existing.deletions + file.deletions,
-                        sourceToolName: existing.sourceToolName ?? file.sourceToolName
+                        sourceToolName: existing.sourceToolName ?? file.sourceToolName,
+                        preview: file.preview ?? existing.preview,
+                        isPreviewTruncated: file.isPreviewTruncated || existing.isPreviewTruncated
                     )
                 } else {
                     merged[file.filePath] = file

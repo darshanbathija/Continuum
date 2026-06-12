@@ -929,13 +929,13 @@ public final class AgentControlServer {
             return channel(for: host)
         }
 
-        guard let host = try? await terminalRegistry.spawnShell(cwd: session.effectiveCwd, title: "Shell") else {
+        guard let host = try? await terminalRegistry.spawnShell(cwd: session.effectiveCwd, title: "Terminal") else {
             return nil
         }
         let pane = TerminalPaneRef(
             id: session.terminalPanes.first(where: { $0.isPrimary })?.id ?? UUID(),
             paneId: host.id.uuidString,
-            title: "Shell",
+            title: "Terminal",
             isPrimary: true
         )
         try? await registry.replacePrimaryTerminalPane(sessionId: session.id, pane: pane)

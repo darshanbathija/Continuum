@@ -4,6 +4,33 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.36.0 build 236] - 2026-06-12 - Vendor secret sharing + Code tab document tabs
+
+Vendor secret sharing and guided CLI onboarding, document tabs and
+edited-file previews in the Code tab, richer agent transcripts, and more
+accurate usage analytics. **iOS/watchOS ship as marketing 1.0.1 — the first
+public App Store update since the 1.0 launch** (release type: auto-release
+after approval).
+
+### Added
+
+- **Guided vendor CLI onboarding** in provisioning settings. (#402)
+- **Secure vendor secret sharing**: `@`-mention vendors in the composer and save pasted vendor env vars from Code tab chat. (#404, #403)
+- **Code titlebar Create PR button** with skill attachment. (#406)
+- **Document tabs** for agent-produced PDFs, HTML, images, and docs. (#394)
+- **Expandable edited-file chips** at the end of session turns, with hover diff preview. (#395, #396)
+- **Richer agent transcripts** with rich tool icons and per-stack logos. (#392)
+- **Cloud vs Tailscale pairing choice** restored in download flow and Devices tab. (#390)
+- **Hover-to-copy** on chat rows and a hover effect on the workspace new-tab button. (#405, #400)
+
+### Fixed
+
+- **Cursor spend accuracy**: analytics now uses the Cursor dashboard billing API. (#407)
+- **Self-hosting**: relay auto-provision fixed, pairing is Tailscale-first. (#393)
+- **Secondary-account** usage gauges and menu-bar toggles. (#391)
+- **Cross-provider model toggles** stay on the current tab. (#398)
+- **Terminal** auto-focuses when a Claude session is ready; tabs labelled "Terminal — branch" not "Shell". (#401, #399)
+
 ## [0.35.0 build 235] - 2026-06-12 - Multi-account provider settings + Providers redesign
 
 Multi-account provider settings get evened out across the app, Settings →

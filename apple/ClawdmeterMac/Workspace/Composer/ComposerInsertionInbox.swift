@@ -7,6 +7,20 @@ final class ComposerInsertionInbox: ObservableObject {
         let id = UUID()
         let text: String
         let autoSend: Bool
+        let attachmentURL: URL?
+        let attachmentDisplayName: String?
+
+        init(
+            text: String,
+            autoSend: Bool,
+            attachmentURL: URL? = nil,
+            attachmentDisplayName: String? = nil
+        ) {
+            self.text = text
+            self.autoSend = autoSend
+            self.attachmentURL = attachmentURL
+            self.attachmentDisplayName = attachmentDisplayName
+        }
     }
 
     static let shared = ComposerInsertionInbox()
@@ -15,8 +29,18 @@ final class ComposerInsertionInbox: ObservableObject {
 
     private init() {}
 
-    func enqueue(text: String, autoSend: Bool) {
-        pendingRequest = Request(text: text, autoSend: autoSend)
+    func enqueue(
+        text: String,
+        autoSend: Bool,
+        attachmentURL: URL? = nil,
+        attachmentDisplayName: String? = nil
+    ) {
+        pendingRequest = Request(
+            text: text,
+            autoSend: autoSend,
+            attachmentURL: attachmentURL,
+            attachmentDisplayName: attachmentDisplayName
+        )
     }
 
     func consumePendingRequest(id: UUID) -> Request? {

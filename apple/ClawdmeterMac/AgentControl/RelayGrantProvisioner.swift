@@ -91,6 +91,11 @@ public struct RelayGrantProvisioner {
     }
 
     /// Fetch and persist a grant token when none is stored yet.
+    ///
+    /// Tries the relay Worker's provision endpoint first (rate-limited).
+    /// When that endpoint is unavailable — e.g. the Worker hasn't been
+    /// redeployed yet, or the network is down — mints the same deterministic
+    /// per-install token locally using the bundled client provisioning key.
     @discardableResult
     public func ensureConfigured(
         relayURL: String = RelayEnvironment.resolvedRelayURL(processEnv: ProcessInfo.processInfo.environment)
@@ -100,10 +105,10 @@ public struct RelayGrantProvisioner {
             try await provision(relayURL: relayURL)
             return grantTokenStore.isConfigured
         } catch {
-            relayGrantProvisionerLogger.error(
-                "Relay grant auto-provision failed: \(error.localizedDescription, privacy: .public)"
+            relayGrantProvisionerLogger.warning(
+                "Relay grant HTTP auto-provision unavailable: \(error.localizedDescription, privacy: .public)"
             )
-            return false
+            return mintAndStoreLocalDeviceGrantToken()
         }
     }
 
@@ -173,6 +178,37 @@ public struct RelayGrantProvisioner {
             using: SymmetricKey(data: provisioningKey)
         )
         return base64URLEncode(Data(mac))
+    }
+
+    /// Deterministic per-install grant token — mirrors `issueDeviceGrantToken`
+    /// in `infra/relay/src/provision.ts`.
+    static func mintLocalDeviceGrantToken(
+        installId: String,
+        provisioningKey: Data
+    ) -> String {
+        let message = "device-grant-v1:\(installId)"
+        let mac = HMAC<SHA256>.authenticationCode(
+            for: Data(message.utf8),
+            using: SymmetricKey(data: provisioningKey)
+        )
+        return "\(installId).\(base64URLEncode(Data(mac)))"
+    }
+
+    private func mintAndStoreLocalDeviceGrantToken() -> Bool {
+        guard let provisioningKey = RelayClientProvisioningKey.resolved(processEnv: processEnv) else {
+            relayGrantProvisionerLogger.error("Relay grant auto-provision failed: missing client provisioning key")
+            return false
+        }
+        let token = Self.mintLocalDeviceGrantToken(
+            installId: installIdentity.installId,
+            provisioningKey: provisioningKey
+        )
+        guard grantTokenStore.setToken(token) else {
+            relayGrantProvisionerLogger.error("Relay grant auto-provision failed: keychain store failed")
+            return false
+        }
+        relayGrantProvisionerLogger.info("Relay grant token minted locally")
+        return true
     }
 
     private static func base64URLEncode(_ data: Data) -> String {

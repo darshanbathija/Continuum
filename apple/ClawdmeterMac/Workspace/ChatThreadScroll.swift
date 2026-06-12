@@ -794,41 +794,40 @@ struct ChatThreadScroll: View {
         let artifacts = turn.outputArtifacts
         let files = turn.editedFiles
         if turn.finalAssistant != nil || !artifacts.isEmpty || !files.isEmpty {
-            HStack(spacing: 8) {
-                if turn.finalAssistant != nil {
-                    Button {
-                        onPreviewTurn()
-                    } label: {
-                        transcriptChip(
-                            icon: WorkbenchPaneTab.browser.systemImage,
-                            title: "Preview",
-                            tint: SessionsV2Theme.accent
-                        )
+            VStack(alignment: .leading, spacing: 8) {
+                if turn.finalAssistant != nil || !artifacts.isEmpty {
+                    HStack(spacing: 8) {
+                        if turn.finalAssistant != nil {
+                            Button {
+                                onPreviewTurn()
+                            } label: {
+                                transcriptChip(
+                                    icon: WorkbenchPaneTab.browser.systemImage,
+                                    title: "Preview",
+                                    tint: SessionsV2Theme.accent
+                                )
+                            }
+                            .buttonStyle(PressableButtonStyle())
+                            .help("Open the current worktree preview")
+                            .accessibilityIdentifier("code.turn.preview")
+                        }
+                        ForEach(artifacts.prefix(6)) { artifact in
+                            Button {
+                                openTranscriptArtifact(artifact)
+                            } label: {
+                                transcriptChip(
+                                    icon: iconName(for: artifact.kind),
+                                    title: artifact.filename,
+                                    tint: TranscriptArtifactClassifier.opensInDocumentTab(forPath: artifact.path) ? t.accent : t.fg3
+                                )
+                            }
+                            .buttonStyle(PressableButtonStyle())
+                            .help(helpText(for: artifact))
+                        }
                     }
-                    .buttonStyle(PressableButtonStyle())
-                    .help("Open the current worktree preview")
-                    .accessibilityIdentifier("code.turn.preview")
                 }
-                ForEach(artifacts.prefix(6)) { artifact in
-                    Button {
-                        openTranscriptArtifact(artifact)
-                    } label: {
-                        transcriptChip(
-                            icon: iconName(for: artifact.kind),
-                            title: artifact.filename,
-                            tint: TranscriptArtifactClassifier.opensInDocumentTab(forPath: artifact.path) ? t.accent : t.fg3
-                        )
-                    }
-                    .buttonStyle(PressableButtonStyle())
-                    .help(helpText(for: artifact))
-                }
-                ForEach(files.prefix(6)) { file in
-                    transcriptChip(
-                        icon: "pencil.and.scribble",
-                        title: "\(file.basename) \(editDeltaLabel(file))",
-                        tint: SessionsV2Theme.success
-                    )
-                    .help(file.filePath)
+                if !files.isEmpty {
+                    TranscriptEditedFileChipStripView(turn: turn, density: density)
                 }
             }
             .padding(.leading, 38)
@@ -1065,12 +1064,6 @@ struct ChatThreadScroll: View {
         case .archive: return "archivebox"
         case .data: return "tablecells.badge.ellipsis"
         }
-    }
-
-    private func editDeltaLabel(_ file: TranscriptEditedFile) -> String {
-        let additions = file.additions > 0 ? "+\(file.additions)" : ""
-        let deletions = file.deletions > 0 ? "-\(file.deletions)" : ""
-        return [additions, deletions].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     /// v0.5.6 — fire-and-forget answer send for AskUserQuestion. Mirrors

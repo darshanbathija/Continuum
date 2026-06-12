@@ -714,18 +714,22 @@ private struct TranscriptScroll: View {
     @ViewBuilder
     private func compactChipStrip(_ turn: TranscriptTurn) -> some View {
         if !turn.outputArtifacts.isEmpty || !turn.editedFiles.isEmpty {
-            HStack(spacing: 7) {
-                ForEach(turn.outputArtifacts.prefix(4)) { artifact in
-                    Button {
-                        UIPasteboard.general.string = artifact.path
-                    } label: {
-                        compactChip(icon: iconName(for: artifact.kind), title: artifact.filename)
+            VStack(alignment: .leading, spacing: 8) {
+                if !turn.outputArtifacts.isEmpty {
+                    HStack(spacing: 7) {
+                        ForEach(turn.outputArtifacts.prefix(4)) { artifact in
+                            Button {
+                                UIPasteboard.general.string = artifact.path
+                            } label: {
+                                compactChip(icon: iconName(for: artifact.kind), title: artifact.filename)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Copy path \(artifact.path)")
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Copy path \(artifact.path)")
                 }
-                ForEach(turn.editedFiles.prefix(4)) { file in
-                    compactChip(icon: "pencil.and.scribble", title: file.basename)
+                if !turn.editedFiles.isEmpty {
+                    TranscriptEditedFileChipStripView(turn: turn)
                 }
             }
             .padding(.leading, 24)
@@ -814,6 +818,7 @@ private struct MessageRow: View {
                         .padding(.vertical, 10)
                         .background(t.accent.opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
                 }
+                .contextMenu { messageCopyMenu(message) }
             case .assistantText:
                 if message.isError {
                     errorAssistantRow(message)
@@ -833,6 +838,7 @@ private struct MessageRow: View {
                         .padding(13)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .contextMenu { messageCopyMenu(message) }
                 }
             case .toolCall, .toolResult:
                 AgentToolActionRow(
@@ -891,6 +897,7 @@ private struct MessageRow: View {
                     .stroke(SessionsV2Theme.danger.opacity(0.55), lineWidth: 1.25)
             )
             .accessibilityLabel("Model failed: \(message.body)")
+            .contextMenu { messageCopyMenu(message) }
 
             if let retryPrompt = modelFailureRetryPrompt {
                 modelFailureActionRow(retryPrompt: retryPrompt)
@@ -923,6 +930,13 @@ private struct MessageRow: View {
             }
         }
         .padding(.leading, 2)
+    }
+
+    @ViewBuilder
+    private func messageCopyMenu(_ message: ChatMessage) -> some View {
+        Button("Copy Message", systemImage: "doc.on.doc") {
+            UIPasteboard.general.string = message.body
+        }
     }
 }
 

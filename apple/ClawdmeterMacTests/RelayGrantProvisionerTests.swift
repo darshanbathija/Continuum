@@ -39,4 +39,18 @@ final class RelayGrantProvisionerTests: XCTestCase {
         XCTAssertNotNil(key)
         XCTAssertGreaterThanOrEqual(key?.count ?? 0, 32)
     }
+
+    func testMintLocalDeviceGrantTokenMatchesServerAlgorithm() {
+        let key = Data(base64Encoded: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")!
+        let installId = "11111111-1111-4111-8111-111111111111"
+        let token = RelayGrantProvisioner.mintLocalDeviceGrantToken(
+            installId: installId,
+            provisioningKey: key
+        )
+        XCTAssertTrue(token.hasPrefix("\(installId)."))
+        XCTAssertEqual(
+            token,
+            "11111111-1111-4111-8111-111111111111.L8OeZbMU2WAZMleiolFa_abtU5LLI_bprHf-yLwRXfE"
+        )
+    }
 }

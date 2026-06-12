@@ -46,6 +46,27 @@ final class WireV24VendorProvisioningTests: XCTestCase {
         XCTAssertEqual(decoded.statuses.first?.mcpMatches.first?.name, "cloudflare")
     }
 
+    func testVendorMentionCatalogMatching() {
+        let cloudflareMatches = VendorProvisioningCatalog.vendors(matchingMentionQuery: "cloud")
+        XCTAssertTrue(cloudflareMatches.contains { $0.id == "cloudflare" })
+
+        XCTAssertEqual(
+            VendorProvisioningCatalog.bestVendorMatch(forMentionQuery: "Cloudflare")?.id,
+            "cloudflare"
+        )
+        XCTAssertNil(VendorProvisioningCatalog.bestVendorMatch(forMentionQuery: "c"))
+    }
+
+    func testVendorMentionConnectionLabels() {
+        let connected = VendorProvisioningStatus(vendorId: "cloudflare", cliStatus: .authenticated)
+        let disconnected = VendorProvisioningStatus(vendorId: "cloudflare", cliStatus: .notInstalled)
+
+        XCTAssertEqual(connected.mentionConnectionLabel, "connected")
+        XCTAssertTrue(connected.isMentionConnected)
+        XCTAssertEqual(disconnected.mentionConnectionLabel, "not connected")
+        XCTAssertFalse(disconnected.isMentionConnected)
+    }
+
     func testEnvPreviewAndImportPayloadsRoundTripWithoutSecretInPreviewResponse() throws {
         let workspaceId = UUID()
         let previewRequest = VendorEnvPreviewRequest(
@@ -97,5 +118,50 @@ final class WireV24VendorProvisioningTests: XCTestCase {
         XCTAssertNil(decoded.currentWorkspaceId)
         XCTAssertEqual(decoded.workspaceIds, [])
         XCTAssertEqual(decoded.candidates, [])
+    }
+
+    func testOnboardingGuideHidesInstallWhenCLIInstalled() {
+        let installed = VendorProvisioningStatus(
+            vendorId: "supabase",
+            cliStatus: .unauthenticated,
+            installedBinary: "/opt/homebrew/bin/supabase",
+            message: "CLI installed, authentication not confirmed."
+        )
+        let guide = VendorProvisioningOnboardingGuide.resolve(status: installed)
+
+        XCTAssertEqual(guide.step, .authenticate)
+        XCTAssertFalse(guide.showsInstall)
+        XCTAssertTrue(guide.showsAuthenticate)
+        XCTAssertEqual(guide.primaryActionKind, .authenticate)
+        XCTAssertEqual(guide.statusLabel, "Needs Auth")
+    }
+
+    func testOnboardingGuideShowsInstallOnlyWhenMissing() {
+        let missing = VendorProvisioningStatus(
+            vendorId: "upstash",
+            cliStatus: .notInstalled,
+            message: "CLI not installed."
+        )
+        let guide = VendorProvisioningOnboardingGuide.resolve(status: missing)
+
+        XCTAssertEqual(guide.step, .installCLI)
+        XCTAssertTrue(guide.showsInstall)
+        XCTAssertFalse(guide.showsAuthenticate)
+        XCTAssertEqual(guide.primaryActionKind, .install)
+    }
+
+    func testOnboardingGuideTreatsProbeErrorsAsAuthStep() {
+        let timedOut = VendorProvisioningStatus(
+            vendorId: "gcp",
+            cliStatus: .error,
+            installedBinary: "/opt/homebrew/bin/gcloud",
+            message: "timedOut(after: 6.0)"
+        )
+        let guide = VendorProvisioningOnboardingGuide.resolve(status: timedOut)
+
+        XCTAssertEqual(guide.step, .authenticate)
+        XCTAssertFalse(guide.showsInstall)
+        XCTAssertTrue(guide.showsAuthenticate)
+        XCTAssertEqual(guide.statusLabel, "Needs Auth")
     }
 }

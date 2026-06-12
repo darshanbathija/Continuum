@@ -3,14 +3,14 @@
     <channel>
         <title>Continuum</title>
         <item>
-            <title>0.35.0</title>
-            <pubDate>Fri, 12 Jun 2026 13:34:44 +0700</pubDate>
-            <sparkle:version>235</sparkle:version>
-            <sparkle:shortVersionString>0.35.0</sparkle:shortVersionString>
+            <title>0.36.0</title>
+            <pubDate>Fri, 12 Jun 2026 16:59:25 +0700</pubDate>
+            <sparkle:version>236</sparkle:version>
+            <sparkle:shortVersionString>0.36.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <sparkle:releaseNotesLink>https://darshanbathija.github.io/Continuum/updates/release-notes/Continuum-0.35.0-arm64.md</sparkle:releaseNotesLink>
-            <enclosure url="https://github.com/darshanbathija/Continuum/releases/download/v0.35.0-mac/Continuum-0.35.0-arm64.dmg" length="115002631" type="application/octet-stream" sparkle:edSignature="ZtXS+U8yrVpHB/O8jKlZk3aoMUyuBN2gfaodz6a5pA8YUGnA9+S+qlqRa3QPVTv+HmGarQxn0ig2MEcR3uRHCQ=="/>
+            <sparkle:releaseNotesLink>https://darshanbathija.github.io/Continuum/updates/release-notes/Continuum-0.36.0-arm64.md</sparkle:releaseNotesLink>
+            <enclosure url="https://github.com/darshanbathija/Continuum/releases/download/v0.36.0-mac/Continuum-0.36.0-arm64.dmg" length="115707207" type="application/octet-stream" sparkle:edSignature="8WkPkabeAoEYHXpozw89GHQJrsGTP5E9A0ctjQ7j0VH/pbEUetN2xEpJXgbHorNYduL9W680N1fXNfmual7yBA=="/>
         </item>
     </channel>
 </rss>
