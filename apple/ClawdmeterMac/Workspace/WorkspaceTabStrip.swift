@@ -183,8 +183,12 @@ struct WorkspaceTabStrip: View {
         }
         .id(Self.newTabButtonId)
         .buttonStyle(PressableButtonStyle())
-        .help("New chat tab")
-        .accessibilityIdentifier("code.workspace.new-tab")
+        .codeHoverChrome(
+            cornerRadius: 6,
+            help: "New chat tab",
+            accessibilityLabel: "New chat tab",
+            accessibilityIdentifier: "code.workspace.new-tab"
+        )
         .contextMenu {
             Button("Chat") {
                 DispatchQueue.main.async {
