@@ -237,8 +237,8 @@ struct WorkspaceTabStrip: View {
             && activeTerminalTabId == nil
             && activeDocumentTabId == nil
         return tabRow(
-            title: "Untitled",
-            subtitle: "Draft",
+            title: WorkspaceSessionTabLabel.repoBranchTitle(repo: "Untitled", branch: "Draft"),
+            subtitle: "",
             systemImage: nil,
             isActive: isActive,
             labelWidth: labelWidth,
