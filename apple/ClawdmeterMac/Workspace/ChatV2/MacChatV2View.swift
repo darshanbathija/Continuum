@@ -1678,7 +1678,13 @@ private struct MessageRow: View {
                         .padding(.vertical, 9)
                         .background(t.accent.opacity(0.16), in: RoundedRectangle(cornerRadius: 6))
                         .textSelection(.enabled)
+                        .messageHoverCopy(
+                            text: message.body,
+                            onCopy: copyMessageBody,
+                            style: .userBubble
+                        )
                 }
+                .contextMenu { messageCopyMenu(message) }
             case .assistantText:
                 if message.isError {
                     errorAssistantRow(message)
@@ -1700,6 +1706,13 @@ private struct MessageRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.hairline, lineWidth: 0.5))
+                    .messageHoverCopy(
+                        text: message.body,
+                        onCopy: copyMessageBody,
+                        style: .assistantMessage,
+                        timestamp: message.at
+                    )
+                    .contextMenu { messageCopyMenu(message) }
                 }
             case .toolCall, .toolResult:
                 AgentToolActionRow(
@@ -1757,6 +1770,13 @@ private struct MessageRow: View {
                     .stroke(SessionsV2Theme.danger.opacity(0.55), lineWidth: 1.25)
             )
             .accessibilityLabel("Model failed: \(message.body)")
+            .messageHoverCopy(
+                text: message.body,
+                onCopy: copyMessageBody,
+                style: .assistantMessage,
+                timestamp: message.at
+            )
+            .contextMenu { messageCopyMenu(message) }
 
             if let retryPrompt = modelFailureRetryPrompt {
                 modelFailureActionRow(retryPrompt: retryPrompt)
@@ -1790,6 +1810,18 @@ private struct MessageRow: View {
             }
         }
         .padding(.leading, 2)
+    }
+
+    private func copyMessageBody(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    @ViewBuilder
+    private func messageCopyMenu(_ message: ChatMessage) -> some View {
+        Button("Copy Message", systemImage: "doc.on.doc") {
+            copyMessageBody(message.body)
+        }
     }
 }
 

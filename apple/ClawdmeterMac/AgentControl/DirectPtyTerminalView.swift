@@ -23,7 +23,11 @@ struct DirectPtyTerminalView: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: TerminalView, context: Context) {}
+    func updateNSView(_ nsView: TerminalView, context: Context) {
+        if context.coordinator.isReadyForInput {
+            context.coordinator.requestFocus()
+        }
+    }
 
     static func dismantleNSView(_ nsView: TerminalView, coordinator: Coordinator) {
         coordinator.disconnect()
@@ -34,6 +38,10 @@ struct DirectPtyTerminalView: NSViewRepresentable {
         let host: TerminalPtyHost
         weak var terminalView: TerminalView?
         private var subscriptionTask: Task<Void, Never>?
+        private var sawOutput = false
+        private var hasRequestedFocus = false
+
+        var isReadyForInput: Bool { sawOutput }
 
         init(host: TerminalPtyHost) {
             self.host = host
@@ -47,9 +55,32 @@ struct DirectPtyTerminalView: NSViewRepresentable {
                     if Task.isCancelled { break }
                     let arr = Array(chunk)
                     await MainActor.run {
-                        self?.terminalView?.feed(byteArray: ArraySlice(arr))
+                        guard let self else { return }
+                        if !arr.isEmpty, !self.sawOutput {
+                            self.sawOutput = true
+                            self.requestFocus()
+                        }
+                        self.terminalView?.feed(byteArray: ArraySlice(arr))
                     }
                 }
+            }
+        }
+
+        func requestFocus() {
+            guard !hasRequestedFocus, let terminalView else { return }
+            DispatchQueue.main.async { [weak self, weak terminalView] in
+                guard let self, let terminalView else { return }
+                guard let window = terminalView.window else { return }
+                guard terminalView.acceptsFirstResponder else { return }
+                // First output is async, so the user may already be typing in a
+                // sibling text field. Don't yank focus out of a text editor;
+                // latch so the updateNSView re-arm path doesn't keep retrying.
+                if let current = window.firstResponder, current !== terminalView, current is NSText {
+                    self.hasRequestedFocus = true
+                    return
+                }
+                window.makeFirstResponder(terminalView)
+                self.hasRequestedFocus = true
             }
         }
 

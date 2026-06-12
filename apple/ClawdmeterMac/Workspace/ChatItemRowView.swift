@@ -415,6 +415,11 @@ struct ChatItemRowContent: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: 640, alignment: .trailing)
+                .messageHoverCopy(
+                    text: msg.body,
+                    onCopy: actions.onCopy,
+                    style: .userBubble
+                )
                 bodyArtifactStripIfAny(body: msg.body, alignment: .trailing)
             }
         }
@@ -431,29 +436,42 @@ struct ChatItemRowContent: View {
                         modelFailureActionRow(retryPrompt: retryPrompt)
                     }
                 } else {
-                    // Perf: while THIS row is the actively-streaming tail, render the
-                    // (growing) body as plain `Text` instead of `MarkdownRenderer`.
-                    // The renderer re-kicks a detached whole-body markdown parse on
-                    // every `source` change, so a streaming burst parsed the full
-                    // body once per token. The parse runs once at turn completion,
-                    // when `isStreamingTail` flips false and the row routes back
-                    // through `ChatItemRowView` → `MarkdownRenderer`.
-                    if payload.isStreamingTail {
-                        Text(msg.body)
-                            .font(.system(size: 13, design: .serif))
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        MarkdownRenderer(source: msg.body, syntaxTheme: payload.syntaxTheme)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    pathLinkStripIfAny(body: msg.body)
-                    bodyArtifactStripIfAny(body: msg.body)
+                    assistantMessageBody(msg)
                 }
             }
             Spacer(minLength: 64)
         }
+    }
+
+    @ViewBuilder
+    private func assistantMessageBody(_ msg: SessionChatStore.ChatMessage) -> some View {
+        Group {
+            // Perf: while THIS row is the actively-streaming tail, render the
+            // (growing) body as plain `Text` instead of `MarkdownRenderer`.
+            // The renderer re-kicks a detached whole-body markdown parse on
+            // every `source` change, so a streaming burst parsed the full
+            // body once per token. The parse runs once at turn completion,
+            // when `isStreamingTail` flips false and the row routes back
+            // through `ChatItemRowView` → `MarkdownRenderer`.
+            if payload.isStreamingTail {
+                Text(msg.body)
+                    .font(.system(size: 13, design: .serif))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                MarkdownRenderer(source: msg.body, syntaxTheme: payload.syntaxTheme)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            pathLinkStripIfAny(body: msg.body)
+            bodyArtifactStripIfAny(body: msg.body)
+        }
+        .messageHoverCopy(
+            text: msg.body,
+            onCopy: actions.onCopy,
+            style: .assistantMessage,
+            timestamp: msg.at
+        )
     }
 
     private func errorAssistantBubble(_ msg: SessionChatStore.ChatMessage) -> some View {
@@ -484,6 +502,12 @@ struct ChatItemRowContent: View {
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(SessionsV2Theme.danger.opacity(0.55), lineWidth: 1.25)
+        )
+        .messageHoverCopy(
+            text: msg.body,
+            onCopy: actions.onCopy,
+            style: .assistantMessage,
+            timestamp: msg.at
         )
         .accessibilityLabel("Model failed: \(msg.body)")
     }

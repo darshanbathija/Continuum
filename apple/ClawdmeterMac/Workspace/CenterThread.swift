@@ -1321,11 +1321,14 @@ struct CenterThread: View {
               let entry = catalog.entry(forId: modelId, customProviderId: customProviderId)
         else { return }
         if entry.provider != liveSession.agent {
-            composerStore.agent = liveSession.agent
-            composerStore.modelId = liveSession.model
-            composerStore.effort = liveSession.effort
-            composerStore.customProviderId = liveSession.customProviderId
-            model.openCrossProviderDraft(from: liveSession, entry: entry, effort: effort)
+            // Cross-provider picks update the composer chip in place. The
+            // running runtime keeps its original provider — never hand a
+            // foreign model id to SessionConfigChanger — but the tab, transcript,
+            // and header stay put so toggling model family feels like a dial flip.
+            composerStore.agent = selectedAgent
+            composerStore.modelId = modelId
+            composerStore.customProviderId = customProviderId
+            composerStore.effort = entry.supportsEffort ? effort : nil
             return
         }
         guard !isHarnessDriven else { return }
