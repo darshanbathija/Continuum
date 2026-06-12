@@ -144,21 +144,21 @@ struct SkillsSettingsView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            pluginSidebar
-                .frame(width: 200)
-            paneDivider
-            skillsListPane
-                .frame(width: 240)
-            paneDivider
-            skillDetailPane
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
-        .frame(minHeight: 520)
-        .background(t.hair2.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(t.hairline, lineWidth: 0.8)
+        settingsPanel(
+            title: "Skills",
+            subtitle: "Browse skill plugins, search commands, and read their instructions."
+        ) {
+            HStack(alignment: .top, spacing: 16) {
+                pluginSidebar
+                    .frame(width: 200)
+                TahoeHair(vertical: true)
+                skillsListPane
+                    .frame(width: 240)
+                TahoeHair(vertical: true)
+                skillDetailPane
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            .frame(minHeight: 480)
         }
         .onAppear {
             reloadGroups()
@@ -181,26 +181,53 @@ struct SkillsSettingsView: View {
         }
     }
 
+    private func settingsPanel<Content: View>(
+        title: String,
+        subtitle: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        TahoeGlass(radius: 8, tone: .panel) {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title.uppercased())
+                        .font(TahoeFont.body(11, weight: .bold))
+                        .tracking(0.6)
+                        .foregroundStyle(t.fg3)
+                    Text(subtitle)
+                        .font(TahoeFont.body(12.5))
+                        .foregroundStyle(t.fg3)
+                }
+                .padding(.bottom, 18)
+                content()
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     // MARK: Left — plugin groups
 
     private var pluginSidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Text("Personal plugins")
-                    .font(TahoeFont.body(11, weight: .bold))
-                    .foregroundStyle(t.fg3)
+                Text("PLUGINS")
+                    .font(TahoeFont.body(10, weight: .bold))
+                    .tracking(0.6)
+                    .foregroundStyle(t.fg4)
                 Spacer()
                 Button(action: { isAddPluginPresented = true }) {
-                    TahoeIcon("plus", size: 11, weight: .bold)
-                        .frame(width: 22, height: 22)
-                        .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    HStack(spacing: 5) {
+                        TahoeIcon("plus", size: 9, weight: .bold)
+                        Text("Add plugin")
+                            .font(TahoeFont.body(11, weight: .semibold))
+                    }
+                    .foregroundStyle(t.fg2)
                 }
                 .buttonStyle(.plain)
                 .help("Add a custom skills plugin folder")
                 .accessibilityIdentifier("settings.skills.addPlugin")
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 14)
             .padding(.bottom, 10)
 
             ScrollView {
@@ -209,10 +236,10 @@ struct SkillsSettingsView: View {
                         pluginRow(group)
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 12)
+                .padding(.bottom, 4)
             }
         }
+        .padding(.trailing, 4)
     }
 
     private func pluginRow(_ group: SkillPluginGroup) -> some View {
@@ -222,27 +249,29 @@ struct SkillsSettingsView: View {
         } label: {
             HStack(spacing: 8) {
                 Text(group.title)
-                    .font(TahoeFont.body(12.5, weight: isSelected ? .semibold : .medium))
+                    .font(TahoeFont.body(13, weight: isSelected ? .bold : .semibold))
                     .foregroundStyle(isSelected ? t.fg : t.fg2)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 if group.isDisabled {
                     Text("Disabled")
-                        .font(TahoeFont.body(9, weight: .semibold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(t.hair2, in: RoundedRectangle(cornerRadius: 4))
-                        .foregroundStyle(t.fg4)
+                        .font(TahoeFont.body(10, weight: .bold))
+                        .foregroundStyle(t.fg3)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(t.glassTintHi.opacity(0.5), in: Capsule(style: .continuous))
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                isSelected ? t.accentAlpha(t.dark ? 0.14 : 0.08) : .clear,
-                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                        .fill(t.segmentActiveFill)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("settings.skills.plugin.\(group.id)")
@@ -253,33 +282,34 @@ struct SkillsSettingsView: View {
     private var skillsListPane: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("Skills")
-                    .font(TahoeFont.body(13, weight: .bold))
-                    .foregroundStyle(t.fg)
+                Text("COMMANDS")
+                    .font(TahoeFont.body(10, weight: .bold))
+                    .tracking(0.6)
+                    .foregroundStyle(t.fg4)
                 Spacer()
                 Button(action: { catalog.refreshIfStale() }) {
-                    TahoeIcon("refresh", size: 11)
+                    HStack(spacing: 5) {
+                        TahoeIcon("refresh", size: 10)
+                        Text("Refresh")
+                            .font(TahoeFont.body(11, weight: .semibold))
+                    }
+                    .foregroundStyle(t.fg2)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(t.fg3)
                 .help("Refresh skills")
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 14)
-            .padding(.bottom, 8)
+            .padding(.bottom, 10)
 
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 10))
-                    .foregroundStyle(t.fg4)
+                    .foregroundStyle(t.fg3)
                 TextField("Search skills", text: $skillSearch)
                     .textFieldStyle(.plain)
-                    .font(TahoeFont.body(11.5))
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .font(TahoeFont.body(12))
             .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(t.hair2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .padding(.bottom, 10)
 
             Button {
@@ -288,14 +318,14 @@ struct SkillsSettingsView: View {
                 HStack(spacing: 6) {
                     TahoeIcon(isSkillsExpanded ? "chevD" : "chevR", size: 9)
                     Text("Personal skills")
-                        .font(TahoeFont.body(11, weight: .semibold))
+                        .font(TahoeFont.mono(10, weight: .semibold))
+                        .kerning(0.6)
                         .foregroundStyle(t.fg3)
                     Spacer()
                     Text("\(filteredSkills.count)")
-                        .font(TahoeFont.body(10))
+                        .font(TahoeFont.mono(10, weight: .semibold))
                         .foregroundStyle(t.fg4)
                 }
-                .padding(.horizontal, 12)
                 .padding(.vertical, 6)
             }
             .buttonStyle(.plain)
@@ -305,9 +335,8 @@ struct SkillsSettingsView: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         if filteredSkills.isEmpty {
                             Text(emptySkillsMessage)
-                                .font(TahoeFont.body(11.5))
-                                .foregroundStyle(t.fg4)
-                                .padding(.horizontal, 12)
+                                .font(TahoeFont.body(12))
+                                .foregroundStyle(t.fg3)
                                 .padding(.vertical, 16)
                         } else {
                             ForEach(filteredSkills) { skill in
@@ -315,10 +344,11 @@ struct SkillsSettingsView: View {
                             }
                         }
                     }
-                    .padding(.bottom, 12)
+                    .padding(.bottom, 4)
                 }
             }
         }
+        .padding(.horizontal, 12)
     }
 
     private var emptySkillsMessage: String {
@@ -353,18 +383,20 @@ struct SkillsSettingsView: View {
                         Color.clear.frame(width: 10)
                     }
                     Text(skill.label)
-                        .font(TahoeFont.body(12, weight: isSelected ? .semibold : .regular))
+                        .font(TahoeFont.body(13, weight: isSelected ? .bold : .semibold))
                         .foregroundStyle(isSelected ? t.fg : t.fg2)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(
-                    isSelected ? t.accentAlpha(t.dark ? 0.14 : 0.08) : .clear,
-                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                            .fill(t.segmentActiveFill)
+                    }
+                }
+                .contentShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("settings.skills.skill.\(skill.id)")
@@ -399,10 +431,10 @@ struct SkillsSettingsView: View {
                     TahoeIcon("doc", size: 28)
                         .foregroundStyle(t.fg4)
                     Text("Select a skill")
-                        .font(TahoeFont.body(13, weight: .semibold))
+                        .font(TahoeFont.body(14, weight: .semibold))
                         .foregroundStyle(t.fg3)
                     Text("Choose a plugin on the left, then pick a skill to read its instructions.")
-                        .font(TahoeFont.body(11.5))
+                        .font(TahoeFont.body(12))
                         .foregroundStyle(t.fg4)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 260)
@@ -410,12 +442,7 @@ struct SkillsSettingsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-    }
-
-    private var paneDivider: some View {
-        Rectangle()
-            .fill(t.hairline)
-            .frame(width: 1)
+        .padding(.horizontal, 12)
     }
 
     private var addPluginSheet: some View {
@@ -571,13 +598,13 @@ private struct SkillDetailPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             detailHeader
-            TahoeHair().padding(.horizontal, 16)
+            TahoeHair().padding(.vertical, 12)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if !detail.command.description.isEmpty {
                         Text(detail.command.description)
-                            .font(TahoeFont.body(13))
-                            .foregroundStyle(t.fg2)
+                            .font(TahoeFont.body(12))
+                            .foregroundStyle(t.fg3)
                             .lineSpacing(4)
                             .textSelection(.enabled)
                     }
@@ -588,13 +615,12 @@ private struct SkillDetailPane: View {
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(12)
-                            .background(t.hair2, in: RoundedRectangle(cornerRadius: 6))
+                            .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     } else {
                         SkillMarkdownBody(document: document)
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 18)
+                .padding(.vertical, 4)
             }
         }
     }
@@ -603,15 +629,18 @@ private struct SkillDetailPane: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
                 Text(detail.command.label)
-                    .font(TahoeFont.body(16, weight: .bold))
+                    .font(TahoeFont.body(13.5, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer()
                 Button {
                     showSource.toggle()
                 } label: {
-                    TahoeIcon(showSource ? "doc" : "code", size: 12)
-                        .frame(width: 28, height: 28)
-                        .background(t.hair2, in: RoundedRectangle(cornerRadius: 6))
+                    HStack(spacing: 5) {
+                        TahoeIcon(showSource ? "doc" : "code", size: 10)
+                        Text(showSource ? "Rendered" : "Source")
+                            .font(TahoeFont.body(11, weight: .semibold))
+                    }
+                    .foregroundStyle(t.fg2)
                 }
                 .buttonStyle(.plain)
                 .help(showSource ? "Show rendered view" : "Show source")
@@ -625,17 +654,17 @@ private struct SkillDetailPane: View {
                 metadataItem(label: "Trigger", value: triggerLabel)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.vertical, 4)
     }
 
     private func metadataItem(label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(TahoeFont.body(10, weight: .semibold))
+            Text(label.uppercased())
+                .font(TahoeFont.body(10, weight: .bold))
+                .tracking(0.6)
                 .foregroundStyle(t.fg4)
             Text(value)
-                .font(TahoeFont.body(11.5, weight: .medium))
+                .font(TahoeFont.body(12, weight: .medium))
                 .foregroundStyle(t.fg2)
         }
     }
