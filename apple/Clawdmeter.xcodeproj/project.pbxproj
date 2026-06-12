@@ -282,6 +282,7 @@
 		968F1A809DD00135F492B0FE /* RelaySubscriptionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F51A41CE73D5F9E79AE1DE9 /* RelaySubscriptionBridge.swift */; };
 		96A37EE3F9DD16B68B705113 /* VendorProvisioningService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8524794C9A655A7937BDCB51 /* VendorProvisioningService.swift */; };
 		972A8C92564CE8C6269F8682 /* ExecutionHostServerRouteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51C306A7F8CA416D498EEC6 /* ExecutionHostServerRouteTests.swift */; };
+		C3D4E5F60718293A4B5C6D7E /* ExecutionHostCoordinatorIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F /* ExecutionHostCoordinatorIntegrationTests.swift */; };
 		E4F5061728394A5B6C7D8E9F /* AWSComputeProvisionerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5061728394A5B6C7D8E9FA0 /* AWSComputeProvisionerTests.swift */; };
 		061728394A5B6C7D8E9FA0B1 /* AWSComputeLiveE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1728394A5B6C7D8E9FA0B1C2 /* AWSComputeLiveE2ETests.swift */; };
 		97623C56C0F6148B34FE03C6 /* RelayGrantTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1392A469BC8DB11964EE6640 /* RelayGrantTokenStore.swift */; };
@@ -876,6 +877,7 @@
 		B3C6F2D7B52D4DA18E6794CD /* AgentSessionRegistryEventStoreWireTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionRegistryEventStoreWireTests.swift; sourceTree = "<group>"; };
 		B402D2971401AAA603A1AC75 /* HarnessProcessReaperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessProcessReaperTests.swift; sourceTree = "<group>"; };
 		B51C306A7F8CA416D498EEC6 /* ExecutionHostServerRouteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionHostServerRouteTests.swift; sourceTree = "<group>"; };
+		D4E5F60718293A4B5C6D7E8F /* ExecutionHostCoordinatorIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionHostCoordinatorIntegrationTests.swift; sourceTree = "<group>"; };
 		F5061728394A5B6C7D8E9FA0 /* AWSComputeProvisionerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AWSComputeProvisionerTests.swift; sourceTree = "<group>"; };
 		1728394A5B6C7D8E9FA0B1C2 /* AWSComputeLiveE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AWSComputeLiveE2ETests.swift; sourceTree = "<group>"; };
 		B53A23CB4E962050EF7971CB /* GitDiffPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitDiffPane.swift; sourceTree = "<group>"; };
@@ -1447,6 +1449,7 @@
 				21210F0340F6B45C7BF28AB0 /* DiagnosticsSupportBundleTests.swift */,
 				1079DC5DFB5709D11EDAACB2 /* DoneDetectorTests.swift */,
 				B51C306A7F8CA416D498EEC6 /* ExecutionHostServerRouteTests.swift */,
+				D4E5F60718293A4B5C6D7E8F /* ExecutionHostCoordinatorIntegrationTests.swift */,
 				F5061728394A5B6C7D8E9FA0 /* AWSComputeProvisionerTests.swift */,
 				1728394A5B6C7D8E9FA0B1C2 /* AWSComputeLiveE2ETests.swift */,
 				5B2F92F537B1AC9C7C24DFCF /* F1aWireChatParityTests.swift */,
@@ -2213,6 +2216,7 @@
 				961138F14762FD98647ADA23 /* DiagnosticsSupportBundleTests.swift in Sources */,
 				915EBD7C5CDF6BE7C78E185D /* DoneDetectorTests.swift in Sources */,
 				972A8C92564CE8C6269F8682 /* ExecutionHostServerRouteTests.swift in Sources */,
+				C3D4E5F60718293A4B5C6D7E /* ExecutionHostCoordinatorIntegrationTests.swift in Sources */,
 				E4F5061728394A5B6C7D8E9F /* AWSComputeProvisionerTests.swift in Sources */,
 				061728394A5B6C7D8E9FA0B1 /* AWSComputeLiveE2ETests.swift in Sources */,
 				E8E88A643114653B96748F29 /* F1aWireChatParityTests.swift in Sources */,

@@ -68,6 +68,10 @@ func main() {
 		if err := runPair(); err != nil {
 			log.Fatal(err)
 		}
+	case "pair-relay":
+		if err := runPairRelay(); err != nil {
+			log.Fatal(err)
+		}
 	case "show-token":
 		if err := runShowToken(); err != nil {
 			log.Fatal(err)
@@ -83,7 +87,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: continuum-agent {serve|pair|show-token|health}\n")
+	fmt.Fprintf(os.Stderr, "usage: continuum-agent {serve|pair|pair-relay|show-token|health}\n")
 }
 
 func loadConfig() (config, error) {
@@ -195,6 +199,10 @@ func runServe() error {
 	if err != nil {
 		return err
 	}
+	store, err := newSessionStore(cfg.dataDir)
+	if err != nil {
+		return err
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -220,15 +228,14 @@ func runServe() error {
 		writeJSON(w, selfHost(cfg))
 	})
 	mux.HandleFunc("/sessions", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
+			handleGetSessions(w, r, store, cfg.token)
+		case http.MethodPost:
+			handlePostSessions(w, r, cfg, store, cfg.token)
+		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
 		}
-		if !authorize(r, cfg.token) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		writeJSON(w, []any{})
 	})
 
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.port)
@@ -240,6 +247,10 @@ func runServe() error {
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	if pairing, err := loadRelayPairing(cfg.dataDir); err == nil && pairing.SID != "" {
+		go startRelayClient(cfg, pairing, addr)
 	}
 
 	log.Printf("listening on %s (host=%s kind=%s wire=%d)", addr, cfg.hostID, cfg.kind, defaultWireVersion)

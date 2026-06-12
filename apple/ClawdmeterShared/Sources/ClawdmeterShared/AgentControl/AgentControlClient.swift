@@ -936,6 +936,28 @@ public final class AgentControlClient: ObservableObject {
 
     @MainActor
     @discardableResult
+    public func probeExecutionHostHealth(hostId: UUID) async -> ExecutionHost? {
+        guard supportsExecutionHosts else { return nil }
+        guard let request = makeRequest(
+            path: "/execution-hosts/\(hostId.uuidString)/health",
+            method: "POST",
+            body: Data("{}".utf8)
+        ) else { return nil }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let host = try decoder.decode(ExecutionHost.self, from: data)
+            await refreshExecutionHosts()
+            return host
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    @discardableResult
     public func pairTailscaleExecutionHost(_ req: PairTailscaleExecutionHostRequest) async -> ExecutionHost? {
         let encoder = JSONEncoder()
         guard let body = try? encoder.encode(req),

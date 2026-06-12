@@ -166,4 +166,42 @@ final class ExecutionHostServerRouteTests: XCTestCase {
         _ = TailnetReachability.isOnTailnet()
         TailnetReachability.invalidateCache()
     }
+
+    func testProbeExecutionHostHealth() async throws {
+        let server = try makeServer()
+        defer { server.stop() }
+        let remoteId = UUID()
+        let host = ExecutionHost(
+            id: remoteId,
+            displayName: "Probe Host",
+            kind: .vps,
+            primaryTransport: .relay,
+            preferredTransports: [.relay],
+            health: .unknown,
+            relayPairingSid: "sid-probe"
+        )
+        let registerBody = try JSONEncoder().encode(RegisterExecutionHostRequest(host: host))
+        let (regStatus, _) = try await loopbackRequest(
+            server: server,
+            method: "POST",
+            path: "/execution-hosts",
+            body: registerBody
+        )
+        XCTAssertEqual(regStatus, 200)
+        MultiHostRelayStore.shared.save(
+            record: MultiHostRelayStore.Record(hostId: remoteId, sid: "sid-probe", relayUrl: "wss://relay.test"),
+            iosToken: "probe-token"
+        )
+        let (status, data) = try await loopbackRequest(
+            server: server,
+            method: "POST",
+            path: "/execution-hosts/\(remoteId.uuidString)/health"
+        )
+        XCTAssertEqual(status, 200)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let probed = try decoder.decode(ExecutionHost.self, from: data)
+        XCTAssertEqual(probed.id, remoteId)
+        XCTAssertNotNil(probed.lastHealthCheckAt)
+    }
 }

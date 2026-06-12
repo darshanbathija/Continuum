@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -103,6 +104,46 @@ func TestLoadConfigGeneratesTokenAndHostID(t *testing.T) {
 	}
 	if cfg2.token != cfg.token || cfg2.hostID != cfg.hostID {
 		t.Fatal("expected stable token and host id on reload")
+	}
+}
+
+func TestPostSessionsCreatesAgentSession(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAWDMETER_DATA_DIR", dir)
+	t.Setenv("HOST_DISPLAY_NAME", "VPS Test")
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := newSessionStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte(`{"repoKey":"/tmp/test-repo","agent":"claude","planMode":false,"useWorktree":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/sessions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+cfg.token)
+	rec := httptest.NewRecorder()
+	handlePostSessions(rec, req, cfg, store, cfg.token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"running"`) {
+		t.Fatalf("expected running session: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"executionHostId"`) {
+		t.Fatalf("expected executionHostId: %s", rec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/sessions", nil)
+	getReq.Header.Set("Authorization", "Bearer "+cfg.token)
+	getRec := httptest.NewRecorder()
+	handleGetSessions(getRec, getReq, store, cfg.token)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status %d", getRec.Code)
+	}
+	if !strings.Contains(getRec.Body.String(), `"agent":"claude"`) {
+		t.Fatalf("expected session in list: %s", getRec.Body.String())
 	}
 }
 

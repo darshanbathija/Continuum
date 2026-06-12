@@ -20,6 +20,8 @@ struct ExecutionHostSettingsView: View {
     @State private var vpsRelayToken = ""
     @State private var vpsRelaySymmetricKey = ""
     @State private var errorMessage: String?
+    @State private var tailscaleTestStatus: String?
+    @State private var tailscaleTesting = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -114,8 +116,17 @@ struct ExecutionHostSettingsView: View {
             TextField("MagicDNS hostname", text: $tailscaleHostname)
             SecureField("Pairing token", text: $pairingToken)
             Toggle("Also enable relay access (recommended)", isOn: $relayAlsoEnabled)
+            if let tailscaleTestStatus {
+                Text(tailscaleTestStatus)
+                    .font(TahoeFont.body(11))
+                    .foregroundStyle(tailscaleTestStatus.contains("reachable") ? Color.green : t.fg3)
+            }
             HStack {
                 Button("Cancel") { showAddTailscale = false }
+                Button("Test connection") {
+                    Task { await testTailscaleConnection() }
+                }
+                .disabled(tailscaleTesting || tailscaleHostname.isEmpty || pairingToken.isEmpty)
                 Spacer()
                 Button("Add") {
                     Task { await submitTailscaleHost() }
@@ -172,6 +183,45 @@ struct ExecutionHostSettingsView: View {
         case .remoteMac: return "Remote Mac"
         case .byocAWS: return "AWS (R2)"
         case .byocRailway: return "Railway"
+        }
+    }
+
+    @MainActor
+    private func testTailscaleConnection() async {
+        tailscaleTesting = true
+        defer { tailscaleTesting = false }
+        let host = tailscaleHostname.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = pairingToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty, !token.isEmpty else {
+            tailscaleTestStatus = "Enter hostname and pairing token."
+            return
+        }
+        let port = 21731
+        let onTailnet = await TailnetReachability.canReach(hostname: host, port: port)
+        guard onTailnet else {
+            tailscaleTestStatus = relayAlsoEnabled
+                ? "Tailnet unreachable — relay fallback will be used after pairing."
+                : "Tailnet unreachable. Enable relay access or join this tailnet."
+            return
+        }
+        let literal = AgentControlClient.urlHostLiteral(host)
+        guard let url = URL(string: "http://\(literal):\(port)/health") else {
+            tailscaleTestStatus = "Invalid hostname."
+            return
+        }
+        var req = URLRequest(url: url, timeoutInterval: 6)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                tailscaleTestStatus = relayAlsoEnabled
+                    ? "Tailnet reachable · relay enabled"
+                    : "Tailnet reachable"
+            } else {
+                tailscaleTestStatus = "Health check failed — verify token and daemon."
+            }
+        } catch {
+            tailscaleTestStatus = "Connection failed: \(error.localizedDescription)"
         }
     }
 

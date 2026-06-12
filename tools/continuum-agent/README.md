@@ -27,7 +27,8 @@ Piped installs (`curl … | bash`) compile from upstream Go sources when Go is i
 ```bash
 continuum-agent serve       # systemd ExecStart
 continuum-agent health      # GET /health
-continuum-agent pair        # print pairing URL + token
+continuum-agent pair        # print direct pairing URL + token
+continuum-agent pair-relay  # emit relay bundle for Mac Settings → Devices
 continuum-agent show-token  # print bearer token
 ```
 
@@ -40,6 +41,15 @@ Environment:
 | `CLAWDMETER_BIND_ALL` | `1` on systemd install |
 | `EXECUTION_HOST_ID` | from `/etc/clawdmeter/env` or generated |
 | `CLAWDMETER_HOST_KIND` | `vps` (AWS sets `byocAWS`) |
+
+## Remote spawn API
+
+Authenticated endpoints (bearer token from `show-token`):
+
+- `GET /sessions` — list sessions on this host
+- `POST /sessions` — spawn (accepts wire v30 `NewSessionRequest` JSON)
+
+Spawns a detached background runner per session so work continues when the Mac client disconnects.
 
 ## AWS live E2E (Mac)
 
