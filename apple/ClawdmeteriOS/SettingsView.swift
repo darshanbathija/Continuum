@@ -80,7 +80,7 @@ struct SettingsView: View {
                 } footer: {
                     Text(agentClient.isConfigured
                         ? "Scan a new QR or paste a new URL to re-pair with a different Mac. Forget pairing erases the stored host + token from this iPhone (Mac is untouched)."
-                        : "Open Continuum on your Mac → Pair with iPhone. Both devices must be on the same Tailnet.")
+                        : "Open Continuum on your Mac → Settings → Devices → Pair iPhone. Choose Continuum Cloud or Tailscale to match the QR shown on your Mac.")
                 }
 
                 Section {
@@ -91,8 +91,8 @@ struct SettingsView: View {
                     Text("Connection")
                 } footer: {
                     Text(relayDefaultOn
-                        ? "On: this iPhone reaches your Mac through the Continuum relay (and direct over the LAN when both are on the same Wi-Fi). Works off your home network. Takes effect on next launch."
-                        : "Off: this iPhone uses the legacy direct connection to your Mac. Turn relay back on if direct stops working away from home. Takes effect on next launch.")
+                        ? "On: matches Continuum Cloud pairing. This iPhone reaches your Mac through the relay (and direct over the LAN when both are on the same Wi-Fi). Takes effect on next launch."
+                        : "Off: matches Tailscale pairing. This iPhone connects directly to your Mac over your Tailnet. Takes effect on next launch.")
                 }
 
                 Section {
