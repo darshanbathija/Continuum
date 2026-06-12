@@ -467,12 +467,6 @@ struct ContextUsagePopover: View {
                     fraction: nil
                 ))
             }
-            rows.append(planProgressRow(
-                id: "code.context-usage.row.cursor-total",
-                label: "Monthly total",
-                pct: quota.totalPct,
-                resetMins: quota.resetMins
-            ))
             if let pct = quota.autoPct {
                 rows.append(planProgressRow(
                     id: "code.context-usage.row.cursor-auto",
