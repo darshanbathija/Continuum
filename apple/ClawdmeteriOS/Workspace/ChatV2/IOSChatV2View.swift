@@ -818,6 +818,7 @@ private struct MessageRow: View {
                         .padding(.vertical, 10)
                         .background(t.accent.opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
                 }
+                .contextMenu { messageCopyMenu(message) }
             case .assistantText:
                 if message.isError {
                     errorAssistantRow(message)
@@ -837,6 +838,7 @@ private struct MessageRow: View {
                         .padding(13)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .contextMenu { messageCopyMenu(message) }
                 }
             case .toolCall, .toolResult:
                 AgentToolActionRow(
@@ -895,6 +897,7 @@ private struct MessageRow: View {
                     .stroke(SessionsV2Theme.danger.opacity(0.55), lineWidth: 1.25)
             )
             .accessibilityLabel("Model failed: \(message.body)")
+            .contextMenu { messageCopyMenu(message) }
 
             if let retryPrompt = modelFailureRetryPrompt {
                 modelFailureActionRow(retryPrompt: retryPrompt)
@@ -927,6 +930,13 @@ private struct MessageRow: View {
             }
         }
         .padding(.leading, 2)
+    }
+
+    @ViewBuilder
+    private func messageCopyMenu(_ message: ChatMessage) -> some View {
+        Button("Copy Message", systemImage: "doc.on.doc") {
+            UIPasteboard.general.string = message.body
+        }
     }
 }
 

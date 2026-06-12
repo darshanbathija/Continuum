@@ -278,6 +278,8 @@ struct ComposerInputCore: View {
     @State private var paletteQuery: String = ""
     @State private var showingMentions: Bool = false
     @State private var mentionQuery: String = ""
+    @State private var vendorStatuses: [String: VendorProvisioningStatus] = [:]
+    @State private var vendorEnvImportTarget: VendorProvisioningVendor?
     @State private var showingPromptHistory: Bool = false
     @State private var showingExpandedEditor: Bool = false
     @State private var savePromptTitle: String = ""
@@ -413,6 +415,7 @@ struct ComposerInputCore: View {
                 MentionPicker(
                     openSessions: sources.sessions,
                     sourceEntries: sources.sourceEntries,
+                    vendorStatuses: vendorStatuses,
                     query: $mentionQuery,
                     onSelect: applyMentionSelection,
                     onDismiss: { showingMentions = false }
@@ -510,6 +513,23 @@ struct ComposerInputCore: View {
                 onClose: { showingExpandedEditor = false }
             )
         }
+        .sheet(item: $vendorEnvImportTarget) { vendor in
+            VendorEnvImportSheet(
+                vendor: vendor,
+                service: AppDelegate.runtime?.vendorProvisioningService,
+                workspaceStore: AppDelegate.runtime?.workspaceStore,
+                envStore: AppDelegate.runtime?.repoEnvStore,
+                onClose: {
+                    vendorEnvImportTarget = nil
+                    Task { await refreshVendorStatuses() }
+                }
+            )
+            .frame(minWidth: 760, minHeight: 700)
+        }
+        .task(id: showingMentions) {
+            guard showingMentions else { return }
+            await refreshVendorStatuses()
+        }
     }
 
     // MARK: - Palette/mention trigger detection
@@ -553,6 +573,19 @@ struct ComposerInputCore: View {
         showingMentions = false
     }
 
+    private func refreshVendorStatuses() async {
+        guard let service = AppDelegate.runtime?.vendorProvisioningService else { return }
+        let response = await service.checkDevice()
+        vendorStatuses = Dictionary(uniqueKeysWithValues: response.statuses.map { ($0.vendorId, $0) })
+    }
+
+    private var activeVendorMentionPreview: (vendor: VendorProvisioningVendor, status: VendorProvisioningStatus?)? {
+        guard let query = VendorMentionSupport.trailingMentionQuery(in: store.text),
+              let vendor = VendorProvisioningCatalog.bestVendorMatch(forMentionQuery: query)
+        else { return nil }
+        return (vendor, vendorStatuses[vendor.id])
+    }
+
     private func applyPaletteSelection(_ cmd: PaletteCommand) {
         // Insert "/<cmd.id> " in place of the typed "/query" and KEEP the
         // composer open (no auto-send) so the user can add arguments before
@@ -575,6 +608,9 @@ struct ComposerInputCore: View {
         }
         let replacement: String
         switch pick {
+        case .vendor(let vendor):
+            replacement = "@vendor:\(vendor.id) "
+            vendorEnvImportTarget = vendor
         case .session(let s):
             replacement = "@session:\(s.id.uuidString) "
         case .file(let path, _):
@@ -1020,7 +1056,12 @@ struct ComposerInputCore: View {
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
             ZStack(alignment: .topLeading) {
-                composerTextField
+                VStack(alignment: .leading, spacing: 6) {
+                    if let preview = activeVendorMentionPreview {
+                        VendorMentionPreviewChip(vendor: preview.vendor, status: preview.status)
+                    }
+                    composerTextField
+                }
             }
             .background(Color.clear, in: RoundedRectangle(cornerRadius: 6))
             .overlay(

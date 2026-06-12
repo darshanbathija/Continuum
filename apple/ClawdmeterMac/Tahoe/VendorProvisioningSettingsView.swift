@@ -65,7 +65,7 @@ struct VendorProvisioningSettingsView: View {
         VStack(alignment: .leading, spacing: 16) {
             panel(
                 title: "Provisioning",
-                subtitle: "Connect vendor CLIs, inspect MCP availability, and import deployment env variables into repo sets."
+                subtitle: "Connect vendor CLIs in order — install, authenticate, then import env variables into repo sets."
             ) {
                 if service == nil || workspaceStore == nil || envStore == nil {
                     Text("Runtime provisioning is not available in previews.")
@@ -105,6 +105,9 @@ struct VendorProvisioningSettingsView: View {
         }
         .task {
             vendors = service?.vendorsResponse().vendors ?? VendorProvisioningCatalog.vendors
+            if statuses.isEmpty, service != nil {
+                await checkDevice()
+            }
         }
         .sheet(item: $importVendor) { vendor in
             VendorEnvImportSheet(
@@ -119,7 +122,12 @@ struct VendorProvisioningSettingsView: View {
         .sheet(item: $actionTerminal) { terminal in
             VendorProvisioningActionTerminalSheet(
                 terminal: terminal,
-                onClose: { actionTerminal = nil }
+                onClose: {
+                    actionTerminal = nil
+                    if terminal.shouldRecheckOnClose {
+                        Task { await checkDevice() }
+                    }
+                }
             )
         }
         .accessibilityIdentifier("settings.provisioning.root")
@@ -131,7 +139,7 @@ struct VendorProvisioningSettingsView: View {
                 Text("Device Check")
                     .font(TahoeFont.body(14, weight: .semibold))
                     .foregroundStyle(t.fg)
-                Text("Looks for installed CLIs, authenticated accounts, and configured Codex or Claude MCPs.")
+                Text("Scans for installed CLIs and authenticated accounts, then guides you through install → sign-in → env import.")
                     .font(TahoeFont.body(12))
                     .foregroundStyle(t.fg3)
             }
@@ -330,7 +338,8 @@ struct VendorProvisioningSettingsView: View {
                 actionTerminal = VendorProvisioningActionTerminal(
                     id: paneId,
                     title: "\(vendor.displayName) \(action.label)",
-                    host: host
+                    host: host,
+                    shouldRecheckOnClose: action.kind == .install || action.kind == .authenticate
                 )
             }
         } catch {
@@ -343,6 +352,7 @@ private struct VendorProvisioningActionTerminal: Identifiable {
     let id: String
     let title: String
     let host: TerminalPtyHost
+    var shouldRecheckOnClose: Bool = false
 }
 
 private struct VendorProvisioningActionTerminalSheet: View {
@@ -371,6 +381,12 @@ private struct VendorProvisioningActionTerminalSheet: View {
 
             DirectPtyTerminalView(host: terminal.host)
                 .frame(minWidth: 760, minHeight: 480)
+
+            Text("Close this window when finished — status will refresh automatically.")
+                .font(TahoeFont.body(11))
+                .foregroundStyle(t.fg3)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
         }
         .frame(minWidth: 760, minHeight: 540)
         .onDisappear {
@@ -434,6 +450,12 @@ private struct VendorProvisioningRow: View {
                         .font(TahoeFont.body(12))
                         .foregroundStyle(t.fg3)
                         .lineLimit(2)
+                    if !onboarding.guidance.isEmpty {
+                        Text(onboarding.guidance)
+                            .font(TahoeFont.body(11.5, weight: .semibold))
+                            .foregroundStyle(onboarding.step == .configureEnv ? t.fg2 : t.accent)
+                            .lineLimit(2)
+                    }
                     if showsInstallProgress {
                         ProgressView()
                             .progressViewStyle(.linear)
@@ -442,33 +464,7 @@ private struct VendorProvisioningRow: View {
                     }
                 }
                 Spacer(minLength: 0)
-                HStack(spacing: 8) {
-                    ForEach(vendor.actions) { action in
-                        Button {
-                            onAction(action)
-                        } label: {
-                            HStack(spacing: 5) {
-                                TahoeIcon(icon(for: action.kind), size: 10, weight: .bold)
-                                Text(action.label)
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(actionsDisabled && action.kind != .signup)
-                        .help(action.command ?? action.url?.absoluteString ?? action.label)
-                    }
-                    Button {
-                        onImport()
-                    } label: {
-                        HStack(spacing: 5) {
-                            TahoeIcon("tray", size: 10, weight: .bold)
-                            Text("Add Env")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(actionsDisabled || !hasWorkspaces)
-                    .help(hasWorkspaces ? "Import env variables into repo env sets" : "Add a repository first")
-                    .accessibilityIdentifier("settings.provisioning.import.\(vendor.id)")
-                }
+                actionsRow
             }
 
             if let status, !status.mcpMatches.isEmpty {
@@ -493,6 +489,92 @@ private struct VendorProvisioningRow: View {
         .accessibilityIdentifier("settings.provisioning.vendor.\(vendor.id)")
     }
 
+    private var onboarding: VendorProvisioningOnboardingGuide {
+        VendorProvisioningOnboardingGuide.resolve(
+            status: status,
+            installPhase: mappedInstallPhase
+        )
+    }
+
+    private var mappedInstallPhase: VendorProvisioningInstallPhase {
+        guard let installPhase else { return .idle }
+        switch installPhase {
+        case .queued, .installing:
+            return .installing
+        case .failed:
+            return .failed
+        case .succeeded:
+            return .succeeded
+        }
+    }
+
+    private var actionsRow: some View {
+        HStack(spacing: 8) {
+            ForEach(visibleActions) { action in
+                actionButton(action)
+            }
+            if onboarding.showsAddEnv {
+                addEnvButton
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ action: VendorProvisioningAction) -> some View {
+        let base = Button {
+            onAction(action)
+        } label: {
+            HStack(spacing: 5) {
+                TahoeIcon(icon(for: action.kind), size: 10, weight: .bold)
+                Text(action.label)
+            }
+        }
+        .disabled(actionsDisabled && action.kind != .signup)
+        .help(action.command ?? action.url?.absoluteString ?? action.label)
+        // if/else (not a ternary) keeps each button-style branch monomorphic —
+        // a ternary between .borderedProminent and .bordered times out the
+        // SwiftUI type-checker.
+        if isPrimaryAction(action) {
+            base.buttonStyle(.borderedProminent)
+        } else {
+            base.buttonStyle(.bordered)
+        }
+    }
+
+    @ViewBuilder
+    private var addEnvButton: some View {
+        let base = Button {
+            onImport()
+        } label: {
+            HStack(spacing: 5) {
+                TahoeIcon("tray", size: 10, weight: .bold)
+                Text("Add Env")
+            }
+        }
+        .disabled(actionsDisabled || !hasWorkspaces)
+        .help(hasWorkspaces ? "Import env variables into repo env sets" : "Add a repository first")
+        .accessibilityIdentifier("settings.provisioning.import.\(vendor.id)")
+        if onboarding.step == .configureEnv {
+            base.buttonStyle(.borderedProminent)
+        } else {
+            base.buttonStyle(.bordered)
+        }
+    }
+
+    private var visibleActions: [VendorProvisioningAction] {
+        vendor.actions.filter { action in
+            switch action.kind {
+            case .install: return onboarding.showsInstall
+            case .authenticate: return onboarding.showsAuthenticate
+            case .signup: return onboarding.showsSignup
+            }
+        }
+    }
+
+    private func isPrimaryAction(_ action: VendorProvisioningAction) -> Bool {
+        onboarding.primaryActionKind == action.kind
+    }
+
     private var showsInstallProgress: Bool {
         guard let installPhase else { return false }
         if case .installing = installPhase {
@@ -502,45 +584,23 @@ private struct VendorProvisioningRow: View {
     }
 
     private var statusPill: some View {
-        let text: String
+        let text = onboarding.statusLabel
         let color: Color
-        if let installPhase {
-            switch installPhase {
-            case .installing:
-                text = "Installing"
-                color = .blue
-                return Badge(text: text, color: color)
-            case .queued:
-                break
-            case .succeeded:
-                text = "Installed"
-                color = .green
-                return Badge(text: text, color: color)
-            case .failed:
-                text = "Install Failed"
-                color = .red
-                return Badge(text: text, color: color)
-            }
-        }
-        switch status?.cliStatus {
-        case .authenticated:
-            text = "Authenticated"
-            color = .green
-        case .installed:
-            text = "Installed"
+        switch onboarding.step {
+        case .unchecked:
+            color = .gray
+        case .installingCLI:
             color = .blue
-        case .unauthenticated:
-            text = "Needs Auth"
+        case .installCLI:
+            if case .failed = installPhase {
+                color = .red
+            } else {
+                color = .gray
+            }
+        case .authenticate:
             color = .orange
-        case .notInstalled:
-            text = "Not Installed"
-            color = .gray
-        case .error:
-            text = "Probe Error"
-            color = .red
-        case .unknown, .none:
-            text = "Unchecked"
-            color = .gray
+        case .configureEnv, .complete:
+            color = .green
         }
         return Badge(text: text, color: color)
     }
@@ -605,7 +665,7 @@ private struct Badge: View {
     }
 }
 
-private struct VendorEnvImportSheet: View {
+struct VendorEnvImportSheet: View {
     @Environment(\.tahoe) private var t
 
     let vendor: VendorProvisioningVendor
