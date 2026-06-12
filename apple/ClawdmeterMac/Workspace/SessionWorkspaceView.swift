@@ -691,7 +691,7 @@ struct SessionWorkspaceView: View {
                 onSelectDocument: { model.selectWorkspaceDocumentTab($0) },
                 onCloseDocument: { model.closeWorkspaceDocumentTab($0) }
             )
-            MarkdownDocumentTabView(tab: tab)
+            WorkspaceDocumentTabView(tab: tab)
         }
     }
 

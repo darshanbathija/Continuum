@@ -152,7 +152,8 @@ public struct MacUsageView: View {
     }
 
     private var usageGaugeItems: [UsageGaugeItem] {
-        liveColumns.map { .primary($0) } + enabledSecondaryColumns.map { .secondary($0) }
+        liveColumns.map { .primary($0) }
+            + enabledSecondaryColumns.map { .secondary($0) }
     }
 
     @ViewBuilder
@@ -330,24 +331,27 @@ private struct WeeklyMeterRow: View {
 }
 
 /// Multi-account gauge column. Same instrument shape as ProviderColumn
-/// with an account-tagged header; menu-bar + auto-revive controls are
-/// primary-only (secondaries have no status item).
+/// with an account-tagged header plus a per-instance menu-bar toggle.
 private struct SecondaryProviderColumn: View {
     @Environment(\.tahoe) private var t
     let column: SecondaryTahoeColumn
     @ObservedObject var model: AppModel
+    @State private var menuBar: Bool = true
 
     init(column: SecondaryTahoeColumn) {
         self.column = column
-        self.model = column.model
+        _model = ObservedObject(wrappedValue: column.model)
     }
 
     private var row: TahoeLiveRow {
         AppRuntime.makeTahoeRow(model: model, provider: column.provider)
     }
 
+    private var menuBarPrefKey: String {
+        ProviderStatusController.prefKey(forWireId: column.wireId)
+    }
+
     var body: some View {
-        let row = self.row
         TahoeGlass(radius: 8, tone: .panel) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
@@ -362,6 +366,7 @@ private struct SecondaryProviderColumn: View {
                             .foregroundStyle(t.fg2)
                     }
                     Spacer()
+                    MenuBarCheckbox(on: $menuBar)
                 }
                 TahoeQuotaBar(provider: column.provider, percent: row.sessionPercent, size: 220,
                               label: "session",
@@ -377,6 +382,13 @@ private struct SecondaryProviderColumn: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityIdentifier("usage.secondary.\(column.wireId)")
+        .onAppear {
+            menuBar = UserDefaults.standard.object(forKey: menuBarPrefKey) as? Bool ?? true
+            model.forcePoll()
+        }
+        .onChange(of: menuBar) { _, v in
+            UserDefaults.standard.set(v, forKey: menuBarPrefKey)
+        }
     }
 }
 

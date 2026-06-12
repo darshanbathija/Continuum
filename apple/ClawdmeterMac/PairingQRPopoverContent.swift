@@ -3,32 +3,23 @@ import AppKit
 import ClawdmeterShared
 
 /// Compact pairing UI used by the dashboard toolbar's Pair with iPhone
-/// affordance. Shows the QR code + a Copy URL CTA so users don't have
-/// to dig into Settings → Sessions to pair a phone.
-///
-/// **E7 rewrite (Gate 3 GTM launch blocker).** Surfaces the relay
-/// pairing bundle (sessionId + per-peer bearer tokens + Mac X25519
-/// public key) instead of the Tailscale host/port/token URL. Falls
-/// back to "Pair iPhone" CTA when no bundle exists.
-///
-/// The compact popover keeps the regenerate + revoke + advanced
-/// controls in Settings — first-time pair stays a one-click action.
+/// affordance. Users choose Cloud or Tailscale, install the iPhone app,
+/// then scan the transport-specific pairing QR.
 struct PairingQRPopoverContent: View {
 
     @ObservedObject var runtime: AppRuntime
     @ObservedObject var pairingService: RelayPairingService
+    @AppStorage(PairingMode.storageKey) private var pairingModeRaw: String = PairingMode.cloud.rawValue
     @State private var qrImage: NSImage?
+    @State private var tailscaleQRImage: NSImage?
     @State private var didCopy: Bool = false
-    /// Step 1 of pairing: download QR before minting the relay auth bundle.
+    @State private var tokenForDisplay: String = ""
+    @State private var resolvedHost: TailscaleHost.Resolved = TailscaleHost.Resolved(host: "127.0.0.1", kind: .loopback)
+    /// Step 1 of pairing: download QR before minting the pairing QR.
     @State private var confirmedAppInstall: Bool = ContinuumIOSAppStore.hasConfirmedInstall
     @State private var now: Date = Date()
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-    /// Active Tahoe accent (Halo blue by default; tracks the user's theme).
-    /// All chrome inside this popover routes through this so the brackets,
-    /// halo, and Copy URL CTA stay on-brand instead of leaking the legacy
-    /// terra-cotta heritage color from SessionsV2Theme.accent.
     @Environment(\.tahoe) private var t
-    /// #21: pause the 1Hz countdown re-render when the window is inactive.
     @Environment(\.controlActiveState) private var controlActiveState
 
     init(runtime: AppRuntime) {
@@ -36,52 +27,88 @@ struct PairingQRPopoverContent: View {
         self.pairingService = runtime.relayPairingService
     }
 
+    private var pairingMode: Binding<PairingMode> {
+        Binding(
+            get: { PairingMode(rawValue: pairingModeRaw) ?? .cloud },
+            set: { pairingModeRaw = $0.rawValue }
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Pair with iPhone")
                 .font(.system(size: 15, weight: .semibold))
 
-            switch pairingService.phase {
-            case .unpaired:
-                if confirmedAppInstall {
-                    unpairedContent
-                } else {
-                    PairingDownloadAppStep(layout: .popover, onConfirmInstall: confirmAppInstallAndBeginPairing)
-                }
-            case .generatingBundle:
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Generating bundle…")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 40)
-            case .scanning, .keyExchanged, .readyButNotConnected:
-                bundleContent
+            if confirmedAppInstall {
+                PairingModePicker(mode: pairingMode, layout: .compact)
+            }
+
+            switch pairingMode.wrappedValue {
+            case .cloud:
+                cloudContent
+            case .tailscale:
+                tailscaleContent
             }
         }
         .padding(16)
         .frame(width: 300)
         .onAppear {
             confirmedAppInstall = ContinuumIOSAppStore.hasConfirmedInstall
+            refreshTailscaleState()
             refreshQR()
         }
         .onChange(of: pairingService.bundleURL) { _, _ in refreshQR() }
+        .onChange(of: pairingModeRaw) { _, _ in
+            if pairingMode.wrappedValue == .tailscale {
+                refreshTailscaleState()
+            }
+        }
         .onReceive(ticker) { if controlActiveState != .inactive { now = $0 } }
     }
 
-    // MARK: - Empty / unpaired state
+    // MARK: - Cloud
+
+    @ViewBuilder
+    private var cloudContent: some View {
+        switch pairingService.phase {
+        case .unpaired:
+            if confirmedAppInstall {
+                cloudUnpairedContent
+            } else {
+                PairingDownloadAppStep(layout: .popover, onConfirmInstall: confirmAppInstallAndBeginPairing)
+            }
+        case .generatingBundle:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Generating bundle…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 40)
+        case .scanning, .keyExchanged, .readyButNotConnected:
+            cloudBundleContent
+        }
+    }
 
     private func confirmAppInstallAndBeginPairing() {
         ContinuumIOSAppStore.markInstallConfirmed()
         confirmedAppInstall = true
-        Task { await pairingService.beginPairing() }
+        beginPairingForSelectedMode()
     }
 
-    private var unpairedContent: some View {
+    private func beginPairingForSelectedMode() {
+        switch pairingMode.wrappedValue {
+        case .cloud:
+            Task { await pairingService.beginPairing() }
+        case .tailscale:
+            refreshTailscaleState()
+        }
+    }
+
+    private var cloudUnpairedContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Generate a one-time pairing bundle. The iPhone scans the QR and derives a shared key locally — no Tailscale or LAN setup required.")
+            Text("Generate a one-time Cloud pairing bundle. The iPhone scans the QR and derives a shared key locally — no Tailscale or LAN setup required.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -105,13 +132,11 @@ struct PairingQRPopoverContent: View {
         }
     }
 
-    // MARK: - Bundle displayed
-
     @ViewBuilder
-    private var bundleContent: some View {
+    private var cloudBundleContent: some View {
         if let bundle = pairingService.bundle {
             VStack(spacing: 12) {
-                qrTile.frame(maxWidth: .infinity)
+                qrTile(image: qrImage).frame(maxWidth: .infinity)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Scan with Continuum Console on your iPhone")
@@ -123,23 +148,9 @@ struct PairingQRPopoverContent: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(spacing: 8) {
-                    Button(action: copyPairingURL) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "doc.on.doc")
-                            Text(didCopy ? "Copied ✓" : "Copy URL")
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .controlSize(.large)
-                    .buttonStyle(.borderedProminent)
-                    .tint(terraCotta)
-                    Button(action: { Task { await pairingService.beginPairing() } }) {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .controlSize(.large)
-                    .help("Regenerate bundle")
-                }
+                pairingActionRow(copyAction: copyPairingURL, regenerateAction: {
+                    Task { await pairingService.beginPairing() }
+                })
 
                 VStack(alignment: .leading, spacing: 3) {
                     labelRow("Session", value: String(bundle.sid.prefix(12)) + "…")
@@ -153,16 +164,74 @@ struct PairingQRPopoverContent: View {
         }
     }
 
+    // MARK: - Tailscale
+
+    @ViewBuilder
+    private var tailscaleContent: some View {
+        if confirmedAppInstall {
+            tailscaleBundleContent
+        } else {
+            PairingDownloadAppStep(layout: .popover, onConfirmInstall: confirmAppInstallAndBeginPairing)
+        }
+    }
+
+    @ViewBuilder
+    private var tailscaleBundleContent: some View {
+        if let httpPort = runtime.agentControlServer.boundPort,
+           let wsPort = runtime.agentControlServer.boundWsPort,
+           tailscalePairingURL(httpPort: httpPort, wsPort: wsPort) != nil {
+            VStack(spacing: 12) {
+                qrTile(image: tailscaleQRImage).frame(maxWidth: .infinity)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Scan with Continuum Console on your iPhone")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    Text("Both devices must be on the same Tailnet.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                pairingActionRow(copyAction: copyTailscaleURL, regenerateAction: refreshTailscaleState)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    labelRow("Host", value: resolvedHost.host)
+                    labelRow("Token", value: String(tokenForDisplay.prefix(8)) + "…")
+                }
+                .padding(.top, 4)
+
+                tailscaleReachabilityNote
+            }
+        } else {
+            Label("Daemon not running", systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+        }
+    }
+
+    @ViewBuilder
+    private var tailscaleReachabilityNote: some View {
+        switch resolvedHost.kind {
+        case .loopback:
+            Text("No Tailscale address detected. Install and run Tailscale on this Mac first.")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+        case .tailscaleDNSBackendDown(let state):
+            Text("Tailscale is installed but not running (\(state)).")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+        case .tailscaleIPv4, .tailscaleIPv6, .tailscaleDNS:
+            EmptyView()
+        }
+    }
+
     // MARK: - Subviews
 
-    private var qrTile: some View {
-        // Per DESIGN.md: pairing QR is 280x280 with an accent halo (inset
-        // -30, radius 50, blur 10px) and four corner brackets (32x32, 3px
-        // solid accent, asymmetric radius). Inner QR image renders at 224.
+    private func qrTile(image: NSImage?) -> some View {
         ZStack {
-            // Glass tile
             Group {
-                if let qr = qrImage {
+                if let qr = image {
                     Image(nsImage: qr)
                         .interpolation(.none)
                         .resizable()
@@ -181,16 +250,12 @@ struct PairingQRPopoverContent: View {
             .accessibilityLabel("Pairing QR code")
             .accessibilityHint("Scan with your iPhone's camera to pair this Mac.")
 
-            // Corner brackets — TL/BR get one asymmetric radius pattern,
-            // TR/BL get the mirror. 3px stroke + accent glow shadow.
             ForEach(cornerSpecs, id: \.self) { spec in
                 PairingQRCornerBracket(spec: spec, color: t.accent)
             }
         }
         .frame(width: 280, height: 280)
         .background(
-            // Halo: inset -30 (so the gradient extends past the tile),
-            // radius 50, blur 10px per DESIGN.md.
             RoundedRectangle(cornerRadius: 50, style: .continuous)
                 .fill(
                     RadialGradient(
@@ -202,6 +267,26 @@ struct PairingQRPopoverContent: View {
                 .padding(-30)
                 .allowsHitTesting(false)
         )
+    }
+
+    private func pairingActionRow(copyAction: @escaping () -> Void, regenerateAction: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Button(action: copyAction) {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.on.doc")
+                    Text(didCopy ? "Copied ✓" : "Copy URL")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+            .buttonStyle(.borderedProminent)
+            .tint(terraCotta)
+            Button(action: regenerateAction) {
+                Image(systemName: "arrow.clockwise")
+            }
+            .controlSize(.large)
+            .help("Regenerate pairing QR")
+        }
     }
 
     private var cornerSpecs: [QRCornerBracketSpec] {
@@ -227,16 +312,23 @@ struct PairingQRPopoverContent: View {
         }
     }
 
-    /// Effective brand accent — routes through the active Tahoe accent
-    /// (Halo blue by default; tracks the user's chosen theme) rather than
-    /// the legacy terra-cotta heritage color. Per user feedback during
-    /// live verification: orange isn't part of the modern brand.
     private var terraCotta: Color { t.accent }
 
     // MARK: - Actions
 
     private func copyPairingURL() {
         guard let url = pairingService.bundleURL else { return }
+        copyToPasteboard(url)
+    }
+
+    private func copyTailscaleURL() {
+        guard let httpPort = runtime.agentControlServer.boundPort,
+              let wsPort = runtime.agentControlServer.boundWsPort,
+              let url = tailscalePairingURL(httpPort: httpPort, wsPort: wsPort) else { return }
+        copyToPasteboard(url)
+    }
+
+    private func copyToPasteboard(_ url: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(url, forType: .string)
         didCopy = true
@@ -253,6 +345,32 @@ struct PairingQRPopoverContent: View {
             return
         }
         qrImage = PairingQRGenerator.makeImage(from: urlString)
+    }
+
+    private func refreshTailscaleState() {
+        tokenForDisplay = PairingTokenStore.shared.currentToken()
+        resolvedHost = TailscaleHost.resolve()
+        refreshTailscaleQR()
+    }
+
+    private func refreshTailscaleQR() {
+        guard let httpPort = runtime.agentControlServer.boundPort,
+              let wsPort = runtime.agentControlServer.boundWsPort,
+              let urlString = tailscalePairingURL(httpPort: httpPort, wsPort: wsPort) else {
+            tailscaleQRImage = nil
+            return
+        }
+        tailscaleQRImage = PairingQRGenerator.makeImage(from: urlString)
+    }
+
+    private func tailscalePairingURL(httpPort: UInt16, wsPort: UInt16) -> String? {
+        guard !tokenForDisplay.isEmpty else { return nil }
+        return TailscalePairingURLBuilder.buildURL(
+            host: resolvedHost.host,
+            httpPort: httpPort,
+            wsPort: wsPort,
+            token: tokenForDisplay
+        )
     }
 
     private func formatTTLCountdown(ttl: UInt64) -> String {

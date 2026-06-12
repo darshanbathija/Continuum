@@ -225,17 +225,47 @@ public enum TranscriptArtifactClassifier {
         kind(forPath: path) != nil
     }
 
+    /// Paths that should open in an in-session Code workspace document tab
+    /// instead of handing off to an external app.
+    public static func opensInDocumentTab(forPath path: String) -> Bool {
+        kind(forPath: path) != nil
+    }
+
+    public static func systemImageName(for kind: TranscriptArtifactKind) -> String {
+        switch kind {
+        case .markdown: return "doc.richtext"
+        case .html: return "safari"
+        case .image: return "photo"
+        case .pdf: return "doc.text.magnifyingglass"
+        case .document: return "doc.text"
+        case .spreadsheet, .data: return "tablecells"
+        case .presentation: return "rectangle.on.rectangle"
+        case .media: return "play.rectangle"
+        case .archive: return "archivebox"
+        }
+    }
+
+    public static func systemImageName(forPath path: String) -> String {
+        guard let kind = kind(forPath: path) else { return "doc" }
+        return systemImageName(for: kind)
+    }
+
     public static func pathCandidates(in text: String) -> [String] {
         let extensions = artifactExtensions.sorted().joined(separator: "|")
-        let pattern = #"(?i)(?:^|[\s"'`(])((?:(?:~|/|\.{1,2}/|[A-Za-z0-9_.-]+/)[^\s"'`()<>]+|[A-Za-z0-9_.-]+)\.(?:\#(extensions)))(?=$|[\s"'`),.])"#
+        // Optional leading `@` covers composer attachment lines like `@/tmp/a.png`.
+        let pattern = #"(?i)(?:^|[\s"'`(])(@?(?:(?:~|/|\.{1,2}/|[A-Za-z0-9_.-]+/)[^\s"'`()<>]+|[A-Za-z0-9_.-]+)\.(?:\#(extensions)))(?=$|[\s"'`),.])"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         return regex.matches(in: text, range: range).compactMap { match in
             guard match.numberOfRanges > 1,
                   let pathRange = Range(match.range(at: 1), in: text)
             else { return nil }
-            return String(text[pathRange])
+            return normalizeCandidatePath(String(text[pathRange]))
         }
+    }
+
+    private static func normalizeCandidatePath(_ raw: String) -> String {
+        raw.hasPrefix("@") ? String(raw.dropFirst()) : raw
     }
 }
 
@@ -647,8 +677,7 @@ public enum TranscriptTurnProjector {
         var seen: Set<String> = []
         var out: [TranscriptOutputArtifact] = []
         for message in messages {
-            for artifact in message.generatedArtifacts {
-                guard artifact.kind == .markdownDocument else { continue }
+            for artifact in message.generatedArtifacts where artifact.opensInDocumentTab {
                 appendArtifact(path: artifact.path, sourceToolName: artifact.sourceToolName ?? message.title, seen: &seen, out: &out)
             }
             let text = [message.body, message.detail].compactMap { $0 }.joined(separator: "\n")

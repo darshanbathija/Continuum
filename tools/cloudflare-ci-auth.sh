@@ -28,8 +28,11 @@ refresh_access_token() {
   printf '%s' "$access_token"
 }
 
-if [[ -n "${CLOUDFLARE_OAUTH_REFRESH_TOKEN:-}" ]]; then
-  export CLOUDFLARE_API_TOKEN
+# Prefer a static account API token when present; only fall back to the
+# OAuth-refresh exchange (which uses a rotating, often-expired refresh token
+# and can 400) when no static token is configured. Refreshing first would
+# hard-fail CI under `set -e` even though a usable static token exists.
+if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_OAUTH_REFRESH_TOKEN:-}" ]]; then
   CLOUDFLARE_API_TOKEN="$(refresh_access_token "$CLOUDFLARE_OAUTH_REFRESH_TOKEN")"
   export CLOUDFLARE_API_TOKEN
 fi

@@ -2485,7 +2485,7 @@ actor StagingParser {
     }
 
     private func ingestGeneratedArtifacts(_ artifacts: [GeneratedArtifact]) {
-        for artifact in artifacts where artifact.kind == .markdownDocument {
+        for artifact in artifacts where artifact.opensInDocumentTab {
             let path = artifact.path.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !path.isEmpty,
                   !seenArtifactPaths.contains(path)

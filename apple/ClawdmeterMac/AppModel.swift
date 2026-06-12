@@ -133,7 +133,16 @@ public final class AppModel: ObservableObject {
     }
 
     public func forcePoll() {
-        Task { _ = await poller.forcePoll() }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // Starting the model wires `onEvent` → consume; without this a
+            // not-yet-started secondary account gauge stayed at the nil-usage
+            // placeholder. The poll's event is consumed via `onEvent`; do NOT
+            // also consume the return value or every forced poll double-fires
+            // (duplicate Cursor canonical events downstream).
+            if !isStarted { start() }
+            _ = await poller.forcePoll()
+        }
     }
 
     public func setAutoReviveEnabled(_ enabled: Bool) {

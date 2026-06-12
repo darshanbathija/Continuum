@@ -69,8 +69,8 @@ struct TranscriptPathLinkButton: View {
         return "\(link.lineStart)"
     }
 
-    private var isMarkdown: Bool {
-        GeneratedArtifactDetector.isMarkdownPath(link.absolutePath)
+    private var opensInDocumentTab: Bool {
+        TranscriptArtifactClassifier.opensInDocumentTab(forPath: link.absolutePath)
     }
 
     var body: some View {
@@ -97,7 +97,7 @@ struct TranscriptPathLinkButton: View {
         .help(exists ? helpText : "File not found: \(link.path)")
         .accessibilityLabel(exists ? "Open \(link.path) line \(lineLabel)" : "File not found \(link.path)")
         .contextMenu {
-            if isMarkdown, let onOpenMarkdownDocument {
+            if opensInDocumentTab, let onOpenMarkdownDocument {
                 Button("Open in Code Tab") { onOpenMarkdownDocument(link.absolutePath) }
                     .disabled(!exists)
                 Button("Open External Editor") { openExternal() }
@@ -112,7 +112,7 @@ struct TranscriptPathLinkButton: View {
 
     private func open() {
         guard exists else { return }
-        if isMarkdown, let onOpenMarkdownDocument {
+        if opensInDocumentTab, let onOpenMarkdownDocument {
             try? presentationStore.recordPathAction(link.path)
             onOpenMarkdownDocument(link.absolutePath)
             return
@@ -159,7 +159,7 @@ struct TranscriptPathLinkButton: View {
     }
 
     private var helpText: String {
-        if isMarkdown, onOpenMarkdownDocument != nil {
+        if opensInDocumentTab, onOpenMarkdownDocument != nil {
             return "Open \(link.path) in Code tab"
         }
         return "Open \(link.path) at line \(lineLabel)"

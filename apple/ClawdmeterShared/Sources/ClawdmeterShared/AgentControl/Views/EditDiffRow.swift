@@ -49,13 +49,11 @@ public struct EditDiffRow: View {
         // on Watch today, so a compact summary line is enough here as a
         // future-proof placeholder if a Watch chat tab ever lands.
         HStack(spacing: 6) {
-            Image(systemName: verbIcon)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text("\(verb) \(stats.basename)")
+            ToolIconView(toolName: stats.kind == .write ? "Write" : "Edit", size: 12)
+            Text(verb)
                 .font(.system(size: 12, weight: .semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
+                .foregroundStyle(.primary)
+            FilePathChip(path: stats.filePath)
             if stats.additions > 0 {
                 Text("+\(stats.additions)")
                     .font(.system(size: 11, weight: .semibold))
@@ -117,15 +115,11 @@ public struct EditDiffRow: View {
             .padding(.top, 6)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: verbIcon)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14)
-                Text("\(verb) \(stats.basename)")
+                ToolIconView(toolName: stats.kind == .write ? "Write" : "Edit", size: 12)
+                Text(verb)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                FilePathChip(path: stats.filePath)
                 if stats.additions > 0 {
                     Text("+\(stats.additions)")
                         .font(.system(size: 11, weight: .semibold))
@@ -179,14 +173,6 @@ public struct EditDiffRow: View {
         switch stats.kind {
         case .edit, .multiEdit: return "Edited"
         case .write:            return "Wrote"
-        }
-    }
-
-    private var verbIcon: String {
-        switch stats.kind {
-        case .edit:      return "pencil"
-        case .multiEdit: return "pencil.and.scribble"
-        case .write:     return "square.and.pencil"
         }
     }
 
