@@ -290,6 +290,13 @@ public struct MacTerminalView: NSViewRepresentable {
                 guard let self, let terminalView else { return }
                 guard let window = terminalView.window else { return }
                 guard terminalView.acceptsFirstResponder else { return }
+                // First output is async, so the user may already be typing in a
+                // sibling text field. Don't yank focus out of a text editor;
+                // latch so the updateNSView re-arm path doesn't keep retrying.
+                if let current = window.firstResponder, current !== terminalView, current is NSText {
+                    self.hasRequestedFocus = true
+                    return
+                }
                 window.makeFirstResponder(terminalView)
                 self.hasRequestedFocus = true
             }
