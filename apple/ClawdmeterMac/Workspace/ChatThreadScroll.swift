@@ -1070,9 +1070,10 @@ struct ChatThreadScroll: View {
     }
 
     private func editDeltaLabel(_ file: TranscriptEditedFile) -> String {
-        let additions = file.additions > 0 ? "+\(file.additions)" : ""
-        let deletions = file.deletions > 0 ? "-\(file.deletions)" : ""
-        return [additions, deletions].filter { !$0.isEmpty }.joined(separator: " ")
+        TranscriptEditedFileFormatting.deltaLabel(
+            additions: file.additions,
+            deletions: file.deletions
+        )
     }
 
     /// v0.5.6 — fire-and-forget answer send for AskUserQuestion. Mirrors

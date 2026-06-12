@@ -90,6 +90,21 @@ final class CodeTabVisualSnapshotTests: XCTestCase {
         })
     }
 
+    func test_editDiffRow_inlineCounts() {
+        snapshot("edit_diff_row_inline_counts", width: 420, VStack(alignment: .leading, spacing: 8) {
+            EditDiffRow(
+                stats: EditStats(kind: .edit, filePath: "Sources/App.swift", additions: 12, deletions: 3),
+                editDiff: nil,
+                resultBody: nil
+            )
+            EditDiffRow(
+                stats: EditStats(kind: .write, filePath: "README.md", additions: 5, deletions: 0),
+                editDiff: nil,
+                resultBody: nil
+            )
+        })
+    }
+
     /// One sheet contact-sheet assertion so a `--only-testing` run of this file
     /// leaves an obvious pass/fail + a directory the analyst can open.
     func test_zzz_allSnapshotsLanded() {
@@ -97,11 +112,13 @@ final class CodeTabVisualSnapshotTests: XCTestCase {
             "mode_picker_local", "mode_picker_worktree",
             "effort_dial_high", "effort_dial_low", "effort_dial_unsupported",
             "skeleton_lines", "tahoe_buttons", "header_chip_strip",
+            "edit_diff_row_inline_counts",
         ]
         // Re-render synchronously so this test is order-independent.
         test_modePicker_local(); test_modePicker_worktree()
         test_effortDial_high(); test_effortDial_low(); test_effortDial_unsupported()
         test_skeletonLines(); test_tahoeButtons(); test_headerChipStrip()
+        test_editDiffRow_inlineCounts()
         for name in expected {
             let url = Self.outDir.appendingPathComponent("\(name).png")
             XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "missing snapshot \(name)")

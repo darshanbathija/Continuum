@@ -4,10 +4,9 @@ import SwiftUI
 /// v0.5.5 chat row for an `Edit` / `MultiEdit` / `Write` tool call.
 ///
 /// Replaces the generic "Ran 1 command" grouping for file-edit tool
-/// uses — matches Claude Code's own CLI rendering: `Edited <basename>
-/// +N -M ›`. For `Write` we render `Wrote <basename> +N` (no `-M` part,
-/// since the prior content isn't known at parse time so deletions are
-/// always reported as zero).
+/// uses. Each row shows the tool verb, a file chip, and `+N -M` diff
+/// counts inline in the Code tab chat body. For `Write` we render
+/// `Write <chip> +N -0` since deletions are unknown at parse time.
 ///
 /// Tap → toggles a disclosure that surfaces the full file path, the
 /// capped edit preview/diff payload when available, and the matched
@@ -30,6 +29,9 @@ public struct EditDiffRow: View {
     public let density: TranscriptDensity
 
     @State private var isExpanded: Bool = false
+    #if os(macOS)
+    @State private var isHovering: Bool = false
+    #endif
 
     public init(
         stats: EditStats,
@@ -48,27 +50,13 @@ public struct EditDiffRow: View {
         // watchOS has no DisclosureGroup; the chat thread doesn't render
         // on Watch today, so a compact summary line is enough here as a
         // future-proof placeholder if a Watch chat tab ever lands.
-        HStack(spacing: 6) {
-            Image(systemName: verbIcon)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text("\(verb) \(stats.basename)")
-                .font(.system(size: 12, weight: .semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            if stats.additions > 0 {
-                Text("+\(stats.additions)")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(additionsColor)
-            }
-            if stats.deletions > 0 {
-                Text("-\(stats.deletions)")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(deletionsColor)
-            }
+        HStack(spacing: 8) {
+            editVerbLabel
+            TranscriptEditedFileChip(filePath: stats.filePath)
+            EditDiffDeltaCounts(additions: stats.additions, deletions: stats.deletions)
             Spacer(minLength: 0)
         }
-        .padding(8)
+        .padding(.vertical, 4)
         #else
         DisclosureGroup(isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 6) {
@@ -117,36 +105,42 @@ public struct EditDiffRow: View {
             .padding(.top, 6)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: verbIcon)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14)
-                Text("\(verb) \(stats.basename)")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if stats.additions > 0 {
-                    Text("+\(stats.additions)")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(additionsColor)
-                        .monospacedDigit()
-                }
-                if stats.deletions > 0 {
-                    Text("-\(stats.deletions)")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(deletionsColor)
-                        .monospacedDigit()
-                }
+                editVerbLabel
+                TranscriptEditedFileChip(filePath: stats.filePath)
+                EditDiffDeltaCounts(additions: stats.additions, deletions: stats.deletions)
                 Spacer(minLength: 0)
             }
         }
-        .padding(10)
-        .background(
-            Color.secondary.opacity(0.08),
-            in: RoundedRectangle(cornerRadius: 10)
-        )
+        .padding(.vertical, 4)
+        #if os(macOS)
+        .overlay(alignment: .leading) {
+            if isHovering, let preview = editDiff?.preview, !preview.isEmpty {
+                EditDiffHoverPreviewView(
+                    preview: preview,
+                    filePath: stats.filePath,
+                    additions: stats.additions,
+                    deletions: stats.deletions
+                )
+                .offset(x: 12, y: 28)
+                .zIndex(2)
+                .transition(.opacity)
+            }
+        }
+        .onHover { isHovering = $0 }
         #endif
+        #endif
+    }
+
+    private var editVerbLabel: some View {
+        HStack(spacing: 6) {
+            Image(systemName: verbIcon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+            Text(verb)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.primary)
+        }
     }
 
     private var previewTitle: String {
@@ -177,8 +171,8 @@ public struct EditDiffRow: View {
 
     private var verb: String {
         switch stats.kind {
-        case .edit, .multiEdit: return "Edited"
-        case .write:            return "Wrote"
+        case .edit, .multiEdit: return "Edit"
+        case .write:            return "Write"
         }
     }
 
@@ -188,15 +182,6 @@ public struct EditDiffRow: View {
         case .multiEdit: return "pencil.and.scribble"
         case .write:     return "square.and.pencil"
         }
-    }
-
-    private var additionsColor: Color {
-        // Matches the green/red Claude Code's CLI uses for unified diffs.
-        Color(red: 0x52 / 255.0, green: 0xC4 / 255.0, blue: 0x1A / 255.0)
-    }
-
-    private var deletionsColor: Color {
-        Color(red: 0xE6 / 255.0, green: 0x4B / 255.0, blue: 0x4B / 255.0)
     }
 }
 
@@ -243,7 +228,7 @@ enum EditDiffPreviewModel {
     }
 }
 
-private struct EditDiffPreviewPane: View {
+struct EditDiffPreviewPane: View {
     let preview: String
     let lineLimit: Int?
 
