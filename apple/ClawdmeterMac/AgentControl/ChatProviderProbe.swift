@@ -499,6 +499,16 @@ public actor CursorModelProbe {
         await currentState().models
     }
 
+    /// Returns the last probed model list without triggering a fresh probe.
+    /// Falls back to the bundled Cursor catalog when nothing is cached yet.
+    public func cachedModels() -> [ModelCatalogEntry] {
+        if let cache,
+           Date().timeIntervalSince(cache.computedAt) < Self.cacheTTL {
+            return cache.state.models
+        }
+        return ModelCatalog.bundled.cursor
+    }
+
     public func passiveState() async -> CursorModelProbeState {
         let now = Date()
         let binary = ShellRunner.locateBinary("cursor-agent") ?? ShellRunner.locateBinary("agent")

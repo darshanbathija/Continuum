@@ -117,7 +117,7 @@ struct CustomProviderRows: View {
         }
         .task { await refreshCatalog() }
         .onReceive(store.$records) { _ in
-            Task { await refreshCatalog() }
+            catalog = catalogMergedWithStore(catalog)
         }
         .confirmationDialog(
             deleteDialogTitle,
@@ -166,7 +166,6 @@ struct CustomProviderRows: View {
     private func selectDefaultModel(_ modelId: String, for record: CustomProviderRecord) {
         do {
             try store.setDefaultModel(id: record.id, modelId: modelId)
-            Task { await refreshCatalog() }
         } catch {}
     }
 

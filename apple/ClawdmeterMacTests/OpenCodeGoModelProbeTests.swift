@@ -30,4 +30,10 @@ final class OpenCodeGoModelProbeTests: XCTestCase {
         let json = #"{"data":[]}"#.data(using: .utf8)!
         XCTAssertEqual(try OpenCodeGoModelProbe.parseModelsResponse(json).count, 0)
     }
+
+    func test_cachedModels_withoutProbe_returnsBundledFallback() async {
+        await OpenCodeGoModelProbe.shared.invalidate()
+        let cached = await OpenCodeGoModelProbe.shared.cachedModels()
+        XCTAssertEqual(cached.map(\.id), ModelCatalog.bundled.opencode.map(\.id))
+    }
 }

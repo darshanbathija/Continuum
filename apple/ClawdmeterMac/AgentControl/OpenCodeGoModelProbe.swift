@@ -58,6 +58,18 @@ public actor OpenCodeGoModelProbe {
         await currentState().models
     }
 
+    /// Returns the last probed model list without triggering a fresh network call.
+    /// Falls back to the bundled OpenCode catalog when nothing is cached yet.
+    public func cachedModels() -> [ModelCatalogEntry] {
+        if let cache {
+            let ttl = cache.state.discoverySucceeded ? Self.cacheTTL : Self.failureTTL
+            if Date().timeIntervalSince(cache.computedAt) < ttl {
+                return cache.state.models
+            }
+        }
+        return ModelCatalog.bundled.opencode
+    }
+
     public func currentState() async -> OpenCodeGoModelProbeState {
         let now = Date()
         if let cache {

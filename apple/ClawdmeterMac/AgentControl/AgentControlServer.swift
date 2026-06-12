@@ -1506,13 +1506,19 @@ public final class AgentControlServer {
         ], on: connection)
     }
 
-    private func providerEnabledModelCatalog() async -> ModelCatalog {
+    private func providerEnabledModelCatalog(live: Bool = true) async -> ModelCatalog {
         var catalog = ModelCatalog.bundled
         if ProviderEnablement.isEnabled("cursor") {
-            catalog = catalog.replacingCursor(await CursorModelProbe.shared.currentModels())
+            let cursorModels = live
+                ? await CursorModelProbe.shared.currentModels()
+                : await CursorModelProbe.shared.cachedModels()
+            catalog = catalog.replacingCursor(cursorModels)
         }
         if ProviderEnablement.isEnabled("opencode") {
-            catalog = catalog.replacingOpenCodeGo(await OpenCodeGoModelProbe.shared.currentModels())
+            let openCodeModels = live
+                ? await OpenCodeGoModelProbe.shared.currentModels()
+                : await OpenCodeGoModelProbe.shared.cachedModels()
+            catalog = catalog.replacingOpenCodeGo(openCodeModels)
         }
         let enabledIDs = ProviderEnablement.enabledProviderIDs(for: .code)
         let readyModelProviderIDs = enabledIDs.filter { id in
@@ -1535,6 +1541,33 @@ public final class AgentControlServer {
             customProviders: customProviders,
             updatedAt: filtered.updatedAt
         )
+    }
+
+    private func modelCatalogEntryMatches(_ model: String, entries: [ModelCatalogEntry]) -> Bool {
+        entries.contains { $0.id == model || $0.cliAlias == model }
+    }
+
+    /// Validates a default-model id without triggering live Cursor/OpenCode probes.
+    private func isKnownDefaultModel(_ model: String, for vendor: ChatVendor) async -> Bool {
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        if modelCatalogEntryMatches(trimmed, entries: vendor.models(in: .bundled)) {
+            return true
+        }
+        switch vendor.backingProvider {
+        case .cursor where ProviderEnablement.isEnabled("cursor"):
+            return modelCatalogEntryMatches(
+                trimmed,
+                entries: await CursorModelProbe.shared.cachedModels()
+            )
+        case .opencode where ProviderEnablement.isEnabled("opencode"):
+            return modelCatalogEntryMatches(
+                trimmed,
+                entries: await OpenCodeGoModelProbe.shared.cachedModels()
+            )
+        default:
+            return false
+        }
     }
 
     private func handleGetModels(connection: NWConnection) async {
@@ -1571,10 +1604,10 @@ public final class AgentControlServer {
             return
         }
 
-        let catalog = await providerEnabledModelCatalog()
+        let catalog = await providerEnabledModelCatalog(live: false)
         if let model = req.model,
            !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           !vendor.models(in: catalog).contains(where: { $0.id == model || $0.cliAlias == model }) {
+           await !isKnownDefaultModel(model, for: vendor) {
             sendResponse(.badRequest, on: connection)
             return
         }

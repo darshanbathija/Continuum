@@ -2307,6 +2307,20 @@ public final class AgentControlClient: ObservableObject {
             )
             return providerDefaults
         }
+        // Mac loopback uses the same UserDefaults store as the daemon. Skip
+        // the HTTP round trip (and the server's live model probes) so Settings
+        // default-model switches stay instant.
+        if isExplicitConfig {
+            providerDefaults = localStore.setDefault(
+                for: vendor,
+                model: model,
+                effort: effort,
+                clearModel: clearModel,
+                clearEffort: clearEffort,
+                catalog: modelCatalog
+            )
+            return providerDefaults
+        }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let body = try? encoder.encode(requestBody),

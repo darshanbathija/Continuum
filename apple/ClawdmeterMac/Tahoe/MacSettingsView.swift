@@ -1689,30 +1689,28 @@ struct ProviderPreferenceRows: View {
     }
 
     private func update(vendor: ChatVendor, model: String) {
+        let normalizedEffort = ProviderModelPickerSupport.normalizedEffort(
+            snapshot.effort(for: vendor),
+            vendor: vendor,
+            modelId: model,
+            catalog: catalog
+        )
+        snapshot = localStore.setDefault(
+            for: vendor,
+            model: model,
+            effort: normalizedEffort,
+            clearEffort: normalizedEffort == nil,
+            catalog: catalog
+        )
+        guard let client else { return }
         Task {
-            let normalizedEffort = ProviderModelPickerSupport.normalizedEffort(
-                snapshot.effort(for: vendor),
+            if let updated = await client.updateProviderDefault(
                 vendor: vendor,
-                modelId: model,
-                catalog: catalog
-            )
-            if let client {
-                if let updated = await client.updateProviderDefault(
-                    vendor: vendor,
-                    model: model,
-                    effort: normalizedEffort,
-                    clearEffort: normalizedEffort == nil
-                ) {
-                    snapshot = updated
-                }
-            } else {
-                snapshot = localStore.setDefault(
-                    for: vendor,
-                    model: model,
-                    effort: normalizedEffort,
-                    clearEffort: normalizedEffort == nil,
-                    catalog: catalog
-                )
+                model: model,
+                effort: normalizedEffort,
+                clearEffort: normalizedEffort == nil
+            ) {
+                snapshot = updated
             }
         }
     }

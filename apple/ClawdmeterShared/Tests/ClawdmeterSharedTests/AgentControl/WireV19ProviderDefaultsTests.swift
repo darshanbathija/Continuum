@@ -44,4 +44,62 @@ final class WireV19ProviderDefaultsTests: XCTestCase {
         XCTAssertFalse(decoded.clearModel)
         XCTAssertTrue(decoded.clearEffort)
     }
+
+    @MainActor
+    func test_explicitLoopbackUpdateProviderDefaultSkipsHTTP() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [LoopbackHTTPTrapURLProtocol.self]
+        LoopbackHTTPTrapURLProtocol.reset()
+
+        let client = AgentControlClient(
+            host: "127.0.0.1",
+            httpPort: 21731,
+            wsPort: 21732,
+            token: "loopback-token",
+            urlSession: URLSession(configuration: config)
+        )
+        let modelId = try XCTUnwrap(ModelCatalog.bundled.claude.first?.id)
+
+        let start = ContinuousClock.now
+        let updated = await client.updateProviderDefault(
+            vendor: .claude,
+            model: modelId,
+            effort: .high
+        )
+        let elapsed = start.duration(to: ContinuousClock.now)
+
+        XCTAssertEqual(updated?.modelByVendor[ChatVendor.claude.rawValue], modelId)
+        XCTAssertEqual(client.providerDefaults.modelByVendor[ChatVendor.claude.rawValue], modelId)
+        XCTAssertTrue(LoopbackHTTPTrapURLProtocol.requests.isEmpty)
+        XCTAssertLessThan(elapsed, .milliseconds(250))
+    }
+}
+
+private final class LoopbackHTTPTrapURLProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var storedRequests: [URLRequest] = []
+
+    static var requests: [URLRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedRequests
+    }
+
+    static func reset() {
+        lock.lock()
+        storedRequests = []
+        lock.unlock()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.lock.lock()
+        Self.storedRequests.append(request)
+        Self.lock.unlock()
+        client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
+    }
+
+    override func stopLoading() {}
 }
