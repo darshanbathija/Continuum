@@ -190,6 +190,8 @@ final class TranscriptTurnProjectorTests: XCTestCase {
         XCTAssertEqual(files[1].deletions, 1)
         XCTAssertEqual(files[2].additions, 2)
         XCTAssertEqual(files[2].deletions, 0)
+        XCTAssertTrue(files[1].preview?.contains("-old") == true)
+        XCTAssertTrue(files[2].preview?.contains("+line 1") == true)
     }
 
     private func msg(
