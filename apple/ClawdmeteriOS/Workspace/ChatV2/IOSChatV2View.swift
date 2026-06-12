@@ -40,6 +40,7 @@ public struct IOSChatV2View: View {
 
 @available(iOS 17, *)
 private struct ChatBody: View {
+    @Environment(\.theme) private var theme
     @Environment(\.tahoe) private var t
     @ObservedObject var client: AgentControlClient
     @ObservedObject var chatStore: ChatV2Store
@@ -59,8 +60,10 @@ private struct ChatBody: View {
                 header
                 if !client.isConfigured {
                     UnpairedState()
+                } else if let prompt = activeBroadcastPrompt {
+                    broadcastStrip(prompt: prompt)
+                    transcript
                 } else {
-                    broadcastStrip
                     transcript
                 }
                 Composer(
@@ -130,19 +133,16 @@ private struct ChatBody: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("CONTINUUM")
-                    .font(TahoeFont.body(10, weight: .bold))
-                    .foregroundStyle(t.fg4)
-                Text("Chat")
-                    .font(TahoeFont.body(22, weight: .semibold))
-                    .foregroundStyle(t.fg)
-            }
+            ContinuumScreenHeader(title: "Chat")
             Spacer()
             Button { historyPresented = true } label: {
-                TahoeIcon("archive", size: 17).foregroundStyle(t.fg2)
-                    .frame(width: 34, height: 34)
-                    .background(Color.white.opacity(0.06), in: Circle())
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(theme.fg2)
+                    .frame(width: 38, height: 38)
+                    .background(theme.surface2)
+                    .clipShape(Circle())
+                    .overlay(Circle().strokeBorder(theme.hairline, lineWidth: 0.5))
             }
             .buttonStyle(.plain)
             Button {
@@ -150,33 +150,69 @@ private struct ChatBody: View {
                 sendCtl.reset()
                 chatStore.clearAttachments()
             } label: {
-                TahoeIcon("plus", size: 17).foregroundStyle(t.fg2)
-                    .frame(width: 34, height: 34)
-                    .background(Color.white.opacity(0.06), in: Circle())
+                Text("New chat")
+                    .font(ContinuumFont.body(14, weight: .semibold))
+                    .foregroundStyle(theme.primaryText)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(theme.primaryFill)
+                    .clipShape(Capsule(style: .continuous))
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 12)
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
         .padding(.bottom, 8)
     }
 
-    private var broadcastStrip: some View {
-        TahoeGlass(radius: 8, tone: .chip) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(openTarget?.isReadOnlyTranscript == true ? "Archived transcript" : (openTarget?.isFrontier == true || chatStore.selectedChoiceCount > 1 ? "Broadcast to selected" : "One selected provider"))
-                        .font(TahoeFont.body(13, weight: .semibold))
-                        .foregroundStyle(t.fg)
-                    Text(openTarget?.isReadOnlyTranscript == true ? "Read-only history result" : (openTarget?.isFrontier == true || chatStore.selectedChoiceCount > 1 ? "Compare answers · tap a model to read its reply" : "\(chatStore.primaryChoice.displayName(in: client.modelCatalog)) answers this thread"))
-                        .font(TahoeFont.body(11))
-                        .foregroundStyle(t.fg3)
-                }
-                Spacer()
-            }
-            .padding(12)
+    private var activeBroadcastPrompt: String? {
+        guard let openTarget else { return nil }
+        switch openTarget {
+        case .solo(let id):
+            return latestUserPrompt(sessionId: id)
+        case .frontier(let groupId):
+            let child = client.frontierChildren(groupId: groupId).first
+            return child.flatMap { latestUserPrompt(sessionId: $0.id) }
+        case .transcript:
+            return nil
         }
-        .padding(.horizontal, 14)
+    }
+
+    private func latestUserPrompt(sessionId: UUID) -> String? {
+        #if DEBUG
+        if let fixture = client.codeTabVerificationChatSnapshot(sessionId: sessionId) {
+            return fixture.items.reversed().compactMap { item -> String? in
+                if case .message(let m) = item, m.kind == .userText { return m.body.trimmingCharacters(in: .whitespacesAndNewlines) }
+                return nil
+            }.first
+        }
+        #endif
+        let store = iOSChatStoreCache.shared.store(for: sessionId, client: client)
+        return store.snapshot.items.reversed().compactMap { item -> String? in
+            if case .message(let m) = item, m.kind == .userText {
+                let body = m.body.trimmingCharacters(in: .whitespacesAndNewlines)
+                return body.isEmpty ? nil : body
+            }
+            return nil
+        }.first
+    }
+
+    private func broadcastStrip(prompt: String) -> some View {
+        ContinuumSurface(level: .one, padding: 0) {
+            HStack(alignment: .top, spacing: 9) {
+                Text("❯")
+                    .font(ContinuumFont.mono(14))
+                    .foregroundStyle(theme.fg3)
+                Text(prompt)
+                    .font(ContinuumFont.body(14.5))
+                    .foregroundStyle(theme.fg)
+                    .lineLimit(4)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 11)
+        }
+        .padding(.horizontal, 16)
         .padding(.bottom, 10)
     }
 
@@ -798,6 +834,7 @@ private struct ThinkingDotsRow: View {
 
 @available(iOS 17, *)
 private struct MessageRow: View {
+    @Environment(\.theme) private var theme
     @Environment(\.tahoe) private var t
     let item: ChatItem
     var modelFailureRetryPrompt: String? = nil
@@ -812,27 +849,28 @@ private struct MessageRow: View {
                 HStack {
                     Spacer(minLength: 42)
                     Text(message.body)
-                        .font(TahoeFont.body(14))
-                        .foregroundStyle(t.fg)
+                        .font(ContinuumFont.body(14))
+                        .foregroundStyle(theme.fg)
                         .padding(.horizontal, 13)
                         .padding(.vertical, 10)
-                        .background(t.accent.opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
+                        .background(theme.surface2, in: RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
                 }
                 .contextMenu { messageCopyMenu(message) }
             case .assistantText:
                 if message.isError {
                     errorAssistantRow(message)
                 } else {
-                    TahoeGlass(radius: 8, tone: .raised) {
+                    ContinuumSurface(level: .one, padding: 0) {
                         VStack(alignment: .leading, spacing: 8) {
                             if !message.title.isEmpty {
                                 Text(message.title.uppercased())
-                                    .font(TahoeFont.body(10, weight: .bold))
-                                    .foregroundStyle(t.fg4)
+                                    .font(ContinuumFont.etched(10.5))
+                                    .tracking(0.95)
+                                    .foregroundStyle(theme.fg4)
                             }
                             Text(message.body)
-                                .font(TahoeFont.body(14))
-                                .foregroundStyle(t.fg)
+                                .font(ContinuumFont.body(14))
+                                .foregroundStyle(theme.fg)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(13)
@@ -936,6 +974,7 @@ private struct MessageRow: View {
 
 @available(iOS 17, *)
 private struct Composer: View {
+    @Environment(\.theme) private var theme
     @Environment(\.tahoe) private var t
     @ObservedObject var store: ChatV2Store
     @ObservedObject var sendCtl: ComposerSendController
@@ -951,15 +990,15 @@ private struct Composer: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        TahoeGlass(radius: 8, tone: .raised) {
+        ContinuumSurface(level: .two, padding: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 if !store.attachments.isEmpty {
                     attachmentStrip
                 }
                 TextField(placeholder, text: $sendCtl.text, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(TahoeFont.body(14))
-                    .foregroundStyle(t.fg)
+                    .font(ContinuumFont.body(14))
+                    .foregroundStyle(theme.fg)
                     .lineLimit(1...5)
                     .focused($focused)
                     .padding(.horizontal, 14)
@@ -967,8 +1006,8 @@ private struct Composer: View {
 
                 if let err = sendCtl.lastError {
                     Text(err)
-                        .font(TahoeFont.body(11))
-                        .foregroundStyle(.red)
+                        .font(ContinuumFont.body(11))
+                        .foregroundStyle(theme.error)
                         .padding(.horizontal, 14)
                 }
 
@@ -1009,11 +1048,11 @@ private struct Composer: View {
         HStack(spacing: 6) {
             if enabledChoices.isEmpty {
                 Text("Enable on Mac")
-                    .font(TahoeFont.body(11.5, weight: .semibold))
-                    .foregroundStyle(t.fg4)
+                    .font(ContinuumFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(theme.fg4)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
-                    .background(Color.white.opacity(0.06), in: Capsule())
+                    .background(theme.surface1, in: Capsule(style: .continuous))
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -1278,6 +1317,11 @@ private struct Composer: View {
                 return true
             }
             return entry.available
+        case .opencodePartner(let partnerId):
+            guard client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled }) else {
+                return false
+            }
+            return isProviderAvailable(.opencode)
         }
     }
 
@@ -1293,6 +1337,15 @@ private struct Composer: View {
             guard isChoiceAvailable(choice) else {
                 return providerMatrix?.customProviders.first(where: { $0.id == providerId && !$0.available })?.reason
                     ?? "\(label) is unavailable."
+            }
+            return nil
+        case .opencodePartner(let partnerId):
+            let label = choice.displayName(in: client.modelCatalog)
+            guard client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled }) else {
+                return "Connect \(label) in Continuum → Providers on your Mac."
+            }
+            guard isChoiceAvailable(choice) else {
+                return "\(label) is unavailable — ensure OpenCode is running on your Mac."
             }
             return nil
         }
@@ -1784,6 +1837,11 @@ private struct IOSChatModelSelectorSheet: View {
                 return true
             }
             return entry.available
+        case .opencodePartner(let partnerId):
+            guard client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled }) else {
+                return false
+            }
+            return isProviderAvailable(.opencode)
         }
     }
 
@@ -1801,7 +1859,27 @@ private struct IOSChatModelSelectorSheet: View {
                     ?? "\(label) is unavailable"
             }
             return nil
+        case .opencodePartner(let partnerId):
+            let label = choice.displayName(in: client.modelCatalog)
+            guard client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled }) else {
+                return "Connect in Continuum → Providers"
+            }
+            guard isChoiceAvailable(choice) else {
+                return "\(label) is unavailable — ensure OpenCode is running on your Mac"
+            }
+            return nil
         }
+    }
+
+    private func isProviderAvailable(_ provider: AgentKind) -> Bool {
+        guard enabledChoices.contains(where: { $0.backingAgent(in: client.modelCatalog) == provider }) else {
+            return false
+        }
+        guard let entries = providerMatrix?.providers.filter({ $0.provider == provider }),
+              !entries.isEmpty else {
+            return true
+        }
+        return entries.contains { $0.capabilityProbePassed }
     }
 
     private func isVendorAvailable(_ vendor: ChatVendor) -> Bool {
@@ -1990,18 +2068,18 @@ private struct HistoryRowModel: Identifiable {
 
 @available(iOS 17, *)
 private struct EmptyState: View {
-    @Environment(\.tahoe) private var t
+    @Environment(\.theme) private var theme
     let title: String
     let subtitle: String
 
     var body: some View {
         VStack(spacing: 8) {
             Text(title)
-                .font(TahoeFont.body(18, weight: .semibold))
-                .foregroundStyle(t.fg)
+                .font(ContinuumFont.body(18, weight: .semibold))
+                .foregroundStyle(theme.fg)
             Text(subtitle)
-                .font(TahoeFont.body(13))
-                .foregroundStyle(t.fg3)
+                .font(ContinuumFont.body(13))
+                .foregroundStyle(theme.fg3)
                 .multilineTextAlignment(.center)
         }
         .padding(28)
@@ -2011,17 +2089,19 @@ private struct EmptyState: View {
 
 @available(iOS 17, *)
 private struct UnpairedState: View {
-    @Environment(\.tahoe) private var t
+    @Environment(\.theme) private var theme
 
     var body: some View {
         VStack(spacing: 8) {
-            TahoeIcon("link", size: 26).foregroundStyle(t.fg3)
+            Image(systemName: "link")
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(theme.fg3)
             Text("Pair with Mac")
-                .font(TahoeFont.body(18, weight: .semibold))
-                .foregroundStyle(t.fg)
+                .font(ContinuumFont.body(18, weight: .semibold))
+                .foregroundStyle(theme.fg)
             Text("Chat uses the paired Mac daemon to run providers.")
-                .font(TahoeFont.body(13))
-                .foregroundStyle(t.fg3)
+                .font(ContinuumFont.body(13))
+                .foregroundStyle(theme.fg3)
                 .multilineTextAlignment(.center)
         }
         .padding(28)

@@ -9,6 +9,7 @@ import UIKit
 /// Accepts a `TahoeCodeBindings` value (defaults to demo); ContentView/iOS
 /// root injects daemon-derived bindings via the AgentControlClient adapter.
 public struct IOSCodeView: View {
+    @Environment(\.theme) private var theme
     @Environment(\.tahoe) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private enum StatusScope: String, CaseIterable, Identifiable {
@@ -92,53 +93,56 @@ public struct IOSCodeView: View {
     public var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    IOSRoundIconBtn("folder", action: { workspaceSwitcherPresented = true })
-                    if let agentClient {
-                        IOSDesktopSyncBadge(client: agentClient, onPair: onPairWithDesktop)
-                    }
+                HStack(alignment: .center, spacing: 10) {
+                    ContinuumScreenHeader(title: "Code")
                     Spacer()
-                    IOSRoundIconBtn("plus", action: onNewSession)
+                    Button(action: onNewSession) {
+                        Text("New")
+                            .font(ContinuumFont.body(14, weight: .semibold))
+                            .foregroundStyle(theme.primaryText)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 9)
+                            .background(theme.primaryFill)
+                            .clipShape(Capsule(style: .continuous))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 18)
-                .padding(.top, 18)
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
                 .padding(.bottom, 10)
 
-                if let agentClient {
-                    IOSDesktopPairingCTA(client: agentClient, onPair: onPairWithDesktop)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 10)
-                }
-
-                // Search — PR #26 D5. Real TextField that filters
-                // sessions by title + goal across visible repos.
-                TahoeGlass(radius: 6, tone: .chip) {
-                    HStack(spacing: 10) {
-                        TahoeIcon("search", size: 15).foregroundStyle(t.fg3)
-                        TextField("Search sessions…", text: $searchQuery)
-                            .textFieldStyle(.plain)
-                            .font(TahoeFont.body(14))
-                            .foregroundStyle(t.fg)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                        if !searchQuery.isEmpty {
-                            Button {
-                                searchQuery = ""
-                            } label: {
-                                TahoeIcon("x", size: 12).foregroundStyle(t.fg3)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        Button {
-                            filtersDialogPresented = true
-                        } label: {
-                            TahoeIcon("sliders", size: 13)
-                                .foregroundStyle(filtersAreActive ? t.accent : t.fg3)
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(theme.fg3)
+                    TextField("Search sessions…", text: $searchQuery)
+                        .textFieldStyle(.plain)
+                        .font(ContinuumFont.body(14))
+                        .foregroundStyle(theme.fg)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    if !searchQuery.isEmpty {
+                        Button { searchQuery = "" } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(theme.fg3)
                         }
                         .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 14)
-                    .frame(height: 38)
+                    Button { filtersDialogPresented = true } label: {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(filtersAreActive ? theme.live : theme.fg3)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 42)
+                .background(theme.surface2)
+                .clipShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                        .strokeBorder(theme.hairline, lineWidth: 0.5)
                 }
                 .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
 
@@ -159,13 +163,15 @@ public struct IOSCodeView: View {
                 let visible = filteredRepos
                 if visible.isEmpty {
                     VStack(spacing: 8) {
-                        TahoeIcon("chat", size: 22).foregroundStyle(t.fg4)
+                        Image(systemName: "bubble.left.and.bubble.right")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(theme.fg4)
                         Text("No active sessions")
-                            .font(TahoeFont.body(14, weight: .semibold))
-                            .foregroundStyle(t.fg2)
+                            .font(ContinuumFont.body(14, weight: .semibold))
+                            .foregroundStyle(theme.fg2)
                         Text("Sessions started on your Mac will appear here once you're paired.")
-                            .font(TahoeFont.body(12))
-                            .foregroundStyle(t.fg3)
+                            .font(ContinuumFont.body(12))
+                            .foregroundStyle(theme.fg3)
                             .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: 280)
@@ -179,6 +185,11 @@ public struct IOSCodeView: View {
                         IOSRepoCard(
                             repo: repo,
                             onOpen: onOpenDetail,
+                            onContinueOnHost: { sessionId, hostId in
+                                handoffSessionId = sessionId
+                                handoffCurrentHostId = hostId
+                                showHandoffSheet = true
+                            },
                             agentClient: agentClient,
                             outbox: outbox,
                             presentationStore: presentationStore
@@ -315,25 +326,19 @@ public struct IOSCodeView: View {
             }
         } label: {
             HStack(spacing: 6) {
-                TahoeIcon(scope.icon, size: 12)
                 Text(scope.label)
                 Text("\(count)")
-                    .font(TahoeFont.mono(10.5, weight: .bold))
-                    .foregroundStyle(selected ? .white.opacity(0.82) : t.fg4)
+                    .font(ContinuumFont.mono(10.5, weight: .bold))
             }
-            .font(TahoeFont.body(11.5, weight: .bold))
-            .foregroundStyle(selected ? .white : t.fg2)
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .background(
-                selected
-                    ? LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom)
-                    : LinearGradient(colors: [t.glassTintHi, t.glassTintHi], startPoint: .top, endPoint: .bottom),
-                in: Capsule(style: .continuous)
-            )
+            .font(ContinuumFont.body(11.5, weight: .semibold))
+            .foregroundStyle(selected ? theme.fg : theme.fg3)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(selected ? theme.selection : theme.surface2)
+            .clipShape(Capsule(style: .continuous))
             .overlay {
                 Capsule(style: .continuous)
-                    .stroke(selected ? Color.clear : t.hairline, lineWidth: 0.5)
+                    .strokeBorder(selected ? theme.hair2 : theme.hairline, lineWidth: 0.5)
             }
         }
         .buttonStyle(.plain)
@@ -366,17 +371,18 @@ public struct IOSCodeView: View {
 
     private func filterChip(icon: String, text: String, active: Bool) -> some View {
         HStack(spacing: 6) {
-            TahoeIcon(icon, size: 11)
+            Image(systemName: icon == "square.grid.2x2" ? "square.grid.2x2" : "desktopcomputer")
+                .font(.system(size: 11, weight: .medium))
             Text(text)
                 .lineLimit(1)
         }
-        .font(TahoeFont.body(11.5, weight: .semibold))
-        .foregroundStyle(active ? t.fg : t.fg3)
+        .font(ContinuumFont.body(11.5, weight: .semibold))
+        .foregroundStyle(active ? theme.fg : theme.fg3)
         .padding(.horizontal, 10)
         .frame(height: 30)
-        .background(active ? t.glassTintHi : t.glassTint, in: Capsule(style: .continuous))
+        .background(active ? theme.selection : theme.surface2, in: Capsule(style: .continuous))
         .overlay {
-            Capsule(style: .continuous).stroke(t.hairline, lineWidth: 0.5)
+            Capsule(style: .continuous).stroke(theme.hairline, lineWidth: 0.5)
         }
     }
 
@@ -508,10 +514,12 @@ private struct IOSDesktopSyncBadge: View {
 }
 
 private struct IOSRepoCard: View {
+    @Environment(\.theme) private var theme
     @Environment(\.tahoe) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var repo: TahoeCodeRepo
     var onOpen: (UUID) -> Void
+    var onContinueOnHost: ((UUID, UUID?) -> Void)?
     /// PR #35: daemon client used by the recent-row tap handler to
     /// call `unarchiveSession(id:)`. Nil keeps the row read-only.
     var agentClient: AgentControlClient?
@@ -526,40 +534,46 @@ private struct IOSRepoCard: View {
         return RepoIdentityResolver.badge(repoKey: repo.key, displayName: repo.name)
     }
 
+    private var continuumHairline: some View {
+        Rectangle()
+            .fill(theme.hairline)
+            .frame(height: 0.5)
+    }
+
     var body: some View {
-        TahoeGlass(radius: 8, tone: .raised) {
+        ContinuumSurface(level: .one, padding: 0) {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     RepoIdentityBadgeView(badge: repoBadge, size: 28)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(repo.name)
-                            .font(TahoeFont.body(13.5, weight: .bold))
-                            .foregroundStyle(t.fg)
+                            .font(ContinuumFont.body(13.5, weight: .bold))
+                            .foregroundStyle(theme.fg)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Text("\(repo.sessions.count) active · \(repo.recents.count) recent")
-                            .font(TahoeFont.body(11))
-                            .foregroundStyle(t.fg4)
+                            .font(ContinuumFont.body(11))
+                            .foregroundStyle(theme.fg4)
                             .lineLimit(1)
                     }
                     Spacer()
                     if repo.liveSessionCount > 0 {
                         Text("\(repo.liveSessionCount)")
-                            .font(TahoeFont.mono(11, weight: .bold))
-                            .foregroundStyle(.green)
+                            .font(ContinuumFont.mono(11, weight: .bold))
+                            .foregroundStyle(theme.live)
                             .padding(.horizontal, 7)
                             .frame(height: 22)
-                            .background(Color.green.opacity(0.14), in: Capsule(style: .continuous))
+                            .background(theme.live.opacity(0.14), in: Capsule(style: .continuous))
                             .accessibilityLabel("\(repo.liveSessionCount) live sessions")
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 10)
-                TahoeHair().padding(.leading, 58)
+                continuumHairline.padding(.leading, 58)
                 ForEach(Array(repo.sessions.enumerated()), id: \.offset) { i, s in
                     if i > 0 {
-                        TahoeHair().padding(.leading, 58)
+                        continuumHairline.padding(.leading, 58)
                     }
                     Button(action: ContinuumAnalytics.wrapButton(
                             "open_session",
@@ -571,15 +585,15 @@ private struct IOSRepoCard: View {
                             TahoeProviderGlyph(provider: s.agent, size: 32)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(s.title)
-                                    .font(TahoeFont.body(14, weight: .semibold))
-                                    .foregroundStyle(t.fg)
+                                    .font(ContinuumFont.body(14, weight: .semibold))
+                                    .foregroundStyle(theme.fg)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                                 HStack(spacing: 6) {
                                     StatusDot(status: s.status)
                                     Text(s.subtitle)
-                                        .font(TahoeFont.body(11.5))
-                                        .foregroundStyle(t.fg3)
+                                        .font(ContinuumFont.body(11.5))
+                                        .foregroundStyle(theme.fg3)
                                         .lineLimit(1)
                                         .truncationMode(.tail)
                                 }
@@ -593,10 +607,11 @@ private struct IOSRepoCard: View {
                                     // to near-black for those, which is invisible.
                                     let completeTint = s.agent.halo.color
                                     HStack(spacing: 6) {
-                                        TahoePillBar(
-                                            percent: Double(safeCompleted) /
-                                                      max(1, Double(progress.total)) * 100,
+                                        IOSContinuumSessionProgressRail(
                                             provider: s.agent,
+                                            state: continuumProgressState(for: s),
+                                            completed: safeCompleted,
+                                            total: progress.total,
                                             height: 6
                                         )
                                         .frame(maxWidth: .infinity)
@@ -609,9 +624,9 @@ private struct IOSRepoCard: View {
                                                 .accessibilityHidden(true)
                                         }
                                         Text("\(safeCompleted)/\(progress.total)")
-                                            .font(TahoeFont.body(11.5, weight: isComplete ? .bold : .semibold))
+                                            .font(ContinuumFont.body(11.5, weight: isComplete ? .bold : .semibold))
                                             .monospacedDigit()
-                                            .foregroundStyle(isComplete ? completeTint : t.fg2)
+                                            .foregroundStyle(isComplete ? completeTint : theme.fg2)
                                             .frame(minWidth: 48, alignment: .trailing)
                                             .contentTransition(reduceMotion ? .identity : .numericText())
                                     }
@@ -626,7 +641,9 @@ private struct IOSRepoCard: View {
                             }
                             .layoutPriority(1)
                             Spacer(minLength: 8)
-                            TahoeIcon("chevR", size: 14).foregroundStyle(t.fg4)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(theme.fg4)
                         }
                         .padding(.horizontal, 16).padding(.vertical, 14)
                     }
@@ -637,9 +654,8 @@ private struct IOSRepoCard: View {
                            client.supportsExecutionHosts,
                            s.status != .done {
                             Button("Continue on…", systemImage: "arrow.right.circle", action: ContinuumAnalytics.wrapButton("continue_on_host", {
-                                handoffSessionId = s.id
-                                handoffCurrentHostId = client.sessions.first(where: { $0.id == s.id })?.executionHostId
-                                showHandoffSheet = true
+                                let hostId = client.sessions.first(where: { $0.id == s.id })?.executionHostId
+                                onContinueOnHost?(s.id, hostId)
                             }))
                         }
                         Button(presentationStore.snapshot.pinnedSessionIds.contains(s.id) ? "Unpin" : "Pin", systemImage: "pin", action: ContinuumAnalytics.wrapButton("toggle_pin_session", { try? presentationStore.togglePin(s.id) }))
@@ -649,16 +665,13 @@ private struct IOSRepoCard: View {
                     }
                 }
                 if !repo.recents.isEmpty {
-                    TahoeHair()
-                    Text("RECENT")
-                        .font(TahoeFont.body(10.5, weight: .bold))
-                        .tracking(0.5)
-                        .foregroundStyle(t.fg4)
+                    continuumHairline
+                    ContinuumEtchedLabel(text: "Recent")
                         .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     ForEach(Array(repo.recents.enumerated()), id: \.offset) { i, r in
                         if i > 0 {
-                            TahoeHair().padding(.leading, 58)
+                            continuumHairline.padding(.leading, 58)
                         }
                         // PR #35: archived sessions carry a real
                         // sessionId so tapping calls the daemon's
@@ -691,12 +704,12 @@ private struct IOSRepoCard: View {
                                 }
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(r.title)
-                                        .font(TahoeFont.body(14))
-                                        .foregroundStyle(t.fg2)
+                                        .font(ContinuumFont.body(14))
+                                        .foregroundStyle(theme.fg2)
                                         .lineLimit(1)
                                     Text("\(r.provider.displayName) · \(r.ago)")
-                                        .font(TahoeFont.body(11))
-                                        .foregroundStyle(t.fg4)
+                                        .font(ContinuumFont.body(11))
+                                        .foregroundStyle(theme.fg4)
                                 }
                                 Spacer()
                                 if restoreInFlight {
@@ -766,14 +779,37 @@ private struct IOSRepoCard: View {
 
     private func smallBadge(_ text: String, icon: String, tone: Color) -> some View {
         HStack(spacing: 3) {
-            TahoeIcon(icon, size: 9)
+            Image(systemName: continuumBadgeSymbol(icon))
+                .font(.system(size: 9, weight: .bold))
             Text(text)
-                .font(TahoeFont.mono(10, weight: .bold))
+                .font(ContinuumFont.mono(10, weight: .bold))
         }
         .foregroundStyle(tone)
         .padding(.horizontal, 6)
         .frame(height: 20)
         .background(tone.opacity(0.14), in: Capsule(style: .continuous))
+    }
+
+    private func continuumProgressState(for session: TahoeCodeSession) -> IOSContinuumHomeState {
+        switch session.status {
+        case .planning: return .planning
+        case .running, .paused, .degraded: return .executing
+        case .done: return .done
+        }
+    }
+
+    private func continuumBadgeSymbol(_ icon: String) -> String {
+        switch icon {
+        case "pin": return "pin.fill"
+        case "circle": return "circle.fill"
+        case "bellSlash": return "bell.slash.fill"
+        case "sparkles": return "sparkles"
+        case "desktopcomputer": return "desktopcomputer"
+        case "arrowU": return "arrow.up.circle.fill"
+        case "x": return "xmark.circle.fill"
+        case "ellipsis": return "ellipsis"
+        default: return "circle.fill"
+        }
     }
 }
 

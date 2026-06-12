@@ -494,6 +494,11 @@
 		FF51BD37342BEEF6FBDBA443 /* AgentSessionRegistryFrontierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05DEE8E4C784CCD7B7749646 /* AgentSessionRegistryFrontierTests.swift */; };
 		FF59C31C32BC003A469696AE /* JSONLTail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1627364A3A4398D5A45B4A /* JSONLTail.swift */; };
 		FFD59D04A8D35DC460F5CFC2 /* SessionLifecycleReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 044B37D86860F63D469721AA /* SessionLifecycleReducerTests.swift */; };
+		908DFC3DC6A44D4F81CE32EA /* IOSContinuumComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E191D8EAE05B4B17972FE490 /* IOSContinuumComponents.swift */; };
+		BB829B4CE79A4D1BB2F0D990 /* IOSContinuumTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6D38278CA184D02B20F01AD /* IOSContinuumTabBar.swift */; };
+		613C681D8766446BB31DBF1F /* IOSHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFD34B3BFCD449A781219184 /* IOSHomeView.swift */; };
+		84750B43515A445D80140D5D /* IOSContinuumUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5FD8FFBC9E44BBB265C8B2 /* IOSContinuumUsageView.swift */; };
+		A1B2C3D4E5F6478990ABCD01 /* IOSContinuumPairingFlows.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6478990ABCD02 /* IOSContinuumPairingFlows.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1075,6 +1080,11 @@
 		FF6A097860132AA047706A47 /* FollowUpSchedulerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowUpSchedulerSheet.swift; sourceTree = "<group>"; };
 		FFC768B3366CC0C0391F8A8D /* SpawnModeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpawnModeStore.swift; sourceTree = "<group>"; };
 		FFCD9574C1A626280070D394 /* ClawdmeteriOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawdmeteriOSApp.swift; sourceTree = "<group>"; };
+		E191D8EAE05B4B17972FE490 /* IOSContinuumComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSContinuumComponents.swift; sourceTree = "<group>"; };
+		F6D38278CA184D02B20F01AD /* IOSContinuumTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSContinuumTabBar.swift; sourceTree = "<group>"; };
+		DFD34B3BFCD449A781219184 /* IOSHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSHomeView.swift; sourceTree = "<group>"; };
+		4B5FD8FFBC9E44BBB265C8B2 /* IOSContinuumUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSContinuumUsageView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6478990ABCD02 /* IOSContinuumPairingFlows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSContinuumPairingFlows.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1681,6 +1691,18 @@
 			path = Overlay;
 			sourceTree = "<group>";
 		};
+		D9F5216B6EDF45168A4EE83C /* Continuum */ = {
+			isa = PBXGroup;
+			children = (
+				E191D8EAE05B4B17972FE490 /* IOSContinuumComponents.swift */,
+				F6D38278CA184D02B20F01AD /* IOSContinuumTabBar.swift */,
+				DFD34B3BFCD449A781219184 /* IOSHomeView.swift */,
+				4B5FD8FFBC9E44BBB265C8B2 /* IOSContinuumUsageView.swift */,
+				A1B2C3D4E5F6478990ABCD02 /* IOSContinuumPairingFlows.swift */,
+			);
+			path = Continuum;
+			sourceTree = "<group>";
+		};
 		8CBD2F21D826CD435E073238 /* Tahoe */ = {
 			isa = PBXGroup;
 			children = (
@@ -1799,7 +1821,8 @@
 				880A8E821B9C550D46565227 /* AgentControl */,
 				38CA2D6F4DBC6FA5380F3A72 /* Components */,
 				1B2C9F8C298B7AE8F0D3E279 /* Pairing */,
-				8CBD2F21D826CD435E073238 /* Tahoe */,
+				D9F5216B6EDF45168A4EE83C /* Continuum */,
+			8CBD2F21D826CD435E073238 /* Tahoe */,
 				AE653527213BA1906C6046FA /* Workspace */,
 			);
 			path = ClawdmeteriOS;
@@ -2736,6 +2759,12 @@
 				D2D67A3555F9EE2A3BEC40B0 /* IOSRelayClientCoordinator.swift in Sources */,
 				5CD1263CADBCF5568C1657C5 /* IOSRelayPairingService.swift in Sources */,
 				1777EFD96F6AB3DA3918D8A1 /* IOSRootView.swift in Sources */,
+				908DFC3DC6A44D4F81CE32EA /* IOSContinuumComponents.swift in Sources */,
+				BB829B4CE79A4D1BB2F0D990 /* IOSContinuumTabBar.swift in Sources */,
+				613C681D8766446BB31DBF1F /* IOSHomeView.swift in Sources */,
+				84750B43515A445D80140D5D /* IOSContinuumUsageView.swift in Sources */,
+				A1B2C3D4E5F6478990ABCD01 /* IOSContinuumPairingFlows.swift in Sources */,
+
 				B028C8D132320086B733BC2B /* IOSSessionDetailView.swift in Sources */,
 				9E2FE6275C411B4BD5F4A8E8 /* IOSTahoeAdapter.swift in Sources */,
 				8DE0708AC05656E417C4CC49 /* IOSWakeMacBanner.swift in Sources */,
@@ -3158,7 +3187,7 @@
 				INFOPLIST_FILE = ClawdmeterWatch/Info.plist;
 				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.watchkitapp;
-				PRODUCT_NAME = Clawdmeter;
+				PRODUCT_NAME = ClawdmeterWatch;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = 4;
@@ -3393,7 +3422,7 @@
 				INFOPLIST_FILE = ClawdmeterWatch/Info.plist;
 				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.watchkitapp;
-				PRODUCT_NAME = Clawdmeter;
+				PRODUCT_NAME = ClawdmeterWatch;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = 4;

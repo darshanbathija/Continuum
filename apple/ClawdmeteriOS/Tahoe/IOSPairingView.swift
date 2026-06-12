@@ -14,6 +14,7 @@ import ClawdmeterShared
 ///   - legacy path lands the user in the existing AgentControlClient
 ///     `setPairing(...)` configured state (Tailscale-direct)
 public struct IOSPairingView: View {
+    @Environment(\.theme) private var theme
     @Environment(\.tahoe) private var t
     var onClose: () -> Void
 
@@ -28,6 +29,8 @@ public struct IOSPairingView: View {
     @State private var relayPastePresented: Bool = false
     @State private var legacyScanPresented: Bool = false
     @State private var legacyPastePresented: Bool = false
+    @State private var handshakePresented: Bool = false
+    @State private var handshakeTransport: ContinuumPairingHandshakeView.Transport = .cloud
 
     private var pairingMode: Binding<PairingMode> {
         Binding(
@@ -43,19 +46,16 @@ public struct IOSPairingView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            header
-            scrim
-            Spacer(minLength: 0)
-            ctaSection
+        ScrollView {
+            landingContent
         }
+        .background(theme.bg)
         // Relay scan (primary).
         .fullScreenCover(isPresented: $relayScanPresented) {
             PairingScanView(service: relayService) { result in
                 relayScanPresented = false
                 if case .success = result {
-                    applyTransportPreference(for: .cloud)
-                    onClose()
+                    beginHandshake(.cloud)
                 }
             }
         }
@@ -66,8 +66,8 @@ public struct IOSPairingView: View {
                 onAccept: { url in
                     let ok = relayService.handleScannedURL(url)
                     if ok {
-                        applyTransportPreference(for: .cloud)
-                        onClose()
+                        relayPastePresented = false
+                        beginHandshake(.cloud)
                     }
                 }
             )
@@ -78,6 +78,7 @@ public struct IOSPairingView: View {
                 PairingScannerView { challenge in
                     applyLegacyChallenge(challenge)
                     legacyScanPresented = false
+                    beginHandshake(.tailscale)
                 }
                 .navigationTitle("Scan Tailscale QR")
                 .navigationBarTitleDisplayMode(.inline)
@@ -97,7 +98,18 @@ public struct IOSPairingView: View {
         .sheet(isPresented: $legacyPastePresented) {
             LegacyPasteURLSheet(
                 isPresented: $legacyPastePresented,
-                onAccept: { challenge in applyLegacyChallenge(challenge) }
+                onAccept: { challenge in
+                    applyLegacyChallenge(challenge)
+                    legacyPastePresented = false
+                    beginHandshake(.tailscale)
+                }
+            )
+        }
+        .fullScreenCover(isPresented: $handshakePresented) {
+            ContinuumPairingHandshakeView(
+                transport: handshakeTransport,
+                hostLabel: client.executionHosts.first?.displayName ?? "your Mac",
+                onEnter: finishPairing
             )
         }
         .onChange(of: pairingModeRaw) { _, newValue in
@@ -109,22 +121,150 @@ public struct IOSPairingView: View {
         }
     }
 
-    // MARK: - Header
+    // MARK: - Continuum landing (design PairingScreen)
+
+    private var landingContent: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 18) {
+                ContinuumAppMark(size: 92)
+                Text("Continuum")
+                    .font(ContinuumFont.display(26, weight: .heavy))
+                    .tracking(-0.5)
+                    .foregroundStyle(theme.fg)
+            }
+            .padding(.top, 64)
+
+            VStack(spacing: 11) {
+                Text("Pair with your Mac")
+                    .font(ContinuumFont.display(26, weight: .heavy))
+                    .tracking(-0.5)
+                    .foregroundStyle(theme.fg)
+                    .multilineTextAlignment(.center)
+                Text("Start sessions on your Mac, then steer them from here. Open Continuum on your Mac and go to Settings › Pairing.")
+                    .font(ContinuumFont.body(13.5))
+                    .foregroundStyle(theme.fg2)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+            }
+            .padding(.top, 26)
+            .padding(.horizontal, 18)
+
+            VStack(alignment: .leading, spacing: 11) {
+                ContinuumEtchedLabel(text: "Choose a transport")
+                transportCard(.cloud)
+                transportCard(.tailscale)
+            }
+            .padding(.top, 26)
+            .padding(.horizontal, 18)
+
+            Spacer(minLength: 22)
+
+            VStack(spacing: 10) {
+                Button(action: ContinuumAnalytics.wrapButton("pairing_scan_qr", scanQR)) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "qrcode.viewfinder")
+                            .font(.system(size: 17, weight: .semibold))
+                        Text("Scan QR")
+                            .font(ContinuumFont.body(15.5, weight: .semibold))
+                    }
+                    .foregroundStyle(theme.primaryText)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .background(theme.primaryFill)
+                    .clipShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
+                }
+                .buttonStyle(.plain)
+
+                Button(action: ContinuumAnalytics.wrapButton("pairing_paste_token", pasteToken)) {
+                    Text("Paste pairing token")
+                        .font(ContinuumFont.body(15, weight: .medium))
+                        .foregroundStyle(theme.fg2)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                                .strokeBorder(theme.hairline, lineWidth: 0.5)
+                        }
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 30)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func transportCard(_ mode: PairingMode) -> some View {
+        let active = pairingMode.wrappedValue == mode
+        return Button(action: { pairingModeRaw = mode.rawValue }) {
+            ContinuumSurface(level: active ? .two : .one, padding: 14) {
+                HStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .strokeBorder(active ? theme.fg : theme.hairline, lineWidth: active ? 5 : 0.5)
+                            .frame(width: 18, height: 18)
+                        if active {
+                            Circle().fill(theme.fg).frame(width: 8, height: 8)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(mode.displayName)
+                            .font(ContinuumFont.body(15, weight: .semibold))
+                            .foregroundStyle(theme.fg)
+                        Text(mode.subtitle)
+                            .font(ContinuumFont.body(12))
+                            .foregroundStyle(theme.fg3)
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer()
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func beginHandshake(_ transport: ContinuumPairingHandshakeView.Transport) {
+        handshakeTransport = transport
+        handshakePresented = true
+    }
+
+    private func finishPairing() {
+        applyTransportPreference(for: handshakeTransport == .cloud ? .cloud : .tailscale)
+        handshakePresented = false
+        onClose()
+    }
+
+    private func scanQR() {
+        switch pairingMode.wrappedValue {
+        case .cloud: relayScanPresented = true
+        case .tailscale: legacyScanPresented = true
+        }
+    }
+
+    private func pasteToken() {
+        switch pairingMode.wrappedValue {
+        case .cloud: relayPastePresented = true
+        case .tailscale: legacyPastePresented = true
+        }
+    }
+
+    // MARK: - Legacy header (unused by landing layout)
 
     private var header: some View {
         HStack(spacing: 0) {
             Button(action: ContinuumAnalytics.wrapButton("pairing_close", onClose)) {
-                TahoeIcon("x", size: 15).foregroundStyle(t.fg)
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(theme.fg)
                     .frame(width: 44, height: 44)
-                    .background { Capsule().fill(t.glassTintHi) }
-                    .overlay { Capsule().stroke(t.hairline, lineWidth: 0.5) }
+                    .background(theme.surface2)
+                    .clipShape(Circle())
+                    .overlay(Circle().strokeBorder(theme.hairline, lineWidth: 0.5))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Cancel pairing")
             Spacer()
             Text("Pair to Mac")
-                .font(TahoeFont.body(15, weight: .bold))
-                .foregroundStyle(t.fg)
+                .font(ContinuumFont.body(15, weight: .bold))
+                .foregroundStyle(theme.fg)
             Spacer()
             Color.clear.frame(width: 40, height: 38)
         }
@@ -142,19 +282,20 @@ public struct IOSPairingView: View {
                                          center: .center, startRadius: 0, endRadius: 220))
                     .blur(radius: 10).padding(-30).allowsHitTesting(false)
 
-                TahoeGlass(radius: 8, tone: .raised) {
+                ContinuumSurface(level: .one, padding: 28) {
                     VStack(spacing: 10) {
-                        TahoeIcon("qr", size: 54).foregroundStyle(t.fg4)
+                        Image(systemName: "qrcode")
+                            .font(.system(size: 54, weight: .light))
+                            .foregroundStyle(theme.fg4)
                         Text("Scan the live QR")
-                            .font(TahoeFont.body(14, weight: .bold))
-                            .foregroundStyle(t.fg2)
+                            .font(ContinuumFont.body(14, weight: .bold))
+                            .foregroundStyle(theme.fg2)
                         Text(scrimSubtitle)
-                            .font(TahoeFont.body(11.5))
-                            .foregroundStyle(t.fg3)
+                            .font(ContinuumFont.body(11.5))
+                            .foregroundStyle(theme.fg3)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: 200)
                     }
-                    .padding(28)
                 }
                 .frame(width: 280, height: 280)
 

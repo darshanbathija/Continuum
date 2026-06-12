@@ -141,28 +141,9 @@ extension UsageModel {
             claude: row(usage: usage,                 provider: .claude, hasWeekly: true,  modelFallback: "Sonnet 4.5"),
             codex:  row(usage: codexSnapshot?.usage,  provider: .codex,  hasWeekly: true,  modelFallback: "gpt-5"),
             gemini: row(usage: geminiSnapshot?.usage, provider: .gemini, hasWeekly: false, modelFallback: "antigravity-pro"),
-            cursor: TahoeLiveRow(
-                sessionPercent: 0,
-                weeklyPercent: 0,
-                sessionResetIn: "-",
-                weeklyResetIn: "",
-                modelName: "Cursor Auto",
-                autoReviveOn: false,
-                supportsAutoRevive: false,
-                hasWeekly: false,
-                stale: true
-            ),
-            grok: TahoeLiveRow(
-                sessionPercent: 0,
-                weeklyPercent: -1,
-                sessionResetIn: "\u{2014}",
-                weeklyResetIn: "",
-                modelName: "grok-build",
-                autoReviveOn: false,
-                supportsAutoRevive: false,
-                hasWeekly: false,
-                stale: true
-            )
+            opencode: row(usage: opencodeSnapshot?.usage, provider: .opencode, hasWeekly: false, modelFallback: "Kimi K2.6"),
+            cursor: row(usage: cursorSnapshot?.usage, provider: .cursor, hasWeekly: false, modelFallback: "Cursor Auto"),
+            grok: row(usage: grokSnapshot?.usage, provider: .grok, hasWeekly: false, modelFallback: "grok-build")
         )
     }
 
@@ -190,9 +171,9 @@ extension UsageModel {
             sessionResetIn: TahoeFmt.resetIn(minutes: usage.sessionResetMins),
             weeklyResetIn: hasWeekly ? TahoeFmt.resetIn(minutes: usage.weeklyResetMins) : "",
             modelName: modelName,
-            autoReviveOn: false, // iOS doesn't surface AutoReviver state today
+            autoReviveOn: provider == .claude ? autoReviver.isEnabled : false,
             autoReviveAgo: "",
-            supportsAutoRevive: false,
+            supportsAutoRevive: provider == .claude,
             hasWeekly: hasWeekly
         )
     }
