@@ -1698,49 +1698,28 @@ private struct MessageRow: View {
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.hairline, lineWidth: 0.5))
                 }
             case .toolCall, .toolResult:
-                HStack(alignment: .top, spacing: 7) {
-                    TahoeIcon("terminal", size: 10).foregroundStyle(t.fg3)
-                    Text(message.body)
-                        .font(TahoeFont.mono(10.5))
-                        .foregroundStyle(t.fg3)
-                        .lineLimit(5)
-                }
+                AgentToolActionRow(
+                    toolName: message.title,
+                    callBody: message.body,
+                    detail: message.detail,
+                    isError: message.isError
+                )
                 .padding(9)
                 .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
             case .meta:
-                Text(message.body)
-                    .font(TahoeFont.body(10.5))
-                    .foregroundStyle(t.fg4)
+                if message.title == "Thinking" {
+                    ThinkingActionRow(summary: message.body)
+                } else {
+                    Text(message.body)
+                        .font(TahoeFont.body(10.5))
+                        .foregroundStyle(t.fg4)
+                }
             }
         case .toolRun(_, let pairs):
-            VStack(alignment: .leading, spacing: 6) {
-                Text(pairs.count == 1 ? "Ran 1 command" : "Ran \(pairs.count) commands")
-                    .font(TahoeFont.body(10.5, weight: .semibold))
-                    .foregroundStyle(t.fg3)
+            VStack(alignment: .leading, spacing: 4) {
                 ForEach(pairs) { pair in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
-                            TahoeIcon("terminal", size: 10).foregroundStyle(t.fg3)
-                            Text(pair.call.title)
-                                .font(TahoeFont.mono(10.5, weight: .semibold))
-                                .foregroundStyle(t.fg2)
-                            Text(pair.call.body)
-                                .font(TahoeFont.mono(10.5))
-                                .foregroundStyle(t.fg3)
-                                .lineLimit(2)
-                                .truncationMode(.middle)
-                        }
-                        if let result = pair.result, !result.body.isEmpty {
-                            Text(result.body)
-                                .font(TahoeFont.mono(10.5))
-                                .foregroundStyle(result.isError ? .red : t.fg3)
-                                .lineLimit(6)
-                                .textSelection(.enabled)
-                        }
-                    }
-                    .padding(8)
-                    .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
-                    .id("pair:\(pair.id)")
+                    AgentToolActionRow(pair: pair)
+                        .id("pair:\(pair.id)")
                 }
             }
         }
