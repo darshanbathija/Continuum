@@ -163,11 +163,13 @@ public struct MacUsageView: View {
             ForEach(Array(chunked(items, rowSizes: rowSizes).enumerated()), id: \.offset) { _, row in
                 HStack(spacing: 14) {
                     ForEach(row) { item in
-                        switch item {
-                        case .primary(let column):
-                            ProviderColumn(provider: column.provider, row: column.row, model: column.model)
-                        case .secondary(let column):
-                            SecondaryProviderColumn(column: column)
+                        Group {
+                            switch item {
+                            case .primary(let column):
+                                ProviderColumn(provider: column.provider, row: column.row, model: column.model)
+                            case .secondary(let column):
+                                SecondaryProviderColumn(column: column)
+                            }
                         }
                         .frame(maxWidth: .infinity)
                     }
