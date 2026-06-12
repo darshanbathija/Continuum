@@ -64,6 +64,14 @@ struct SpawnTerminalView: NSViewRepresentable {
             DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0 : 0.05)) { [weak self] in
                 guard let self, let view = self.terminalView else { return }
                 if let window = view.window {
+                    // Token bumps fire on grid-open and on store-driven
+                    // selection changes (e.g. closeTile falling back to the
+                    // first tile). Don't yank the keyboard out of a sibling
+                    // text editor (sidebar search, rename field) the user is
+                    // mid-type in. The click-to-focus path is unaffected.
+                    if let current = window.firstResponder, current !== view, current is NSText {
+                        return
+                    }
                     window.makeFirstResponder(view)
                 } else if attempt < 5 {
                     self.requestKeyboardFocus(attempt: attempt + 1)

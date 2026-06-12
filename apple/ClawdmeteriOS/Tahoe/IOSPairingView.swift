@@ -313,6 +313,7 @@ public struct IOSPairingView: View {
             wsPort: challenge.wsPort,
             token: challenge.token
         )
+        PostHogIdentity.onDirectPairingCompleted()
         Task { @MainActor in
             await client.refreshAll()
         }

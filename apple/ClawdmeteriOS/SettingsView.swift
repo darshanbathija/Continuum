@@ -253,6 +253,7 @@ struct SettingsView: View {
             .alert("Forget Mac pairing?", isPresented: $showingClearPairingConfirm) {
                 Button("Forget pairing", role: .destructive) {
                     agentClient.clearPairing()
+                    PostHogIdentity.refreshFromCurrentState()
                 }
                 Button("Cancel", role: .cancel) { }
             } message: {
