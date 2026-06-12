@@ -31,6 +31,7 @@ public struct OpencodeSetupSheet: View {
     public enum Command: Identifiable, Equatable {
         case signIn
         case addProvider
+        case loginProvider(String)
         case signOut
         case diagnostic
 
@@ -38,6 +39,7 @@ public struct OpencodeSetupSheet: View {
             switch self {
             case .signIn: return "signIn"
             case .addProvider: return "addProvider"
+            case .loginProvider(let providerID): return "loginProvider:\(providerID)"
             case .signOut: return "signOut"
             case .diagnostic: return "diagnostic"
             }
@@ -47,6 +49,8 @@ public struct OpencodeSetupSheet: View {
             switch self {
             case .signIn: return "Sign in to OpenCode"
             case .addProvider: return "Add OpenCode provider"
+            case .loginProvider(let providerID):
+                return "Sign in to \(OpencodeAuthFile.defaultDisplayName(for: providerID))"
             case .signOut: return "Sign out of OpenCode"
             case .diagnostic: return "OpenCode diagnostic"
             }
@@ -58,6 +62,9 @@ public struct OpencodeSetupSheet: View {
             switch self {
             case .signIn, .addProvider:
                 return "\(quoted(binary)) auth login"
+            case .loginProvider(let providerID):
+                let escaped = providerID.replacingOccurrences(of: "'", with: "'\\''")
+                return "\(quoted(binary)) auth login --provider '\(escaped)'"
             case .signOut:
                 // O6: opencode auth logout takes no --provider arg,
                 // signs out of all.
@@ -248,6 +255,7 @@ public struct OpencodeSetupSheet: View {
                 exitCode = code
                 if exitCode == 0 {
                     onCompletion()
+                    NotificationCenter.default.post(name: .opencodeAuthChanged, object: nil)
                 }
                 // Refresh provider manager state — triggers O5.
                 await OpencodeProcessManager.shared.reprobe()
@@ -279,4 +287,8 @@ public struct OpencodeSetupSheet: View {
             try? FileManager.default.removeItem(at: exitFile)
         }
     }
+}
+
+extension Notification.Name {
+    static let opencodeAuthChanged = Notification.Name("clawdmeter.opencodeAuth.changed")
 }
