@@ -405,9 +405,10 @@ final class SessionFileResolverTests: XCTestCase {
         assertSameFile(resolver.resolve(session: session), rollout)
     }
 
-    /// Mid-creation race: a rollout probed while still EMPTY must not be
-    /// permanently exempted from the cwd guard. Once its meta line lands
-    /// (foreign cwd), the next scan must filter it.
+    /// Mid-creation race: a rollout probed while still EMPTY is never
+    /// selected (no transcript value) and must not be permanently
+    /// exempted from the cwd guard. Once its meta line lands (foreign
+    /// cwd), the next scan must filter it too.
     func testEmptyRolloutProbeDoesNotPermanentlyBypassCwdGuard() throws {
         let createdAt = Date().addingTimeInterval(-600)
         let lastEventAt = Date().addingTimeInterval(-60)
@@ -417,8 +418,9 @@ final class SessionFileResolverTests: XCTestCase {
             mtime: createdAt.addingTimeInterval(30),
             contents: #"{"type":"session_meta","payload":{"cwd":"/tmp/test-repo"}}"#
         )
-        // Newer foreign rollout, probed while empty: accepted this once
-        // (no parseable cwd) — that's the back-compat rule.
+        // Newer foreign rollout, probed while empty: skipped outright —
+        // selecting it would cache a foreign file into codexLinks before
+        // its cwd is knowable.
         let foreign = try writeRollout(
             name: "rollout-foreign-race.jsonl",
             mtime: lastEventAt,
@@ -428,11 +430,46 @@ final class SessionFileResolverTests: XCTestCase {
             codexSessionsRoot: tmpdir,
             resolveClaudeURL: { _ in nil }
         )
-        assertSameFile(resolver.resolve(session: session), foreign)
+        assertSameFile(resolver.resolve(session: session), own)
 
         // The meta line lands (foreign cwd). Because the empty probe was
-        // NOT cached, the next scan re-parses and filters the foreign
-        // rollout — the session recovers its own rollout.
+        // NOT cached, the next scan re-parses and still filters it.
+        try #"{"type":"session_meta","payload":{"cwd":"/Users/foreign"}}"#
+            .write(to: foreign, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: lastEventAt],
+            ofItemAtPath: foreign.path
+        )
+        resolver.invalidate(sessionId: session.id)
+        assertSameFile(resolver.resolve(session: session), own)
+    }
+
+    /// Same race, partial-write variant (both adversarial models flagged
+    /// it): a rollout probed with malformed first bytes — no complete
+    /// JSON line yet — must classify `.empty` (re-probed later), never
+    /// the cacheable `.noMeta` that would exempt it forever.
+    func testPartialFirstLineProbeDoesNotCacheCwdExemption() throws {
+        let createdAt = Date().addingTimeInterval(-600)
+        let lastEventAt = Date().addingTimeInterval(-60)
+        let session = makeSession(agent: .codex, createdAt: createdAt, lastEventAt: lastEventAt)
+        let own = try writeRollout(
+            name: "rollout-own-vs-partial.jsonl",
+            mtime: createdAt.addingTimeInterval(30),
+            contents: #"{"type":"session_meta","payload":{"cwd":"/tmp/test-repo"}}"#
+        )
+        // Foreign rollout caught mid-write of its first line.
+        let foreign = try writeRollout(
+            name: "rollout-foreign-partial.jsonl",
+            mtime: lastEventAt,
+            contents: #"{"type":"session_me"#
+        )
+        let resolver = SessionFileResolver(
+            codexSessionsRoot: tmpdir,
+            resolveClaudeURL: { _ in nil }
+        )
+        assertSameFile(resolver.resolve(session: session), own)
+
+        // The full meta line lands (foreign cwd) — still filtered.
         try #"{"type":"session_meta","payload":{"cwd":"/Users/foreign"}}"#
             .write(to: foreign, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(

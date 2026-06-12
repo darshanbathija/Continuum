@@ -151,8 +151,15 @@ struct SpawnGridView: View {
         ) {
             ForEach(group.tiles) { tile in
                 tileView(tile, isExpanded: expandedTileId == tile.id)
+                    // Parked tiles draw offscreen (clipped) but their
+                    // AppKit frames still exist — block hit-testing so a
+                    // click can never reach an invisible terminal.
+                    .allowsHitTesting(expandedTileId == nil || expandedTileId == tile.id)
             }
         }
+        // Explicit flexible frame: sizeThatFits echoes the proposal, so
+        // an unspecified proposal must not collapse the grid to zero.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(8)
         .clipped()  // parked (offscreen) tiles must not paint outside
     }

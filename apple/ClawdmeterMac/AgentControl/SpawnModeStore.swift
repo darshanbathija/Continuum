@@ -242,17 +242,26 @@ final class SpawnModeStore: ObservableObject {
         }
     }
 
-    /// Called from `applicationWillTerminate`: signal every spawn child's
-    /// process group synchronously so Cmd+Q doesn't orphan agents that
-    /// ignore the SIGHUP from the dying PTY master. No waits/reaps — the
-    /// process is exiting; signals are best-effort and instantaneous.
+    /// Called from `applicationWillTerminate`: signal every LIVE spawn
+    /// child's process group synchronously so Cmd+Q doesn't orphan agents
+    /// that ignore the SIGHUP from the dying PTY master. No waits/reaps —
+    /// the process is exiting; signals are best-effort and instantaneous.
+    ///
+    /// Exited tiles are skipped: their pids were already reaped by the
+    /// host's exit watcher, so signaling them risks hitting a RECYCLED
+    /// pid belonging to an unrelated process. `exitedTileIds` is the
+    /// synchronous liveness proxy this non-async context can read.
+    /// SIGKILL follows SIGTERM because there is no later escalation
+    /// opportunity — the app is gone in milliseconds.
     func terminateAllForAppQuit() {
         for group in groups {
-            for tile in group.tiles where tile.pid > 0 {
+            for tile in group.tiles where tile.pid > 0 && !exitedTileIds.contains(tile.id) {
                 _ = Darwin.kill(-tile.pid, SIGHUP)
                 _ = Darwin.kill(tile.pid, SIGHUP)
                 _ = Darwin.kill(-tile.pid, SIGTERM)
                 _ = Darwin.kill(tile.pid, SIGTERM)
+                _ = Darwin.kill(-tile.pid, SIGKILL)
+                _ = Darwin.kill(tile.pid, SIGKILL)
             }
         }
     }

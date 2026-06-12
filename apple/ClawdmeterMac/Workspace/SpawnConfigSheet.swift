@@ -77,16 +77,17 @@ struct SpawnConfigSheet: View {
                 availableAgents: spawnableAgents
             )
         }
-        .sheet(item: $installTerminal) { terminal in
+        // Re-probe on EVERY dismissal path (Done button AND Esc swipe-away):
+        // onDismiss is the one hook both share. A just-installed CLI must
+        // flip its row live, and a previously-empty allocation must re-seed
+        // so the first install restores the two-click flow.
+        .sheet(item: $installTerminal, onDismiss: {
+            availability = [:]
+            resolveAvailability()
+            seedDefaultAllocation()
+        }) { terminal in
             SetupTerminalSheet(terminal: terminal) {
                 installTerminal = nil
-                // Re-probe so a just-installed CLI flips its row live, and
-                // re-seed: when NOTHING was spawnable at onAppear the
-                // allocation is still empty — the first installed CLI must
-                // restore the two-click flow, not leave Spawn dead at 0/N.
-                availability = [:]
-                resolveAvailability()
-                seedDefaultAllocation()
             }
         }
     }
@@ -386,7 +387,8 @@ struct SpawnConfigSheet: View {
                     name: .clawdmeterShowTransientToast,
                     object: nil,
                     userInfo: ["toast": TransientToast(
-                        title: "Spawned \(group.tiles.count) of \(group.tiles.count + result.failedSlotTitles.count) sessions — \(result.failedSlotTitles.joined(separator: ", ")) failed to start"
+                        title: "Spawned \(group.tiles.count) of \(group.tiles.count + result.failedSlotTitles.count) sessions — \(result.failedSlotTitles.joined(separator: ", ")) failed to start",
+                        severity: .failure
                     )]
                 )
             }

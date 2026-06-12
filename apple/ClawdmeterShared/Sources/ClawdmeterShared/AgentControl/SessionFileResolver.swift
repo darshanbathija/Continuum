@@ -193,11 +193,18 @@ public final class SessionFileResolver: @unchecked Sendable {
             // Terminal-launched codex) mass-produce rollouts inside a live
             // session's activity window, and the newest one would silently
             // re-point this session's transcript at a foreign conversation.
-            // Require the rollout's own recorded cwd to match the session;
-            // rollouts with no parseable cwd stay accepted (back-compat).
-            if let recordedCwd = recordedRolloutCwd(at: url),
-               Self.canonicalPath(recordedCwd) != sessionCwd {
+            // Require the rollout's own recorded cwd to match the session.
+            // `.noMeta` (real lines, legacy format) stays accepted for
+            // back-compat; `.empty` (mid-creation, no transcript value) is
+            // never selected — picking one would cache a foreign file into
+            // codexLinks before its cwd is even knowable.
+            switch cachedRolloutParse(at: url) {
+            case .empty:
                 continue
+            case .cwd(let recordedCwd) where Self.canonicalPath(recordedCwd) != sessionCwd:
+                continue
+            default:
+                break
             }
             if date > newestDate {
                 newestDate = date
@@ -213,16 +220,17 @@ public final class SessionFileResolver: @unchecked Sendable {
     /// the instant between file creation and the meta flush parses as
     /// `.empty`; that result is NOT cached, so the next scan re-probes
     /// instead of permanently exempting the file from the cwd guard.
-    private func recordedRolloutCwd(at url: URL) -> String? {
+    private func cachedRolloutParse(at url: URL) -> RolloutCwdParse {
         lock.lock()
         if let cached = rolloutCwdCache[url.path] {
             lock.unlock()
-            return cached
+            if let cwd = cached { return .cwd(cwd) }
+            return .noMeta
         }
         lock.unlock()
         let parsed = Self.parseRolloutCwdResult(at: url)
         if case .empty = parsed {
-            return nil
+            return .empty
         }
         let value: String? = {
             if case .cwd(let cwd) = parsed { return cwd }
@@ -237,7 +245,7 @@ public final class SessionFileResolver: @unchecked Sendable {
             rolloutCwdCache.removeValue(forKey: rolloutCwdCacheOrder.removeFirst())
         }
         lock.unlock()
-        return value
+        return parsed
     }
 
     /// Head-parse outcome. `.empty` (no bytes / unreadable — likely a file
@@ -258,12 +266,24 @@ public final class SessionFileResolver: @unchecked Sendable {
     /// Scan the head of a rollout file for the first `session_meta` /
     /// `turn_context` line carrying a `cwd`. Reads at most 64KB — the
     /// meta line is the first line Codex writes.
+    ///
+    /// `.noMeta` (cacheable) requires at least one COMPLETE,
+    /// JSON-parseable line: a file probed mid-write of its first line
+    /// (bytes present, no terminating newline, or only malformed
+    /// fragments) classifies `.empty` so the verdict is re-probed —
+    /// caching it would permanently exempt the rollout from the cwd
+    /// guard once its real meta line lands.
     static func parseRolloutCwdResult(at url: URL) -> RolloutCwdParse {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return .empty }
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: 64 * 1024), !data.isEmpty else { return .empty }
+        // A line that parses as JSON is complete (a mid-write fragment
+        // won't parse); only a file with at least one complete parsed
+        // line earns the cacheable `.noMeta` verdict.
+        var sawParsedLine = false
         for lineData in data.split(separator: UInt8(ascii: "\n")).prefix(20) {
             guard let root = try? JSONSerialization.jsonObject(with: Data(lineData)) as? [String: Any] else { continue }
+            sawParsedLine = true
             let type = root["type"] as? String
             guard type == "session_meta" || type == "turn_context" else { continue }
             if let payload = root["payload"] as? [String: Any],
@@ -272,7 +292,7 @@ public final class SessionFileResolver: @unchecked Sendable {
                 return .cwd(cwd)
             }
         }
-        return .noMeta
+        return sawParsedLine ? .noMeta : .empty
     }
 
     /// Path comparison form: standardized + symlink-resolved, then
