@@ -51,6 +51,8 @@ let package = Package(
                 // Technology-stack logos (simple-icons, MIT) for file rows in
                 // the Code tab transcript. Loaded via `Image("stack-…", bundle: .module)`.
                 .process("Icons/StackIcons.xcassets"),
+                // GitHub Octicons (MIT) for branch / PR status in the sidebar.
+                .process("Icons/GitHubOcticons.xcassets"),
             ]
         ),
         .testTarget(

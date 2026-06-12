@@ -1062,7 +1062,9 @@ struct SidebarPane: View {
                     model.selectWorkspaceDocumentTab(document)
                 }
             } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    GitHubBranchStatusIcon(worktreeBranchIconKind(for: wt), size: 14)
+                        .accessibilityIdentifier("code.worktree.branch-icon")
                     VStack(alignment: .leading, spacing: 1) {
                         Text(wt.branch)
                             .font(TahoeFont.body(12.5, weight: .medium))
@@ -1076,7 +1078,7 @@ struct SidebarPane: View {
                     }
                     Spacer(minLength: 4)
                 }
-                .padding(.leading, 48)
+                .padding(.leading, 28)
                 .padding(.trailing, 8)
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1184,6 +1186,24 @@ struct SidebarPane: View {
                 }
             }
         }
+    }
+
+    /// GitHub Octicon + Primer color for a sidebar worktree row. Reads
+    /// `prMirrorState` on sessions first, then the workbench PR cache.
+    private func worktreeBranchIconKind(for wt: WorktreeGroup) -> GitHubBranchIconKind {
+        var states: [PRStatus.State] = []
+        states.reserveCapacity(wt.sessions.count)
+        for session in wt.sessions {
+            if let state = session.prMirrorState?.state {
+                states.append(state)
+                continue
+            }
+            if let raw = workbenchState.snapshot.prCache[session.id]?.state,
+               let state = PRStatus.State(rawValue: raw.lowercased()) {
+                states.append(state)
+            }
+        }
+        return GitHubBranchIconKind.preferred(from: states)
     }
 
     /// The models running on a worktree, oldest→newest (the handoff chain) with
