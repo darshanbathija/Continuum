@@ -714,18 +714,22 @@ private struct TranscriptScroll: View {
     @ViewBuilder
     private func compactChipStrip(_ turn: TranscriptTurn) -> some View {
         if !turn.outputArtifacts.isEmpty || !turn.editedFiles.isEmpty {
-            HStack(spacing: 7) {
-                ForEach(turn.outputArtifacts.prefix(4)) { artifact in
-                    Button {
-                        UIPasteboard.general.string = artifact.path
-                    } label: {
-                        compactChip(icon: iconName(for: artifact.kind), title: artifact.filename)
+            VStack(alignment: .leading, spacing: 8) {
+                if !turn.outputArtifacts.isEmpty {
+                    HStack(spacing: 7) {
+                        ForEach(turn.outputArtifacts.prefix(4)) { artifact in
+                            Button {
+                                UIPasteboard.general.string = artifact.path
+                            } label: {
+                                compactChip(icon: iconName(for: artifact.kind), title: artifact.filename)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Copy path \(artifact.path)")
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Copy path \(artifact.path)")
                 }
-                ForEach(turn.editedFiles.prefix(4)) { file in
-                    compactChip(icon: "pencil.and.scribble", title: file.basename)
+                if !turn.editedFiles.isEmpty {
+                    TranscriptEditedFileChipStripView(turn: turn)
                 }
             }
             .padding(.leading, 24)

@@ -986,21 +986,25 @@ public struct IOSSessionDetailView: View {
     @ViewBuilder
     private func iosTurnChipStrip(_ turn: TranscriptTurn) -> some View {
         if !turn.outputArtifacts.isEmpty || !turn.editedFiles.isEmpty {
-            HStack(spacing: 7) {
-                ForEach(turn.outputArtifacts.prefix(4)) { artifact in
-                    Button {
-                        if artifact.kind == .markdown {
-                            openMarkdownDocument(artifact.path)
-                        } else {
-                            UIPasteboard.general.string = artifact.path
+            VStack(alignment: .leading, spacing: 8) {
+                if !turn.outputArtifacts.isEmpty {
+                    HStack(spacing: 7) {
+                        ForEach(turn.outputArtifacts.prefix(4)) { artifact in
+                            Button {
+                                if artifact.kind == .markdown {
+                                    openMarkdownDocument(artifact.path)
+                                } else {
+                                    UIPasteboard.general.string = artifact.path
+                                }
+                            } label: {
+                                iosTranscriptChip(icon: iosArtifactIcon(artifact.kind), title: artifact.filename)
+                            }
+                            .buttonStyle(.plain)
                         }
-                    } label: {
-                        iosTranscriptChip(icon: iosArtifactIcon(artifact.kind), title: artifact.filename)
                     }
-                    .buttonStyle(.plain)
                 }
-                ForEach(turn.editedFiles.prefix(4)) { file in
-                    iosTranscriptChip(icon: "pencil.and.scribble", title: file.basename)
+                if !turn.editedFiles.isEmpty {
+                    TranscriptEditedFileChipStripView(turn: turn)
                 }
             }
             .padding(.leading, 34)

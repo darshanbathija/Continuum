@@ -81,6 +81,73 @@ public struct TranscriptTurn: Identifiable, Hashable, Sendable {
     public var hasCollapsedContent: Bool {
         !hiddenItems.isEmpty
     }
+
+    /// Per-file edit metadata for the end-of-turn chip strip. Walks the
+    /// lossless `expandedItems` tool pairs so the `+N more` expansion can
+    /// render inline diff previews via `EditDiffRow`.
+    public func editFileDetails() -> [TranscriptEditedFileDetail] {
+        let lookup = Self.editLookup(from: expandedItems)
+        return editedFiles.map { file in
+            if let match = lookup[file.filePath] {
+                return TranscriptEditedFileDetail(
+                    file: file,
+                    stats: match.stats,
+                    editDiff: match.editDiff,
+                    resultBody: match.resultBody
+                )
+            }
+            return TranscriptEditedFileDetail(
+                file: file,
+                stats: EditStats(
+                    kind: .edit,
+                    filePath: file.filePath,
+                    additions: file.additions,
+                    deletions: file.deletions
+                )
+            )
+        }
+    }
+
+    private struct EditLookupEntry: Sendable {
+        let stats: EditStats
+        let editDiff: EditDiff?
+        let resultBody: String?
+    }
+
+    private static func editLookup(from items: [ChatItem]) -> [String: EditLookupEntry] {
+        var out: [String: EditLookupEntry] = [:]
+        for item in items {
+            guard case .toolRun(_, let pairs) = item else { continue }
+            for pair in pairs {
+                if let stats = pair.call.editStats {
+                    out[stats.filePath] = EditLookupEntry(
+                        stats: stats,
+                        editDiff: pair.call.editDiff,
+                        resultBody: pair.result?.body
+                    )
+                }
+                for file in TranscriptEditedFile.from(pair.call) where out[file.filePath] == nil {
+                    let kind: EditStats.Kind
+                    switch pair.call.editDiff?.kind {
+                    case .write: kind = .write
+                    case .multiEdit: kind = .multiEdit
+                    default: kind = .edit
+                    }
+                    out[file.filePath] = EditLookupEntry(
+                        stats: EditStats(
+                            kind: kind,
+                            filePath: file.filePath,
+                            additions: file.additions,
+                            deletions: file.deletions
+                        ),
+                        editDiff: pair.call.editDiff,
+                        resultBody: pair.result?.body
+                    )
+                }
+            }
+        }
+        return out
+    }
 }
 
 public struct TranscriptTurnSummary: Hashable, Sendable {
