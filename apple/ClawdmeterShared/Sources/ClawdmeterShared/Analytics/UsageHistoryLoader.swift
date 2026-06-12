@@ -245,9 +245,14 @@ public actor UsageHistoryLoader {
         if let cursorAgentKVDBURL {
             observe(Self.sqliteMtime(cursorAgentKVDBURL))
         }
+        #if os(macOS)
+        // CursorDashboardUsageParser is macOS-only; useCursorDashboardUsage is
+        // always false off macOS, but the call must also be gated or non-macOS
+        // builds fail to compile (cannot find type in scope).
         if useCursorDashboardUsage {
             observe(CursorDashboardUsageParser.cacheMtime())
         }
+        #endif
         return maxMtime
     }
 
