@@ -631,6 +631,10 @@ final class AppRuntime: ObservableObject {
                     }
                 }
             }
+        } else {
+            Task { @MainActor [self] in
+                await self.syncProviderShellShims()
+            }
         }
 
         runtimeLogger.info("AppRuntime.init COMPLETE instance=\(ObjectIdentifier(self).hashValue)")
@@ -938,6 +942,7 @@ final class AppRuntime: ObservableObject {
             // the loader's root closures read the list per refresh.
             usageHistoryStore.forceRefresh()
         }
+        await syncProviderShellShims()
         let redactedRoot = instance.configRoot == nil
             ? "nil"
             : ProviderInstanceLogRedaction.homeToken(for: instance)
@@ -969,10 +974,22 @@ final class AppRuntime: ObservableObject {
         if deleteConfigRoot, let root = instance.homePathOverride, !root.isEmpty {
             try? FileManager.default.removeItem(atPath: root)
         }
+        await syncProviderShellShims()
         runtimeLogger.info(
             "AppRuntime.removeInstance wireId=\(instance.wireId, privacy: .public) deleteConfigRoot=\(deleteConfigRoot)"
         )
         return true
+    }
+
+    /// Install `~/.local/bin/<kind>-<name>` wrappers for every
+    /// secondary Claude/Codex account so Terminal can launch them with
+    /// one command (e.g. `claude-work`).
+    private func syncProviderShellShims() async {
+        let instances = await providerInstanceRegistry.allInstances()
+        ProviderInstanceShellShimInstaller.sync(
+            instances: instances,
+            appSupportDirectory: appSupportDirectory
+        )
     }
 
     /// Spawn an `AppModel` for `instance` using the per-kind config and

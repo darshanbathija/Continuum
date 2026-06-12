@@ -399,6 +399,23 @@ struct AddProviderAccountSheet: View {
 
     // MARK: Done
 
+    private var doneStepDetail: String {
+        let instance = ProviderInstanceId(
+            kind: kind,
+            name: model.name,
+            homePathOverride: ProviderInstanceStore.configRoot(
+                baseDir: runtime.appSupportDirectory,
+                kind: kind,
+                name: model.name
+            ).path
+        )
+        let base = "Its rate-limit gauge starts polling now, and it appears in Chat and Code account pickers."
+        guard let command = ProviderInstanceShellShim.commandName(for: instance) else {
+            return base
+        }
+        return "\(base) In Terminal, run `\(command)` to use this account (same idea as typing `\(kind.rawValue)` for your default)."
+    }
+
     private var doneStep: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
@@ -407,7 +424,7 @@ struct AddProviderAccountSheet: View {
                     .font(TahoeFont.body(13, weight: .semibold))
                     .foregroundStyle(t.fg)
             }
-            Text("Its rate-limit gauge starts polling now, and it appears in Chat and Code account pickers.")
+            Text(doneStepDetail)
                 .font(TahoeFont.body(11.5))
                 .foregroundStyle(t.fg3)
                 .fixedSize(horizontal: false, vertical: true)
