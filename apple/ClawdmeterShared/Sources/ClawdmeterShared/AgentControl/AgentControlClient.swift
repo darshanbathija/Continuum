@@ -86,6 +86,7 @@ public final class AgentControlClient: ObservableObject {
     private let urlSession: URLSession
     private var desktopEventSyncTask: Task<Void, Never>?
     private var desktopEventResyncTask: Task<Void, Never>?
+    private var providerDefaultsChangedObserver: NSObjectProtocol?
 
     #if DEBUG
     public static let codeTabVerificationSessionId = UUID(uuidString: "8D70F169-9D3A-45C8-9F7F-04E02E55A201")!
@@ -105,6 +106,7 @@ public final class AgentControlClient: ObservableObject {
         self.urlSession = urlSession
         self.isConfigured = (UserDefaults.standard.string(forKey: Self.hostKey) != nil
                              && UserDefaults.standard.string(forKey: Self.tokenKey) != nil)
+        observeProviderDefaultsChanges()
     }
 
     #if DEBUG
@@ -131,11 +133,27 @@ public final class AgentControlClient: ObservableObject {
         self.tokenOverride = token
         self.urlSession = urlSession
         self.isConfigured = true
+        observeProviderDefaultsChanges()
     }
 
     deinit {
         desktopEventSyncTask?.cancel()
         desktopEventResyncTask?.cancel()
+        if let providerDefaultsChangedObserver {
+            NotificationCenter.default.removeObserver(providerDefaultsChangedObserver)
+        }
+    }
+
+    private func observeProviderDefaultsChanges() {
+        providerDefaultsChangedObserver = NotificationCenter.default.addObserver(
+            forName: ProviderDefaultsStore.changedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.providerDefaults = ProviderDefaultsStore().snapshot
+            }
+        }
     }
 
     #if DEBUG
@@ -509,6 +527,12 @@ public final class AgentControlClient: ObservableObject {
     /// config.
     private var isExplicitConfig: Bool {
         hostOverride != nil || tokenOverride != nil
+    }
+
+    /// Mac loopback clients read/write the same on-disk provider defaults as
+    /// Settings. Remote paired clients still need daemon PUT/GET sync.
+    public var usesLocalProviderDefaultsStore: Bool {
+        isExplicitConfig
     }
 
     // MARK: - Config
@@ -2297,6 +2321,20 @@ public final class AgentControlClient: ObservableObject {
         let localStore = ProviderDefaultsStore()
         if let serverWireVersion,
            serverWireVersion < AgentControlWireVersion.providerDefaultsMinimum {
+            providerDefaults = localStore.setDefault(
+                for: vendor,
+                model: model,
+                effort: effort,
+                clearModel: clearModel,
+                clearEffort: clearEffort,
+                catalog: modelCatalog
+            )
+            return providerDefaults
+        }
+        // Mac loopback uses the same UserDefaults store as the daemon. Skip
+        // the HTTP round trip (and the server's live model probes) so Settings
+        // default-model switches stay instant.
+        if isExplicitConfig {
             providerDefaults = localStore.setDefault(
                 for: vendor,
                 model: model,

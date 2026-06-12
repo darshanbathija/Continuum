@@ -500,11 +500,14 @@ public final class ChatV2Store: ObservableObject {
     public func applyProviderDefaults(_ snapshot: ProviderDefaultsSnapshot, catalog: ModelCatalog = .bundled) {
         providerDefaults.replace(with: snapshot)
         for vendor in Self.defaultChatVendorOrder {
+            let choice = ProviderChoice.builtin(vendor)
             if let modelId = snapshot.modelId(for: vendor),
                Self.catalog(catalog, contains: modelId, for: vendor) {
+                selectedModelByChoice[choice] = modelId
                 selectedModelByVendor[vendor] = modelId
                 selectedModelByProvider[vendor.backingProvider] = modelId
             } else {
+                selectedModelByChoice.removeValue(forKey: choice)
                 selectedModelByVendor.removeValue(forKey: vendor)
                 selectedModelByProvider.removeValue(forKey: vendor.backingProvider)
             }
@@ -516,9 +519,11 @@ public final class ChatV2Store: ObservableObject {
                 catalog: catalog
             )
             if let effectiveEffort {
+                selectedEffortByChoice[choice] = effectiveEffort
                 selectedEffortByVendor[vendor] = effectiveEffort
                 selectedEffortByProvider[vendor.backingProvider] = effectiveEffort
             } else {
+                selectedEffortByChoice.removeValue(forKey: choice)
                 selectedEffortByVendor.removeValue(forKey: vendor)
                 selectedEffortByProvider.removeValue(forKey: vendor.backingProvider)
             }
