@@ -6,17 +6,31 @@ final class ToolPresentationTests: XCTestCase {
     func test_toolCatalogNormalizesKnownProviderNames() {
         XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "Bash"), "bash")
         XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "exec_command"), "bash")
-        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "web_search"), "web")
-        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "MultiEdit"), "write")
-        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "AskUserQuestion"), "agent")
+        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "web_search"), "web_search")
+        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "web_fetch"), "web_fetch")
+        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "MultiEdit"), "multiedit")
+        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "Edit"), "edit")
+        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "Grep"), "grep")
+        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "Glob"), "glob")
+        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "AskUserQuestion"), "ask_user")
     }
 
     func test_toolPresentationCarriesDataOnlyStylingHints() {
         let bash = ToolPresentationCatalog.presentation(for: "exec_command", summary: "git status")
         XCTAssertEqual(bash.displayName, "Bash")
-        XCTAssertEqual(bash.systemImageName, "terminal")
+        XCTAssertEqual(bash.systemImageName, "terminal.fill")
         XCTAssertEqual(bash.tone, .shell)
         XCTAssertEqual(bash.summary, "git status")
+
+        let grep = ToolPresentationCatalog.presentation(for: "Grep")
+        XCTAssertEqual(grep.normalizedKind, "grep")
+        XCTAssertEqual(grep.systemImageName, "line.3.horizontal.decrease.circle")
+        XCTAssertEqual(grep.tone, .search)
+
+        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "StrReplace"), "edit")
+        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "codebase_search"), "web_search")
+        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "read_file"), "read")
+        XCTAssertEqual(ToolPresentationCatalog.normalizedKind(for: "WebFetch"), "web_fetch")
 
         let unknown = ToolPresentationCatalog.presentation(for: "future_tool", isError: true)
         XCTAssertEqual(unknown.tone, .warning)
