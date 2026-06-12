@@ -1702,7 +1702,9 @@ struct ProviderPreferenceRows: View {
             clearEffort: normalizedEffort == nil,
             catalog: catalog
         )
-        guard let client else { return }
+        // Mac loopback shares UserDefaults — `changedNotification` keeps the
+        // loopback client + Chat composer in sync without a daemon round trip.
+        guard let client, !client.usesLocalProviderDefaultsStore else { return }
         Task {
             if let updated = await client.updateProviderDefault(
                 vendor: vendor,

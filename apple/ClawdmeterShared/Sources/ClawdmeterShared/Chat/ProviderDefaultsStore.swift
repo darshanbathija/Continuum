@@ -217,6 +217,11 @@ public struct UpdateProviderDefaultRequest: Codable, Hashable, Sendable {
 
 @MainActor
 public final class ProviderDefaultsStore: ObservableObject {
+    /// Posted after any persist write so sibling store instances (Settings,
+    /// Chat, SessionLauncher, loopback client) can refresh without an HTTP
+    /// round trip through the daemon.
+    public static let changedNotification = Notification.Name("clawdmeter.providerDefaults.changed")
+
     @Published public private(set) var snapshot: ProviderDefaultsSnapshot
 
     private let defaults: UserDefaults
@@ -397,6 +402,7 @@ public final class ProviderDefaultsStore: ObservableObject {
         defaults.set(next.favoriteOrder, forKey: Self.defaultsPrefix + "favoriteOrder")
         defaults.set(next.updatedAt.timeIntervalSince1970, forKey: Self.defaultsPrefix + "updatedAt")
         snapshot = next
+        NotificationCenter.default.post(name: Self.changedNotification, object: self)
     }
 
     private static func readSnapshot(defaults: UserDefaults) -> ProviderDefaultsSnapshot {

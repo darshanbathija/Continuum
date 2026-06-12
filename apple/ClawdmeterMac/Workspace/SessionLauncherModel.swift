@@ -32,6 +32,7 @@ final class SessionLauncherModel: ObservableObject {
     @Published private(set) var availability: SessionLauncherAvailability
     @Published private(set) var modelCatalog: ModelCatalog
     private let providerDefaults: ProviderDefaultsStore
+    private var providerDefaultsObserver: AnyCancellable?
 
     init(
         modelCatalog: ModelCatalog = .bundled,
@@ -41,6 +42,12 @@ final class SessionLauncherModel: ObservableObject {
         self.modelCatalog = modelCatalog
         self.availability = availability
         self.providerDefaults = providerDefaults ?? ProviderDefaultsStore()
+        providerDefaultsObserver = NotificationCenter.default
+            .publisher(for: ProviderDefaultsStore.changedNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.providerDefaults.refresh()
+            }
     }
 
     var selectableAgents: [AgentKind] {

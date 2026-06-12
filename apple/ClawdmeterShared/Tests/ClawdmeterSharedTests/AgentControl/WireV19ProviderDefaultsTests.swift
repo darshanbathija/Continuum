@@ -73,6 +73,24 @@ final class WireV19ProviderDefaultsTests: XCTestCase {
         XCTAssertTrue(LoopbackHTTPTrapURLProtocol.requests.isEmpty)
         XCTAssertLessThan(elapsed, .milliseconds(250))
     }
+
+    @MainActor
+    func test_providerDefaultsChangedNotificationUpdatesLoopbackClient() async throws {
+        let client = AgentControlClient(
+            host: "127.0.0.1",
+            httpPort: 21731,
+            wsPort: 21732,
+            token: "loopback-token"
+        )
+        let store = ProviderDefaultsStore()
+        let modelId = try XCTUnwrap(ModelCatalog.bundled.claude.first?.id)
+
+        _ = store.setDefault(for: .claude, model: modelId, effort: .high)
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertEqual(client.providerDefaults.modelByVendor[ChatVendor.claude.rawValue], modelId)
+    }
 }
 
 private final class LoopbackHTTPTrapURLProtocol: URLProtocol {

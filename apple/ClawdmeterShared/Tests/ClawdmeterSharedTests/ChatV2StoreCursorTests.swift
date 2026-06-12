@@ -206,6 +206,23 @@ final class ChatV2StoreCursorTests: XCTestCase {
     }
 
     @MainActor
+    func test_applyProviderDefaults_overridesStaleComposerModelPick() {
+        let suiteName = "ApplyProviderDefaultsOverridesChoice.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = ChatV2Store(defaults: defaults)
+        store.selectModel("gpt-5.3-codex-spark", for: .chatgpt, catalog: .bundled)
+        XCTAssertEqual(store.model(for: .chatgpt, catalog: .bundled), "gpt-5.3-codex-spark")
+
+        let snapshot = ProviderDefaultsSnapshot(
+            modelByVendor: [ChatVendor.chatgpt.rawValue: "gpt-5.5"]
+        )
+        store.applyProviderDefaults(snapshot, catalog: .bundled)
+
+        XCTAssertEqual(store.model(for: .chatgpt, catalog: .bundled), "gpt-5.5")
+    }
+
+    @MainActor
     func test_cursorEffortIsDisabledUntilCatalogEntrySupportsEffort() async {
         let suiteName = "CursorEffortDisabled.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
