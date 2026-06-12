@@ -51,6 +51,87 @@ final class MenuBarGaugeViewCacheTests: XCTestCase {
         XCTAssertLessThanOrEqual(MenuBarGaugeView.imageCacheCountForTesting, 160)
     }
 
+    func test_cursorSplitLabelCachesDistinctAutoAndApiValues() {
+        MenuBarGaugeView.resetCachesForTesting()
+
+        let base = UsageData(
+            sessionPct: 48,
+            sessionResetMins: 120,
+            sessionEpoch: 1_000,
+            weeklyPct: 48,
+            weeklyResetMins: 120,
+            weeklyEpoch: 1_000,
+            status: .allowed,
+            representativeClaim: .unknown,
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let first = UsageData(
+            sessionPct: 48,
+            sessionResetMins: 120,
+            sessionEpoch: 1_000,
+            weeklyPct: 48,
+            weeklyResetMins: 120,
+            weeklyEpoch: 1_000,
+            status: .allowed,
+            representativeClaim: .unknown,
+            updatedAt: Date(timeIntervalSince1970: 1_000),
+            cursorQuota: UsageData.CursorQuota(
+                totalPct: 48,
+                autoPct: 25,
+                apiPct: 95,
+                resetMins: 120,
+                resetEpoch: 1_000
+            )
+        )
+        let second = UsageData(
+            sessionPct: 48,
+            sessionResetMins: 120,
+            sessionEpoch: 1_000,
+            weeklyPct: 48,
+            weeklyResetMins: 120,
+            weeklyEpoch: 1_000,
+            status: .allowed,
+            representativeClaim: .unknown,
+            updatedAt: Date(timeIntervalSince1970: 1_000),
+            cursorQuota: UsageData.CursorQuota(
+                totalPct: 48,
+                autoPct: 30,
+                apiPct: 95,
+                resetMins: 120,
+                resetEpoch: 1_000
+            )
+        )
+
+        let firstImage = MenuBarGaugeView.renderLabel(
+            for: first,
+            assetName: "CursorLogo",
+            template: true,
+            hasWeekly: false
+        )
+        let firstCachedAgain = MenuBarGaugeView.renderLabel(
+            for: first,
+            assetName: "CursorLogo",
+            template: true,
+            hasWeekly: false
+        )
+        let secondImage = MenuBarGaugeView.renderLabel(
+            for: second,
+            assetName: "CursorLogo",
+            template: true,
+            hasWeekly: false
+        )
+        let nonCursorImage = MenuBarGaugeView.renderLabel(
+            for: base,
+            assetName: "CursorLogo",
+            template: true,
+            hasWeekly: false
+        )
+
+        XCTAssertTrue(firstImage === firstCachedAgain)
+        XCTAssertFalse(firstImage === secondImage)
+        XCTAssertFalse(firstImage === nonCursorImage)
+    }
+
     func test_providerBadgeImagePreservesAspectRatio() throws {
         MenuBarGaugeView.resetCachesForTesting()
 
