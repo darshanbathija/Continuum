@@ -46,6 +46,27 @@ final class WireV24VendorProvisioningTests: XCTestCase {
         XCTAssertEqual(decoded.statuses.first?.mcpMatches.first?.name, "cloudflare")
     }
 
+    func testVendorMentionCatalogMatching() {
+        let cloudflareMatches = VendorProvisioningCatalog.vendors(matchingMentionQuery: "cloud")
+        XCTAssertTrue(cloudflareMatches.contains { $0.id == "cloudflare" })
+
+        XCTAssertEqual(
+            VendorProvisioningCatalog.bestVendorMatch(forMentionQuery: "Cloudflare")?.id,
+            "cloudflare"
+        )
+        XCTAssertNil(VendorProvisioningCatalog.bestVendorMatch(forMentionQuery: "c"))
+    }
+
+    func testVendorMentionConnectionLabels() {
+        let connected = VendorProvisioningStatus(vendorId: "cloudflare", cliStatus: .authenticated)
+        let disconnected = VendorProvisioningStatus(vendorId: "cloudflare", cliStatus: .notInstalled)
+
+        XCTAssertEqual(connected.mentionConnectionLabel, "connected")
+        XCTAssertTrue(connected.isMentionConnected)
+        XCTAssertEqual(disconnected.mentionConnectionLabel, "not connected")
+        XCTAssertFalse(disconnected.isMentionConnected)
+    }
+
     func testEnvPreviewAndImportPayloadsRoundTripWithoutSecretInPreviewResponse() throws {
         let workspaceId = UUID()
         let previewRequest = VendorEnvPreviewRequest(
