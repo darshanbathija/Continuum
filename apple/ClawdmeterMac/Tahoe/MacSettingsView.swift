@@ -140,9 +140,7 @@ public struct MacSettingsView: View {
         ProviderSettingsTab(rawValue: providerTabRaw) ?? .providers
     }
 
-    private var contentMaxWidth: CGFloat? {
-        selectedSection == .providers && providerTab == .skills ? nil : 920
-    }
+    private var contentMaxWidth: CGFloat? { 920 }
 
     private var matchingSections: [SettingsSection] {
         SettingsSection.matching(query: settingsSearch)
