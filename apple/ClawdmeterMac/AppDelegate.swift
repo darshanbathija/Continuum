@@ -174,6 +174,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for observer in [prefsObserver, windowCloseObserver, showDashboardObserver] {
             if let observer { NotificationCenter.default.removeObserver(observer) }
         }
+        // Spawn-mode PTY children are session leaders; an agent that
+        // ignores the master-close SIGHUP would outlive the app and keep
+        // burning quota with no UI handle. Signal them synchronously —
+        // no waits, termination won't give us time to reap.
+        SpawnModeStore.shared.terminateAllForAppQuit()
         // F2-wire: opportunistic WAL checkpoint on normal exit so the
         // orchestration log's sidecar files (`-wal`/`-shm`) don't accrete
         // unbounded across reboots, and so a normal exit gives the next

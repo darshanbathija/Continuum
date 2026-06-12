@@ -124,6 +124,20 @@ public struct IOSRootView: View {
         .task {
             await agentClient.refreshAll()
             agentClient.startDesktopEventSync()
+            PostHogScreenTracking.screen(tab.rawValue.capitalized)
+        }
+        .onChange(of: tab) { _, newTab in
+            PostHogScreenTracking.screen(newTab.rawValue.capitalized)
+        }
+        .onChange(of: pushedScreen) { _, screen in
+            switch screen {
+            case .pairing:
+                PostHogScreenTracking.screen("Pairing")
+            case .sessionDetail:
+                PostHogScreenTracking.screen("Session Detail")
+            case nil:
+                PostHogScreenTracking.screen(tab.rawValue.capitalized)
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {

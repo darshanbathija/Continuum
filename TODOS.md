@@ -864,3 +864,57 @@ Deferred from the multi-account v1 plan (`darshanbathija/multi-account-subscript
       daemon listener starts (or add a "still booting" error variant).
 - [ ] `claude setup-token` token expiry (~1 yr): surface the re-authenticate state
       proactively on poller 401 (Settings dot exists; add a notification nudge).
+
+## Spawn mode — review deferrals (2026-06-12)
+
+From the /review pass on `darshanbathija/spawn-mode-code-tab`. Non-blocking;
+each was explicitly deferred during the fix-first batch.
+
+### Per-account pinning for spawn tiles
+- **What**: spawn tiles always run on the primary account (`claudePtyEnv()`
+  with `instance: nil`; Codex uses the default `CODEX_HOME`). Multi-account
+  users (v0.32) can't pin a spawn batch to a work/personal account.
+- **Shape**: account picker chip in `SpawnConfigSheet` when a kind has ≥2
+  instances; route through `InstanceSpawnEnv`-style fail-closed resolution.
+
+### App-quit warning when spawn agents are running
+- **What**: Cmd+Q now SIGHUP/SIGTERMs spawn children (AppDelegate), but
+  there's no "N agents are still running" confirmation before quit.
+- **Shape**: `applicationShouldTerminate` returning `.terminateLater` with a
+  count-aware alert when `SpawnModeStore.shared.groups` has live tiles.
+
+### Spawn surface is invisible to the control plane
+- **What**: spawn tiles live only in `SpawnModeStore` — no
+  `AgentSessionRegistry` entry, no iOS/Watch visibility, no AuditLog on
+  close, no Live Activity. Intentional for v1 (raw terminals, not managed
+  sessions) but undocumented; iOS users see Claude usage spike with no
+  sessions listed.
+- **Shape**: either register synthetic read-only sessions or document the
+  asymmetry in `docs/known-limitations.md`.
+
+### Gemini spawn row resolves the `gemini` CLI, not `agy`
+- **What**: spawn availability checks `gemini` (Google's interactive TUI);
+  the rest of the Mac provider path treats Antigravity (`agy`) as the
+  Gemini-lane CLI. Users with only `agy` see the row uninstalled.
+- **Shape**: decide whether the spawn row should offer the gemini-cli TUI
+  (current), agy, or both with distinct labels.
+
+### Pre-existing PTY-view patterns multiplied by spawn (×8)
+- **What**: per-keystroke unstructured `Task { host.writeBytes }` has no
+  ordering guarantee; `TerminalPtyHost.outputStream()` uses unbounded
+  AsyncStream buffering; hidden (inactive-tab-cached) SwiftTerm views keep
+  feeding/parsing output at opacity 0. All pre-date spawn mode
+  (`DirectPtyTerminalView` has the same shapes) but spawn multiplies the
+  worst case by 8 terminals for hours.
+- **Shape**: serialized writer per host; bounded buffering policy with
+  ring catch-up; pause `feed` while the view is not visible.
+
+### Same-cwd Codex rollout ambiguity (residual after cwd filter)
+- **What**: the resolver's cwd filter can't distinguish two Codex sessions
+  running in the SAME directory (two managed sessions in one repo, or a
+  managed home-dir chat plus a spawn tile in ~) — the newest same-cwd
+  rollout still wins the window scan.
+- **Shape**: match the rollout's recorded Codex session id against the
+  session's known `codexSessionId` when available; `record()` at spawn
+  already anchors managed sessions, so this only bites resumed/external
+  pairs.

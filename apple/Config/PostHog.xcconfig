@@ -1,0 +1,4 @@
+// PostHog product analytics. Override the project token locally via
+// Config/Local.xcconfig (copy from Local.xcconfig.example).
+POSTHOG_HOST = https:/$()/us.i.posthog.com
+POSTHOG_PROJECT_TOKEN =

@@ -12,7 +12,7 @@ At a high level, Continuum does three jobs:
 - Runs and controls local coding-agent sessions from Mac, iPhone, and Watch.
 - Keeps chat, code, usage, device pairing, diagnostics, and provider setup in one app.
 
-Current source version: `0.31.9` (`apple/project.yml` build `209`).
+Current source version: `0.36.0` (`apple/project.yml` build `236`).
 
 ## What ships
 
@@ -50,7 +50,7 @@ The main Mac tabs are:
 
 - **Chat** - solo or broadcast chat over Claude, Codex, Antigravity, Cursor, and OpenRouter, with Frontier-style multi-provider comparison endpoints in the daemon.
 - **Usage** - live quota cards plus historical spend by provider, day, and repo. OpenCode appears as a dollar-cost lane because it does not expose Anthropic-style rolling quota headers.
-- **Code** - repo/session workbench with city-named worktrees, terminal panes, chat transcript, Browser Preview with comment chips, plan/diff/PR/artifact/source panes, archive/reopen flows, and provider filters.
+- **Code** - repo/session workbench with city-named worktrees, terminal panes, chat transcript, Browser Preview with comment chips, plan/diff/PR/artifact/source panes, archive/reopen flows, and provider filters. A sidebar Spawn button opens spawn mode: a 4/6/8-tile grid of interactive agent CLI terminals (Claude, Codex, Gemini, OpenCode, Cursor, Grok) running in your home directory, with per-agent allocation, tile expand/compact, and guided Install affordances for missing CLIs (npm installs run in an embedded terminal; Cursor/OpenCode/Grok open their install pages).
 - **Settings** - visual theme, provider setup, per-provider model/effort defaults, provider diagnostics, pairing, Live Activities, auto-revive, and diagnostics.
 
 ## Analytics

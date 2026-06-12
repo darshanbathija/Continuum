@@ -1,0 +1,3 @@
+// Copy to Local.xcconfig (gitignored) and fill in your PostHog project token.
+// Find it at: https://us.posthog.com/project/settings (Project API key, phc_…)
+POSTHOG_PROJECT_TOKEN = phc_your_project_token_here

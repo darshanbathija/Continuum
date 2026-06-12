@@ -25,6 +25,9 @@ apple/ClawdmeterMac/Resources/Vendor/tmux/
 # tools/download-bundled-uv.sh; gitignored to keep the repo lean.
 apple/ClawdmeterMac/Resources/Vendor/uv/
 
+# Local developer overrides (PostHog project token, etc.)
+apple/Config/Local.xcconfig
+
 # Apple — Xcode and xcodegen
 apple/Clawdmeter.xcodeproj/xcuserdata/
 apple/Clawdmeter.xcodeproj/project.xcworkspace/xcuserdata/
