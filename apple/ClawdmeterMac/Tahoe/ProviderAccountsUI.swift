@@ -32,6 +32,12 @@ final class InstanceLoginCoordinator: ObservableObject {
 /// The per-provider accounts sub-list. Renders only for kinds that
 /// support config-dir isolation (Claude / Codex — see
 /// `ProviderInstanceEnvironment.configDirVariable`).
+private enum ProviderAccountRowMetrics {
+    static let defaultColumnWidth: CGFloat = 56
+    static let disconnectColumnWidth: CGFloat = 84
+    static let trailingColumnSpacing: CGFloat = 10
+}
+
 struct ProviderAccountsSection: View {
     @Environment(\.tahoe) private var t
     let runtime: AppRuntime
@@ -50,6 +56,10 @@ struct ProviderAccountsSection: View {
 
     private var displayedAccounts: [ProviderInstanceId] {
         instances
+    }
+
+    private var showsCodeDefaultColumn: Bool {
+        displayedAccounts.count >= 2
     }
 
     var body: some View {
@@ -81,14 +91,14 @@ struct ProviderAccountsSection: View {
             }
         }
         .alert(
-            "Remove this account?",
+            "Disconnect this account?",
             isPresented: Binding(
                 get: { pendingRemoval != nil },
                 set: { if !$0 { pendingRemoval = nil } }
             ),
             presenting: pendingRemoval
         ) { instance in
-            Button("Remove account", role: .destructive) {
+            Button("Disconnect", role: .destructive) {
                 Task {
                     if preferredWireId == instance.wireId {
                         setPreferredAccount(nil)
@@ -97,7 +107,7 @@ struct ProviderAccountsSection: View {
                     await refresh()
                 }
             }
-            Button("Remove + delete its data", role: .destructive) {
+            Button("Disconnect + delete its data", role: .destructive) {
                 Task {
                     if preferredWireId == instance.wireId {
                         setPreferredAccount(nil)
@@ -108,35 +118,41 @@ struct ProviderAccountsSection: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { instance in
-            Text("“\(instance.name)” stops polling and disappears from account pickers. “Remove + delete its data” also deletes its sign-in and local history on this Mac.")
+            Text("“\(instance.name)” stops polling and disappears from account pickers. “Disconnect + delete its data” also deletes its sign-in and local history on this Mac.")
         }
     }
 
     private var accountListHeader: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: ProviderAccountRowMetrics.trailingColumnSpacing) {
             Text("\(displayedAccounts.count) accounts")
                 .font(TahoeFont.mono(10, weight: .semibold))
-                .kerning(0.6)
+                .kerning(0.4)
                 .foregroundStyle(t.fg3)
             Spacer(minLength: 8)
-            Text("Code default")
-                .font(TahoeFont.mono(10, weight: .semibold))
-                .kerning(0.6)
-                .foregroundStyle(t.fg3)
-                .frame(width: codeDefaultColumnWidth, alignment: .center)
-            Color.clear
-                .frame(width: 9, height: 9)
-                .accessibilityHidden(true)
+            trailingColumnsHeader
         }
     }
 
-    private var codeDefaultColumnWidth: CGFloat { 76 }
+    @ViewBuilder
+    private var trailingColumnsHeader: some View {
+        if showsCodeDefaultColumn {
+            Text("Default")
+                .font(TahoeFont.mono(10, weight: .semibold))
+                .kerning(0.3)
+                .foregroundStyle(t.fg3)
+                .lineLimit(1)
+                .frame(width: ProviderAccountRowMetrics.defaultColumnWidth, alignment: .center)
+        }
+        Color.clear
+            .frame(width: ProviderAccountRowMetrics.disconnectColumnWidth, height: 1)
+            .accessibilityHidden(true)
+    }
 
     private func accountRow(_ instance: ProviderInstanceId) -> some View {
         let label = settingsDisplayName(for: instance)
         let email = emailByWireId[instance.wireId]
-        let showCodeDefault = displayedAccounts.count >= 2
-        return HStack(spacing: 8) {
+        let isCodeDefault = isPreferredForCode(instance)
+        return HStack(spacing: ProviderAccountRowMetrics.trailingColumnSpacing) {
             Circle()
                 .fill(statusByWireId[instance.wireId] == true ? ContinuumTokens.live : ContinuumTokens.error)
                 .frame(width: 6, height: 6)
@@ -156,37 +172,56 @@ struct ProviderAccountsSection: View {
                     .foregroundStyle(t.fg3)
             }
             Spacer(minLength: 8)
-            if showCodeDefault {
-                codeDefaultPicker(for: instance, label: label)
+            if showsCodeDefaultColumn {
+                codeDefaultPicker(for: instance, label: label, isSelected: isCodeDefault)
+                    .frame(width: ProviderAccountRowMetrics.defaultColumnWidth, alignment: .center)
             }
-            if instance.isPrimary {
-                Color.clear
-                    .frame(width: 9, height: 9)
-                    .accessibilityHidden(true)
-            } else {
-                Button {
-                    pendingRemoval = instance
-                } label: {
-                    TahoeIcon("x", size: 9, weight: .bold)
-                        .foregroundStyle(t.fg3)
-                }
-                .buttonStyle(.plain)
-                .help("Remove account “\(label)”")
-                .accessibilityIdentifier("settings.provider.\(instance.wireId).remove")
-            }
+            accountDisconnectButton(for: instance, label: label)
+                .frame(width: ProviderAccountRowMetrics.disconnectColumnWidth, alignment: .trailing)
         }
+        .frame(minHeight: 22)
         .accessibilityIdentifier("settings.provider.\(instance.wireId).account")
     }
 
-    private func codeDefaultPicker(for instance: ProviderInstanceId, label: String) -> some View {
-        let isSelected = isPreferredForCode(instance)
-        return Button {
+    @ViewBuilder
+    private func accountDisconnectButton(for instance: ProviderInstanceId, label: String) -> some View {
+        if instance.isPrimary {
+            Color.clear
+                .frame(height: 1)
+                .accessibilityHidden(true)
+        } else {
+            Button("Disconnect") {
+                pendingRemoval = instance
+            }
+            .buttonStyle(.plain)
+            .font(TahoeFont.body(12, weight: .semibold))
+            .foregroundStyle(t.fg2)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .help("Disconnect account “\(label)”")
+            .accessibilityIdentifier("settings.provider.\(instance.wireId).disconnect")
+        }
+    }
+
+    private func codeDefaultPicker(
+        for instance: ProviderInstanceId,
+        label: String,
+        isSelected: Bool
+    ) -> some View {
+        Button {
             setPreferredAccount(instance.isPrimary ? nil : instance.wireId)
         } label: {
-            Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(isSelected ? t.fg : t.fg4)
-                .frame(width: codeDefaultColumnWidth, alignment: .center)
+            ZStack {
+                Image(systemName: "circle")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(isSelected ? t.fg : t.fg4)
+                if isSelected {
+                    Circle()
+                        .fill(t.fg)
+                        .frame(width: 6, height: 6)
+                }
+            }
+            .frame(width: 16, height: 16)
         }
         .buttonStyle(.plain)
         .help(isSelected
