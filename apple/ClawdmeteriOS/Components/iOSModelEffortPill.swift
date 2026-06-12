@@ -92,13 +92,16 @@ struct iOSModelEffortPill: View {
     }
 
     private var currentPickerChoice: ProviderChoice {
-        if let customProviderId {
-            return .custom(customProviderId)
-        }
-        if let migrated = ChatVendor.migrated(from: agent) {
-            return .builtin(migrated)
-        }
-        return .builtin(.chatgpt)
+        ProviderChoice.resolvedForDisplay(
+            modelId: selectedModelId,
+            customProviderId: customProviderId,
+            agent: agent,
+            catalog: catalog,
+            enabledChoices: ChatV2Store.enabledChatChoices(
+                from: ProviderEnablement.enabledProviderIDs(),
+                catalog: catalog
+            )
+        )
     }
 
     private var summaryText: String {

@@ -173,19 +173,23 @@ struct CenterThread: View {
         }
     }
 
+    private var liveSession: AgentSession {
+        model.registry.session(id: session.id) ?? session
+    }
+
     private var header: some View {
         HStack(spacing: 12) {
-            TahoeProviderGlyph(provider: session.tahoeProvider, size: 26)
+            TahoeProviderGlyph(provider: headerProvider, size: 26)
             VStack(alignment: .leading, spacing: 1) {
                 // v0.5.4: user-supplied customName takes precedence
                 // over the session's goal in the chat header.
-                Text(headerLabel(for: session))
+                Text(headerLabel(for: liveSession))
                     .font(TahoeFont.body(15, weight: .bold))
                     .foregroundStyle(t.fg)
                     .lineLimit(1)
                     .accessibilityIdentifier("code.center.header.title")
                 HStack(spacing: 6) {
-                    Text(sessionConfigurationSummary)
+                    Text(headerConfigurationSummary)
                         .font(TahoeFont.body(11.5))
                         .foregroundStyle(t.fg3)
                         .lineLimit(1)
@@ -297,11 +301,11 @@ struct CenterThread: View {
 
     private var headerAccessibilityValue: String {
         [
-            session.id.uuidString,
-            headerLabel(for: session),
-            session.agent.rawValue,
-            session.model ?? "",
-            sessionConfigurationSummary
+            liveSession.id.uuidString,
+            headerLabel(for: liveSession),
+            model.displayAgent(for: liveSession, catalog: catalog).rawValue,
+            model.displayModelId(for: liveSession, catalog: catalog) ?? "",
+            headerConfigurationSummary
         ].joined(separator: " ")
     }
 
@@ -477,7 +481,10 @@ struct CenterThread: View {
             // optimistic "+" session. Sits just above the composer (which stays
             // usable the whole time) and confirms each step with a fact.
             if #available(macOS 14, *), let progress = model.provisioningProgress[session.id] {
-                ProvisioningTrailView(progress: progress, agent: session.agent)
+                ProvisioningTrailView(
+                    progress: progress,
+                    agent: model.displayAgent(for: liveSession, catalog: catalog)
+                )
                     .padding(.horizontal, 12)
                     .padding(.top, 10)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -632,7 +639,7 @@ struct CenterThread: View {
             store: composerStore,
             presentationStore: presentationStore,
             catalog: catalog,
-            agentForModelPicker: model.isProvisioning(session.id) ? composerStore.agent : session.agent,
+            agentForModelPicker: composerStore.agent,
             modelSupportsEffort: modelSupportsEffort,
             onSend: { Task { await performBoundSend() } },
             onQueue: { queueCurrentDraft() },
@@ -641,15 +648,13 @@ struct CenterThread: View {
             onChangePermissionMode: { newMode in
                 Task { await changePermissionMode(to: newMode) }
             },
-            onSelectModelConfiguration: model.isProvisioning(session.id) ? { choice, modelId, effort in
-                model.configureProvisionalLaunch(
-                    sessionId: session.id,
-                    agent: choice.backingAgent(in: catalog) ?? composerStore.agent,
+            onSelectModelConfiguration: { choice, modelId, effort in
+                handleModelConfigurationSelection(
+                    choice: choice,
                     modelId: modelId,
-                    effort: effort,
-                    customProviderId: choice.customProviderId
+                    effort: effort
                 )
-            } : nil,
+            },
             customProviderIdForModelPicker: session.customProviderId,
             permissionMode: PermissionModeStore.shared.currentMode(for: session),
             onApprovePlan: {
@@ -687,34 +692,15 @@ struct CenterThread: View {
             if model.isProvisioning(session.id) {
                 let pendingAgent = catalog.entry(
                     forId: new,
-                    customProviderId: composerStore.customProviderId ?? session.customProviderId
+                    customProviderId: composerStore.customProviderId ?? liveSession.customProviderId
                 )?.provider ?? composerStore.agent
                 model.configureProvisionalLaunch(
                     sessionId: session.id,
                     agent: pendingAgent,
                     modelId: new,
                     effort: composerStore.effort,
-                    customProviderId: composerStore.customProviderId ?? session.customProviderId
+                    customProviderId: composerStore.customProviderId ?? liveSession.customProviderId
                 )
-                return
-            }
-            guard !isHarnessDriven, new != session.model else { return }
-            if let entry = catalog.entry(
-                forId: new,
-                customProviderId: session.customProviderId
-            ) {
-                if entry.provider != session.agent {
-                    // A bound runtime can't change provider — model plurality
-                    // lives in tabs. Restore this session's chip and open a
-                    // sibling draft configured for the picked provider/model
-                    // (switchModel has the same guard for non-chip callers).
-                    let effort = composerStore.effort
-                    composerStore.agent = session.agent
-                    composerStore.modelId = session.model
-                    model.openCrossProviderDraft(from: session, entry: entry, effort: effort)
-                    return
-                }
-                Task { await model.switchModel(sessionId: session.id, to: entry, effort: composerStore.effort) }
             }
         }
         .onChange(of: composerStore.effort) { _, new in
@@ -1266,22 +1252,78 @@ struct CenterThread: View {
     }
 
     private var effectiveModelId: String? {
-        Self.effectiveModelId(for: session, catalog: catalog)
+        Self.effectiveModelId(for: liveSession, catalog: catalog)
     }
 
     private func effectiveEffort(forModelId modelId: String?) -> ReasoningEffort? {
-        Self.effectiveEffort(for: session, modelId: modelId, catalog: catalog)
+        Self.effectiveEffort(for: liveSession, modelId: modelId, catalog: catalog)
     }
 
-    private var sessionConfigurationSummary: String {
+    private var headerProvider: TahoeProvider {
+        TahoeProvider.resolvedForModelEntry(
+            modelId: composerStore.modelId ?? effectiveModelId,
+            customProviderId: composerStore.customProviderId ?? liveSession.customProviderId,
+            fallbackAgent: model.isProvisioning(liveSession.id) ? composerStore.agent : liveSession.agent,
+            catalog: catalog
+        )
+    }
+
+    private var headerConfigurationSummary: String {
+        let customProviderId = composerStore.customProviderId ?? liveSession.customProviderId
+        let modelId = composerStore.modelId.flatMap { id in
+            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        } ?? effectiveModelId
+        let agent: AgentKind
+        if let modelId,
+           let entry = catalog.entry(forId: modelId, customProviderId: customProviderId) {
+            agent = entry.provider
+        } else if model.isProvisioning(liveSession.id) {
+            agent = composerStore.agent
+        } else {
+            agent = liveSession.agent
+        }
         let modelText: String
-        if let id = effectiveModelId, !id.isEmpty {
-            modelText = catalog.entry(forId: id)?.displayName ?? id
+        if let modelId {
+            modelText = catalog.entry(forId: modelId, customProviderId: customProviderId)?.displayName ?? modelId
         } else {
             modelText = "default model"
         }
-        let effortText = effectiveEffort(forModelId: effectiveModelId).map(effortLabel) ?? "Default effort"
-        return "\(session.tahoeProvider.displayName) · \(modelText) · \(effortText)"
+        let effort = composerStore.effort ?? effectiveEffort(forModelId: modelId)
+        let effortText = effort.map(effortLabel) ?? "Default effort"
+        return "\(agent.tahoeProvider.displayName) · \(modelText) · \(effortText)"
+    }
+
+    private func handleModelConfigurationSelection(
+        choice: ProviderChoice,
+        modelId: String,
+        effort: ReasoningEffort?
+    ) {
+        let customProviderId = choice.customProviderId
+        let selectedAgent = choice.backingAgent(in: catalog) ?? composerStore.agent
+        if model.isProvisioning(liveSession.id) {
+            model.configureProvisionalLaunch(
+                sessionId: liveSession.id,
+                agent: selectedAgent,
+                modelId: modelId,
+                effort: effort,
+                customProviderId: customProviderId
+            )
+            return
+        }
+        guard !isReadOnly,
+              let entry = catalog.entry(forId: modelId, customProviderId: customProviderId)
+        else { return }
+        if entry.provider != liveSession.agent {
+            composerStore.agent = liveSession.agent
+            composerStore.modelId = liveSession.model
+            composerStore.effort = liveSession.effort
+            composerStore.customProviderId = liveSession.customProviderId
+            model.openCrossProviderDraft(from: liveSession, entry: entry, effort: effort)
+            return
+        }
+        guard !isHarnessDriven else { return }
+        Task { await model.switchModel(sessionId: liveSession.id, to: entry, effort: effort) }
     }
 
     static func effectiveModelId(for session: AgentSession, catalog: ModelCatalog) -> String? {
