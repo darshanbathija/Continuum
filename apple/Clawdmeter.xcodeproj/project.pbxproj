@@ -380,6 +380,7 @@
 		DCA8543E3CD0D2378D6C6BC3 /* PseudoTerminal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 985A7892D8BD9DC9E3227E5F /* PseudoTerminal.swift */; };
 		DD4A5C6456455C79978A09ED /* AnalyticsRangeAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58B2791865D23423A7F4CC0F /* AnalyticsRangeAdapter.swift */; };
 		DE3ED064F985609F92BF4576 /* OpenCodeGoCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D3578D367A2C908552D456 /* OpenCodeGoCredentials.swift */; };
+		F9A0B1C2D3E4F5A6B7C8D9E0 /* OpenCodeGoBrowserAuthImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8F9A0B1C2D3E4F5A6B7C8D9 /* OpenCodeGoBrowserAuthImporter.swift */; };
 		DEC72DF9FD4C81E4BA223693 /* CGSessionLiveness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 932A85B4655F88C993AF0E2B /* CGSessionLiveness.swift */; };
 		E12B14B2458C468678246859 /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = E5841B9F5A902887629FD6BF /* ClawdmeterShared */; };
 		E2C107C402AACE6FAB80BBB3 /* MacUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B3AA024217929E481D26844 /* MacUsageView.swift */; };
@@ -805,6 +806,7 @@
 		A2507332067583B37F56219E /* InheritedContextChips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InheritedContextChips.swift; sourceTree = "<group>"; };
 		A27CA03750EC59D41E11FB18 /* iOSTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSTerminalView.swift; sourceTree = "<group>"; };
 		A2D3578D367A2C908552D456 /* OpenCodeGoCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeGoCredentials.swift; sourceTree = "<group>"; };
+		E8F9A0B1C2D3E4F5A6B7C8D9 /* OpenCodeGoBrowserAuthImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeGoBrowserAuthImporter.swift; sourceTree = "<group>"; };
 		A340A844B01D4266CC5CED74 /* WorkspaceTabsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTabsTests.swift; sourceTree = "<group>"; };
 		A4BDBE8D894DEC31C57C6929 /* PairingTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTokenStore.swift; sourceTree = "<group>"; };
 		A5239318D643E1B51443A7C3 /* AutopilotState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutopilotState.swift; sourceTree = "<group>"; };
@@ -1079,6 +1081,7 @@
 				0A4AA299B141BD4D1652F66B /* NotificationDispatcher.swift */,
 				BCD88BB66371C0075AB50554 /* OpencodeAuthFile.swift */,
 				A2D3578D367A2C908552D456 /* OpenCodeGoCredentials.swift */,
+				E8F9A0B1C2D3E4F5A6B7C8D9 /* OpenCodeGoBrowserAuthImporter.swift */,
 				D7EE1E531D0C1FB1B8D6CF23 /* OpenCodeGoModelProbe.swift */,
 				B67061D7F5F105E0995FC937 /* OpenCodeGoQuotaClient.swift */,
 				384BF00CD993B413D98494D7 /* OpenCodeGoSource.swift */,
@@ -2310,6 +2313,7 @@
 				16AAD267657983FF56851AD3 /* NotificationDispatcher.swift in Sources */,
 				44996E84FA30C403B50066AA /* OnboardingSheet.swift in Sources */,
 				DE3ED064F985609F92BF4576 /* OpenCodeGoCredentials.swift in Sources */,
+				F9A0B1C2D3E4F5A6B7C8D9E0 /* OpenCodeGoBrowserAuthImporter.swift in Sources */,
 				E34A609A43CDB61716AE9E11 /* OpenCodeGoModelProbe.swift in Sources */,
 				9D6A16A4CD9B38770A2865DF /* OpenCodeGoQuotaClient.swift in Sources */,
 				69C920BB4B28A1EA0A10BA03 /* OpenCodeGoSource.swift in Sources */,
