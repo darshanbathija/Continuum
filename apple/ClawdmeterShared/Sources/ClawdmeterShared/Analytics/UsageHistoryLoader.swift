@@ -55,6 +55,10 @@ public actor UsageHistoryLoader {
     /// contains `agentKv:blob:*` context rows that are richer than transcript
     /// JSONL and are needed for realistic local Cursor token estimates.
     private let cursorAgentKVDBURL: URL?
+    /// When true, Cursor analytics prefer the dashboard billing API's per-event
+    /// `chargedCents` over local hook/transcript/KV estimates.
+    private let useCursorDashboardUsage: Bool
+    private let cursorDashboardCacheURL: URL?
     private let cacheURL: URL?
     private let pricing: Pricing
     /// Multi-account: extra per-account roots merged into the Claude /
@@ -80,6 +84,8 @@ public actor UsageHistoryLoader {
         cursorHooksLogsDir: URL? = nil,
         cursorAgentTranscriptRoot: URL? = nil,
         cursorAgentKVDBURL: URL? = nil,
+        cursorDashboardUsageEnabled: Bool? = nil,
+        cursorDashboardCacheURL: URL? = nil,
         cacheURL: URL? = nil,
         pricing: Pricing = .shared,
         additionalClaudeDirs: @escaping @Sendable () -> [URL] = { [] },
@@ -124,6 +130,13 @@ public actor UsageHistoryLoader {
         self.cursorAgentKVDBURL = cursorAgentKVDBURL ?? (usingDefaultHistoryDirs ? CursorAgentKVUsageParser.defaultStateDatabaseURL() : nil)
         #else
         self.cursorAgentKVDBURL = cursorAgentKVDBURL
+        #endif
+        #if os(macOS)
+        self.useCursorDashboardUsage = cursorDashboardUsageEnabled ?? usingDefaultHistoryDirs
+        self.cursorDashboardCacheURL = cursorDashboardCacheURL ?? CursorDashboardUsageParser.defaultCacheURL()
+        #else
+        self.useCursorDashboardUsage = false
+        self.cursorDashboardCacheURL = nil
         #endif
         self.cacheURL = cacheURL ?? Self.defaultCacheURL()
         self.pricing = pricing
@@ -231,6 +244,9 @@ public actor UsageHistoryLoader {
         }
         if let cursorAgentKVDBURL {
             observe(Self.sqliteMtime(cursorAgentKVDBURL))
+        }
+        if useCursorDashboardUsage {
+            observe(CursorDashboardUsageParser.cacheMtime())
         }
         return maxMtime
     }
@@ -403,26 +419,44 @@ public actor UsageHistoryLoader {
         for result in codexResults { nextCache.files[result.path] = result.cacheEntry }
         writeCheckpoint(base: cache, overlay: nextCache)
 
-        let cursorHookResults = await load(
-            CachedFileSourceAdapter(files: cursorHookFiles, activeURL: cursorHookActive) { url in
-                try Self.parseCursorHooksFile(at: url)
-            },
-            cache: cache
-        )
+        var cursorDashboardRecords: [UsageRecord] = []
+        #if os(macOS)
+        if useCursorDashboardUsage {
+            cursorDashboardRecords = await CursorDashboardUsageParser.loadRecords(
+                cacheURL: cursorDashboardCacheURL
+            )
+        }
+        #endif
 
-        let cursorTranscriptResults = await load(
-            CachedFileSourceAdapter(files: cursorTranscriptFiles, activeURL: cursorTranscriptActive) { url in
-                try Self.parseCursorAgentTranscriptFile(at: url, modelHints: cursorTranscriptModelHints)
-            },
-            cache: cache
-        )
+        let cursorHookResults: [PerFileResult]
+        let cursorTranscriptResults: [PerFileResult]
+        let cursorAgentKVResults: [PerFileResult]
+        if cursorDashboardRecords.isEmpty {
+            cursorHookResults = await load(
+                CachedFileSourceAdapter(files: cursorHookFiles, activeURL: cursorHookActive) { url in
+                    try Self.parseCursorHooksFile(at: url)
+                },
+                cache: cache
+            )
 
-        let cursorAgentKVResults = await load(
-            CachedFileSourceAdapter(files: cursorAgentKVFiles, activeURL: cursorAgentKVActive) { url in
-                try Self.parseCursorAgentKVDatabase(at: url)
-            },
-            cache: cache
-        )
+            cursorTranscriptResults = await load(
+                CachedFileSourceAdapter(files: cursorTranscriptFiles, activeURL: cursorTranscriptActive) { url in
+                    try Self.parseCursorAgentTranscriptFile(at: url, modelHints: cursorTranscriptModelHints)
+                },
+                cache: cache
+            )
+
+            cursorAgentKVResults = await load(
+                CachedFileSourceAdapter(files: cursorAgentKVFiles, activeURL: cursorAgentKVActive) { url in
+                    try Self.parseCursorAgentKVDatabase(at: url)
+                },
+                cache: cache
+            )
+        } else {
+            cursorHookResults = []
+            cursorTranscriptResults = []
+            cursorAgentKVResults = []
+        }
 
         let geminiResults = await load(
             CachedFileSourceAdapter(files: geminiFiles, activeURL: geminiActive) { url in
@@ -502,22 +536,34 @@ public actor UsageHistoryLoader {
             sessionCount += 1
             nextCache.files[result.path] = result.cacheEntry
         }
-        let combinedCursorFileResults = cursorHookResults + cursorTranscriptResults + cursorAgentKVResults
-        if !combinedCursorFileResults.isEmpty {
-            var bucket = cursorDayByRepo ?? [:]
-            for result in combinedCursorFileResults {
-                mergePerFileResult(
-                    result,
-                    into: &bucket,
-                    dedup: &seenDedupKeys,
-                    unpriced: &unpricedModelTokens,
-                    byModel: &tokensByModel,
-                    byDayByModel: &byDayByModel
-                )
-                sessionCount += 1
-                nextCache.files[result.path] = result.cacheEntry
+        if !cursorDashboardRecords.isEmpty {
+            let rollup = Self.rollup(records: cursorDashboardRecords)
+            cursorDayByRepo = rollup.byDayByRepo
+            Self.mergeModelRollups(
+                rollup,
+                unpriced: &unpricedModelTokens,
+                byModel: &tokensByModel,
+                byDayByModel: &byDayByModel
+            )
+            sessionCount += 1
+        } else {
+            let combinedCursorFileResults = cursorHookResults + cursorTranscriptResults + cursorAgentKVResults
+            if !combinedCursorFileResults.isEmpty {
+                var bucket = cursorDayByRepo ?? [:]
+                for result in combinedCursorFileResults {
+                    mergePerFileResult(
+                        result,
+                        into: &bucket,
+                        dedup: &seenDedupKeys,
+                        unpriced: &unpricedModelTokens,
+                        byModel: &tokensByModel,
+                        byDayByModel: &byDayByModel
+                    )
+                    sessionCount += 1
+                    nextCache.files[result.path] = result.cacheEntry
+                }
+                cursorDayByRepo = bucket
             }
-            cursorDayByRepo = bucket
         }
         // v0.23.8: fold desktop IDE and agy CLI results into the same
         // .gemini bucket. The two surfaces share pricing and share the
@@ -605,9 +651,14 @@ public actor UsageHistoryLoader {
             }
         }
 
-        let cursorRecords = LedgerUsageSourceAdapter(url: cursorLedgerURL) {
-            CursorACPUsageLedger.parseFile(at: $0)
-        }.records()
+        let cursorRecords: [UsageRecord]
+        if cursorDashboardRecords.isEmpty {
+            cursorRecords = LedgerUsageSourceAdapter(url: cursorLedgerURL) {
+                CursorACPUsageLedger.parseFile(at: $0)
+            }.records()
+        } else {
+            cursorRecords = []
+        }
         if !cursorRecords.isEmpty {
             let rollup = Self.rollup(records: cursorRecords)
             Self.mergeProviderRollup(rollup.byDayByRepo, into: &cursorDayByRepo)
@@ -1148,14 +1199,19 @@ public actor UsageHistoryLoader {
         let computedCost = Pricing.shared.cost(for: record.model, tokens: record.tokens)
         let embeddedCost = record.tokens.costUSD
         var tokensWithCost = record.tokens
-        if computedCost > 0 {
+        // Cursor dashboard billing and other embedded-cost sources win when
+        // pricing aliases would undercount (Composer → Kimi K2.5) or when no
+        // rate card exists (OpenCode BYOK rows).
+        if embeddedCost > 0 && (record.provider == .cursor || computedCost == 0) {
+            tokensWithCost.costUSD = embeddedCost
+        } else if computedCost > 0 {
             tokensWithCost.costUSD = computedCost
         } else if embeddedCost > 0 {
             tokensWithCost.costUSD = embeddedCost
         } else {
             tokensWithCost.costUSD = 0
         }
-        return (tokensWithCost, Pricing.shared.isPriced(record.model) || embeddedCost > 0)
+        return (tokensWithCost, embeddedCost > 0 || Pricing.shared.isPriced(record.model))
     }
 
     /// Merge a per-file result into the cross-file rollup. Applies global
@@ -1398,7 +1454,11 @@ struct AnalyticsCache: Codable, Sendable {
     // pricing.json. Days cached before the entry existed priced Fable usage
     // at $0 and parked the tokens in unpricedModelTokens — force a one-time
     // reparse so they re-price (same pattern as the v14 Claude-dedup bump).
-    static let currentVersion: Int = 18
+    // v19 (2026-06-12): Cursor analytics now prefer dashboard billing events
+    // with authoritative `chargedCents` instead of local hook/KV estimates
+    // priced through OpenRouter aliases. Bump forces a one-time reparse so
+    // historical Cursor days pick up the corrected spend.
+    static let currentVersion: Int = 19
 
     let version: Int
     var files: [String: FileEntry]
