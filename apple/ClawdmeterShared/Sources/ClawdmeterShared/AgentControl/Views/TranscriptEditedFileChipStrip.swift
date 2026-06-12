@@ -172,6 +172,9 @@ public struct TranscriptEditedFileChipStripView: View {
         )
         .help(file.filePath)
         .accessibilityLabel(fileChipAccessibilityLabel(file))
+        // Hover preview is a pointer affordance; onHover + popover are both
+        // unavailable on watchOS, so gate the whole chain out of the watch build.
+        #if !os(watchOS)
         .onHover { hovering in
             let hasPreview = !(file.preview ?? "").isEmpty
             if hovering, hasPreview {
@@ -193,6 +196,7 @@ public struct TranscriptEditedFileChipStripView: View {
                     .padding(8)
             }
         }
+        #endif
     }
 
     private func moreChip(_ overflow: TranscriptEditedFileChipStripModel.OverflowSummary) -> some View {
