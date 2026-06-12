@@ -1260,8 +1260,14 @@ struct CenterThread: View {
     }
 
     private var headerProvider: TahoeProvider {
-        TahoeProvider.resolvedForModelEntry(
-            modelId: composerStore.modelId ?? effectiveModelId,
+        // Normalize an empty modelId to nil (matching headerConfigurationSummary)
+        // so the glyph and the summary text resolve the same provider.
+        let modelId = composerStore.modelId.flatMap { id in
+            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        } ?? effectiveModelId
+        return TahoeProvider.resolvedForModelEntry(
+            modelId: modelId,
             customProviderId: composerStore.customProviderId ?? liveSession.customProviderId,
             fallbackAgent: model.isProvisioning(liveSession.id) ? composerStore.agent : liveSession.agent,
             catalog: catalog
