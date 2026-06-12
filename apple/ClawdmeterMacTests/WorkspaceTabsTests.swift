@@ -55,8 +55,11 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(ProviderAccountChip.displayLabel(for: nil, in: choices), "Default")
         XCTAssertEqual(ProviderAccountChip.displayLabel(for: work.wireId, in: choices), "work")
 
+        // The composer chip persists its pick through the same single source
+        // of truth Settings uses — CodePreferredAccountStore — so picking an
+        // account in the composer and in Settings can never disagree.
         let defaults = UserDefaults.standard
-        let key = "clawdmeter.code.accountByAgent"
+        let key = "clawdmeter.code.preferredAccountWireIdByKind"
         let prior = defaults.dictionary(forKey: key)
         defer {
             if let prior { defaults.set(prior, forKey: key) }
@@ -64,10 +67,10 @@ final class WorkspaceTabsTests: XCTestCase {
         }
         defaults.removeObject(forKey: key)
 
-        CodeComposerAccountPreference.setWireId(work.wireId, for: .claude)
-        XCTAssertEqual(CodeComposerAccountPreference.wireId(for: .claude), work.wireId)
-        CodeComposerAccountPreference.setWireId(nil, for: .claude)
-        XCTAssertNil(CodeComposerAccountPreference.wireId(for: .claude))
+        CodePreferredAccountStore.setPreferred(wireId: work.wireId, for: .claude)
+        XCTAssertEqual(CodePreferredAccountStore.preferredWireId(for: .claude), work.wireId)
+        CodePreferredAccountStore.setPreferred(wireId: nil, for: .claude)
+        XCTAssertNil(CodePreferredAccountStore.preferredWireId(for: .claude))
     }
 
     func test_rootCommandRoutingRegistersCodeTabShortcutBackedActions() {

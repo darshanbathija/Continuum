@@ -2,29 +2,6 @@ import SwiftUI
 import AppKit
 import ClawdmeterShared
 
-/// Persists the Code-tab account pick per provider kind. nil wireId = primary.
-enum CodeComposerAccountPreference {
-    private static let defaultsKey = "clawdmeter.code.accountByAgent"
-
-    static func wireId(for agent: AgentKind) -> String? {
-        guard let map = UserDefaults.standard.dictionary(forKey: defaultsKey) as? [String: String] else {
-            return nil
-        }
-        guard let wireId = map[agent.rawValue] else { return nil }
-        return ProviderInstanceId.isSecondaryWireId(wireId) ? wireId : nil
-    }
-
-    static func setWireId(_ wireId: String?, for agent: AgentKind) {
-        var map = UserDefaults.standard.dictionary(forKey: defaultsKey) as? [String: String] ?? [:]
-        if let wireId, ProviderInstanceId.isSecondaryWireId(wireId) {
-            map[agent.rawValue] = wireId
-        } else {
-            map.removeValue(forKey: agent.rawValue)
-        }
-        UserDefaults.standard.set(map, forKey: defaultsKey)
-    }
-}
-
 /// Compact pill on the composer's bottom bar that opens an account menu
 /// (Default / work / personal …). Mirrors `PermissionModeChip`.
 struct ProviderAccountChip: View {

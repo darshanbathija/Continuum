@@ -759,7 +759,7 @@ struct ComposerInputCore: View {
                 selectedWireId: selectedAccountWireId.wrappedValue,
                 onSelect: { wireId in
                     selectedAccountWireId.wrappedValue = wireId
-                    CodeComposerAccountPreference.setWireId(wireId, for: store.agent)
+                    CodePreferredAccountStore.setPreferred(wireId: wireId, for: store.agent)
                 }
             )
             .layoutPriority(1)
@@ -789,8 +789,7 @@ struct ComposerInputCore: View {
             selectedAccountWireId?.wrappedValue = nil
         }
         if selectedAccountWireId?.wrappedValue == nil,
-           let persisted = CodeComposerAccountPreference.wireId(for: store.agent),
-           choices.contains(where: { $0.wireId == persisted }) {
+           let persisted = CodePreferredAccountStore.providerInstanceId(for: store.agent, available: choices) {
             selectedAccountWireId?.wrappedValue = persisted
         }
     }
