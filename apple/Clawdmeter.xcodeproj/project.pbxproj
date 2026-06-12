@@ -331,6 +331,7 @@
 		BDD2A7A6A1192473FA46DB66 /* SessionSidebarGrouperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 693EC2D069F0436FA3D69AAC /* SessionSidebarGrouperTests.swift */; };
 		BEBEDF3EC84554BEEE967A5E /* RelayPairingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0F7E72EBBEC05B986430D9 /* RelayPairingService.swift */; };
 		BEE0A480281823DFA1BC2157 /* UpdateCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCCD51F6F0D51468D1C0C5DB /* UpdateCoordinator.swift */; };
+		E8F9A0B1C2D3E4F506172839 /* UpdateStatusPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5B /* UpdateStatusPersistence.swift */; };
 		BF953F6EFA5428F1648B071A /* IOSLiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C5DB1E465D5AE0EA5AB19D /* IOSLiveView.swift */; };
 		C01FC5D35C94CA6461926DFF /* SessionComparisonSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41CDAADDCEB563D1401793AB /* SessionComparisonSheet.swift */; };
 		C0B6077013D39D05387FD7E4 /* iOSPlanTrackerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C08ACE23C4B4D169F54F10A1 /* iOSPlanTrackerView.swift */; };
@@ -942,6 +943,7 @@
 		FB8D04D48E1D2426976FC898 /* AuditLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuditLog.swift; sourceTree = "<group>"; };
 		FC02499FAC98FCD7B46146BA /* SessionChatStoreResolveURLTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChatStoreResolveURLTests.swift; sourceTree = "<group>"; };
 		FCCD51F6F0D51468D1C0C5DB /* UpdateCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateCoordinator.swift; sourceTree = "<group>"; };
+		A0B1C2D3E4F5061728394A5B /* UpdateStatusPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateStatusPersistence.swift; sourceTree = "<group>"; };
 		FCE2CE86D461B7E5CF1FA73F /* MacAPNSPusher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAPNSPusher.swift; sourceTree = "<group>"; };
 		FCEA6256CB6D114C219DA5E1 /* ClawdmeterMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClawdmeterMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FCF5A90BF0E2E2F414B2BCD6 /* VendorProvisioningServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VendorProvisioningServiceTests.swift; sourceTree = "<group>"; };
@@ -1512,6 +1514,7 @@
 			children = (
 				CCB7FB7DB2059E1F3425D94C /* GitHubReleaseConstants.swift */,
 				FCCD51F6F0D51468D1C0C5DB /* UpdateCoordinator.swift */,
+				A0B1C2D3E4F5061728394A5B /* UpdateStatusPersistence.swift */,
 				1B7490B2B75179425CAFC62D /* UpdatesUI.swift */,
 			);
 			path = Updates;
@@ -2409,6 +2412,7 @@
 				F83690B678EAD7122793643E /* TranscriptMessageGutter.swift in Sources */,
 				62FFE97A5091E96F5BA3EB86 /* TranscriptPathLinks.swift in Sources */,
 				BEE0A480281823DFA1BC2157 /* UpdateCoordinator.swift in Sources */,
+				E8F9A0B1C2D3E4F506172839 /* UpdateStatusPersistence.swift in Sources */,
 				BBC17451B2115D6D2351BA97 /* UpdatesUI.swift in Sources */,
 				D89B4592E0A3C71E668ED91F /* UsageQueryService.swift in Sources */,
 				CD402B011863A67A5A6A51A9 /* UsageStatusChip.swift in Sources */,

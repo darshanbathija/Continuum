@@ -11,8 +11,12 @@ final class UpdateCoordinatorTests: XCTestCase {
         build: String? = "155",
         now: Date = Date(timeIntervalSince1970: 1_779_840_000),
         opener: @escaping (URL) -> Void = { _ in },
-        finderRevealer: @escaping (URL) -> Void = { _ in }
+        finderRevealer: @escaping (URL) -> Void = { _ in },
+        clearPersistence: Bool = true
     ) -> (UpdateCoordinator, FakeSparkleUpdateDriver) {
+        if clearPersistence {
+            UpdateStatusPersistence.clear()
+        }
         let driver = providedDriver ?? FakeSparkleUpdateDriver()
         let coordinator = UpdateCoordinator(
             session: session,
@@ -93,21 +97,23 @@ final class UpdateCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.state, .setupBlocked(reason: "bad public key", fallbackURL: ReleaseUpdateConfig.releasesLatestURL))
     }
 
-    func testManualCheckUsesSparkleDriver() {
+    func testManualCheckUsesSparkleDriver() async {
         let (coordinator, driver) = makeCoordinator()
         coordinator.checkForUpdates()
+        XCTAssertEqual(coordinator.state, .checking)
+        await drainScheduledSparkleChecks()
         XCTAssertEqual(driver.manualChecks, 1)
         XCTAssertEqual(driver.informationChecks, 0)
-        XCTAssertEqual(coordinator.state, .checking)
     }
 
-    func testRefreshUpdateStatusUsesInformationOnlyProbe() {
+    func testRefreshUpdateStatusUsesInformationOnlyProbe() async {
         let (coordinator, driver) = makeCoordinator()
         coordinator.refreshUpdateStatus()
-        XCTAssertEqual(driver.manualChecks, 0)
-        XCTAssertEqual(driver.informationChecks, 1)
         XCTAssertEqual(coordinator.state, .checking)
         XCTAssertTrue(coordinator.awaitingManualCheckPopover)
+        await drainScheduledSparkleChecks()
+        XCTAssertEqual(driver.manualChecks, 0)
+        XCTAssertEqual(driver.informationChecks, 1)
     }
 
     func testManualCheckAwaitingPopoverClearedAfterAcknowledgement() {
@@ -117,16 +123,20 @@ final class UpdateCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.awaitingManualCheckPopover)
     }
 
-    func testUpdateAvailableForegroundCheckBypassesProbeDebounce() {
+    func testUpdateAvailableForegroundCheckBypassesProbeDebounce() async {
         let (coordinator, driver) = makeCoordinator()
+        let update = SparkleUpdateInfo(version: "156", displayVersion: "0.29.17")
         coordinator.refreshUpdateStatus()
-        driver.emitFound(SparkleUpdateInfo(version: "156", displayVersion: "0.29.17"))
+        await drainScheduledSparkleChecks()
+        driver.emitFound(update)
 
         coordinator.checkForUpdates()
+        XCTAssertEqual(coordinator.state, .updateAvailable(update))
+        XCTAssertTrue(coordinator.isRefreshingUpdateStatus)
+        await drainScheduledSparkleChecks()
 
         XCTAssertEqual(driver.informationChecks, 1)
         XCTAssertEqual(driver.manualChecks, 1)
-        XCTAssertEqual(coordinator.state, .checking)
     }
 
     func testManualCheckWhenDriverCannotCheckShowsSetupBlocked() {
@@ -146,11 +156,13 @@ final class UpdateCoordinatorTests: XCTestCase {
         )
     }
 
-    func testManualCheckDebouncesRapidClicks() {
+    func testManualCheckDebouncesRapidClicks() async {
         let (coordinator, driver) = makeCoordinator()
         coordinator.checkForUpdates()
+        await drainScheduledSparkleChecks()
         coordinator.checkForUpdates()
         XCTAssertEqual(driver.manualChecks, 1)
+        XCTAssertTrue(coordinator.awaitingManualCheckPopover)
     }
 
     func testBackgroundCheckRespectsAutomaticToggle() {
@@ -372,6 +384,36 @@ final class UpdateCoordinatorTests: XCTestCase {
         XCTAssertFalse(
             updateControlShouldRender(.upToDate, showsInactiveStates: false, awaitingManualCheckPopover: false)
         )
+    }
+
+    func testPersistedUpToDateStatusRestoresImmediately() {
+        let checkedAt = Date(timeIntervalSince1970: 42)
+        UpdateStatusPersistence.save(.upToDate(lastCheckedAt: checkedAt))
+
+        let (coordinator, _) = makeCoordinator(clearPersistence: false)
+        XCTAssertEqual(coordinator.state, .upToDate(lastCheckedAt: checkedAt))
+        XCTAssertEqual(coordinator.lastCheckedAt, checkedAt)
+    }
+
+    func testManualCheckKeepsPersistedStatusWhileRefreshing() async {
+        let checkedAt = Date(timeIntervalSince1970: 42)
+        UpdateStatusPersistence.save(.upToDate(lastCheckedAt: checkedAt))
+
+        let (coordinator, driver) = makeCoordinator(clearPersistence: false)
+        coordinator.refreshUpdateStatus()
+
+        XCTAssertEqual(coordinator.state, .upToDate(lastCheckedAt: checkedAt))
+        XCTAssertTrue(coordinator.isRefreshingUpdateStatus)
+        XCTAssertTrue(coordinator.awaitingManualCheckPopover)
+        await drainScheduledSparkleChecks()
+        XCTAssertEqual(driver.informationChecks, 1)
+    }
+
+    private func drainScheduledSparkleChecks() async {
+        for _ in 0..<5 {
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
     }
 
     private static func waitForMetadata(_ coordinator: UpdateCoordinator) async {
