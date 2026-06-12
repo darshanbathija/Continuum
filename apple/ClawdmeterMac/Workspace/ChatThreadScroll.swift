@@ -794,35 +794,41 @@ struct ChatThreadScroll: View {
         let artifacts = turn.outputArtifacts
         let files = turn.editedFiles
         if turn.finalAssistant != nil || !artifacts.isEmpty || !files.isEmpty {
-            HStack(spacing: 8) {
-                if turn.finalAssistant != nil {
-                    Button {
-                        onPreviewTurn()
-                    } label: {
-                        transcriptChip(
-                            icon: WorkbenchPaneTab.browser.systemImage,
-                            title: "Preview",
-                            tint: SessionsV2Theme.accent
-                        )
+            VStack(alignment: .leading, spacing: 8) {
+                if turn.finalAssistant != nil || !artifacts.isEmpty {
+                    HStack(spacing: 8) {
+                        if turn.finalAssistant != nil {
+                            Button {
+                                onPreviewTurn()
+                            } label: {
+                                transcriptChip(
+                                    icon: WorkbenchPaneTab.browser.systemImage,
+                                    title: "Preview",
+                                    tint: SessionsV2Theme.accent
+                                )
+                            }
+                            .buttonStyle(PressableButtonStyle())
+                            .help("Open the current worktree preview")
+                            .accessibilityIdentifier("code.turn.preview")
+                        }
+                        ForEach(artifacts.prefix(6)) { artifact in
+                            Button {
+                                openTranscriptArtifact(artifact)
+                            } label: {
+                                transcriptChip(
+                                    icon: iconName(for: artifact.kind),
+                                    title: artifact.filename,
+                                    tint: TranscriptArtifactClassifier.opensInDocumentTab(forPath: artifact.path) ? t.accent : t.fg3
+                                )
+                            }
+                            .buttonStyle(PressableButtonStyle())
+                            .help(helpText(for: artifact))
+                        }
                     }
-                    .buttonStyle(PressableButtonStyle())
-                    .help("Open the current worktree preview")
-                    .accessibilityIdentifier("code.turn.preview")
                 }
-                ForEach(artifacts.prefix(6)) { artifact in
-                    Button {
-                        openTranscriptArtifact(artifact)
-                    } label: {
-                        transcriptChip(
-                            icon: iconName(for: artifact.kind),
-                            title: artifact.filename,
-                            tint: artifact.kind == .markdown ? t.accent : t.fg3
-                        )
-                    }
-                    .buttonStyle(PressableButtonStyle())
-                    .help(helpText(for: artifact))
+                if !files.isEmpty {
+                    TranscriptEditedFileChipStripView(turn: turn, density: density)
                 }
-                TranscriptEditedFileChipStripView(files: files, repoRoot: transcriptPathRoot)
             }
             .padding(.leading, 38)
             .padding(.top, 2)
@@ -1015,7 +1021,7 @@ struct ChatThreadScroll: View {
     }
 
     private func openTranscriptArtifact(_ artifact: TranscriptOutputArtifact) {
-        if artifact.kind == .markdown {
+        if TranscriptArtifactClassifier.opensInDocumentTab(forPath: artifact.path) {
             model.openWorkspaceDocumentTab(from: session, path: artifact.path)
             return
         }
@@ -1039,12 +1045,10 @@ struct ChatThreadScroll: View {
     }
 
     private func helpText(for artifact: TranscriptOutputArtifact) -> String {
-        switch artifact.kind {
-        case .markdown:
-            return "Open Markdown document in Code tab"
-        case .html, .image, .pdf, .document, .spreadsheet, .presentation, .media, .archive, .data:
-            return "Open \(artifact.path)"
+        if TranscriptArtifactClassifier.opensInDocumentTab(forPath: artifact.path) {
+            return "Open \(artifact.filename) in Code tab"
         }
+        return "Open \(artifact.path)"
     }
 
     private func iconName(for kind: TranscriptArtifactKind) -> String {

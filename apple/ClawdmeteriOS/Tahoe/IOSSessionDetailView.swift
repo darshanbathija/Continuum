@@ -986,21 +986,25 @@ public struct IOSSessionDetailView: View {
     @ViewBuilder
     private func iosTurnChipStrip(_ turn: TranscriptTurn) -> some View {
         if !turn.outputArtifacts.isEmpty || !turn.editedFiles.isEmpty {
-            HStack(spacing: 7) {
-                ForEach(turn.outputArtifacts.prefix(4)) { artifact in
-                    Button {
-                        if artifact.kind == .markdown {
-                            openMarkdownDocument(artifact.path)
-                        } else {
-                            UIPasteboard.general.string = artifact.path
+            VStack(alignment: .leading, spacing: 8) {
+                if !turn.outputArtifacts.isEmpty {
+                    HStack(spacing: 7) {
+                        ForEach(turn.outputArtifacts.prefix(4)) { artifact in
+                            Button {
+                                if artifact.kind == .markdown {
+                                    openMarkdownDocument(artifact.path)
+                                } else {
+                                    UIPasteboard.general.string = artifact.path
+                                }
+                            } label: {
+                                iosTranscriptChip(icon: iosArtifactIcon(artifact.kind), title: artifact.filename)
+                            }
+                            .buttonStyle(.plain)
                         }
-                    } label: {
-                        iosTranscriptChip(icon: iosArtifactIcon(artifact.kind), title: artifact.filename)
                     }
-                    .buttonStyle(.plain)
                 }
-                ForEach(turn.editedFiles.prefix(4)) { file in
-                    iosTranscriptChip(icon: "pencil.and.scribble", title: file.basename)
+                if !turn.editedFiles.isEmpty {
+                    TranscriptEditedFileChipStripView(turn: turn)
                 }
             }
             .padding(.leading, 34)
@@ -1681,7 +1685,13 @@ private struct IOSWireChatItemRow: View {
             case .toolCall, .toolResult:
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
-                        TahoeIcon(message.kind == .toolCall ? "doc" : "check", size: 11).foregroundStyle(t.fg3)
+                        ToolIconView(toolName: message.title, size: 11, isError: message.isError)
+                        if message.kind == .toolCall,
+                           let path = TechStackIconCatalog.filePathHint(toolTitle: message.title, body: message.body) {
+                            TechStackIconView(path: path, size: 12)
+                        } else if message.kind == .toolResult {
+                            TahoeIcon("check", size: 11).foregroundStyle(t.fg3)
+                        }
                         Text(message.title)
                             .font(TahoeFont.body(11.5, weight: .semibold))
                             .foregroundStyle(t.fg2)
@@ -1697,10 +1707,15 @@ private struct IOSWireChatItemRow: View {
                 }
                 .padding(.horizontal, 4).padding(.vertical, 4)
             case .meta:
-                Text(message.body)
-                    .font(TahoeFont.body(11.5))
-                    .foregroundStyle(t.fg3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if message.title == "Thinking" {
+                    ThinkingActionRow(summary: message.body)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(message.body)
+                        .font(TahoeFont.body(11.5))
+                        .foregroundStyle(t.fg3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
         .contextMenu {

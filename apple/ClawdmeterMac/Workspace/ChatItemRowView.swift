@@ -245,8 +245,15 @@ struct ChatItemRowContent: View {
     private func toolRunBody(runId: String, pairs: [ToolPair]) -> some View {
         let editPairs = pairs.filter { !TranscriptEditedFile.from($0.call).isEmpty }
         let askPairs  = pairs.filter { $0.call.askUserQuestion != nil }
-        let otherPairs = pairs.filter {
-            TranscriptEditedFile.from($0.call).isEmpty && $0.call.askUserQuestion == nil
+        let flatPairs = pairs.filter {
+            TranscriptEditedFile.from($0.call).isEmpty
+                && $0.call.askUserQuestion == nil
+                && ToolActionSummary.rendersFlatRow(toolName: $0.call.title)
+        }
+        let bashPairs = pairs.filter {
+            TranscriptEditedFile.from($0.call).isEmpty
+                && $0.call.askUserQuestion == nil
+                && !ToolActionSummary.rendersFlatRow(toolName: $0.call.title)
         }
         VStack(alignment: .leading, spacing: 6) {
             ForEach(editPairs) { pair in
@@ -291,19 +298,23 @@ struct ChatItemRowContent: View {
                     }
                 }
             }
-            ForEach(markdownArtifacts(in: pairs)) { artifact in
+            ForEach(previewableArtifacts(in: pairs)) { artifact in
                 generatedArtifactButton(artifact)
             }
-            if !otherPairs.isEmpty {
-                toolRunGroup(id: runId, pairs: otherPairs)
+            ForEach(flatPairs) { pair in
+                AgentToolActionRow(pair: pair)
+                    .id("pair:\(pair.id)")
+            }
+            if !bashPairs.isEmpty {
+                toolRunGroup(id: runId, pairs: bashPairs)
             }
         }
     }
 
-    private func markdownArtifacts(in pairs: [ToolPair]) -> [GeneratedArtifact] {
+    private func previewableArtifacts(in pairs: [ToolPair]) -> [GeneratedArtifact] {
         var seen: Set<String> = []
         var out: [GeneratedArtifact] = []
-        for artifact in pairs.flatMap({ $0.call.generatedArtifacts }) where artifact.kind == .markdownDocument {
+        for artifact in pairs.flatMap({ $0.call.generatedArtifacts }) where artifact.opensInDocumentTab {
             guard !seen.contains(artifact.path) else { continue }
             seen.insert(artifact.path)
             out.append(artifact)
@@ -316,7 +327,7 @@ struct ChatItemRowContent: View {
             actions.onOpenMarkdownDocument(artifact.path)
         } label: {
             HStack(spacing: 7) {
-                Image(systemName: "doc.richtext")
+                Image(systemName: artifact.systemImageName)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(t.accent)
                 Text((artifact.path as NSString).lastPathComponent.isEmpty ? artifact.path : (artifact.path as NSString).lastPathComponent)
@@ -333,7 +344,7 @@ struct ChatItemRowContent: View {
             .background(t.hair2, in: Capsule(style: .continuous))
         }
         .buttonStyle(PressableButtonStyle())
-        .help("Open Markdown document in Code tab")
+        .help("Open in Code tab")
     }
 
     @ViewBuilder
@@ -404,6 +415,7 @@ struct ChatItemRowContent: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: 640, alignment: .trailing)
+                bodyArtifactStripIfAny(body: msg.body, alignment: .trailing)
             }
         }
     }
@@ -437,6 +449,7 @@ struct ChatItemRowContent: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     pathLinkStripIfAny(body: msg.body)
+                    bodyArtifactStripIfAny(body: msg.body)
                 }
             }
             Spacer(minLength: 64)
@@ -521,15 +534,67 @@ struct ChatItemRowContent: View {
         }
     }
 
-    private func metaRow(_ msg: SessionChatStore.ChatMessage) -> some View {
-        HStack {
-            Spacer()
-            Text(msg.body)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Spacer()
+    @ViewBuilder
+    private func bodyArtifactStripIfAny(
+        body: String,
+        alignment: HorizontalAlignment = .leading
+    ) -> some View {
+        let paths = Array(Set(TranscriptArtifactClassifier.pathCandidates(in: body))).sorted().prefix(6)
+        if !paths.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(Array(paths), id: \.self) { path in
+                    bodyArtifactButton(path: path)
+                }
+            }
+            .frame(maxWidth: 640, alignment: frameAlignment(for: alignment))
         }
-        .padding(.vertical, 4)
+    }
+
+    private func frameAlignment(for alignment: HorizontalAlignment) -> Alignment {
+        alignment == .trailing ? .trailing : .leading
+    }
+
+    private func bodyArtifactButton(path: String) -> some View {
+        Button {
+            actions.onOpenMarkdownDocument(path)
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: TranscriptArtifactClassifier.systemImageName(forPath: path))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                Text((path as NSString).lastPathComponent.isEmpty ? path : (path as NSString).lastPathComponent)
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(t.hair2, in: Capsule(style: .continuous))
+        }
+        .buttonStyle(PressableButtonStyle())
+        .help("Open in Code tab")
+    }
+
+    @ViewBuilder
+    private func metaRow(_ msg: SessionChatStore.ChatMessage) -> some View {
+        if msg.title == "Thinking" {
+            ThinkingActionRow(summary: msg.body)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 2)
+        } else {
+            HStack {
+                Spacer()
+                Text(msg.body)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.vertical, 4)
+        }
     }
 
     // MARK: Tool-run / pair rendering
@@ -560,8 +625,16 @@ struct ChatItemRowContent: View {
             // the row narrows.
             HStack(alignment: .center, spacing: 6) {
                 HStack(spacing: 6) {
-                    TahoeIcon("terminal", size: 10)
-                        .foregroundStyle(t.fg3)
+                    Group {
+                        if let running = runningStep {
+                            ToolIconView(toolName: running.call.title, size: 10)
+                        } else if let first = pairs.first {
+                            ToolIconView(toolName: first.call.title, size: 10)
+                        } else {
+                            TahoeIcon("terminal", size: 10)
+                                .foregroundStyle(t.fg3)
+                        }
+                    }
                     HStack(spacing: 0) {
                         Text("Ran ")
                         // v0.29.27: dropped the trailing-aligned 20pt
@@ -664,9 +737,14 @@ struct ChatItemRowContent: View {
             .padding(.top, 4)
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: toolIcon(pair.call.title))
-                    .font(.system(size: 10))
-                    .foregroundStyle(toolTint(pair.call.title))
+                ToolIconView(toolName: pair.call.title, size: 10, isError: isError)
+                if let path = TechStackIconCatalog.filePathHint(
+                    toolTitle: pair.call.title,
+                    body: pair.call.body,
+                    detail: pair.call.detail
+                ) {
+                    TechStackIconView(path: path, size: 12)
+                }
                 Text(pair.call.title)
                     .font(TahoeFont.mono(11, weight: .semibold))
                     .foregroundStyle(toolTint(pair.call.title))
@@ -782,19 +860,7 @@ struct ChatItemRowContent: View {
     }
 
     private func toolTint(_ name: String) -> Color {
-        // Generic-tool tints. Avoid the AI-slop purple — `.web` is just a
-        // network fetch, not a provider identity. Route through the Codex
-        // blue token so the palette stays consistent with the rest of the
-        // app's tool chrome.
-        switch ToolPresentationCatalog.presentation(for: name).tone {
-        case .read: return SessionsV2Theme.codexBlue
-        case .write: return terraCotta
-        case .shell: return SessionsV2Theme.success
-        case .web: return SessionsV2Theme.codexBlue
-        case .agent: return SessionsV2Theme.warn
-        case .warning: return SessionsV2Theme.danger
-        case .neutral: return .secondary
-        }
+        ToolIconView.tint(for: ToolPresentationCatalog.presentation(for: name).tone)
     }
 
     private var terraCotta: Color { SessionsV2Theme.accent }

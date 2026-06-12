@@ -105,6 +105,53 @@ final class TranscriptTurnProjectorTests: XCTestCase {
         XCTAssertTrue(GeneratedArtifactDetector.isMarkdownPath("docs/report.MDOWN"))
     }
 
+    func testOutputClassifierDetectsComposerAttachmentPaths() {
+        let text = "@/tmp/a.png\n@/tmp/report.pdf look at these"
+
+        let candidates = TranscriptArtifactClassifier.pathCandidates(in: text)
+
+        XCTAssertEqual(candidates, ["/tmp/a.png", "/tmp/report.pdf"])
+        XCTAssertTrue(TranscriptArtifactClassifier.opensInDocumentTab(forPath: "/tmp/a.png"))
+        XCTAssertTrue(TranscriptArtifactClassifier.opensInDocumentTab(forPath: "/tmp/report.pdf"))
+    }
+
+    func testEditedFileChipStripOverflowSummaryAggregatesHiddenFiles() {
+        let files = (0..<14).map {
+            TranscriptEditedFile(
+                filePath: "Sources/File\($0).swift",
+                additions: $0 == 0 ? 52 : 1,
+                deletions: $0 == 0 ? 5 : 1
+            )
+        }
+
+        XCTAssertNil(TranscriptEditedFileChipStripModel.overflowSummary(for: Array(files.prefix(4))))
+
+        let overflow = TranscriptEditedFileChipStripModel.overflowSummary(for: files)
+        XCTAssertEqual(overflow?.hiddenCount, 10)
+        XCTAssertEqual(overflow?.additions, 10)
+        XCTAssertEqual(overflow?.deletions, 10)
+    }
+
+    func testEditFileDetailsAttachDiffPayloadFromExpandedItems() {
+        let editStatsMessage = msg(
+            "call:edit",
+            .toolCall,
+            "Edit",
+            "Sources/App.swift",
+            0,
+            editStats: EditStats(kind: .edit, filePath: "Sources/App.swift", additions: 2, deletions: 1),
+            editDiff: EditDiff(kind: .edit, filePath: "Sources/App.swift", additions: 2, deletions: 1, preview: "-old\n+new")
+        )
+        let turn = TranscriptTurnProjector
+            .project(messages: [msg("u1", .userText, "You", "Edit", -1), editStatsMessage])
+            .turns[0]
+
+        let details = turn.editFileDetails()
+        XCTAssertEqual(details.count, 1)
+        XCTAssertEqual(details[0].stats.filePath, "Sources/App.swift")
+        XCTAssertEqual(details[0].editDiff?.preview, "-old\n+new")
+    }
+
     func testEditedFilesPreferEditStatsAndFallBackToEditDiff() {
         let editStatsMessage = msg(
             "call:edit",
