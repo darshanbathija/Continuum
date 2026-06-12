@@ -5095,6 +5095,22 @@ public final class AgentControlServer {
             sendResponse(.badRequest(detail: "relay_url_sid_token_required"), on: connection)
             return
         }
+        guard Self.isValidRelayExecutionHostURL(relayUrl) else {
+            sendResponse(.badRequest(detail: "invalid_relay_url"), on: connection)
+            return
+        }
+        guard let symmetricKey = req.derivedSymmetricKeyBase64URL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !symmetricKey.isEmpty
+        else {
+            sendResponse(.badRequest(detail: "relay_key_required"), on: connection)
+            return
+        }
+        guard let keyData = RelayPairingBase64URL.decode(symmetricKey),
+              keyData.count == RelayFrameCodec.keyLength
+        else {
+            sendResponse(.badRequest(detail: "invalid_relay_key"), on: connection)
+            return
+        }
         let hostId = UUID()
         let host = ExecutionHost(
             id: hostId,
@@ -5113,10 +5129,18 @@ public final class AgentControlServer {
         MultiHostRelayStore.shared.save(
             record: MultiHostRelayStore.Record(hostId: hostId, sid: sid, relayUrl: relayUrl),
             iosToken: req.pairingToken,
-            derivedSymmetricKeyBase64URL: req.derivedSymmetricKeyBase64URL
+            derivedSymmetricKeyBase64URL: symmetricKey
         )
         broadcastExecutionHostRegistered(saved)
         sendCodable(saved, on: connection)
+    }
+
+    private static func isValidRelayExecutionHostURL(_ value: String) -> Bool {
+        guard let components = URLComponents(string: value),
+              components.host?.isEmpty == false,
+              components.scheme == "ws" || components.scheme == "wss"
+        else { return false }
+        return true
     }
 
     private func handleProbeExecutionHostHealth(hostId: String, connection: NWConnection) async {
@@ -5314,9 +5338,10 @@ public final class AgentControlServer {
             }
         }
         do {
+            let forwardedRequest = await requestWithGitSourceIfNeeded(req)
             let session = try await executionHostCoordinator.forwardSessionCreate(
                 hostId: spawnHost.host.id,
-                request: req,
+                request: forwardedRequest,
                 clientOnTailnet: true
             )
             let encoder = JSONEncoder()
@@ -5334,6 +5359,22 @@ public final class AgentControlServer {
                 body: Data(#"{"error":"remote_spawn_failed"}"#.utf8)
             ), on: connection)
         }
+    }
+
+    private func requestWithGitSourceIfNeeded(_ req: NewSessionRequest) async -> NewSessionRequest {
+        if req.sourceRemoteURL != nil {
+            return req
+        }
+        guard let snapshot = await GitRepositorySnapshotResolver.resolve(cwd: req.repoKey),
+              snapshot.remoteURL != nil
+        else {
+            return req
+        }
+        return req.withSourceRepository(
+            remoteURL: snapshot.remoteURL,
+            branch: snapshot.branch,
+            commit: snapshot.commit
+        )
     }
 
     /// Historical analytics snapshot — same data the Mac dashboard's

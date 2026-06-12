@@ -712,6 +712,13 @@ public struct NewSessionRequest: Codable, Sendable {
     /// v30 handoff (D1): link spawned session to source session.
     public let parentSessionId: UUID?
 
+    /// Remote execution source checkout metadata. When a session is spawned on
+    /// a different host, `repoKey` may be a Mac-local path that does not exist
+    /// remotely; these optional fields tell the remote daemon what to fetch.
+    public let sourceRemoteURL: String?
+    public let sourceBranch: String?
+    public let sourceCommit: String?
+
     public init(
         repoKey: String,
         agent: AgentKind,
@@ -727,7 +734,10 @@ public struct NewSessionRequest: Codable, Sendable {
         sessionId: UUID? = nil,
         customProviderId: String? = nil,
         targetHostId: UUID? = nil,
-        parentSessionId: UUID? = nil
+        parentSessionId: UUID? = nil,
+        sourceRemoteURL: String? = nil,
+        sourceBranch: String? = nil,
+        sourceCommit: String? = nil
     ) {
         self.repoKey = repoKey
         self.agent = agent
@@ -744,6 +754,9 @@ public struct NewSessionRequest: Codable, Sendable {
         self.customProviderId = customProviderId
         self.targetHostId = targetHostId
         self.parentSessionId = parentSessionId
+        self.sourceRemoteURL = sourceRemoteURL
+        self.sourceBranch = sourceBranch
+        self.sourceCommit = sourceCommit
     }
 
     // Custom decoder to tolerate v2 requests missing the new fields.
@@ -772,11 +785,40 @@ public struct NewSessionRequest: Codable, Sendable {
         self.customProviderId = try c.decodeIfPresent(String.self, forKey: .customProviderId)
         self.targetHostId = try c.decodeIfPresent(UUID.self, forKey: .targetHostId)
         self.parentSessionId = try c.decodeIfPresent(UUID.self, forKey: .parentSessionId)
+        self.sourceRemoteURL = try c.decodeIfPresent(String.self, forKey: .sourceRemoteURL)
+        self.sourceBranch = try c.decodeIfPresent(String.self, forKey: .sourceBranch)
+        self.sourceCommit = try c.decodeIfPresent(String.self, forKey: .sourceCommit)
     }
 
     private enum CodingKeys: String, CodingKey {
         case repoKey, agent, model, planMode, goal, useWorktree, baseBranch, effort, abPair, providerInstanceId
         case existingWorkspacePath, sessionId, customProviderId, targetHostId, parentSessionId
+        case sourceRemoteURL, sourceBranch, sourceCommit
+    }
+}
+
+public extension NewSessionRequest {
+    func withSourceRepository(remoteURL: String?, branch: String?, commit: String?) -> NewSessionRequest {
+        NewSessionRequest(
+            repoKey: repoKey,
+            agent: agent,
+            model: model,
+            planMode: planMode,
+            goal: goal,
+            useWorktree: useWorktree,
+            baseBranch: baseBranch,
+            effort: effort,
+            abPair: abPair,
+            providerInstanceId: providerInstanceId,
+            existingWorkspacePath: existingWorkspacePath,
+            sessionId: sessionId,
+            customProviderId: customProviderId,
+            targetHostId: targetHostId,
+            parentSessionId: parentSessionId,
+            sourceRemoteURL: remoteURL ?? sourceRemoteURL,
+            sourceBranch: branch ?? sourceBranch,
+            sourceCommit: commit ?? sourceCommit
+        )
     }
 }
 

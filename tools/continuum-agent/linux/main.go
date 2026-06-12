@@ -15,6 +15,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -237,6 +238,9 @@ func runServe() error {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/sessions/", func(w http.ResponseWriter, r *http.Request) {
+		handleSessionByID(w, r, store, cfg.token)
+	})
 
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.port)
 	if strings.EqualFold(os.Getenv("CLAWDMETER_BIND_ALL"), "1") {
@@ -310,7 +314,7 @@ func selfHost(cfg config) executionHost {
 		PreferredTransports: []string{"relay", "tailscaleDirect"},
 		Health:              "healthy",
 		RelayAlsoEnabled:    true,
-		OpencodeAvailable:   false,
+		OpencodeAvailable:   binaryAvailable("opencode"),
 		DaemonWireVersion:   defaultWireVersion,
 	}
 	if cfg.kind == "byocAWS" {
@@ -324,6 +328,11 @@ func selfHost(cfg config) executionHost {
 		}
 	}
 	return host
+}
+
+func binaryAvailable(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
 }
 
 func authorize(r *http.Request, token string) bool {

@@ -150,12 +150,12 @@ struct ExecutionHostSettingsView: View {
 
             Divider()
 
-            Text("Relay pairing (from VPS `continuum-agent pair` output)")
+            Text("Relay pairing (from VPS `continuum-agent pair-relay` output)")
                 .font(TahoeFont.body(12, weight: .semibold))
             TextField("Relay URL (wss://…)", text: $vpsRelayUrl)
             TextField("Session ID (sid)", text: $vpsRelaySid)
             SecureField("Pairing token", text: $vpsRelayToken)
-            TextField("Symmetric key (optional, base64url)", text: $vpsRelaySymmetricKey)
+            TextField("Symmetric key (base64url)", text: $vpsRelaySymmetricKey)
 
             HStack {
                 Button("Cancel") { showAddVPS = false }
@@ -280,19 +280,19 @@ struct ExecutionHostSettingsView: View {
         let relayUrl = vpsRelayUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         let sid = vpsRelaySid.trimmingCharacters(in: .whitespacesAndNewlines)
         let token = vpsRelayToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, !relayUrl.isEmpty, !sid.isEmpty, !token.isEmpty else {
-            errorMessage = "Display name, relay URL, sid, and token are required."
+        let symKey = vpsRelaySymmetricKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !relayUrl.isEmpty, !sid.isEmpty, !token.isEmpty, !symKey.isEmpty else {
+            errorMessage = "Display name, relay URL, sid, token, and symmetric key are required."
             return
         }
         let alias = vpsSSHAlias.trimmingCharacters(in: .whitespacesAndNewlines)
-        let symKey = vpsRelaySymmetricKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let host = await client.pairRelayExecutionHost(
             PairRelayExecutionHostRequest(
                 displayName: name,
                 relayUrl: relayUrl,
                 sid: sid,
                 pairingToken: token,
-                derivedSymmetricKeyBase64URL: symKey.isEmpty ? nil : symKey,
+                derivedSymmetricKeyBase64URL: symKey,
                 sshHostAlias: alias.isEmpty ? nil : alias
             )
         )

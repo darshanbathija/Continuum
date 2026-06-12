@@ -117,7 +117,7 @@ final class ExecutionHostServerRouteTests: XCTestCase {
             relayUrl: "wss://relay.example.com",
             sid: "sid-test-123",
             pairingToken: "ios-token-test",
-            derivedSymmetricKeyBase64URL: "abc123",
+            derivedSymmetricKeyBase64URL: RelayPairingBase64URL.encode(Data(repeating: 7, count: RelayFrameCodec.keyLength)),
             sshHostAlias: "my-vps"
         )
         let body = try JSONEncoder().encode(req)
@@ -136,6 +136,50 @@ final class ExecutionHostServerRouteTests: XCTestCase {
         XCTAssertEqual(listStatus, 200)
         let list = try JSONDecoder().decode(ExecutionHostListResponse.self, from: listData)
         XCTAssertTrue(list.hosts.contains { $0.displayName == "VPS 1" })
+    }
+
+    func testPairRelayExecutionHostRejectsMalformedSymmetricKey() async throws {
+        let server = try makeServer()
+        defer { server.stop() }
+        let req = PairRelayExecutionHostRequest(
+            displayName: "VPS 1",
+            relayUrl: "wss://relay.example.com",
+            sid: "sid-test-123",
+            pairingToken: "ios-token-test",
+            derivedSymmetricKeyBase64URL: "abc123",
+            sshHostAlias: nil
+        )
+        let body = try JSONEncoder().encode(req)
+        let (status, data) = try await loopbackRequest(
+            server: server,
+            method: "POST",
+            path: "/execution-hosts/pair/relay",
+            body: body
+        )
+        XCTAssertEqual(status, 400)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("invalid_relay_key"))
+    }
+
+    func testPairRelayExecutionHostRequiresSymmetricKey() async throws {
+        let server = try makeServer()
+        defer { server.stop() }
+        let req = PairRelayExecutionHostRequest(
+            displayName: "VPS 1",
+            relayUrl: "wss://relay.example.com",
+            sid: "sid-test-123",
+            pairingToken: "ios-token-test",
+            derivedSymmetricKeyBase64URL: nil,
+            sshHostAlias: nil
+        )
+        let body = try JSONEncoder().encode(req)
+        let (status, data) = try await loopbackRequest(
+            server: server,
+            method: "POST",
+            path: "/execution-hosts/pair/relay",
+            body: body
+        )
+        XCTAssertEqual(status, 400)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("relay_key_required"))
     }
 
     func testValidateAWSComputeMissingCLI() async throws {

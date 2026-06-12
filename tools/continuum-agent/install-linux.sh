@@ -20,6 +20,23 @@ detect_arch() {
   esac
 }
 
+require_go_123() {
+  local version major minor rest
+  version="$(go env GOVERSION 2>/dev/null || go version | awk '{print $3}')"
+  version="${version#go}"
+  major="${version%%.*}"
+  rest="${version#*.}"
+  minor="${rest%%.*}"
+  if [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]]; then
+    if (( major > 1 || (major == 1 && minor >= 23) )); then
+      return 0
+    fi
+  fi
+  echo "error: Go 1.23+ is required to build continuum-agent from source; found go${version}." >&2
+  echo "Set CONTINUUM_AGENT_BINARY_URL to a prebuilt binary or install a newer Go toolchain." >&2
+  return 1
+}
+
 install_binary() {
   local arch
   arch="$(detect_arch)"
@@ -44,6 +61,7 @@ install_binary() {
   fi
 
   if [[ -f "${SCRIPT_DIR}/linux/main.go" ]] && command -v go >/dev/null 2>&1; then
+    require_go_123
     echo "Building continuum-agent from source…"
     (
       cd "${SCRIPT_DIR}/linux"
@@ -55,12 +73,16 @@ install_binary() {
   fi
 
   if command -v go >/dev/null 2>&1; then
+    require_go_123
     echo "Building continuum-agent from upstream source (piped install)…"
     local tmp
     tmp="$(mktemp -d)"
     local base="${CONTINUUM_AGENT_SOURCE_BASE:-https://raw.githubusercontent.com/clawdmeter/clawdmeter/main/tools/continuum-agent/linux}"
-    curl -fsSL "${base}/main.go" -o "${tmp}/main.go"
-    curl -fsSL "${base}/go.mod" -o "${tmp}/go.mod"
+    local files=(main.go sessions.go spawn.go relay_client.go relay_pair.go go.mod go.sum)
+    local file
+    for file in "${files[@]}"; do
+      curl -fsSL "${base}/${file}" -o "${tmp}/${file}"
+    done
     (
       cd "$tmp"
       CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \

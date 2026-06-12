@@ -10,6 +10,43 @@ public enum SessionHandoffError: Error, Equatable {
     case remoteSpawnFailed(String)
 }
 
+struct GitRepositorySnapshot: Sendable, Equatable {
+    let remoteURL: String?
+    let branch: String?
+    let commit: String?
+}
+
+enum GitRepositorySnapshotResolver {
+    static func resolve(cwd: String) async -> GitRepositorySnapshot? {
+        guard let git = ShellRunner.locateBinary("git") else { return nil }
+        async let remote = runGit(git: git, cwd: cwd, arguments: ["config", "--get", "remote.origin.url"])
+        async let branch = runGit(git: git, cwd: cwd, arguments: ["rev-parse", "--abbrev-ref", "HEAD"])
+        async let commit = runGit(git: git, cwd: cwd, arguments: ["rev-parse", "HEAD"])
+        let resolvedRemote = await remote
+        let resolvedBranch = await branch
+        let resolvedCommit = await commit
+        if resolvedRemote == nil && resolvedBranch == nil && resolvedCommit == nil {
+            return nil
+        }
+        return GitRepositorySnapshot(
+            remoteURL: resolvedRemote,
+            branch: resolvedBranch == "HEAD" ? nil : resolvedBranch,
+            commit: resolvedCommit
+        )
+    }
+
+    private static func runGit(git: String, cwd: String, arguments: [String]) async -> String? {
+        guard let result = try? await ShellRunner.shared.run(
+            executable: git,
+            arguments: arguments,
+            cwd: cwd,
+            timeout: 15
+        ) else { return nil }
+        let trimmed = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 /// D1/D9 handoff: push branch, spawn linked session on target host.
 @MainActor
 public final class SessionHandoffService {
@@ -65,6 +102,12 @@ public final class SessionHandoffService {
         let cwd = source.effectiveCwd
         try await assertCleanGitState(cwd: cwd)
         try await pushCurrentBranch(cwd: cwd)
+        guard let sourceGit = await GitRepositorySnapshotResolver.resolve(cwd: cwd),
+              let sourceRemoteURL = sourceGit.remoteURL,
+              !sourceRemoteURL.isEmpty
+        else {
+            throw SessionHandoffError.remoteSpawnFailed("Remote handoff requires a git origin URL for the source repo.")
+        }
 
         try await registry.updateHandoff(
             id: sessionId,
@@ -98,7 +141,10 @@ public final class SessionHandoffService {
                 providerInstanceId: source.providerInstanceId,
                 customProviderId: source.customProviderId,
                 targetHostId: targetHostId,
-                parentSessionId: sessionId
+                parentSessionId: sessionId,
+                sourceRemoteURL: sourceRemoteURL,
+                sourceBranch: sourceGit.branch,
+                sourceCommit: sourceGit.commit
             ),
             clientOnTailnet: clientOnTailnet
         )
@@ -133,23 +179,6 @@ public final class SessionHandoffService {
         let trimmed = status.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             throw SessionHandoffError.gitDirty("Commit or stash changes before handoff.")
-        }
-        let branchResult = try await ShellRunner.shared.run(
-            executable: git,
-            arguments: ["rev-parse", "--abbrev-ref", "HEAD"],
-            cwd: cwd,
-            timeout: 10
-        )
-        let branch = branchResult.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !branch.isEmpty, branch != "HEAD" else { return }
-        let ahead = try await ShellRunner.shared.run(
-            executable: git,
-            arguments: ["rev-list", "--count", "@{upstream}..HEAD"],
-            cwd: cwd,
-            timeout: 10
-        )
-        if let count = Int(ahead.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)), count > 0 {
-            throw SessionHandoffError.gitDirty("Push \(count) unpushed commit(s) before handoff.")
         }
     }
 

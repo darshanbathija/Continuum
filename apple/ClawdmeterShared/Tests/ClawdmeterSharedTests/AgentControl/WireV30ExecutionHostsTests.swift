@@ -296,6 +296,24 @@ final class WireV30ExecutionHostsTests: XCTestCase {
         XCTAssertEqual(decoded.parentSessionId, parentId)
     }
 
+    func testNewSessionRequestSourceRepositoryRoundTrip() throws {
+        let req = NewSessionRequest(
+            repoKey: "/Users/me/repo",
+            agent: .opencode,
+            targetHostId: UUID(),
+            sourceRemoteURL: "git@github.com:example/repo.git",
+            sourceBranch: "feature/remote-hosts",
+            sourceCommit: "0123456789abcdef0123456789abcdef01234567"
+        )
+        let decoded = try JSONDecoder().decode(
+            NewSessionRequest.self,
+            from: JSONEncoder().encode(req)
+        )
+        XCTAssertEqual(decoded.sourceRemoteURL, "git@github.com:example/repo.git")
+        XCTAssertEqual(decoded.sourceBranch, "feature/remote-hosts")
+        XCTAssertEqual(decoded.sourceCommit, "0123456789abcdef0123456789abcdef01234567")
+    }
+
     func testHostRunMinuteCSVIncludesExecutionHostId() {
         let hostId = UUID()
         let sessionId = UUID()
