@@ -218,11 +218,9 @@ final class ComposerSendStopRenderingTests: XCTestCase {
             "code.context-usage.row.system-tools",
             "code.context-usage.row.skills",
             "code.context-usage.row.system-prompt",
-            "code.context-usage.row.custom-agents",
             "code.context-usage.row.plan-header",
             "code.context-usage.row.cursor-included",
             "code.context-usage.row.cursor-extra",
-            "code.context-usage.row.cursor-total",
             "code.context-usage.row.cursor-auto",
             "code.context-usage.row.cursor-api",
             "code.context-usage.row.weekly",
@@ -230,7 +228,6 @@ final class ComposerSendStopRenderingTests: XCTestCase {
         XCTAssertFalse(rows.contains { $0.id == "code.context-usage.row.session" })
         XCTAssertFalse(rows.contains { $0.id == "code.context-usage.row.cost" })
         XCTAssertEqual(rows.first { $0.id == "code.context-usage.section.context" }?.value, "336.2k / 1.0M")
-        XCTAssertEqual(rows.first { $0.id == "code.context-usage.row.cursor-total" }?.value, "63% · resets 3d")
         XCTAssertEqual(rows.first { $0.id == "code.context-usage.row.cursor-auto" }?.value, "37% · resets 3d")
         XCTAssertEqual(rows.first { $0.id == "code.context-usage.row.cursor-api" }?.kind, .progress(tint: .danger))
         XCTAssertEqual(rows.first { $0.id == "code.context-usage.row.weekly" }?.value, "72% · resets 2h")
