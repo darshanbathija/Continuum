@@ -53,6 +53,25 @@ final class ChatEnvPasteDetectorTests: XCTestCase {
         XCTAssertTrue(redacted.contains("Then run the migration."))
     }
 
+    func testRedactEnvLinesRemovesAllLinesOfMultilineQuotedSecret() {
+        let text = """
+        Here is the key.
+        GCP_SA_KEY="-----BEGIN PRIVATE KEY-----
+        MIIEvQIBADANBgkqhkiG9w0BAQEF
+        -----END PRIVATE KEY-----"
+        Thanks.
+        """
+        let redacted = ChatEnvPasteDetector.redactEnvLines(from: text, keys: ["GCP_SA_KEY"])
+
+        // The whole multiline secret must be stripped — not just its first line.
+        XCTAssertFalse(redacted.contains("GCP_SA_KEY="))
+        XCTAssertFalse(redacted.contains("BEGIN PRIVATE KEY"))
+        XCTAssertFalse(redacted.contains("MIIEvQIBADANBgkqhkiG9w0BAQEF"))
+        XCTAssertFalse(redacted.contains("END PRIVATE KEY"))
+        XCTAssertTrue(redacted.contains("Here is the key."))
+        XCTAssertTrue(redacted.contains("Thanks."))
+    }
+
     func testContextHintsJoinsRecentMessages() {
         let messages = [
             ChatMessage(

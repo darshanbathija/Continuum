@@ -96,11 +96,31 @@ public enum ChatEnvPasteDetector {
         var kept: [String] = []
         kept.reserveCapacity(lines.count)
 
-        for line in lines {
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
             guard let key = assignmentKey(in: line), upperKeys.contains(key) else {
                 kept.append(line)
+                index += 1
                 continue
             }
+            // Drop this KEY= line AND any continuation lines of a multiline
+            // quoted value (PEM keys, JSON), mirroring parseAssignments — else
+            // only the first line is redacted and the rest leaks to the agent.
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let body = trimmed.hasPrefix("export ")
+                ? String(trimmed.dropFirst("export ".count)).trimmingCharacters(in: .whitespaces)
+                : trimmed
+            if let eq = body.firstIndex(of: "=") {
+                var rawValue = String(body[body.index(after: eq)...])
+                if let quote = rawValue.first, quote == "\"" || quote == "'" {
+                    while !hasClosingQuote(rawValue, quote: quote), index + 1 < lines.count {
+                        index += 1
+                        rawValue += "\n" + lines[index]
+                    }
+                }
+            }
+            index += 1
         }
 
         while kept.last?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
