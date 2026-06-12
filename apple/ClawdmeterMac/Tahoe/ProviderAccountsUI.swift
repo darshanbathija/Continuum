@@ -226,7 +226,7 @@ struct ProviderAccountsSection: View {
             }
         }
         var storedPreferred = CodePreferredAccountStore.preferredWireId(for: kind)
-        if let storedPreferred, !all.contains(where: { $0.wireId == storedPreferred }) {
+        if let pref = storedPreferred, !all.contains(where: { $0.wireId == pref }) {
             storedPreferred = nil
             CodePreferredAccountStore.setPreferred(wireId: nil, for: kind)
         }
