@@ -19,6 +19,7 @@ import SwiftUI
 /// the session is still moving forward and claude/codex is working."
 public struct LiveSessionActivityIndicator: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var timelineVisible = false
     /// Provider drives the accent + symbol.
     public let agent: AgentKind
     /// Most-recent observed event on the JSONL. nil → hide.
@@ -41,6 +42,9 @@ public struct LiveSessionActivityIndicator: View {
         self.lastEventAt = lastEventAt
         self.activityStartedAt = activityStartedAt
         self.activityWindow = activityWindow
+        self._timelineVisible = State(initialValue: lastEventAt.map {
+            Date().timeIntervalSince($0) < activityWindow
+        } ?? false)
     }
 
     public var body: some View {
@@ -49,36 +53,75 @@ public struct LiveSessionActivityIndicator: View {
         // The old timer fired 20× per second per visible chat and mutated
         // `@State now` on every tick, invalidating the pill body + the
         // surrounding view chain. `TimelineView` drives `context.date`
-        // without `@State` mutation, so SwiftUI only re-renders the body
-        // closure (Capsule + Material + Text) on each tick, not the whole
-        // view tree. Reduce-Motion downgrades to 1Hz; otherwise 0.2s (5Hz)
-        // since the elapsed string only displays one decimal anyway.
-        TimelineView(.periodic(from: .now, by: reduceMotion ? 1.0 : 0.2)) { context in
-            let now = context.date
-            let active = isActive(at: now)
-            Group {
-                if active {
-                    HStack(spacing: 8) {
-                        spinner
-                        Text("\(elapsedString(at: now)) · thinking…")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
+        // without per-tick `@State` mutation, so SwiftUI only re-renders
+        // the body closure (Capsule + Material + Text) on each tick, not
+        // the whole view tree. Reduce-Motion downgrades to 1Hz; otherwise
+        // 0.2s (5Hz) since the elapsed string only displays one decimal
+        // anyway. The TimelineView itself is only mounted while the last
+        // event is inside the activity window; otherwise hidden/cached
+        // transcripts would keep waking SwiftUI forever.
+        Group {
+            if timelineVisible {
+                TimelineView(.periodic(from: .now, by: reduceMotion ? 1.0 : 0.2)) { context in
+                    let now = context.date
+                    let active = isActive(at: now)
+                    Group {
+                        if active {
+                            HStack(spacing: 8) {
+                                spinner
+                                Text("\(elapsedString(at: now)) · thinking…")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(ContinuumTokens.surface2, in: Capsule())
+                            .overlay(
+                                Capsule().stroke(accent.opacity(0.25), lineWidth: 0.5)
+                            )
+                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.95)))
+                        }
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(ContinuumTokens.surface2, in: Capsule())
-                    .overlay(
-                        Capsule().stroke(accent.opacity(0.25), lineWidth: 0.5)
-                    )
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.95)))
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: active)
                 }
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: active)
+        }
+        .task(id: activityScheduleKey) {
+            await updateTimelineVisibility()
         }
     }
 
     // MARK: - Derived
+
+    private var activityScheduleKey: String {
+        "\(lastEventAt?.timeIntervalSinceReferenceDate ?? -1):\(activityWindow)"
+    }
+
+    private var activityExpiry: Date? {
+        lastEventAt?.addingTimeInterval(activityWindow)
+    }
+
+    @MainActor
+    private func updateTimelineVisibility() async {
+        guard let activityExpiry else {
+            timelineVisible = false
+            return
+        }
+
+        let remaining = activityExpiry.timeIntervalSinceNow
+        guard remaining > 0 else {
+            timelineVisible = false
+            return
+        }
+
+        timelineVisible = true
+        let cappedRemaining = min(remaining, activityWindow)
+        try? await Task.sleep(nanoseconds: UInt64(cappedRemaining * 1_000_000_000))
+        if !Task.isCancelled {
+            timelineVisible = false
+        }
+    }
 
     private func isActive(at now: Date) -> Bool {
         guard let lastEventAt else { return false }

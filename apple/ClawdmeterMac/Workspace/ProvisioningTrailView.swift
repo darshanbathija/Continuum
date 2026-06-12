@@ -85,12 +85,22 @@ struct ProvisioningTrailView: View {
     }
 
     private var elapsedLabel: some View {
-        TimelineView(.periodic(from: .now, by: reduceMotion ? 1.0 : 0.2)) { ctx in
-            let secs = max(0, ctx.date.timeIntervalSince(progress.startedAt))
-            Text(String(format: "%.1fs", secs))
-                .font(.system(size: 10)).monospacedDigit()
-                .foregroundStyle(.tertiary)
+        Group {
+            if progress.allDone {
+                elapsedText(at: Date())
+            } else {
+                TimelineView(.periodic(from: .now, by: reduceMotion ? 1.0 : 0.2)) { ctx in
+                    elapsedText(at: ctx.date)
+                }
+            }
         }
+    }
+
+    private func elapsedText(at date: Date) -> some View {
+        let secs = max(0, date.timeIntervalSince(progress.startedAt))
+        return Text(String(format: "%.1fs", secs))
+            .font(.system(size: 10)).monospacedDigit()
+            .foregroundStyle(.tertiary)
     }
 
     // MARK: stepper
