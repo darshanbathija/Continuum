@@ -236,8 +236,7 @@ struct CenterThread: View {
             if let branch = branchLabel {
                 TahoePill(tone: .chip) {
                     HStack(spacing: 5) {
-                        Image(systemName: prBranchIcon)
-                            .font(.system(size: 10, weight: .semibold))
+                        GitHubBranchStatusIcon(prBranchIconKind, size: 10)
                         Text(branch)
                             .font(TahoeFont.mono(11))
                             .lineLimit(1)
@@ -1456,31 +1455,21 @@ struct CenterThread: View {
         return nil
     }
 
-    /// Icon for the branch chip. Filled when a PR is open or merged so the
-    /// chip reads at a glance — empty branch glyph when no PR is linked.
-    private var prBranchIcon: String {
-        guard let state = prMirror.state?.state.uppercased() else {
-            return "arrow.triangle.branch"
+    /// GitHub Octicon for the branch chip — matches sidebar worktree rows.
+    private var prBranchIconKind: GitHubBranchIconKind {
+        guard let state = prMirror.state?.state else {
+            return .branch
         }
-        switch state {
-        case "OPEN", "MERGED": return "arrow.triangle.pull"
-        default: return "arrow.triangle.branch"
-        }
+        return GitHubBranchIconKind.from(prStateRaw: state)
     }
 
-    /// Branch-chip color follows GitHub's PR badge palette: green for an
-    /// open PR, purple for a merged PR, dark red for a closed-without-merge
-    /// PR, and the Clawdmeter terra-cotta when no PR has been detected yet.
+    /// Branch-chip tint follows GitHub Primer PR semantics; terra-cotta when
+    /// no PR is linked (plain worktree branch).
     private var prBranchColor: Color {
-        guard let state = prMirror.state?.state.uppercased() else {
+        guard prMirror.state?.state != nil else {
             return terraCotta
         }
-        switch state {
-        case "OPEN":   return .green
-        case "MERGED": return Color(red: 0x8A / 255.0, green: 0x3F / 255.0, blue: 0xFC / 255.0)
-        case "CLOSED": return .red
-        default:       return terraCotta
-        }
+        return prBranchIconKind.color
     }
 
     private var branchTooltip: String {
