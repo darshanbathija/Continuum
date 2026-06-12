@@ -341,7 +341,7 @@ public struct MacSettingsView: View {
 
         if let runtime {
             SettingsCard(title: "Pair iPhone",
-                         sub: "Scan one QR with your iPhone to mirror live quota + sessions.") {
+                         sub: "Choose Continuum Cloud or Tailscale, then scan the pairing QR with your iPhone.") {
                 PairingSettingsView(runtime: runtime)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -637,7 +637,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .advanced:
             return "Vendor CLI, MCP, hosting, storage, and domain provisioning."
         case .devices:
-            return "Quota behavior, iPhone mirroring, and pairing."
+            return "Quota behavior, iPhone mirroring, and Cloud or Tailscale pairing."
         case .notifications:
             return "DND, batching, chimes, previews, and event toggles."
         case .externalTools:

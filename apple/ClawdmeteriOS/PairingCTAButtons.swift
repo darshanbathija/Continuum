@@ -4,9 +4,8 @@ import ClawdmeterShared
 /// Reusable side-by-side "Scan QR" + "Paste URL" CTA used by every iOS
 /// empty state that needs the user to pair with a Mac: Sessions tab,
 /// Analytics tab, and the Codex card on the Live tab. Each tap opens the
-/// Tahoe `IOSPairingView` sheet — D3 retired the legacy `PairingFlow`,
-/// so both buttons present the same sheet (the segmented picker is gone,
-/// the new view exposes both Scan + Paste from one screen).
+/// Tahoe `IOSPairingView` sheet. Both buttons open the same sheet where
+/// users choose Continuum Cloud or Tailscale, then scan or paste the URL.
 struct PairingCTAButtons: View {
     @ObservedObject var client: AgentControlClient
 
