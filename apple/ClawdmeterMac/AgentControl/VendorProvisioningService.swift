@@ -553,12 +553,22 @@ public final class VendorProvisioningService: ObservableObject {
                 message: Self.safeMessage(result.stderrString, fallback: "CLI installed, authentication not confirmed.")
             )
         } catch let error as ShellRunner.ShellError {
-            return AuthProbe(
-                status: .error,
-                accountLabel: nil,
-                projectLabel: nil,
-                message: Self.safeMessage(String(describing: error), fallback: "CLI probe failed.")
-            )
+            switch error {
+            case .timedOut:
+                return AuthProbe(
+                    status: .unauthenticated,
+                    accountLabel: nil,
+                    projectLabel: nil,
+                    message: "Auth check timed out. Try signing in manually."
+                )
+            default:
+                return AuthProbe(
+                    status: .error,
+                    accountLabel: nil,
+                    projectLabel: nil,
+                    message: Self.safeMessage(error.localizedDescription, fallback: "CLI probe failed.")
+                )
+            }
         } catch {
             return AuthProbe(
                 status: .error,
