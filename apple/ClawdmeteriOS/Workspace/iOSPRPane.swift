@@ -184,10 +184,10 @@ struct iOSPRPane: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     Button(role: .destructive, action: ContinuumAnalytics.wrapButton(
-                            "pr_delete",
+                            "pr_merge_prompt",
                             {
                         showingMergeConfirm = true
-                    
+
                             }
                         )) {
                         HStack(spacing: 7) {
