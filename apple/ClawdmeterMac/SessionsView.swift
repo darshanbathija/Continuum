@@ -1720,6 +1720,56 @@ public final class SessionsModel: ObservableObject {
         workspaceDraftTabs[index] = tab
     }
 
+    /// Provider shown on workspace session tabs and sibling chrome. Mirrors the
+    /// composer chip: during provisioning or a cross-provider picker toggle the
+    /// registry row may still reflect the spawn defaults while the chip already
+    /// shows the user's choice.
+    func displayAgent(for session: AgentSession, catalog: ModelCatalog = .bundled) -> AgentKind {
+        let live = registry.session(id: session.id) ?? session
+        guard let store = composerStores[session.id] else { return live.agent }
+        let customProviderId = store.customProviderId ?? live.customProviderId
+        if let modelId = store.modelId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !modelId.isEmpty,
+           let entry = catalog.entry(forId: modelId, customProviderId: customProviderId) {
+            if isProvisioning(session.id)
+                || entry.provider != live.agent
+                || modelId != live.model {
+                return entry.provider
+            }
+        }
+        if isProvisioning(session.id) {
+            return store.agent
+        }
+        return live.agent
+    }
+
+    func displayModelId(for session: AgentSession, catalog: ModelCatalog = .bundled) -> String? {
+        let live = registry.session(id: session.id) ?? session
+        guard let store = composerStores[session.id] else { return live.model }
+        if let modelId = store.modelId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !modelId.isEmpty {
+            if isProvisioning(session.id) || modelId != live.model {
+                return modelId
+            }
+        }
+        return live.model
+    }
+
+    func workspaceTabSubtitle(for session: AgentSession, catalog: ModelCatalog = .bundled) -> String {
+        let branch = (WorkspaceKey.workspacePath(for: session) as NSString).lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let agent = displayAgent(for: session, catalog: catalog).rawValue
+        return branch.isEmpty ? agent : "\(agent) - \(branch)"
+    }
+
+    func workspaceDraftTabSubtitle(for draft: WorkspaceDraftTab) -> String {
+        let branch = (draft.workspaceKey.workspacePath as NSString).lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let agent = draft.agent.rawValue
+        if branch.isEmpty { return "\(agent) · Draft" }
+        return "\(agent) - \(branch)"
+    }
+
     func workspaceDraftTabs(in workspaceKey: WorkspaceKey) -> [WorkspaceDraftTab] {
         workspaceDraftTabs
             .filter { $0.workspaceKey == workspaceKey }

@@ -618,10 +618,8 @@ struct ComposerInputCore: View {
                     }
                 },
                 onSelectModelConfiguration: { choice, modelId, effort in
-                    if onSelectModelConfiguration != nil {
-                        store.agent = choice.backingAgent(in: catalog) ?? store.agent
-                        store.customProviderId = choice.customProviderId
-                    }
+                    store.agent = choice.backingAgent(in: catalog) ?? store.agent
+                    store.customProviderId = choice.customProviderId
                     onSelectModelConfiguration?(choice, modelId, effort)
                 }
             )
@@ -713,10 +711,8 @@ struct ComposerInputCore: View {
                     }
                 },
                 onSelectModelConfiguration: { choice, modelId, effort in
-                    if onSelectModelConfiguration != nil {
-                        store.agent = choice.backingAgent(in: catalog) ?? store.agent
-                        store.customProviderId = choice.customProviderId
-                    }
+                    store.agent = choice.backingAgent(in: catalog) ?? store.agent
+                    store.customProviderId = choice.customProviderId
                     onSelectModelConfiguration?(choice, modelId, effort)
                 }
             )

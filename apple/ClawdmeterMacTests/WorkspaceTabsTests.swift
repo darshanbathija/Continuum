@@ -404,6 +404,81 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.workspaceDraftTabs(in: key).map(\.id), [first.id, second.id])
     }
 
+    func test_workspaceTabChromeReflectsComposerModelToggleBeforeRegistryAdopt() async throws {
+        let registryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspaceTabsDisplayAgent-\(UUID().uuidString).json")
+        let workspaceStoreURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspaceTabsDisplayAgent-workspaces-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: registryURL) }
+        defer { try? FileManager.default.removeItem(at: workspaceStoreURL) }
+        let registry = AgentSessionRegistry(storeURL: registryURL)
+        let model = SessionsModel(
+            repoIndex: RepoIndex(),
+            registry: registry,
+            workspaceStore: WorkspaceStore(storeURL: workspaceStoreURL, sessionsURL: registryURL)
+        )
+        let session = try await registry.create(
+            repoKey: "/repo/clawdmeter",
+            repoDisplayName: "Clawdmeter",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: nil,
+            worktreePath: "/repo/clawdmeter/tucson",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree,
+            effort: .xhigh
+        )
+        model.provisioningSessionIds.insert(session.id)
+        let store = model.composerStore(for: session, catalog: .bundled)
+        store.agent = .claude
+        store.modelId = "claude-fable-5-1m"
+        store.effort = .high
+
+        XCTAssertEqual(model.displayAgent(for: session), .claude)
+        XCTAssertEqual(model.displayModelId(for: session), "claude-fable-5-1m")
+        XCTAssertEqual(model.workspaceTabSubtitle(for: session), "claude - tucson")
+        XCTAssertEqual(session.agent, .codex, "Registry row stays on spawn defaults until adopt")
+    }
+
+    func test_configureProvisionalLaunchUpdatesDisplayAgentForTrailAndTabs() async throws {
+        let registryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspaceTabsProvisionalDisplay-\(UUID().uuidString).json")
+        let workspaceStoreURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspaceTabsProvisionalDisplay-workspaces-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: registryURL) }
+        defer { try? FileManager.default.removeItem(at: workspaceStoreURL) }
+        let registry = AgentSessionRegistry(storeURL: registryURL)
+        let model = SessionsModel(
+            repoIndex: RepoIndex(),
+            registry: registry,
+            workspaceStore: WorkspaceStore(storeURL: workspaceStoreURL, sessionsURL: registryURL)
+        )
+        let session = try await registry.create(
+            repoKey: "/repo/clawdmeter",
+            repoDisplayName: "Clawdmeter",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: nil,
+            worktreePath: "/repo/clawdmeter/tucson",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree,
+            effort: .xhigh
+        )
+        model.provisioningSessionIds.insert(session.id)
+        XCTAssertTrue(model.configureProvisionalLaunch(
+            sessionId: session.id,
+            agent: .claude,
+            modelId: "claude-fable-5-1m",
+            effort: .high
+        ))
+        XCTAssertEqual(model.displayAgent(for: session), .claude)
+        XCTAssertEqual(model.workspaceTabSubtitle(for: session), "claude - tucson")
+    }
+
     func test_workspaceDraftFirstSendPlanUsesSelectedDraftModelAsFirstTurn() {
         let inheritedSourceId = UUID()
         let draft = WorkspaceDraftTab(

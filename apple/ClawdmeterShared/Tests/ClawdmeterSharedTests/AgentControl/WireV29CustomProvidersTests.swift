@@ -162,6 +162,28 @@ final class WireV29CustomProvidersTests: XCTestCase {
         XCTAssertEqual(ProviderChoice.custom("deepinfra").id, "custom:deepinfra")
     }
 
+    func testProviderChoiceResolvedForDisplayPrefersModelProviderOverAgent() {
+        let catalog = ModelCatalog.bundled
+        let enabled: [ProviderChoice] = [.builtin(.chatgpt), .builtin(.claude)]
+        let choice = ProviderChoice.resolvedForDisplay(
+            modelId: "claude-fable-5-1m",
+            customProviderId: nil,
+            agent: .codex,
+            catalog: catalog,
+            enabledChoices: enabled
+        )
+        XCTAssertEqual(choice, .builtin(.claude))
+        XCTAssertEqual(
+            TahoeProvider.resolvedForModelEntry(
+                modelId: "claude-fable-5-1m",
+                customProviderId: nil,
+                fallbackAgent: .codex,
+                catalog: catalog
+            ),
+            .claude
+        )
+    }
+
     func testProviderRegistryCustomNamespace() {
         XCTAssertEqual(ProviderRegistry.customProviderId(from: "custom/deepinfra"), "deepinfra")
         XCTAssertNil(ProviderRegistry.customProviderId(from: "codex"))

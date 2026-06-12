@@ -206,9 +206,11 @@ struct WorkspaceTabStrip: View {
         let isActive = activeTerminalTabId == nil
             && activeDocumentTabId == nil
             && session.id == activeSessionId
+        let displayAgent = model.displayAgent(for: session)
+        let displayModelId = model.displayModelId(for: session)
         return tabRow(
             title: title(for: session),
-            subtitle: workspaceSubtitle(for: session),
+            subtitle: model.workspaceTabSubtitle(for: session),
             systemImage: nil,
             isActive: isActive,
             labelWidth: labelWidth,
@@ -217,7 +219,7 @@ struct WorkspaceTabStrip: View {
         )
         .help(session.effectiveCwd)
         .accessibilityIdentifier("code.workspace.tab.session")
-        .accessibilityValue("\(isActive ? "selected" : "not selected") \(session.id.uuidString) \(session.agent.rawValue) \(session.model ?? "")")
+        .accessibilityValue("\(isActive ? "selected" : "not selected") \(session.id.uuidString) \(displayAgent.rawValue) \(displayModelId ?? "")")
         .contextMenu {
             Button("Close", role: .destructive) {
                 Task { await model.endSession(id: session.id) }
@@ -239,7 +241,7 @@ struct WorkspaceTabStrip: View {
             && activeDocumentTabId == nil
         return tabRow(
             title: "Untitled",
-            subtitle: "Draft",
+            subtitle: model.workspaceDraftTabSubtitle(for: draft),
             systemImage: nil,
             isActive: isActive,
             labelWidth: labelWidth,
@@ -248,7 +250,7 @@ struct WorkspaceTabStrip: View {
         )
         .help("Draft chat tab")
         .accessibilityIdentifier("code.workspace.tab.draft")
-        .accessibilityValue("\(isActive ? "selected" : "not selected") \(draft.id.uuidString)")
+        .accessibilityValue("\(isActive ? "selected" : "not selected") \(draft.id.uuidString) \(draft.agent.rawValue) \(draft.modelId ?? "")")
     }
 
     private func terminalButton(_ tab: WorkspaceTerminalTab, session: AgentSession, labelWidth: CGFloat) -> some View {
@@ -370,11 +372,6 @@ struct WorkspaceTabStrip: View {
             return goal
         }
         return session.displayLabel
-    }
-
-    private func workspaceSubtitle(for session: AgentSession) -> String {
-        let last = (WorkspaceKey.workspacePath(for: session) as NSString).lastPathComponent
-        return last.isEmpty ? session.agent.rawValue : "\(session.agent.rawValue) - \(last)"
     }
 
     private func terminalTitle(for tab: WorkspaceTerminalTab, session: AgentSession) -> String {

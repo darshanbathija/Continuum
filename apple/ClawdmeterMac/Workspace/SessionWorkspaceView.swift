@@ -584,7 +584,10 @@ struct SessionWorkspaceView: View {
                 onSelectDocument: { model.selectWorkspaceDocumentTab($0) },
                 onCloseDocument: { model.closeWorkspaceDocumentTab($0) }
             )
-            WorkspaceContextHeader(draft: draft, catalog: launcher.modelCatalog)
+            WorkspaceContextHeader(
+                draft: model.draftWorkspaceTab ?? draft,
+                catalog: launcher.modelCatalog
+            )
             Divider()
             CodeWorkspaceDraftComposer(
                 model: model,
@@ -788,19 +791,33 @@ struct WorkspaceContextHeader: View {
     let title: String
     let configurationSummary: String
     let branchLabel: String?
+    let headerAccessibilityValue: String
 
     @Environment(\.tahoe) private var t
 
     init(draft: WorkspaceDraftTab, catalog: ModelCatalog) {
-        provider = TahoeProvider.resolved(agent: draft.agent, modelId: draft.modelId)
+        let resolvedAgent = Self.resolvedAgent(for: draft, catalog: catalog)
+        provider = TahoeProvider.resolvedForModelEntry(
+            modelId: draft.modelId,
+            customProviderId: nil,
+            fallbackAgent: resolvedAgent,
+            catalog: catalog
+        )
         title = RepoIdentity.displayName(for: draft.workspaceKey.repoKey)
         configurationSummary = Self.configurationSummary(
-            agent: draft.agent,
+            agent: resolvedAgent,
             modelId: draft.modelId,
             effort: draft.effort,
             catalog: catalog
         )
         branchLabel = Self.branchLabel(for: draft.workspaceKey)
+        headerAccessibilityValue = [
+            draft.id.uuidString,
+            title,
+            resolvedAgent.rawValue,
+            draft.modelId ?? "",
+            configurationSummary
+        ].joined(separator: " ")
     }
 
     var body: some View {
@@ -842,12 +859,32 @@ struct WorkspaceContextHeader: View {
         .padding(.bottom, 10)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("code.center.header")
+        .accessibilityValue(headerAccessibilityValue)
+        .overlay(alignment: .topLeading) {
+            Text(headerAccessibilityValue)
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(width: 1, height: 1)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(headerAccessibilityValue)
+                .accessibilityIdentifier("code.center.header.state")
+                .accessibilityValue(headerAccessibilityValue)
+        }
     }
 
     private static func branchLabel(for key: WorkspaceKey) -> String? {
         let branch = (key.workspacePath as NSString).lastPathComponent
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return branch.isEmpty ? nil : branch
+    }
+
+    private static func resolvedAgent(for draft: WorkspaceDraftTab, catalog: ModelCatalog) -> AgentKind {
+        if let modelId = draft.modelId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !modelId.isEmpty,
+           let entry = catalog.entry(forId: modelId) {
+            return entry.provider
+        }
+        return draft.agent
     }
 
     private static func configurationSummary(
