@@ -335,4 +335,82 @@ final class SessionFileResolverTests: XCTestCase {
         )
         assertSameFile(resolver.resolve(session: session), bare)
     }
+
+    // MARK: - parseRolloutCwd
+
+    func testParseRolloutCwdReadsSessionMeta() throws {
+        let url = try writeRollout(
+            name: "parse-meta.jsonl",
+            mtime: Date(),
+            contents: #"{"type":"session_meta","payload":{"cwd":"/Users/dev/repo"}}"#
+        )
+        XCTAssertEqual(SessionFileResolver.parseRolloutCwd(at: url), "/Users/dev/repo")
+    }
+
+    func testParseRolloutCwdReadsTurnContextVariant() throws {
+        let lines = [
+            #"{"type":"event_msg","payload":{"type":"token_count"}}"#,
+            #"{"type":"turn_context","payload":{"cwd":"/Users/dev/other"}}"#,
+        ].joined(separator: "\n")
+        let url = try writeRollout(name: "parse-turn.jsonl", mtime: Date(), contents: lines)
+        XCTAssertEqual(SessionFileResolver.parseRolloutCwd(at: url), "/Users/dev/other")
+    }
+
+    func testParseRolloutCwdSkipsMalformedLinesAndEmptyCwd() throws {
+        let lines = [
+            "not json at all {{{",
+            #"{"type":"session_meta","payload":{"cwd":""}}"#,
+            #"{"type":"session_meta","payload":{"cwd":"/Users/dev/found"}}"#,
+        ].joined(separator: "\n")
+        let url = try writeRollout(name: "parse-mixed.jsonl", mtime: Date(), contents: lines)
+        XCTAssertEqual(SessionFileResolver.parseRolloutCwd(at: url), "/Users/dev/found")
+    }
+
+    func testParseRolloutCwdReturnsNilForEmptyOrMissingFile() throws {
+        let empty = try writeRollout(name: "parse-empty.jsonl", mtime: Date(), contents: "")
+        XCTAssertNil(SessionFileResolver.parseRolloutCwd(at: empty))
+        let missing = tmpdir.appendingPathComponent("does-not-exist.jsonl")
+        XCTAssertNil(SessionFileResolver.parseRolloutCwd(at: missing))
+    }
+
+    func testParseRolloutCwdReturnsNilWhenNoMetaLineExists() throws {
+        let url = try writeRollout(
+            name: "parse-no-meta-type.jsonl",
+            mtime: Date(),
+            contents: #"{"type":"event_msg","payload":{"cwd":"/should/be/ignored"}}"#
+        )
+        XCTAssertNil(SessionFileResolver.parseRolloutCwd(at: url),
+                     "cwd only counts from session_meta / turn_context lines")
+    }
+
+    /// The per-path cwd cache must not re-read the file: rewriting the
+    /// rollout with a DIFFERENT cwd after a resolve must leave the cached
+    /// value in effect (rollout headers are immutable in production; the
+    /// cache trades re-parsing for that invariant).
+    func testRecordedRolloutCwdIsCachedPerPath() throws {
+        let createdAt = Date().addingTimeInterval(-600)
+        let lastEventAt = Date().addingTimeInterval(-60)
+        let session = makeSession(agent: .codex, createdAt: createdAt, lastEventAt: lastEventAt)
+        let url = try writeRollout(
+            name: "cache-probe.jsonl",
+            mtime: createdAt.addingTimeInterval(30),
+            contents: #"{"type":"session_meta","payload":{"cwd":"/tmp/test-repo"}}"#
+        )
+        let resolver = SessionFileResolver(
+            codexSessionsRoot: tmpdir,
+            resolveClaudeURL: { _ in nil }
+        )
+        assertSameFile(resolver.resolve(session: session), url)
+
+        // Rewrite the SAME path with a foreign cwd. The cached parse must
+        // win on the next scan (clear the link cache to force a re-scan).
+        try #"{"type":"session_meta","payload":{"cwd":"/Users/foreign"}}"#
+            .write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: createdAt.addingTimeInterval(35)],
+            ofItemAtPath: url.path
+        )
+        resolver.invalidate(sessionId: session.id)
+        assertSameFile(resolver.resolve(session: session), url)
+    }
 }
