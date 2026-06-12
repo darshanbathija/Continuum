@@ -43,6 +43,15 @@ final class AppDictationContext: GlobalDictationContextProviding {
         )
     }
 
+    func resolveComposerTargetForStopDelivery() -> DictationRouteResolution {
+        DictationRouting.shared.resolve(
+            currentTab: currentTabProvider(),
+            lastDictationTab: presentationStoreProvider?()?.snapshot.lastDictationTab
+                ?? loadLastDictationTabFromDisk(),
+            includeActiveRecording: false
+        )
+    }
+
     func prepareComposerRoute(for target: DictationComposerTarget) {
         onPrepareComposerRoute?(target)
     }

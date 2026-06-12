@@ -37,7 +37,7 @@ public final class GlobalHotkeyManager {
 
     @discardableResult
     public func start() -> Bool {
-        stopListeningOnly()
+        stop()
 
         var eventMask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
         eventMask |= CGEventMask(1 << CGEventType.keyDown.rawValue)

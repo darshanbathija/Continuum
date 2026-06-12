@@ -44,6 +44,9 @@ packages:
   PostHog:
     url: https://github.com/PostHog/posthog-ios.git
     from: "3.60.0"
+  WhisperKit:
+    url: https://github.com/argmaxinc/WhisperKit.git
+    from: "0.9.0"
 
 targets:
   # ───────────────────────────────────────────────────────────────
@@ -107,6 +110,8 @@ targets:
         product: Sparkle
       - package: PostHog
         product: PostHog
+      - package: WhisperKit
+        product: WhisperKit
       - target: ClawdmeterMacWidgets
         embed: true
     preBuildScripts:

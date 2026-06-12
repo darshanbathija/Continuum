@@ -132,7 +132,7 @@ public final class STTModelDownloadManager: ObservableObject {
 
         do {
             try Task.checkCancellation()
-            _ = try await WhisperKit.download(
+            let downloadedDirectory = try await WhisperKit.download(
                 variant: descriptor.whisperModelName,
                 downloadBase: destination,
                 progressCallback: { [weak self] progress in
@@ -146,6 +146,10 @@ public final class STTModelDownloadManager: ObservableObject {
                 }
             )
             try Task.checkCancellation()
+            guard STTModelCatalog.resolvedModelDirectory(in: downloadedDirectory) != nil
+                || STTModelCatalog.resolvedModelDirectory(in: destination) != nil else {
+                throw STTModelDownloadError.installationIncomplete(modelID)
+            }
             refreshInstalledModels()
             downloadState = .idle
             resumableModelID = nil
@@ -159,7 +163,7 @@ public final class STTModelDownloadManager: ObservableObject {
     }
 
     private func markDownloadInterrupted(modelID: String) {
-        if isModelInstalled(modelID) {
+        if isModelInstalledOnDisk(modelID) {
             refreshInstalledModels()
             downloadState = .idle
             resumableModelID = nil
@@ -170,10 +174,19 @@ public final class STTModelDownloadManager: ObservableObject {
     }
 
     private func markDownloadFailed(modelID: String, message: String) {
-        if !isModelInstalled(modelID) {
+        if !isModelInstalledOnDisk(modelID) {
             resumableModelID = modelID
         }
         downloadState = .failed(modelID: modelID, message: message)
+    }
+
+    private func isModelInstalledOnDisk(_ modelID: String) -> Bool {
+        STTModelCatalog.isModelInstalled(
+            at: STTModelCatalog.modelDirectory(
+                appSupportDirectory: appSupportDirectory,
+                modelID: modelID
+            )
+        )
     }
 }
 
@@ -181,6 +194,7 @@ public enum STTModelDownloadError: LocalizedError {
     case downloadInProgress
     case unknownModel(String)
     case cancelled
+    case installationIncomplete(String)
 
     public var errorDescription: String? {
         switch self {
@@ -190,6 +204,8 @@ public enum STTModelDownloadError: LocalizedError {
             return "Unknown Whisper model \"\(modelID)\"."
         case .cancelled:
             return "Model download cancelled."
+        case .installationIncomplete(let modelID):
+            return "Whisper model \"\(modelID)\" downloaded but required model files were not found."
         }
     }
 }

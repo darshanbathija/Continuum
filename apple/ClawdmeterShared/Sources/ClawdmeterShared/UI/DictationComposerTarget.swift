@@ -42,7 +42,11 @@ public enum DictationRouteResolver {
         case DictationComposerTarget.code.rawValue:
             return .route(.code)
         default:
-            return .route(input.lastDictationTab ?? .code)
+            let fallbackTarget = input.lastDictationTab ?? .code
+            if fallbackTarget == .chat, input.chatComposerIsReadOnly {
+                return .unavailableReadOnlyChat
+            }
+            return .route(fallbackTarget)
         }
     }
 }

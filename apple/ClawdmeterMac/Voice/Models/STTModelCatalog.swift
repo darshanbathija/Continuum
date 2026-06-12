@@ -26,6 +26,11 @@ public enum STTModelCatalog {
     public static let voiceModelsDirectoryName = "VoiceModels"
     public static let defaultModelID = "base"
     public static let largeDownloadWarningBytes: Int64 = 500_000_000
+    private static let requiredModelNames = [
+        "AudioEncoder",
+        "MelSpectrogram",
+        "TextDecoder",
+    ]
 
     public static let models: [STTModelDescriptor] = [
         STTModelDescriptor(
@@ -73,31 +78,76 @@ public enum STTModelCatalog {
     }
 
     public static func isModelInstalled(at directory: URL) -> Bool {
-        guard FileManager.default.fileExists(atPath: directory.path) else { return false }
-        return containsWhisperKitArtifacts(in: directory)
+        resolvedModelDirectory(in: directory) != nil
     }
 
-    private static func containsWhisperKitArtifacts(in directory: URL) -> Bool {
-        let requiredNames = [
-            "AudioEncoder.mlmodelc",
-            "MelSpectrogram.mlmodelc",
-            "TextDecoder.mlmodelc",
-        ]
+    public static func resolvedModelDirectory(appSupportDirectory: URL, modelID: String) -> URL? {
+        resolvedModelDirectory(
+            in: modelDirectory(
+                appSupportDirectory: appSupportDirectory,
+                modelID: modelID
+            )
+        )
+    }
+
+    public static func resolvedModelDirectory(in directory: URL) -> URL? {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return nil }
+        if containsWhisperKitArtifacts(in: directory) {
+            return directory
+        }
+
         guard let enumerator = FileManager.default.enumerator(
             at: directory,
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         ) else {
-            return false
+            return nil
         }
 
-        var found = Set<String>()
         for case let fileURL as URL in enumerator {
-            found.insert(fileURL.lastPathComponent)
-            if requiredNames.allSatisfy({ found.contains($0) }) {
-                return true
+            let candidate = candidateModelDirectory(for: fileURL)
+            if let candidate, containsWhisperKitArtifacts(in: candidate) {
+                return candidate
             }
         }
-        return false
+
+        return nil
+    }
+
+    private static func containsWhisperKitArtifacts(in directory: URL) -> Bool {
+        requiredModelNames.allSatisfy { modelName in
+            hasModelArtifact(named: modelName, in: directory)
+        }
+    }
+
+    private static func hasModelArtifact(named modelName: String, in directory: URL) -> Bool {
+        let compiledModel = directory.appendingPathComponent("\(modelName).mlmodelc", isDirectory: true)
+        if FileManager.default.fileExists(atPath: compiledModel.path) {
+            return true
+        }
+
+        let packageModel = directory
+            .appendingPathComponent("\(modelName).mlpackage", isDirectory: true)
+            .appendingPathComponent("Data/com.apple.CoreML/model.mlmodel")
+        return FileManager.default.fileExists(atPath: packageModel.path)
+    }
+
+    private static func candidateModelDirectory(for fileURL: URL) -> URL? {
+        if fileURL.pathExtension == "mlmodelc" {
+            return fileURL.deletingLastPathComponent()
+        }
+        if fileURL.pathExtension == "mlpackage" {
+            return fileURL.deletingLastPathComponent()
+        }
+        if fileURL.lastPathComponent == "model.mlmodel" {
+            let packageURL = fileURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+            if packageURL.pathExtension == "mlpackage" {
+                return packageURL.deletingLastPathComponent()
+            }
+        }
+        return nil
     }
 }

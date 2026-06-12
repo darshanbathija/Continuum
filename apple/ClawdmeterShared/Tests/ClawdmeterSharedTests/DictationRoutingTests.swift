@@ -33,6 +33,13 @@ final class DictationRoutingTests: XCTestCase {
         XCTAssertEqual(resolution, .route(.chat))
     }
 
+    func testResolveBlocksReadOnlyChatFallback() {
+        let resolution = DictationRouteResolver.resolve(
+            .init(currentTab: "usage", chatComposerIsReadOnly: true, lastDictationTab: .chat)
+        )
+        XCTAssertEqual(resolution, .unavailableReadOnlyChat)
+    }
+
     func testResolveDefaultsToCodeWithoutHistory() {
         let resolution = DictationRouteResolver.resolve(.init(currentTab: "settings"))
         XCTAssertEqual(resolution, .route(.code))

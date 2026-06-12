@@ -48,7 +48,7 @@ public final class WhisperKitTranscriber: STTTranscribing {
             appSupportDirectory: appSupportDirectory,
             modelID: modelID
         )
-        guard STTModelCatalog.isModelInstalled(at: modelDirectory) else {
+        guard let resolvedModelDirectory = STTModelCatalog.resolvedModelDirectory(in: modelDirectory) else {
             throw WhisperKitTranscriberError.modelNotInstalled(modelID)
         }
 
@@ -73,7 +73,7 @@ public final class WhisperKitTranscriber: STTTranscribing {
         let config = WhisperKitConfig(
             model: descriptor.whisperModelName,
             downloadBase: STTModelCatalog.voiceModelsRoot(appSupportDirectory: appSupportDirectory),
-            modelFolder: modelDirectory.path,
+            modelFolder: resolvedModelDirectory.path,
             load: true,
             download: false
         )

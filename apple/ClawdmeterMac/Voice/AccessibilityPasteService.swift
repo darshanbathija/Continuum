@@ -15,7 +15,7 @@ public enum AccessibilityPasteError: Error, LocalizedError, Equatable {
         case .noFocusedElement:
             return "No focused text field was found."
         case .pasteFailed:
-            return "Could not paste into the focused field."
+            return "Could not confirm paste into the focused field."
         }
     }
 }
@@ -39,12 +39,16 @@ public struct AccessibilityPasteService {
         guard isTrusted else { return .failure(.notAuthorized) }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .success(()) }
 
-        if insertViaAccessibility(text) {
+        guard let focusedElement = focusedElement() else {
+            copyToPasteboard(text)
+            return .failure(.noFocusedElement)
+        }
+
+        if insertViaAccessibility(text, on: focusedElement) {
             return .success(())
         }
-        if simulateCommandV(text) {
-            return .success(())
-        }
+
+        attemptCommandVPaste(text)
         copyToPasteboard(text)
         return .failure(.pasteFailed)
     }
@@ -56,7 +60,7 @@ public struct AccessibilityPasteService {
         return pasteboard.setString(text, forType: .string)
     }
 
-    private func insertViaAccessibility(_ text: String) -> Bool {
+    private func focusedElement() -> AXUIElement? {
         let systemElement = AXUIElementCreateSystemWide()
         var focusedValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
@@ -66,10 +70,12 @@ public struct AccessibilityPasteService {
         ) == .success,
               let focusedValue,
               CFGetTypeID(focusedValue) == AXUIElementGetTypeID()
-        else { return false }
+        else { return nil }
 
-        let element = unsafeDowncast(focusedValue as AnyObject, to: AXUIElement.self)
+        return unsafeDowncast(focusedValue as AnyObject, to: AXUIElement.self)
+    }
 
+    private func insertViaAccessibility(_ text: String, on element: AXUIElement) -> Bool {
         if setSelectedText(text, on: element) {
             return true
         }
@@ -91,9 +97,9 @@ public struct AccessibilityPasteService {
         return status == .success
     }
 
-    private func simulateCommandV(_ text: String) -> Bool {
+    private func attemptCommandVPaste(_ text: String) {
         copyToPasteboard(text)
-        guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return }
 
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
         keyDown?.flags = .maskCommand
@@ -101,6 +107,5 @@ public struct AccessibilityPasteService {
         keyUp?.flags = .maskCommand
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
-        return true
     }
 }

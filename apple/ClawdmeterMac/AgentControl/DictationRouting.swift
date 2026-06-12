@@ -31,16 +31,20 @@ public final class DictationRouting: ObservableObject {
         globalSessionTarget = active ? target : nil
         if active, let target {
             activeRecordingTarget = target
-        } else if !active, let target, activeRecordingTarget == target {
+        } else if !active, target == nil || activeRecordingTarget == target {
             activeRecordingTarget = nil
         }
     }
 
-    public func resolve(currentTab: String, lastDictationTab: DictationComposerTarget?) -> DictationRouteResolution {
+    public func resolve(
+        currentTab: String,
+        lastDictationTab: DictationComposerTarget?,
+        includeActiveRecording: Bool = true
+    ) -> DictationRouteResolution {
         DictationRouteResolver.resolve(
             .init(
                 currentTab: currentTab,
-                activeRecordingTarget: activeRecordingTarget,
+                activeRecordingTarget: includeActiveRecording ? activeRecordingTarget : nil,
                 chatComposerIsReadOnly: chatComposerIsReadOnly,
                 lastDictationTab: lastDictationTab
             )

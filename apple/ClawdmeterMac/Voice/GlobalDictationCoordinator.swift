@@ -9,6 +9,7 @@ public protocol GlobalDictationContextProviding: AnyObject {
     var appSupportDirectory: URL { get }
     func voicePreferences() -> VoicePresentationPreferences
     func resolveComposerTarget() -> DictationRouteResolution
+    func resolveComposerTargetForStopDelivery() -> DictationRouteResolution
     func prepareComposerRoute(for target: DictationComposerTarget)
     func applyComposerText(_ text: String, target: DictationComposerTarget, phase: GlobalDictationNotification.Phase)
     func showInfoToast(title: String, detail: String?)
@@ -262,7 +263,7 @@ public final class GlobalDictationCoordinator: ObservableObject {
             continuumBundleID: context.continuumBundleID,
             frontmostBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
             systemWideEnabled: context.voicePreferences().systemWideDictationEnabled,
-            composerResolution: context.resolveComposerTarget()
+            composerResolution: context.resolveComposerTargetForStopDelivery()
         )
     }
 
@@ -298,7 +299,7 @@ public final class GlobalDictationCoordinator: ObservableObject {
             case .failure(let error):
                 pasteService.copyToPasteboard(trimmed)
                 context.showFailureToast(
-                    title: "Could not paste — copied to clipboard",
+                    title: "Paste not confirmed — copied to clipboard",
                     detail: error.localizedDescription
                 )
             }

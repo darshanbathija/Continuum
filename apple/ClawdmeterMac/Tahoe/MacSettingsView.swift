@@ -677,13 +677,23 @@ public struct MacSettingsView: View {
                 .controlSize(.small)
             } else {
                 Button("Download") {
-                    Task {
-                        try? await manager?.download(modelID: model.id)
-                        selectWhisperModel(model.id)
-                    }
+                    downloadAndSelectWhisperModel(model.id, manager: manager)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            }
+        }
+    }
+
+    private func downloadAndSelectWhisperModel(_ modelID: String, manager: STTModelDownloadManager?) {
+        guard let manager else { return }
+        Task { @MainActor in
+            do {
+                try await manager.download(modelID: modelID)
+                guard manager.isModelInstalled(modelID) else { return }
+                selectWhisperModel(modelID)
+            } catch {
+                // STTModelDownloadManager publishes failed/cancelled state for the row UI.
             }
         }
     }
@@ -3348,10 +3358,7 @@ private struct VoiceWhisperModelPicker: View {
                 title: Text("Download \(model.displayName)?"),
                 message: Text("This model is about \(model.sizeLabel). Downloads run entirely on your Mac."),
                 primaryButton: .default(Text("Download")) {
-                    Task {
-                        try? await downloadManager.download(modelID: model.id)
-                        onSelect(model.id)
-                    }
+                    downloadAndSelect(model.id)
                 },
                 secondaryButton: .cancel()
             )
@@ -3363,9 +3370,18 @@ private struct VoiceWhisperModelPicker: View {
             pendingLargeDownload = model
             return
         }
-        Task {
-            try? await downloadManager.download(modelID: model.id)
-            onSelect(model.id)
+        downloadAndSelect(model.id)
+    }
+
+    private func downloadAndSelect(_ modelID: String) {
+        Task { @MainActor in
+            do {
+                try await downloadManager.download(modelID: modelID)
+                guard downloadManager.isModelInstalled(modelID) else { return }
+                onSelect(modelID)
+            } catch {
+                // STTModelDownloadManager publishes failed/cancelled state for the row UI.
+            }
         }
     }
 

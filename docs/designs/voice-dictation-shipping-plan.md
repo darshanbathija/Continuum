@@ -1,7 +1,7 @@
 # Voice & Dictation Shipping Plan
 
-**Status:** Accepted (product decisions locked)  
-**Target:** Mac (Continuum / ClawdmeterMac)  
+**Status:** Accepted (product decisions locked)
+**Target:** Mac (Continuum / ClawdmeterMac)
 **Last updated:** 2026-06-12
 
 Ship Continuum from **in-app composer dictation** (Apple Speech, ⌃M → Code only) to **system-wide dictation** comparable to [Mac Parakeet](https://github.com/moona3k/macparakeet) and [Handy](https://github.com/cjpais/handy), with a **future release** adding a user-selectable, downloadable local model picker.
@@ -97,7 +97,7 @@ Ship Continuum from **in-app composer dictation** (Apple Speech, ⌃M → Code o
 
 > **Note:** Phase 1 ships ⌃M routing as an interim in-app shortcut. Phase 2 makes **Fn double-tap** the primary trigger for both in-app and system-wide; ⌃M becomes optional secondary.
 
-**Effort:** 1–2 days  
+**Effort:** 1–2 days
 **Release:** Next minor (e.g. v0.23.x)
 
 ### 2.1 Tasks
@@ -200,7 +200,7 @@ Clarify in Voice tab:
 
 **Goal:** **Fn double-tap** is the single primary trigger — works in Continuum (active composer) and in any other app (paste). Optional system-wide toggle in Voice settings gates external paste; Fn gesture itself is always handled by the global tap once enabled.
 
-**Effort:** 1.5–2 weeks  
+**Effort:** 1.5–2 weeks
 **Release:** Following minor (e.g. v0.24.x)
 
 ### 3.1 New modules
@@ -365,7 +365,7 @@ Voice tab shows Fn double-tap as the primary trigger (not a remappable chord —
 
 **Goal:** Visible feedback during dictation and optional advanced Fn modes. No persistent menu bar presence.
 
-**Effort:** 1–1.5 weeks  
+**Effort:** 1–1.5 weeks
 **Release:** v0.25.x ("Voice" feature release)
 
 ### 4.1 No persistent menu bar agent
@@ -386,8 +386,8 @@ apple/ClawdmeterMac/Voice/Overlay/
   DictationOverlayView.swift         // SwiftUI waveform + state pill
 ```
 
-**States:** recording → processing → success / error (hidden when idle)  
-**Placement:** Bottom-center of active display  
+**States:** recording → processing → success / error (hidden when idle)
+**Placement:** Bottom-center of active display
 **Audio level:** RMS from `AVAudioEngine` tap
 
 Show overlay for all dictation (Fn and ⌃M, in-app and system-wide). This replaces menu bar as the "something is happening" indicator.
@@ -428,8 +428,8 @@ Defer if schedule slips.
 
 **Goal:** User-selectable, downloadable, on-device STT models — parity with Handy / Mac Parakeet model selection.
 
-**Effort:** 3–4 weeks  
-**Release:** v0.26.x ("Voice Pro" or similar)  
+**Effort:** 3–4 weeks
+**Release:** v0.26.x ("Voice Pro" or similar)
 **Prerequisite:** Phase 2 STT protocol + download infrastructure
 
 ### 5.1 Model candidates
@@ -539,7 +539,7 @@ Voice tab remains single source of truth for permission status rows.
 | **M5** | Phase 3: optional advanced Fn modes + dictation history | +3 days |
 | **M6** | Future: model catalog + WhisperKit + picker | +3–4 weeks |
 
-**To Mac Parakeet parity (minus custom models):** ~3.5–4 weeks  
+**To Mac Parakeet parity (minus custom models):** ~3.5–4 weeks
 **Including local model picker:** ~7–8 weeks
 
 ---
