@@ -3,6 +3,15 @@ import Foundation
 public struct GeneratedArtifact: Identifiable, Hashable, Sendable, Codable {
     public enum Kind: String, Hashable, Sendable, Codable {
         case markdownDocument
+        case html
+        case image
+        case pdf
+        case document
+        case spreadsheet
+        case presentation
+        case media
+        case archive
+        case data
     }
 
     public let kind: Kind
@@ -15,6 +24,15 @@ public struct GeneratedArtifact: Identifiable, Hashable, Sendable, Codable {
         self.kind = kind
         self.path = path
         self.sourceToolName = sourceToolName
+    }
+
+    public var opensInDocumentTab: Bool {
+        TranscriptArtifactClassifier.opensInDocumentTab(forPath: path)
+    }
+
+    public var systemImageName: String {
+        guard let transcriptKind = TranscriptArtifactClassifier.kind(forPath: path) else { return "doc" }
+        return TranscriptArtifactClassifier.systemImageName(for: transcriptKind)
     }
 }
 
@@ -43,8 +61,8 @@ public enum GeneratedArtifactDetector {
         var artifacts: [GeneratedArtifact] = []
         if isPatchLike(toolName: toolName),
            let patch = patchText(from: input) {
-            artifacts.append(contentsOf: markdownPaths(inPatch: patch).map {
-                GeneratedArtifact(kind: .markdownDocument, path: $0, sourceToolName: toolName)
+            artifacts.append(contentsOf: artifactPaths(inPatch: patch).compactMap {
+                makeArtifact(path: $0, sourceToolName: toolName)
             })
         }
 
@@ -64,12 +82,8 @@ public enum GeneratedArtifactDetector {
     public static func artifactsFromDisplay(title: String, body: String, detail: String?) -> [GeneratedArtifact] {
         guard isWriteLike(toolName: title) else { return [] }
         let text = [body, detail].compactMap { $0 }.joined(separator: "\n")
-        var paths: [String] = []
-        for candidate in markdownPathCandidates(in: text) where isMarkdownPath(candidate) {
-            paths.append(candidate)
-        }
-        return dedupe(paths.map {
-            GeneratedArtifact(kind: .markdownDocument, path: $0, sourceToolName: title)
+        return dedupe(TranscriptArtifactClassifier.pathCandidates(in: text).compactMap {
+            makeArtifact(path: $0, sourceToolName: title)
         })
     }
 
@@ -93,8 +107,9 @@ public enum GeneratedArtifactDetector {
                     continue
                 }
                 if pathKeys.contains(key), let path = stringPath(from: raw),
-                   isMarkdownCandidate(path, metadataMarksMarkdown: marksMarkdown) {
-                    artifacts.append(GeneratedArtifact(kind: .markdownDocument, path: path, sourceToolName: toolName))
+                   isArtifactCandidate(path, metadataMarksMarkdown: marksMarkdown),
+                   let artifact = makeArtifact(path: path, sourceToolName: toolName, metadataMarksMarkdown: marksMarkdown) {
+                    artifacts.append(artifact)
                 }
                 collectPathArtifacts(in: raw, inheritedMarkdownMetadata: marksMarkdown, into: &artifacts, toolName: toolName)
             }
@@ -105,10 +120,41 @@ public enum GeneratedArtifactDetector {
         }
     }
 
-    private static func isMarkdownCandidate(_ path: String, metadataMarksMarkdown: Bool) -> Bool {
-        if isMarkdownPath(path) { return true }
+    private static func isArtifactCandidate(_ path: String, metadataMarksMarkdown: Bool) -> Bool {
+        if TranscriptArtifactClassifier.isArtifactPath(path) { return true }
         let ext = (path as NSString).pathExtension
         return ext.isEmpty && metadataMarksMarkdown
+    }
+
+    private static func makeArtifact(
+        path: String,
+        sourceToolName: String,
+        metadataMarksMarkdown: Bool = false
+    ) -> GeneratedArtifact? {
+        if let kind = kind(forPath: path) {
+            return GeneratedArtifact(kind: kind, path: path, sourceToolName: sourceToolName)
+        }
+        let ext = (path as NSString).pathExtension
+        if ext.isEmpty && metadataMarksMarkdown {
+            return GeneratedArtifact(kind: .markdownDocument, path: path, sourceToolName: sourceToolName)
+        }
+        return nil
+    }
+
+    private static func kind(forPath path: String) -> GeneratedArtifact.Kind? {
+        guard let transcriptKind = TranscriptArtifactClassifier.kind(forPath: path) else { return nil }
+        switch transcriptKind {
+        case .markdown: return .markdownDocument
+        case .html: return .html
+        case .image: return .image
+        case .pdf: return .pdf
+        case .document: return .document
+        case .spreadsheet: return .spreadsheet
+        case .presentation: return .presentation
+        case .media: return .media
+        case .archive: return .archive
+        case .data: return .data
+        }
     }
 
     private static func dictionaryMarksMarkdown(_ dict: [String: Any]) -> Bool {
@@ -176,7 +222,7 @@ public enum GeneratedArtifactDetector {
         return nil
     }
 
-    private static func markdownPaths(inPatch patch: String) -> [String] {
+    private static func artifactPaths(inPatch patch: String) -> [String] {
         var paths: [String] = []
         for line in patch.split(separator: "\n", omittingEmptySubsequences: false) {
             let raw = String(line).trimmingCharacters(in: .whitespaces)
@@ -187,7 +233,7 @@ public enum GeneratedArtifactDetector {
                 diffPath(from: raw, prefix: "+++ b/"),
                 diffPath(from: raw, prefix: "--- b/")
             ].compactMap { $0 }
-            for path in candidates where isMarkdownPath(path) {
+            for path in candidates where TranscriptArtifactClassifier.isArtifactPath(path) {
                 paths.append(path)
             }
         }
@@ -203,18 +249,6 @@ public enum GeneratedArtifactDetector {
         guard line.hasPrefix(prefix) else { return nil }
         let rest = String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
         return rest == "/dev/null" ? nil : rest
-    }
-
-    private static func markdownPathCandidates(in text: String) -> [String] {
-        let pattern = #"(?i)(?:^|[\s"'`(])((?:(?:~|/|\.{1,2}/|[A-Za-z0-9_.-]+/)[^\s"'`()<>]+|[A-Za-z0-9_.-]+)\.(?:md|markdown|mdown))(?=$|[\s"'`),.])"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        return regex.matches(in: text, range: range).compactMap { match in
-            guard match.numberOfRanges > 1,
-                  let pathRange = Range(match.range(at: 1), in: text)
-            else { return nil }
-            return String(text[pathRange])
-        }
     }
 
     private static func stringPath(from value: Any) -> String? {

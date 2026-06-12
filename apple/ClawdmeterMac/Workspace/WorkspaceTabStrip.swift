@@ -275,7 +275,7 @@ struct WorkspaceTabStrip: View {
         tabRow(
             title: tab.title,
             subtitle: "Document",
-            systemImage: "doc.richtext",
+            systemImage: TranscriptArtifactClassifier.systemImageName(forPath: tab.path),
             isActive: activeDocumentTabId == tab.id,
             labelWidth: labelWidth,
             selectAction: { onSelectDocument(tab) },

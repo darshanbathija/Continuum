@@ -298,7 +298,7 @@ struct ChatItemRowContent: View {
                     }
                 }
             }
-            ForEach(markdownArtifacts(in: pairs)) { artifact in
+            ForEach(previewableArtifacts(in: pairs)) { artifact in
                 generatedArtifactButton(artifact)
             }
             ForEach(flatPairs) { pair in
@@ -311,10 +311,10 @@ struct ChatItemRowContent: View {
         }
     }
 
-    private func markdownArtifacts(in pairs: [ToolPair]) -> [GeneratedArtifact] {
+    private func previewableArtifacts(in pairs: [ToolPair]) -> [GeneratedArtifact] {
         var seen: Set<String> = []
         var out: [GeneratedArtifact] = []
-        for artifact in pairs.flatMap({ $0.call.generatedArtifacts }) where artifact.kind == .markdownDocument {
+        for artifact in pairs.flatMap({ $0.call.generatedArtifacts }) where artifact.opensInDocumentTab {
             guard !seen.contains(artifact.path) else { continue }
             seen.insert(artifact.path)
             out.append(artifact)
@@ -327,7 +327,7 @@ struct ChatItemRowContent: View {
             actions.onOpenMarkdownDocument(artifact.path)
         } label: {
             HStack(spacing: 7) {
-                Image(systemName: "doc.richtext")
+                Image(systemName: artifact.systemImageName)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(t.accent)
                 Text((artifact.path as NSString).lastPathComponent.isEmpty ? artifact.path : (artifact.path as NSString).lastPathComponent)
@@ -344,7 +344,7 @@ struct ChatItemRowContent: View {
             .background(t.hair2, in: Capsule(style: .continuous))
         }
         .buttonStyle(PressableButtonStyle())
-        .help("Open Markdown document in Code tab")
+        .help("Open in Code tab")
     }
 
     @ViewBuilder
@@ -415,6 +415,7 @@ struct ChatItemRowContent: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: 640, alignment: .trailing)
+                bodyArtifactStripIfAny(body: msg.body, alignment: .trailing)
             }
         }
     }
@@ -448,6 +449,7 @@ struct ChatItemRowContent: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     pathLinkStripIfAny(body: msg.body)
+                    bodyArtifactStripIfAny(body: msg.body)
                 }
             }
             Spacer(minLength: 64)
@@ -530,6 +532,51 @@ struct ChatItemRowContent: View {
                 )
             }
         }
+    }
+
+    @ViewBuilder
+    private func bodyArtifactStripIfAny(
+        body: String,
+        alignment: HorizontalAlignment = .leading
+    ) -> some View {
+        let paths = Array(Set(TranscriptArtifactClassifier.pathCandidates(in: body))).sorted().prefix(6)
+        if !paths.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(Array(paths), id: \.self) { path in
+                    bodyArtifactButton(path: path)
+                }
+            }
+            .frame(maxWidth: 640, alignment: frameAlignment(for: alignment))
+        }
+    }
+
+    private func frameAlignment(for alignment: HorizontalAlignment) -> Alignment {
+        alignment == .trailing ? .trailing : .leading
+    }
+
+    private func bodyArtifactButton(path: String) -> some View {
+        Button {
+            actions.onOpenMarkdownDocument(path)
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: TranscriptArtifactClassifier.systemImageName(forPath: path))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                Text((path as NSString).lastPathComponent.isEmpty ? path : (path as NSString).lastPathComponent)
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(t.hair2, in: Capsule(style: .continuous))
+        }
+        .buttonStyle(PressableButtonStyle())
+        .help("Open in Code tab")
     }
 
     @ViewBuilder
