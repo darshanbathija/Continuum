@@ -792,7 +792,7 @@ struct WorkspaceContextHeader: View {
     @Environment(\.tahoe) private var t
 
     init(draft: WorkspaceDraftTab, catalog: ModelCatalog) {
-        provider = draft.agent.tahoeProvider
+        provider = TahoeProvider.resolved(agent: draft.agent, modelId: draft.modelId)
         title = RepoIdentity.displayName(for: draft.workspaceKey.repoKey)
         configurationSummary = Self.configurationSummary(
             agent: draft.agent,

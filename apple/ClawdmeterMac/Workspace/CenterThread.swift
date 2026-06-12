@@ -175,7 +175,7 @@ struct CenterThread: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 26)
+            TahoeProviderGlyph(provider: session.tahoeProvider, size: 26)
             VStack(alignment: .leading, spacing: 1) {
                 // v0.5.4: user-supplied customName takes precedence
                 // over the session's goal in the chat header.
@@ -1281,7 +1281,7 @@ struct CenterThread: View {
             modelText = "default model"
         }
         let effortText = effectiveEffort(forModelId: effectiveModelId).map(effortLabel) ?? "Default effort"
-        return "\(session.agent.tahoeProvider.displayName) · \(modelText) · \(effortText)"
+        return "\(session.tahoeProvider.displayName) · \(modelText) · \(effortText)"
     }
 
     static func effectiveModelId(for session: AgentSession, catalog: ModelCatalog) -> String? {

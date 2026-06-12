@@ -1520,6 +1520,12 @@ public final class AgentControlServer {
                 : await OpenCodeGoModelProbe.shared.cachedModels()
             catalog = catalog.replacingOpenCodeGo(openCodeModels)
         }
+        if ProviderEnablement.isEnabled("openrouter") {
+            let openRouterModels = live
+                ? await OpenRouterModelProbe.shared.currentModels()
+                : await OpenRouterModelProbe.shared.currentState().models
+            catalog = catalog.replacingOpenRouter(openRouterModels)
+        }
         let enabledIDs = ProviderEnablement.enabledProviderIDs(for: .code)
         let readyModelProviderIDs = enabledIDs.filter { id in
             let root = ProviderRegistry.rootProviderID(for: id)
@@ -1535,6 +1541,7 @@ public final class AgentControlServer {
             codex: filtered.codex,
             gemini: filtered.gemini,
             opencode: filtered.opencode,
+            openrouter: filtered.openrouter,
             cursor: filtered.cursor,
             grok: filtered.grok,
             enabledProviderIDs: enabledIDs,
@@ -1554,10 +1561,8 @@ public final class AgentControlServer {
         if modelCatalogEntryMatches(trimmed, entries: vendor.models(in: .bundled)) {
             return true
         }
-        switch vendor.backingProvider {
+        switch vendor {
         case .cursor where ProviderEnablement.isEnabled("cursor"):
-            // Probe cache cold on fresh daemon start → can't distinguish a valid
-            // non-bundled enterprise model from an invalid one; be permissive.
             guard await CursorModelProbe.shared.hasFreshCache else { return true }
             return modelCatalogEntryMatches(
                 trimmed,
@@ -1569,6 +1574,10 @@ public final class AgentControlServer {
                 trimmed,
                 entries: await OpenCodeGoModelProbe.shared.cachedModels()
             )
+        case .openrouter where ProviderEnablement.isEnabled("openrouter"):
+            let state = await OpenRouterModelProbe.shared.currentState()
+            guard state.discoverySucceeded else { return true }
+            return modelCatalogEntryMatches(trimmed, entries: state.models)
         default:
             return false
         }

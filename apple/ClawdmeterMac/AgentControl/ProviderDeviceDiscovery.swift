@@ -94,6 +94,10 @@ public struct ProviderDeviceStatus: Sendable, Equatable, Identifiable {
             // Go API key is the gate; opencode binary helps setup but
             // isn't required to turn the provider on.
             return authenticated
+        case "openrouter":
+            // OpenRouter API key is the gate; opencode binary helps setup
+            // but isn't required to turn the provider on.
+            return authenticated
         case "cursor":
             return cliInstalled && authenticated
         case "grok":
@@ -189,6 +193,7 @@ public enum ProviderDeviceDiscovery {
                 codex: probeCodex(),
                 gemini: probeGemini(),
                 opencode: await probeOpenCode(),
+                openrouter: await probeOpenRouter(),
                 cursor: await probeCursor(),
                 grok: probeGrok()
             )
@@ -200,6 +205,7 @@ public enum ProviderDeviceDiscovery {
             case "codex": return probes.codex
             case "gemini": return probes.gemini
             case "opencode": return probes.opencode
+            case "openrouter": return probes.openrouter
             case "cursor": return probes.cursor
             case "grok": return probes.grok
             default: return nil
@@ -212,6 +218,7 @@ public enum ProviderDeviceDiscovery {
             switch id {
             case "gemini": return "Antigravity"
             case "opencode": return "OpenCode"
+            case "openrouter": return "OpenRouter"
             default: return ProviderRegistry.descriptor(id: id)?.displayName ?? id.capitalized
             }
         }()
@@ -367,6 +374,46 @@ public enum ProviderDeviceDiscovery {
         return ProviderDeviceStatus(
             providerId: "opencode",
             displayName: "OpenCode",
+            cliInstalled: cliInstalled,
+            authenticated: authenticated,
+            status: status,
+            installedBinary: binary,
+            message: message,
+            setupActions: actions
+        )
+    }
+
+    /// **OpenRouter** — API key in `~/.local/share/opencode/auth.json`
+    /// (provider `openrouter`) or `$OPENROUTER_API_KEY`. Routes through
+    /// `opencode serve` with `{providerID: "openrouter"}` model objects.
+    private static func probeOpenRouter() async -> ProviderDeviceStatus {
+        let binary = await MainActor.run {
+            OpencodeProcessManager.shared.locateBinary()
+        }
+        let fileKey = await OpencodeAuthFile.shared.apiKey(providerId: "openrouter")
+        let envKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let authenticated = (fileKey?.isEmpty == false) || (envKey?.isEmpty == false)
+        let cliInstalled = binary != nil
+        let status = resolveStatus(cliInstalled: cliInstalled, authenticated: authenticated)
+        var actions: [ProviderDeviceSetupAction] = []
+        if !authenticated {
+            actions.append(.addOpenRouterKey)
+            if cliInstalled {
+                actions.append(.openOpencodeSignIn)
+            }
+        }
+        let message: String? = {
+            if authenticated {
+                if cliInstalled { return "OpenRouter API key configured · opencode on PATH" }
+                return "OpenRouter API key configured"
+            }
+            if cliInstalled { return "Add your OpenRouter API key or sign in via opencode" }
+            return "Add your OpenRouter API key in Settings"
+        }()
+        return ProviderDeviceStatus(
+            providerId: "openrouter",
+            displayName: "OpenRouter",
             cliInstalled: cliInstalled,
             authenticated: authenticated,
             status: status,

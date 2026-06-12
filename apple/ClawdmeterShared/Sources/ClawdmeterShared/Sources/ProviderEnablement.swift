@@ -72,7 +72,7 @@ public enum ProviderEnablement {
     }
 
     public static func enabledChatVendors(
-        in order: [ChatVendor] = [.chatgpt, .claude, .antigravity, .cursor, .openrouter, .grok]
+        in order: [ChatVendor] = [.chatgpt, .claude, .antigravity, .cursor, .opencode, .openrouter, .grok]
     ) -> [ChatVendor] {
         order.filter { ProviderRegistry.isEnabled(chatVendor: $0) }
     }

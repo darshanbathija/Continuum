@@ -71,7 +71,7 @@ struct IOSWorkspaceTabStrip: View {
     private func sessionChip(_ session: AgentSession) -> some View {
         let active = activeDocumentTabId == nil && session.id == activeSessionId
         HStack(spacing: 8) {
-            TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 18)
+            TahoeProviderGlyph(provider: session.tahoeProvider, size: 18)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title(for: session))
                     .font(TahoeFont.body(11.5, weight: active ? .bold : .semibold))

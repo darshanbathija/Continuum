@@ -62,7 +62,7 @@ public struct ProviderDescriptor: Sendable, Identifiable {
             accentRGB: (0x5C, 0x9D, 0xFF),
             settingsRank: 2,
             chatRank: 2,
-            modelPickerRank: 5,
+            modelPickerRank: 6,
             analyticsRank: 2,
             costStackRank: nil
         ),
@@ -84,7 +84,7 @@ public struct ProviderDescriptor: Sendable, Identifiable {
         ProviderDescriptor(
             id: "opencode",
             agent: .opencode,
-            chatVendor: .openrouter,
+            chatVendor: .opencode,
             analyticsProvider: .opencode,
             agentDisplayName: "OpenCode",
             assetName: "OpencodeLogo",
@@ -97,6 +97,21 @@ public struct ProviderDescriptor: Sendable, Identifiable {
             costStackRank: 2
         ),
         ProviderDescriptor(
+            id: "openrouter",
+            agent: .opencode,
+            chatVendor: .openrouter,
+            analyticsProvider: .opencode,
+            agentDisplayName: "OpenRouter",
+            assetName: "OpenRouterLogo",
+            isTemplateAsset: true,
+            accentRGB: (0x6B, 0x8A, 0xFF),
+            settingsRank: 5,
+            chatRank: 5,
+            modelPickerRank: 4,
+            analyticsRank: 3,
+            costStackRank: nil
+        ),
+        ProviderDescriptor(
             id: "grok",
             agent: .grok,
             chatVendor: .grok,
@@ -105,9 +120,9 @@ public struct ProviderDescriptor: Sendable, Identifiable {
             assetName: "GrokLogo",
             isTemplateAsset: true,
             accentRGB: (0x70, 0x74, 0x7C),
-            settingsRank: 5,
-            chatRank: 5,
-            modelPickerRank: 4,
+            settingsRank: 6,
+            chatRank: 6,
+            modelPickerRank: 5,
             analyticsRank: 5,
             costStackRank: 4
         ),
@@ -116,14 +131,22 @@ public struct ProviderDescriptor: Sendable, Identifiable {
     public static let byId: [String: ProviderDescriptor] =
         Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
 
+    /// Primary descriptor per agent kind. OpenRouter also routes through
+    /// `AgentKind.opencode` but is addressed via its own provider id.
     public static let byAgent: [AgentKind: ProviderDescriptor] =
-        Dictionary(uniqueKeysWithValues: all.map { ($0.agent, $0) })
+        Dictionary(uniqueKeysWithValues: all.compactMap { descriptor in
+            guard descriptor.id == descriptor.agent.rawValue else { return nil }
+            return (descriptor.agent, descriptor)
+        })
 
     public static let byChatVendor: [ChatVendor: ProviderDescriptor] =
         Dictionary(uniqueKeysWithValues: all.map { ($0.chatVendor, $0) })
 
     public static let byAnalyticsProvider: [UsageRecord.Provider: ProviderDescriptor] =
-        Dictionary(uniqueKeysWithValues: all.map { ($0.analyticsProvider, $0) })
+        Dictionary(uniqueKeysWithValues: all.compactMap { descriptor in
+            guard descriptor.id == descriptor.analyticsProvider.rawValue else { return nil }
+            return (descriptor.analyticsProvider, descriptor)
+        })
 
     public static var settingsOrder: [ProviderDescriptor] {
         all.sorted { $0.settingsRank < $1.settingsRank }
@@ -138,7 +161,12 @@ public struct ProviderDescriptor: Sendable, Identifiable {
     }
 
     public static var analyticsDisplayOrder: [UsageRecord.Provider] {
-        all.sorted { $0.analyticsRank < $1.analyticsRank }.map(\.analyticsProvider)
+        var seen = Set<UsageRecord.Provider>()
+        return all
+            .sorted { $0.analyticsRank < $1.analyticsRank }
+            .compactMap { descriptor in
+                seen.insert(descriptor.analyticsProvider).inserted ? descriptor.analyticsProvider : nil
+            }
     }
 
     public static var analyticsCostStackOrder: [UsageRecord.Provider] {

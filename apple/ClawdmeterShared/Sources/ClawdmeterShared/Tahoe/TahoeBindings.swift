@@ -92,6 +92,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
                 // for). Demo defaults to anthropic so the chip reads
                 // meaningfully in Previews.
                 case .opencode: return "Kimi K2.6"
+                case .openrouter: return "anthropic/claude-sonnet-4.6"
                 case .cursor: return "Cursor Auto"
                 case .grok: return "grok-build"
                 }
@@ -133,6 +134,7 @@ public struct TahoeLiveBindings: Equatable, Sendable {
         case .codex:  return codex
         case .gemini: return gemini
         case .opencode: return opencode
+        case .openrouter: return .demo(.openrouter)
         case .cursor: return cursor
         case .grok: return grok
         }

@@ -184,6 +184,7 @@ public struct MacMenubarPopover: View {
             case .codex:  return "gpt-5"
             case .gemini: return "antigravity-pro"
             case .opencode: return "via opencode"
+            case .openrouter: return "via OpenRouter"
             case .cursor: return "Cursor Auto"
             case .grok: return "Grok"
             }

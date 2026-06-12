@@ -26,8 +26,11 @@ struct OnboardingSheet: View {
     @State private var isRefreshingDiscovery = false
     @State private var openCodeGoKeyDraft = ""
     @State private var openCodeGoWorkspaceDraft = ""
+    @State private var openRouterKeyDraft = ""
     @State private var isSavingOpenCodeGoKey = false
+    @State private var isSavingOpenRouterKey = false
     @State private var openCodeGoKeyMessage: String?
+    @State private var openRouterKeyMessage: String?
     @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
     @State private var setupTerminal: SetupTerminalSession?
     @State private var customProviderEditorPresentation: CustomProviderEditorPresentation?
@@ -144,6 +147,9 @@ struct OnboardingSheet: View {
             if showOpenCodeGoSetupPanel {
                 openCodeGoSetupPanel
             }
+            if showOpenRouterSetupPanel {
+                openRouterSetupPanel
+            }
         }
     }
 
@@ -213,6 +219,11 @@ struct OnboardingSheet: View {
         guard let status = discoveryResult?.status(for: "opencode") else { return false }
         return status.setupActions.contains(.addOpenCodeGoKey)
             || status.setupActions.contains(.configureOpenCodeGoQuota)
+    }
+
+    private var showOpenRouterSetupPanel: Bool {
+        guard let status = discoveryResult?.status(for: "openrouter") else { return false }
+        return status.setupActions.contains(.addOpenRouterKey)
     }
 
     @ViewBuilder
@@ -344,7 +355,9 @@ struct OnboardingSheet: View {
             }
         case .openOpencodeSignIn:
             await MainActor.run { opencodeSetupCommand = .signIn }
-        case .addOpenRouterKey, .addOpenCodeGoKey:
+        case .addOpenRouterKey:
+            await MainActor.run { openRouterKeyDraft = "" }
+        case .addOpenCodeGoKey:
             await MainActor.run {
                 openCodeGoKeyDraft = ""
                 prefillOpenCodeGoWorkspaceDraft()
@@ -440,6 +453,54 @@ struct OnboardingSheet: View {
         openCodeGoWorkspaceDraft = workspace
         runtime.opencodeModel.forcePoll()
         return .connected
+    }
+
+    private var openRouterSetupPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("OpenRouter")
+                .font(TahoeFont.body(12.5, weight: .semibold))
+                .foregroundStyle(t.fg)
+            Text("Paste your OpenRouter API key from openrouter.ai/keys.")
+                .font(TahoeFont.body(11.5))
+                .foregroundStyle(t.fg3)
+            SecureField("OpenRouter API key", text: $openRouterKeyDraft)
+                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 8) {
+                Button {
+                    Task { await saveOpenRouterCredentials() }
+                } label: {
+                    Text(isSavingOpenRouterKey ? "Saving…" : "Save")
+                        .font(TahoeFont.body(12, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(openRouterKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSavingOpenRouterKey)
+            }
+            if let openRouterKeyMessage {
+                Text(openRouterKeyMessage)
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg3)
+            }
+        }
+        .padding(12)
+        .background(t.glassTintHi.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func saveOpenRouterCredentials() async {
+        let key = openRouterKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        isSavingOpenRouterKey = true
+        defer { isSavingOpenRouterKey = false }
+        do {
+            try await OpencodeAuthFile.shared.setAPIKey(providerId: "openrouter", key: key)
+            openRouterKeyMessage = "OpenRouter connected."
+            openRouterKeyDraft = ""
+            stagedProviderIDs.insert("openrouter")
+            runtime.opencodeModel.forcePoll()
+            await OpenRouterModelProbe.shared.invalidate()
+            await refreshDiscovery()
+        } catch {
+            openRouterKeyMessage = error.localizedDescription
+        }
     }
 
     @MainActor

@@ -82,6 +82,7 @@ final class SessionLauncherModel: ObservableObject {
         let codexEnabled = ProviderEnablement.isEnabled("codex")
         let geminiEnabled = ProviderEnablement.isEnabled("gemini")
         let opencodeEnabled = ProviderEnablement.isEnabled("opencode")
+        let openrouterEnabled = ProviderEnablement.isEnabled("openrouter")
         let cursorEnabled = ProviderEnablement.isEnabled("cursor")
         let grokEnabled = ProviderEnablement.isEnabled("grok")
 
@@ -95,6 +96,15 @@ final class SessionLauncherModel: ObservableObject {
             let goAuth = await OpenCodeGoCredentials.hasGoAuth()
             opencodeReady = OpencodeProcessManager.shared.binaryPath != nil && goAuth
             nextCatalog = nextCatalog.replacingOpenCodeGo(await OpenCodeGoModelProbe.shared.currentModels())
+        }
+
+        if openrouterEnabled {
+            let openRouterState = await OpenRouterModelProbe.shared.currentState()
+            if !opencodeReady {
+                opencodeReady = openRouterState.authenticated
+                    && (OpencodeProcessManager.shared.binaryPath != nil || openRouterState.discoverySucceeded)
+            }
+            nextCatalog = nextCatalog.replacingOpenRouter(openRouterState.models)
         }
 
         if cursorEnabled {

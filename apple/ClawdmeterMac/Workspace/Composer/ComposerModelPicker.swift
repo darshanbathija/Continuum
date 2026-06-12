@@ -295,7 +295,7 @@ public struct ComposerModelPicker: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(t.fg2)
         case .vendor(let vendor):
-            TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 22)
+            TahoeProviderGlyph(provider: vendor.tahoeProvider, size: 22)
         case .customProvider(let providerId):
             CustomProviderGlyph(
                 label: ProviderChoice.custom(providerId).displayName(in: catalog),

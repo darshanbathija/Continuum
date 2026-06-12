@@ -49,10 +49,10 @@ final class ProviderRegistryTests: XCTestCase {
     }
 
     func testCanonicalProviderRegistryMappings() {
-        XCTAssertEqual(ProviderRegistry.allProviderIDs, ["claude", "codex", "gemini", "cursor", "opencode", "grok"])
+        XCTAssertEqual(ProviderRegistry.allProviderIDs, ["claude", "codex", "gemini", "cursor", "opencode", "openrouter", "grok"])
         XCTAssertEqual(ProviderRegistry.rootProviderID(for: "claude/personal"), "claude")
         XCTAssertEqual(ProviderRegistry.rootProviderID(for: "antigravity"), "gemini")
-        XCTAssertEqual(ProviderRegistry.rootProviderID(for: "openrouter"), "opencode")
+        XCTAssertEqual(ProviderRegistry.rootProviderID(for: "openrouter"), "openrouter")
         XCTAssertEqual(ProviderRegistry.descriptor(chatVendor: .chatgpt)?.id, "codex")
         XCTAssertEqual(ProviderRegistry.descriptor(agentKind: .gemini)?.id, "gemini")
         XCTAssertEqual(ProviderRegistry.descriptor(usageProvider: .opencode)?.id, "opencode")

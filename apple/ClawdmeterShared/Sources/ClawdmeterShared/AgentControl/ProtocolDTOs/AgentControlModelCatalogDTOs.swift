@@ -165,11 +165,11 @@ public struct ModelCatalog: Codable, Sendable {
     /// `cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels`
     /// surfaces — 3-flavor split between Pro/Flash/Flash-Lite.
     public let gemini: [ModelCatalogEntry]
-    /// OpenCode is a runtime/provider adapter, not a single model vendor.
-    /// Entries here represent Clawdmeter-visible choices while the exact
-    /// underlying provider/model identity is persisted on
-    /// `SessionRuntimeBinding.providerModelId`.
+    /// OpenCode Go subscription models (Kimi, GLM, DeepSeek, etc.).
     public let opencode: [ModelCatalogEntry]
+    /// OpenRouter BYOK models — live-probed from the OpenRouter API when
+    /// the user has configured an API key.
+    public let openrouter: [ModelCatalogEntry]
     /// Cursor models are account-visible and should normally be replaced by
     /// a live probe from `cursor-agent --list-models` / `agent models`.
     /// The bundled fallback intentionally contains only Auto so we do not
@@ -193,6 +193,7 @@ public struct ModelCatalog: Codable, Sendable {
         codex: [ModelCatalogEntry],
         gemini: [ModelCatalogEntry] = [],
         opencode: [ModelCatalogEntry] = [],
+        openrouter: [ModelCatalogEntry] = [],
         cursor: [ModelCatalogEntry] = [],
         grok: [ModelCatalogEntry] = [],
         enabledProviderIDs: [String]? = nil,
@@ -203,6 +204,7 @@ public struct ModelCatalog: Codable, Sendable {
         self.codex = codex
         self.gemini = gemini
         self.opencode = opencode
+        self.openrouter = openrouter
         self.cursor = cursor
         self.grok = grok
         self.enabledProviderIDs = enabledProviderIDs
@@ -273,6 +275,13 @@ public struct ModelCatalog: Codable, Sendable {
             ModelCatalogEntry(id: "qwen3.7-max", provider: .opencode, displayName: "OpenCode Go · Qwen3.7 Max", cliAlias: "opencode-go/qwen3.7-max", supportsThinking: true, supportsEffort: false, contextWindow: 256_000, recommendedFor: "Deep reasoning", badge: "Go"),
             ModelCatalogEntry(id: "opencode-default", provider: .opencode, displayName: "OpenCode default", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "Go account default", badge: "Default"),
         ],
+        openrouter: [
+            ModelCatalogEntry(id: "openai/gpt-5.5", provider: .opencode, displayName: "OpenRouter · GPT-5.5", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: nil, recommendedFor: "Most work", badge: "BYOK"),
+            ModelCatalogEntry(id: "anthropic/claude-opus-4.7", provider: .opencode, displayName: "OpenRouter · Claude Opus 4.7", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: 200_000, recommendedFor: "Deep reasoning", badge: nil),
+            ModelCatalogEntry(id: "anthropic/claude-sonnet-4.6", provider: .opencode, displayName: "OpenRouter · Claude Sonnet 4.6", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: 200_000, recommendedFor: "Plan mode", badge: nil),
+            ModelCatalogEntry(id: "google/gemini-3-pro", provider: .opencode, displayName: "OpenRouter · Gemini 3 Pro", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: 2_000_000, recommendedFor: "Deep reasoning", badge: "Pro"),
+            ModelCatalogEntry(id: "opencode-default", provider: .opencode, displayName: "OpenCode default", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "BYOK provider", badge: "Default"),
+        ],
         cursor: [
             ModelCatalogEntry(id: CursorModelCatalog.autoModelId, provider: .cursor, displayName: "Cursor default / Auto", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "Cursor account default", badge: "Auto"),
         ],
@@ -320,6 +329,7 @@ public struct ModelCatalog: Codable, Sendable {
             AgentKind.codex.rawValue: entries(for: .codex),
             AgentKind.gemini.rawValue: entries(for: .gemini),
             AgentKind.opencode.rawValue: entries(for: .opencode),
+            "openrouter": openrouter,
             AgentKind.cursor.rawValue: entries(for: .cursor),
             AgentKind.grok.rawValue: entries(for: .grok),
         ]
@@ -337,7 +347,16 @@ public struct ModelCatalog: Codable, Sendable {
         case .claude: return claude
         case .codex: return codex
         case .gemini: return gemini
-        case .opencode: return opencode
+        case .opencode:
+            var merged = opencode
+            if let enabledProviderIDs {
+                let enabled = Set(enabledProviderIDs.map { ProviderRegistry.rootProviderID(for: $0) })
+                if !enabled.contains("openrouter") {
+                    return merged
+                }
+            }
+            merged.append(contentsOf: openrouter)
+            return merged
         case .cursor: return cursor
         case .grok: return grok
         case .unknown: return []
@@ -350,6 +369,7 @@ public struct ModelCatalog: Codable, Sendable {
             codex: codex,
             gemini: gemini,
             opencode: opencode,
+            openrouter: openrouter,
             cursor: cursor,
             grok: grok,
             enabledProviderIDs: enabledProviderIDs,
@@ -359,15 +379,27 @@ public struct ModelCatalog: Codable, Sendable {
     }
 
     public func replacingOpenCodeGo(_ opencode: [ModelCatalogEntry]) -> ModelCatalog {
-        replacingOpenRouter(opencode)
-    }
-
-    public func replacingOpenRouter(_ opencode: [ModelCatalogEntry]) -> ModelCatalog {
         ModelCatalog(
             claude: claude,
             codex: codex,
             gemini: gemini,
             opencode: opencode,
+            openrouter: openrouter,
+            cursor: cursor,
+            grok: grok,
+            enabledProviderIDs: enabledProviderIDs,
+            customProviders: customProviders,
+            updatedAt: Date()
+        )
+    }
+
+    public func replacingOpenRouter(_ openrouter: [ModelCatalogEntry]) -> ModelCatalog {
+        ModelCatalog(
+            claude: claude,
+            codex: codex,
+            gemini: gemini,
+            opencode: opencode,
+            openrouter: openrouter,
             cursor: cursor,
             grok: grok,
             enabledProviderIDs: enabledProviderIDs,
@@ -389,7 +421,8 @@ public struct ModelCatalog: Codable, Sendable {
             claude: allowed(.claude) ? claude : [],
             codex: allowed(.codex) ? codex : [],
             gemini: allowed(.gemini) ? gemini : [],
-            opencode: allowed(.opencode) ? opencode : [],
+            opencode: allowed(.opencode) && enabled.contains("opencode") ? opencode : [],
+            openrouter: enabled.contains("openrouter") ? openrouter : [],
             cursor: allowed(.cursor) ? cursor : [],
             grok: allowed(.grok) ? grok : [],
             enabledProviderIDs: enabledIDs,
@@ -405,7 +438,7 @@ public struct ModelCatalog: Codable, Sendable {
     /// Codable throws on missing keys; decodeIfPresent + default returns
     /// an empty Gemini array.
     private enum CodingKeys: String, CodingKey {
-        case claude, codex, gemini, opencode, cursor, grok, enabledProviderIDs, customProviders, updatedAt
+        case claude, codex, gemini, opencode, openrouter, cursor, grok, enabledProviderIDs, customProviders, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -414,6 +447,7 @@ public struct ModelCatalog: Codable, Sendable {
         self.codex = try c.decode([ModelCatalogEntry].self, forKey: .codex)
         self.gemini = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .gemini) ?? []
         self.opencode = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .opencode) ?? []
+        self.openrouter = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .openrouter) ?? []
         self.cursor = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .cursor) ?? []
         self.grok = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .grok) ?? []
         self.enabledProviderIDs = try c.decodeIfPresent([String].self, forKey: .enabledProviderIDs)
@@ -427,6 +461,7 @@ public struct ModelCatalog: Codable, Sendable {
         try c.encode(codex, forKey: .codex)
         try c.encode(gemini, forKey: .gemini)
         try c.encode(opencode, forKey: .opencode)
+        try c.encode(openrouter, forKey: .openrouter)
         try c.encode(cursor, forKey: .cursor)
         try c.encode(grok, forKey: .grok)
         try c.encodeIfPresent(enabledProviderIDs, forKey: .enabledProviderIDs)

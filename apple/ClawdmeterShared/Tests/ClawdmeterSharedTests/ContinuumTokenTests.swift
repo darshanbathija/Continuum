@@ -44,9 +44,10 @@ final class ContinuumTokenTests: XCTestCase {
         XCTAssertEqual(TahoeProvider.codex.dot,    ContinuumTokens.hex(0x8A9099)) // graphite
         XCTAssertEqual(TahoeProvider.gemini.dot,   ContinuumTokens.hex(0x5C9DFF)) // Antigravity blue
         XCTAssertEqual(TahoeProvider.opencode.dot, ContinuumTokens.hex(0x9B87D4)) // muted violet
+        XCTAssertEqual(TahoeProvider.openrouter.dot, ContinuumTokens.hex(0x6B8AFF)) // periwinkle blue
         XCTAssertEqual(TahoeProvider.cursor.dot,   ContinuumTokens.hex(0x7FA8B5)) // cool steel
-        // All five providers must be mutually distinct so the picker reads.
-        let dots = [TahoeProvider.claude, .codex, .gemini, .opencode, .cursor].map(\.dot)
+        // All providers must be mutually distinct so the picker reads.
+        let dots = [TahoeProvider.claude, .codex, .gemini, .opencode, .openrouter, .cursor].map(\.dot)
         XCTAssertEqual(Set(dots).count, dots.count)
     }
 
