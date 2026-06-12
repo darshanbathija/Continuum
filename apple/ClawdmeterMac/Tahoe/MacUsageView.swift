@@ -62,26 +62,7 @@ public struct MacUsageView: View {
                     noProvidersCTA
                         .padding(.horizontal, 6).padding(.bottom, 14)
                 } else {
-                    HStack(spacing: 14) {
-                        ForEach(liveColumns) { column in
-                            ProviderColumn(provider: column.provider, row: column.row, model: column.model)
-                        }
-                    }
-                    .padding(.horizontal, 6).padding(.bottom, 14)
-                    if !enabledSecondaryColumns.isEmpty {
-                        // Secondary accounts get their own row beneath the
-                        // primaries — same column shape, account-tagged
-                        // header, no menu-bar/auto-revive controls.
-                        HStack(spacing: 14) {
-                            ForEach(enabledSecondaryColumns) { column in
-                                SecondaryProviderColumn(column: column)
-                            }
-                            if enabledSecondaryColumns.count < liveColumns.count {
-                                Spacer().frame(maxWidth: .infinity)
-                            }
-                        }
-                        .padding(.horizontal, 6).padding(.bottom, 14)
-                    }
+                    usageGaugeGrid
                 }
 
                 if usageAccessGranted {
@@ -127,6 +108,87 @@ public struct MacUsageView: View {
         let row: TahoeLiveRow
         let model: AppModel?
         var id: TahoeProvider { provider }
+    }
+
+    private enum UsageGaugeItem: Identifiable {
+        case primary(LiveColumn)
+        case secondary(SecondaryTahoeColumn)
+
+        var id: String {
+            switch self {
+            case .primary(let column):
+                return "primary-\(column.provider.rawValue)"
+            case .secondary(let column):
+                return "secondary-\(column.wireId)"
+            }
+        }
+    }
+
+    /// Row widths for the live usage gauge grid. Five cards share one row so a
+    /// lone secondary account doesn't stretch across the dashboard; six split 3+3.
+    static func usageGaugeRowSizes(for count: Int) -> [Int] {
+        switch count {
+        case 0: return []
+        case 1...5: return [count]
+        case 6: return [3, 3]
+        default:
+            var rows: [Int] = []
+            var remaining = count
+            while remaining > 0 {
+                if remaining == 7 {
+                    rows += [3, 4]
+                    remaining = 0
+                } else if remaining == 8 {
+                    rows += [4, 4]
+                    remaining = 0
+                } else {
+                    let size = min(3, remaining)
+                    rows.append(size)
+                    remaining -= size
+                }
+            }
+            return rows
+        }
+    }
+
+    private var usageGaugeItems: [UsageGaugeItem] {
+        liveColumns.map { .primary($0) } + enabledSecondaryColumns.map { .secondary($0) }
+    }
+
+    @ViewBuilder
+    private var usageGaugeGrid: some View {
+        let items = usageGaugeItems
+        let rowSizes = Self.usageGaugeRowSizes(for: items.count)
+        VStack(spacing: 14) {
+            ForEach(Array(chunked(items, rowSizes: rowSizes).enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 14) {
+                    ForEach(row) { item in
+                        Group {
+                            switch item {
+                            case .primary(let column):
+                                ProviderColumn(provider: column.provider, row: column.row, model: column.model)
+                            case .secondary(let column):
+                                SecondaryProviderColumn(column: column)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 6).padding(.bottom, 14)
+    }
+
+    private func chunked(_ items: [UsageGaugeItem], rowSizes: [Int]) -> [[UsageGaugeItem]] {
+        var rows: [[UsageGaugeItem]] = []
+        var index = items.startIndex
+        for size in rowSizes {
+            guard index < items.endIndex else { break }
+            let end = items.index(index, offsetBy: size, limitedBy: items.endIndex) ?? items.endIndex
+            rows.append(Array(items[index..<end]))
+            index = end
+        }
+        return rows
     }
 
     private var enabledSecondaryColumns: [SecondaryTahoeColumn] {
