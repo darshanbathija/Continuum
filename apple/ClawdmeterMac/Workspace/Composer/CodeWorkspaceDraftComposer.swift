@@ -10,7 +10,6 @@ struct CodeWorkspaceDraftComposer: View {
     let workspaceDraft: WorkspaceDraftTab
 
     @StateObject private var store: ComposerStore
-    @State private var accountChoices: [ProviderInstanceId] = []
     @State private var selectedAccountWireId: String?
     @Environment(\.tahoe) private var t
 
@@ -62,7 +61,8 @@ struct CodeWorkspaceDraftComposer: View {
                     store.planMode = (newMode == .plan)
                 },
                 permissionMode: store.permissionMode,
-                placeholderOverride: "Ask to make changes, @mention files, run /commands"
+                placeholderOverride: "Ask to make changes, @mention files, run /commands",
+                selectedAccountWireId: $selectedAccountWireId
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

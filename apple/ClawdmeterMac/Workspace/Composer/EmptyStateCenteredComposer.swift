@@ -60,7 +60,6 @@ struct EmptyStateCenteredComposer: View {
     @ObservedObject var presentationStore: SessionPresentationStore
     @StateObject private var store: ComposerStore
     @State private var appeared = false
-    @State private var accountChoices: [ProviderInstanceId] = []
     @State private var selectedAccountWireId: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -101,7 +100,8 @@ struct EmptyStateCenteredComposer: View {
                         store.planMode = (newMode == .plan)
                     },
                     permissionMode: store.permissionMode,
-                    minimalChrome: true
+                    minimalChrome: true,
+                    selectedAccountWireId: $selectedAccountWireId
                 )
             }
             .frame(maxWidth: 760)
@@ -177,61 +177,12 @@ struct EmptyStateCenteredComposer: View {
             .labelsHidden()
             .pickerStyle(.menu)
             Spacer()
-            if accountChoices.count >= 2 {
-                accountMenu
-            }
             Text("Goal becomes the first user message.")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .task(id: store.agent) { await refreshAccountChoices() }
-    }
-
-    private var accountMenu: some View {
-        Menu {
-            ForEach(accountChoices, id: \.wireId) { instance in
-                Button {
-                    selectedAccountWireId = instance.isPrimary ? nil : instance.wireId
-                } label: {
-                    let label = instance.isPrimary ? "Default" : instance.name
-                    let isCurrent = instance.isPrimary
-                        ? selectedAccountWireId == nil
-                        : selectedAccountWireId == instance.wireId
-                    if isCurrent { Label(label, systemImage: "checkmark") }
-                    else { Text(label) }
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "person.crop.circle")
-                    .font(.system(size: 10, weight: .semibold))
-                Text(accountChoices.first { $0.wireId == selectedAccountWireId }.map(\.name) ?? "Default")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(.secondary)
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Which \(store.agent.rawValue) account runs this session")
-        .accessibilityIdentifier("code.account.menu")
-    }
-
-    private func refreshAccountChoices() async {
-        guard let registry = AppDelegate.runtime?.providerInstanceRegistry,
-              ProviderInstanceEnvironment.configDirVariable(for: store.agent) != nil else {
-            accountChoices = []
-            selectedAccountWireId = nil
-            return
-        }
-        let choices = await registry.instances(for: store.agent)
-        accountChoices = choices
-        if let pinned = selectedAccountWireId,
-           !choices.contains(where: { $0.wireId == pinned }) {
-            selectedAccountWireId = nil
-        }
     }
 
     private var modelSupportsEffort: Bool {

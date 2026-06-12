@@ -47,6 +47,29 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(PermissionModeChip.quickFlipTarget(current: .bypass, availableModes: cursorModes), .acceptEdits)
     }
 
+    func test_providerAccountChipDisplayLabelAndPreference() {
+        let primary = ProviderInstanceId.primary(kind: .claude)
+        let work = ProviderInstanceId(kind: .claude, name: "work")
+        let choices = [primary, work]
+
+        XCTAssertEqual(ProviderAccountChip.displayLabel(for: nil, in: choices), "Default")
+        XCTAssertEqual(ProviderAccountChip.displayLabel(for: work.wireId, in: choices), "work")
+
+        let defaults = UserDefaults.standard
+        let key = "clawdmeter.code.accountByAgent"
+        let prior = defaults.dictionary(forKey: key)
+        defer {
+            if let prior { defaults.set(prior, forKey: key) }
+            else { defaults.removeObject(forKey: key) }
+        }
+        defaults.removeObject(forKey: key)
+
+        CodeComposerAccountPreference.setWireId(work.wireId, for: .claude)
+        XCTAssertEqual(CodeComposerAccountPreference.wireId(for: .claude), work.wireId)
+        CodeComposerAccountPreference.setWireId(nil, for: .claude)
+        XCTAssertNil(CodeComposerAccountPreference.wireId(for: .claude))
+    }
+
     func test_rootCommandRoutingRegistersCodeTabShortcutBackedActions() {
         let enabledCommands = Dictionary(uniqueKeysWithValues: MacRootCommandRouting
             .codeTabCommands(canOpenChatTab: true, canOpenTerminalTab: true)
