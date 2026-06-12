@@ -70,6 +70,13 @@ public actor OpenCodeGoModelProbe {
         return ModelCatalog.bundled.opencode
     }
 
+    /// True when the in-memory cache is populated and not yet expired.
+    public var hasFreshCache: Bool {
+        guard let cache else { return false }
+        let ttl = cache.state.discoverySucceeded ? Self.cacheTTL : Self.failureTTL
+        return Date().timeIntervalSince(cache.computedAt) < ttl
+    }
+
     public func currentState() async -> OpenCodeGoModelProbeState {
         let now = Date()
         if let cache {

@@ -1556,11 +1556,15 @@ public final class AgentControlServer {
         }
         switch vendor.backingProvider {
         case .cursor where ProviderEnablement.isEnabled("cursor"):
+            // Probe cache cold on fresh daemon start → can't distinguish a valid
+            // non-bundled enterprise model from an invalid one; be permissive.
+            guard await CursorModelProbe.shared.hasFreshCache else { return true }
             return modelCatalogEntryMatches(
                 trimmed,
                 entries: await CursorModelProbe.shared.cachedModels()
             )
         case .opencode where ProviderEnablement.isEnabled("opencode"):
+            guard await OpenCodeGoModelProbe.shared.hasFreshCache else { return true }
             return modelCatalogEntryMatches(
                 trimmed,
                 entries: await OpenCodeGoModelProbe.shared.cachedModels()

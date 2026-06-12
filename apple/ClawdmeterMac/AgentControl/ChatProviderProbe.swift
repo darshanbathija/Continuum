@@ -509,6 +509,12 @@ public actor CursorModelProbe {
         return ModelCatalog.bundled.cursor
     }
 
+    /// True when the in-memory cache is populated and not yet expired.
+    public var hasFreshCache: Bool {
+        guard let cache else { return false }
+        return Date().timeIntervalSince(cache.computedAt) < Self.cacheTTL
+    }
+
     public func passiveState() async -> CursorModelProbeState {
         let now = Date()
         let binary = ShellRunner.locateBinary("cursor-agent") ?? ShellRunner.locateBinary("agent")
