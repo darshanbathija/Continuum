@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Combine
 import ClawdmeterShared
@@ -86,6 +87,14 @@ final class AppRuntime: ObservableObject {
     // bundle the Mac shows in a QR; iPhone scans it to derive the
     // shared symmetric key. See RelayPairingService for state machine.
     let relayPairingService: RelayPairingService
+
+    /// Phase 2: Fn double-tap dictation — app-scoped so the global event tap
+    /// stays live when the dashboard window is closed or minimized.
+    let globalDictationCoordinator: GlobalDictationCoordinator
+    let dictationHistoryStore: DictationHistoryStore
+    let sttModelDownloadManager: STTModelDownloadManager
+    let appDictationContext: AppDictationContext
+    private var dictationOverlayController: DictationOverlayController?
 
     // E3 (respin): outbound relay WebSocket client. Opens when paired
     // (E7 bundle available) and the user has explicitly flipped the
@@ -305,6 +314,31 @@ final class AppRuntime: ObservableObject {
         let appSupportDirectory = testingAppSupport
             ?? WorkspaceStore.defaultStoreURL().deletingLastPathComponent()
         self.appSupportDirectory = appSupportDirectory
+        let dictationHistoryStore = DictationHistoryStore(appSupportDirectory: appSupportDirectory)
+        self.dictationHistoryStore = dictationHistoryStore
+        self.globalDictationCoordinator = GlobalDictationCoordinator(historyStore: dictationHistoryStore)
+        self.sttModelDownloadManager = STTModelDownloadManager(appSupportDirectory: appSupportDirectory)
+        let dictationContext = AppDictationContext(appSupportDirectory: appSupportDirectory)
+        dictationContext.onApplyComposerText = { text, target, phase in
+            NotificationCenter.default.post(
+                name: .globalDictationApplyText,
+                object: nil,
+                userInfo: GlobalDictationNotification.applyTextUserInfo(
+                    target: target,
+                    text: text,
+                    phase: phase
+                )
+            )
+        }
+        dictationContext.onPrepareComposerRoute = { target in
+            let tab = target == .chat ? "chat" : "code"
+            NotificationCenter.default.post(
+                name: .clawdmeterSwitchTab,
+                object: nil,
+                userInfo: ["tab": tab]
+            )
+        }
+        self.appDictationContext = dictationContext
         let providerInstanceStore = ProviderInstanceStore(
             storeURL: appSupportDirectory.appendingPathComponent("provider-instances.json")
         )
@@ -605,6 +639,7 @@ final class AppRuntime: ObservableObject {
         }
 
         bootstrapProviderRuntimes()
+        wireGlobalDictationLifecycle()
 
         // Multi-account: secondary accounts' gauges over the wire. Set
         // AFTER init completes — an escaping self-capture inside init
@@ -768,6 +803,22 @@ final class AppRuntime: ObservableObject {
         let payload = try? JSONSerialization.data(withJSONObject: ["error": message])
         guard let enc = try? RelayMuxFrame(opId: opId, kind: .error, payload: payload).encoded() else { return }
         try? await relayClient?.send(op: RelayMux.op, payload: enc)
+    }
+
+    private func wireGlobalDictationLifecycle() {
+        guard !Self.deferProviderSideEffectsForTesting else {
+            runtimeLogger.info("Global dictation hotkey deferred under test/no-spend gate")
+            return
+        }
+        globalDictationCoordinator.bind(context: appDictationContext)
+        dictationOverlayController = DictationOverlayController(coordinator: globalDictationCoordinator)
+        globalDictationCoordinator.refreshHotkeyInstallation()
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.globalDictationCoordinator.refreshHotkeyInstallation()
+            }
+            .store(in: &cancellables)
     }
 
     private func bootstrapProviderRuntimes() {

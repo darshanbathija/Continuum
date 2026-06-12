@@ -417,6 +417,12 @@ struct MacRootView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: transientToast)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: modalOverlayKey)
         .tahoeTheme(theme)
+        .environment(\.globalDictationCoordinator, runtime.globalDictationCoordinator)
+        .onAppear { syncGlobalDictationContext() }
+        .onChange(of: tab) { _, _ in syncGlobalDictationContext() }
+        .onChange(of: presentationStore.snapshot.voicePresentationPreferences) { _, _ in
+            syncGlobalDictationContext()
+        }
         .background(ContinuumTokens.palette(for: theme.appearance).bg)
         .background(
             ShortcutOverrideMonitor(
@@ -688,6 +694,79 @@ struct MacRootView: View {
         transientToast = toast
     }
 
+    private func routeDictationToggle() {
+        guard presentationStore.snapshot.voicePresentationPreferences.allowControlMShortcut else { return }
+
+        if DictationRouting.shared.globalSessionActive {
+            runtime.globalDictationCoordinator.toggleComposerDictation()
+            return
+        }
+
+        let resolution = DictationRouting.shared.resolve(
+            currentTab: tab.rawValue,
+            lastDictationTab: presentationStore.snapshot.lastDictationTab
+        )
+        switch resolution {
+        case .unavailableReadOnlyChat:
+            showTransientToast(TransientToast(
+                title: "Dictation unavailable for archived transcripts",
+                duration: 2.5
+            ))
+            return
+        case .route(let target):
+            prepareComposerRoute(for: target)
+            runtime.globalDictationCoordinator.toggleComposerDictation()
+        }
+    }
+
+    private func copyLastDictation() {
+        guard let text = runtime.dictationHistoryStore.entries.first?.text else {
+            showTransientToast(TransientToast(title: "No dictation history yet", duration: 2.5))
+            return
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        showTransientToast(TransientToast(title: "Copied last dictation", duration: 2.5))
+    }
+
+    private func syncGlobalDictationContext() {
+        let context = runtime.appDictationContext
+        context.presentationStoreProvider = { [presentationStore] in presentationStore }
+        context.currentTabProvider = { [tab] in tab.rawValue }
+        context.onPrepareComposerRoute = { target in
+            prepareComposerRoute(for: target)
+        }
+        context.onApplyComposerText = { text, target, phase in
+            NotificationCenter.default.post(
+                name: .globalDictationApplyText,
+                object: nil,
+                userInfo: GlobalDictationNotification.applyTextUserInfo(
+                    target: target,
+                    text: text,
+                    phase: phase
+                )
+            )
+        }
+        runtime.globalDictationCoordinator.refreshHotkeyInstallation()
+    }
+
+    private func prepareComposerRoute(for target: DictationComposerTarget) {
+        switch target {
+        case .chat:
+            if tab != .chat {
+                visitedTabs.insert(.chat)
+                tab = .chat
+            }
+            try? presentationStore.setLastDictationTab(.chat)
+        case .code:
+            if tab != .code {
+                visitedTabs.insert(.code)
+                tab = .code
+            }
+            try? presentationStore.setLastDictationTab(.code)
+        }
+    }
+
     private func performToastAction(_ toast: TransientToast) {
         guard let actionID = toast.actionID else { return }
         if actionID.hasPrefix("unarchive:"),
@@ -745,6 +824,7 @@ struct MacRootView: View {
             .init(id: "composer.send", title: "Send Prompt", subtitle: "Send the current composer draft", keywords: ["submit"], scope: .composer, kind: .action, shortcutID: "composer.send"),
             .init(id: "composer.queue", title: "Queue Follow-up", subtitle: "Queue the current draft for the running session", keywords: ["follow up", "later"], scope: .composer, kind: .action, shortcutID: "composer.queue"),
             .init(id: "composer.dictation", title: "Toggle Dictation", subtitle: "Start or stop composer dictation", keywords: ["voice", "microphone"], scope: .composer, kind: .action, shortcutID: "composer.dictation"),
+            .init(id: "voice.copyLastDictation", title: "Copy Last Dictation", subtitle: "Copy the most recent transcript to the clipboard", keywords: ["voice", "dictation", "clipboard", "history"], scope: .global, kind: .action),
             .init(id: "composer.attach", title: "Add Attachment", subtitle: "Attach files or context to the Code composer", keywords: ["file", "paperclip", "context"], scope: .composer, kind: .action, shortcutID: "composer.attach"),
             .init(id: "composer.modelEffort", title: "Open Model Selector", subtitle: "Open the Code model picker", keywords: ["model", "provider"], scope: .composer, kind: .action, shortcutID: "composer.modelEffort"),
             .init(id: "composer.context", title: "Open Context Usage", subtitle: "Show context-window and plan usage", keywords: ["context", "usage", "tokens"], scope: .composer, kind: .action, shortcutID: "composer.context"),
@@ -869,8 +949,9 @@ struct MacRootView: View {
             tab = .code
             DispatchQueue.main.async { NotificationCenter.default.post(name: .composerQueue, object: nil) }
         case "composer.dictation":
-            tab = .code
-            DispatchQueue.main.async { NotificationCenter.default.post(name: .composerToggleDictation, object: nil) }
+            routeDictationToggle()
+        case "voice.copyLastDictation":
+            copyLastDictation()
         case "composer.attach":
             tab = .code
             DispatchQueue.main.async { NotificationCenter.default.post(name: .composerAttach, object: nil) }
