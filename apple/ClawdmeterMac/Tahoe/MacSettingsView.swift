@@ -557,39 +557,49 @@ private enum ProviderSettingsTab: String, CaseIterable, Identifiable {
 }
 
 private struct ProviderSettingsTabBar: View {
-    @Environment(\.tahoe) private var t
     var selection: ProviderSettingsTab
     var onSelect: (ProviderSettingsTab) -> Void
 
     var body: some View {
         HStack(spacing: 4) {
             ForEach(ProviderSettingsTab.allCases) { tab in
-                let isSelected = tab == selection
-                Button {
-                    onSelect(tab)
-                } label: {
-                    Text(tab.title)
-                        .font(TahoeFont.body(12.5, weight: isSelected ? .semibold : .medium))
-                        .foregroundStyle(isSelected ? t.fg : t.fg3)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(
-                            isSelected ? t.hair2 : .clear,
-                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        )
-                        .overlay {
-                            if isSelected {
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .stroke(t.hairline, lineWidth: 0.8)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("settings.providers.tab.\(tab.rawValue)")
+                ProviderSettingsTabButton(
+                    tab: tab,
+                    isSelected: tab == selection,
+                    onSelect: { onSelect(tab) }
+                )
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 2)
+    }
+}
+
+private struct ProviderSettingsTabButton: View {
+    @Environment(\.tahoe) private var t
+    var tab: ProviderSettingsTab
+    var isSelected: Bool
+    var onSelect: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            Text(tab.title)
+                .font(TahoeFont.body(12.5, weight: isSelected ? .semibold : .medium))
+                .foregroundStyle(isSelected ? t.fg : t.fg3)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background {
+                    if isSelected || isHovered {
+                        RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                            .fill(isSelected ? t.segmentActiveFill : t.hover)
+                    }
+                }
+                .contentShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .accessibilityIdentifier("settings.providers.tab.\(tab.rawValue)")
     }
 }
 
