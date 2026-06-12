@@ -1759,7 +1759,9 @@ private struct ProviderPreferenceRow: View {
                             ProviderDeviceStatusBadge(status: deviceStatus.status)
                         }
                     }
-                    if showDeviceStatus, let message = deviceStatus?.message {
+                    if showDeviceStatus,
+                       let message = deviceStatus?.message,
+                       !shouldHideDeviceStatusMessage {
                         Text(message)
                             .font(TahoeFont.body(11.5))
                             .foregroundStyle(t.fg3)
@@ -1797,6 +1799,15 @@ private struct ProviderPreferenceRow: View {
         .frame(minHeight: 36)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.provider.\(providerId)")
+    }
+
+    /// When multi-account is enabled, the per-account list is the source of
+    /// truth — the provider-level "Signed in · … on PATH" line would make
+    /// a second account look like an afterthought.
+    private var shouldHideDeviceStatusMessage: Bool {
+        isEnabled
+            && accountsRuntime != nil
+            && ProviderAccountsSection.supportsMultiAccount(vendor.backingProvider)
     }
 
     private func shouldShowSetupActions(_ status: ProviderDeviceStatus) -> Bool {

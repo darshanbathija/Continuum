@@ -195,7 +195,7 @@ struct EmptyStateCenteredComposer: View {
                 Button {
                     selectedAccountWireId = instance.isPrimary ? nil : instance.wireId
                 } label: {
-                    let label = instance.isPrimary ? "Default" : instance.name
+                    let label = instance.isPrimary ? "default" : instance.name
                     let isCurrent = instance.isPrimary
                         ? selectedAccountWireId == nil
                         : selectedAccountWireId == instance.wireId
@@ -207,7 +207,7 @@ struct EmptyStateCenteredComposer: View {
             HStack(spacing: 4) {
                 Image(systemName: "person.crop.circle")
                     .font(.system(size: 10, weight: .semibold))
-                Text(accountChoices.first { $0.wireId == selectedAccountWireId }.map(\.name) ?? "Default")
+                Text(currentAccountMenuLabel)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .lineLimit(1)
             }
@@ -219,6 +219,14 @@ struct EmptyStateCenteredComposer: View {
         .accessibilityIdentifier("code.account.menu")
     }
 
+    private var currentAccountMenuLabel: String {
+        if let selectedAccountWireId,
+           let match = accountChoices.first(where: { $0.wireId == selectedAccountWireId }) {
+            return match.name
+        }
+        return "default"
+    }
+
     private func refreshAccountChoices() async {
         guard let registry = AppDelegate.runtime?.providerInstanceRegistry,
               ProviderInstanceEnvironment.configDirVariable(for: store.agent) != nil else {
@@ -228,10 +236,10 @@ struct EmptyStateCenteredComposer: View {
         }
         let choices = await registry.instances(for: store.agent)
         accountChoices = choices
-        if let pinned = selectedAccountWireId,
-           !choices.contains(where: { $0.wireId == pinned }) {
-            selectedAccountWireId = nil
-        }
+        selectedAccountWireId = CodePreferredAccountStore.providerInstanceId(
+            for: store.agent,
+            available: choices
+        )
     }
 
     private var modelSupportsEffort: Bool {

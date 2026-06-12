@@ -101,4 +101,51 @@ final class InstanceLoginSupportTests: XCTestCase {
             .write(to: CodexAuthProbe.authFileURL(configRoot: root))
         XCTAssertTrue(CodexAuthProbe.validAuthExists(configRoot: root))
     }
+
+    // MARK: - Account email resolution
+
+    private func makeUnsignedJWT(payloadJSON: String) -> String {
+        let payloadB64 = Data(payloadJSON.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "hdr.\(payloadB64).sig"
+    }
+
+    func testJWTPayloadReader_decodesBase64URLSegment() throws {
+        let jwt = makeUnsignedJWT(payloadJSON: #"{"email":"user@example.com"}"#)
+        let payload = try XCTUnwrap(JWTPayloadReader.decodePayloadJSON(jwt))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        XCTAssertEqual(json["email"] as? String, "user@example.com")
+    }
+
+    func testCodexEmail_fromIdTokenTopLevelClaim() async throws {
+        let root = try tempRoot()
+        let jwt = makeUnsignedJWT(payloadJSON: #"{"email":"work@company.com"}"#)
+        let auth = """
+        {"auth_mode": "chatgpt",
+         "tokens": {"id_token": "\(jwt)", "access_token": "tok", "refresh_token": "r", "account_id": "u-1"},
+         "last_refresh": "2026-06-11T00:00:00Z"}
+        """
+        try Data(auth.utf8).write(to: CodexAuthProbe.authFileURL(configRoot: root))
+        let instance = ProviderInstanceId(kind: .codex, name: "work", homePathOverride: root.path)
+        let email = await ProviderAccountEmailResolver.email(for: instance)
+        XCTAssertEqual(email, "work@company.com")
+    }
+
+    func testCodexEmail_fromProfileClaim() async throws {
+        let root = try tempRoot()
+        let jwt = makeUnsignedJWT(
+            payloadJSON: #"{"https://api.openai.com/profile":{"email":"profile@example.com"}}"#
+        )
+        let auth = """
+        {"auth_mode": "chatgpt",
+         "tokens": {"id_token": "\(jwt)", "access_token": "tok", "refresh_token": "r"},
+         "last_refresh": "2026-06-11T00:00:00Z"}
+        """
+        try Data(auth.utf8).write(to: CodexAuthProbe.authFileURL(configRoot: root))
+        let instance = ProviderInstanceId(kind: .codex, name: "work", homePathOverride: root.path)
+        let email = await ProviderAccountEmailResolver.email(for: instance)
+        XCTAssertEqual(email, "profile@example.com")
+    }
 }

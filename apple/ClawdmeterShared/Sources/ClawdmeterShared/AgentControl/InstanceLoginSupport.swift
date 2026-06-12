@@ -78,7 +78,142 @@ public struct ClaudeSetupTokenScanner: Sendable {
     }
 }
 
+/// Decode a JWT payload segment without signature verification. Used only
+/// to read display metadata (email) from locally stored OAuth tokens.
+public enum JWTPayloadReader: Sendable {
+
+    public static func decodePayloadJSON(_ jwt: String) -> Data? {
+        let parts = jwt.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count >= 2 else { return nil }
+        return base64URLDecode(String(parts[1]))
+    }
+
+    private static func base64URLDecode(_ string: String) -> Data? {
+        var base64 = string
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let remainder = base64.count % 4
+        if remainder > 0 {
+            base64.append(String(repeating: "=", count: 4 - remainder))
+        }
+        return Data(base64Encoded: base64)
+    }
+}
+
 #if os(macOS)
+/// Resolves the signed-in email for a configured provider instance.
+/// Claude hits Anthropic's private `/api/oauth/profile` endpoint; Codex
+/// reads the `id_token` JWT from the instance's `auth.json`.
+public enum ProviderAccountEmailResolver: Sendable {
+
+    public static func email(for instance: ProviderInstanceId) async -> String? {
+        switch instance.kind {
+        case .claude:
+            return await claudeEmail(for: instance)
+        case .codex:
+            return codexEmail(for: instance)
+        default:
+            return nil
+        }
+    }
+
+    private static func claudeEmail(for instance: ProviderInstanceId) async -> String? {
+        let provider = PastedAnthropicTokenProvider.forInstance(instance)
+        let token: String?
+        if provider.hasToken {
+            token = provider.currentAccessToken
+        } else if instance.isPrimary {
+            token = KeychainTokenProvider(allowsUserInteraction: false).currentAccessToken
+        } else {
+            token = nil
+        }
+        guard let token, !token.isEmpty else { return nil }
+        return await fetchClaudeProfileEmail(token: token)
+    }
+
+    private static func fetchClaudeProfileEmail(token: String) async -> String? {
+        guard let url = URL(string: "https://api.anthropic.com/api/oauth/profile") else {
+            return nil
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 12
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("claude-cli/2.1.143 (external, cli)", forHTTPHeaderField: "User-Agent")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                return nil
+            }
+            let profile = try JSONDecoder().decode(ClaudeOAuthProfile.self, from: data)
+            return profile.account.email?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        } catch {
+            return nil
+        }
+    }
+
+    private static func codexEmail(for instance: ProviderInstanceId) -> String? {
+        let authPath: URL
+        if instance.isPrimary {
+            authPath = ClawdmeterRealHome.url().appendingPathComponent(".codex/auth.json")
+        } else if let root = instance.configRoot, !root.isEmpty {
+            authPath = CodexAuthProbe.authFileURL(configRoot: URL(fileURLWithPath: root))
+        } else {
+            return nil
+        }
+        guard let data = try? Data(contentsOf: authPath),
+              let bundle = try? JSONDecoder().decode(CodexTokenProvider.AuthBundle.self, from: data),
+              let idToken = bundle.tokens?.idToken,
+              !idToken.isEmpty else {
+            return nil
+        }
+        return ChatGPTIdTokenClaims.email(fromJWT: idToken)
+    }
+
+    private struct ClaudeOAuthProfile: Decodable {
+        struct Account: Decodable {
+            let email: String?
+        }
+        let account: Account
+    }
+
+    private struct ChatGPTIdTokenClaims: Decodable {
+        let email: String?
+        let profile: ProfileClaims?
+
+        struct ProfileClaims: Decodable {
+            let email: String?
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case email
+            case profile = "https://api.openai.com/profile"
+        }
+
+        static func email(fromJWT jwt: String) -> String? {
+            guard let payload = JWTPayloadReader.decodePayloadJSON(jwt),
+                  let claims = try? JSONDecoder().decode(ChatGPTIdTokenClaims.self, from: payload) else {
+                return nil
+            }
+            if let direct = claims.email?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
+                return direct
+            }
+            return claims.profile?.email?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilIfEmpty
+        }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+}
+
 /// Validates that a Codex instance's `codex login` actually produced a
 /// usable credential file. `auth.json` can exist mid-write (the CLI
 /// creates then fills it), so presence alone is not completion — the
