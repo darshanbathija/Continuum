@@ -337,6 +337,7 @@ private struct ProviderColumn: View {
             case .codex:  return "codex"
             case .gemini: return "gemini"
             case .opencode: return "opencode"  // PR #31
+            case .openrouter: return "openrouter"
             case .cursor: return "cursor"
             case .grok: return "grok"
             }
@@ -351,7 +352,7 @@ private struct ProviderColumn: View {
     /// already equals the applied state → it no-ops ("toggle does nothing").
     private var menuBarDefaultShown: Bool {
         switch provider {
-        case .cursor, .opencode: return false
+        case .cursor, .opencode, .openrouter: return false
         default: return true
         }
     }

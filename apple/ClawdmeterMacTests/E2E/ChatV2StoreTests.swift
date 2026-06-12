@@ -81,7 +81,7 @@ final class ChatV2StoreTests: XCTestCase {
         XCTAssertEqual(store.model(for: .claude), ModelCatalog.bundled.claude.first?.id)
         XCTAssertEqual(store.model(for: .antigravity), ModelCatalog.bundled.gemini.first?.id)
         XCTAssertEqual(store.model(for: .cursor), ModelCatalog.bundled.cursor.first?.id)
-        XCTAssertEqual(store.model(for: .openrouter), ModelCatalog.bundled.opencode.first?.id)
+        XCTAssertEqual(store.model(for: .openrouter), ModelCatalog.bundled.openrouter.first?.id)
     }
 
     // MARK: - Persistence

@@ -1753,7 +1753,7 @@ struct SidebarPane: View {
                 }
                 RepoIdentityBadgeView(badge: repoBadge, size: 22)
                     .overlay(alignment: .bottomTrailing) {
-                        TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 11)
+                        TahoeProviderGlyph(provider: session.tahoeProvider, size: 11)
                             .padding(2)
                             .background(ContinuumTokens.surface2, in: Circle())
                     }
@@ -1804,7 +1804,7 @@ struct SidebarPane: View {
                         // clamp here rather than render "7/6" to the sidebar.
                         let safeCompleted = max(0, min(progress.completed, progress.total))
                         let isComplete = safeCompleted >= progress.total && progress.total > 0
-                        let provider = session.agent.tahoeProvider
+                        let provider = session.tahoeProvider
                         // Use provider.halo (the same color the bar gradient
                         // anchors on) so the milestone state stays inside the
                         // bar's two-color vocabulary and reads correctly in

@@ -58,6 +58,7 @@ final class ChatV2StoreCursorTests: XCTestCase {
     @MainActor
     func test_cursorAndOpenRouterAreSelectableChatVendors() async {
         XCTAssertTrue(ChatV2Store.defaultChatVendorOrder.contains(.cursor))
+        XCTAssertTrue(ChatV2Store.defaultChatVendorOrder.contains(.opencode))
         XCTAssertTrue(ChatV2Store.defaultChatVendorOrder.contains(.openrouter))
         XCTAssertTrue(ChatV2Store.broadcastCapableProviders.contains(.cursor))
         XCTAssertTrue(ChatV2Store.broadcastCapableProviders.contains(.opencode))

@@ -94,11 +94,7 @@ public struct AnyProviderGlyph: View {
     public var body: some View {
         switch choice {
         case .builtin(let vendor):
-            if let tahoe = vendor.tahoeProvider {
-                TahoeProviderGlyph(provider: tahoe, size: size)
-            } else {
-                CustomProviderGlyph(label: vendor.displayName, size: size)
-            }
+            TahoeProviderGlyph(provider: vendor.tahoeProvider, size: size)
         case .custom(let providerId):
             CustomProviderGlyph(
                 label: choice.displayName(in: catalog),
@@ -106,19 +102,6 @@ public struct AnyProviderGlyph: View {
             )
             .accessibilityLabel(choice.displayName(in: catalog))
             .accessibilityIdentifier("provider.glyph.custom.\(providerId)")
-        }
-    }
-}
-
-private extension ChatVendor {
-    var tahoeProvider: TahoeProvider? {
-        switch self {
-        case .chatgpt: return .codex
-        case .claude: return .claude
-        case .antigravity: return .gemini
-        case .cursor: return .cursor
-        case .openrouter: return .opencode
-        case .grok: return .grok
         }
     }
 }

@@ -8,6 +8,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
     case claude
     case antigravity
     case cursor
+    case opencode
     case openrouter
     case grok
 
@@ -19,7 +20,8 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
         case .claude: return "Claude"
         case .antigravity: return "Antigravity"
         case .cursor: return "Cursor"
-        case .openrouter: return "OpenCode"
+        case .opencode: return "OpenCode"
+        case .openrouter: return "OpenRouter"
         case .grok: return "Grok"
         }
     }
@@ -30,14 +32,14 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
         case .claude: return .claude
         case .antigravity: return .gemini
         case .cursor: return .cursor
-        case .openrouter: return .opencode
+        case .opencode, .openrouter: return .opencode
         case .grok: return .grok
         }
     }
 
     public var billingProvider: String? {
         switch self {
-        case .openrouter: return "opencode-go"
+        case .opencode: return "opencode-go"
         default: return nil
         }
     }
@@ -45,7 +47,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
     public var defaultEffort: ReasoningEffort? {
         switch self {
         case .chatgpt, .claude: return .high
-        case .openrouter, .antigravity, .cursor, .grok: return nil
+        case .opencode, .openrouter, .antigravity, .cursor, .grok: return nil
         }
     }
 
@@ -55,7 +57,8 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
         case .claude: return catalog.claude
         case .antigravity: return catalog.gemini
         case .cursor: return catalog.cursor
-        case .openrouter: return catalog.opencode
+        case .opencode: return catalog.opencode
+        case .openrouter: return catalog.openrouter
         case .grok: return catalog.grok
         }
     }
@@ -70,7 +73,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
         case .codex: return .chatgpt
         case .gemini: return .antigravity
         case .cursor: return .cursor
-        case .opencode: return .openrouter
+        case .opencode: return .opencode
         case .grok: return .grok
         case .unknown: return nil
         }

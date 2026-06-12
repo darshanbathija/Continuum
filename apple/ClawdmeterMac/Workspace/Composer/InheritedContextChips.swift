@@ -176,7 +176,7 @@ struct InheritedContextChips: View {
 
     private func inlineChipLabel(for session: AgentSession, selected: Bool) -> some View {
         HStack(spacing: 8) {
-            TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 18)
+            TahoeProviderGlyph(provider: session.tahoeProvider, size: 18)
             Text(title(for: session))
                 .font(TahoeFont.body(12, weight: .medium))
                 .foregroundStyle(selected ? t.fg : t.fg2)

@@ -81,15 +81,7 @@ extension AgentControlClient {
     /// distinct name so the call sites that need a `TahoeProvider`
     /// (not a TahoeCodeSession field) read clearly.
     private func mapTahoeProvider(for agent: AgentKind) -> TahoeProvider {
-        switch agent {
-        case .claude: return .claude
-        case .codex:  return .codex
-        case .gemini: return .gemini
-        case .opencode: return .opencode
-        case .cursor: return .cursor
-        case .grok: return .grok
-        case .unknown: return .claude
-        }
+        agent.tahoeProvider
     }
 
     private func tahoeSession(_ s: AgentSession, now: Date) -> TahoeCodeSession {
@@ -105,20 +97,7 @@ extension AgentControlClient {
             case .degraded: return "degraded \u{00B7} \(agoText)"
             }
         }()
-        let mapped: TahoeProvider = {
-            switch s.agent {
-            case .claude: return .claude
-            case .codex:  return .codex
-            case .gemini: return .gemini
-            case .opencode: return .opencode  // PR #31: 4th lane in TahoeProvider
-            case .cursor: return .cursor
-            case .grok: return .grok
-            case .unknown:
-                // X3: visual fallback for raws this client doesn't
-                // recognize. Degrades to Claude styling.
-                return .claude
-            }
-        }()
+        let mapped = s.tahoeProvider
         let status: TahoeCodeSession.Status = {
             switch s.status {
             case .planning: return .planning

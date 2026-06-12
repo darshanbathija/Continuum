@@ -1316,11 +1316,15 @@ struct SettingsProviderRowsWithDeviceStatus: View {
     @State private var setupTerminal: SetupTerminalSession?
     @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
     @State private var showOpenCodeGoSetupPanel = false
+    @State private var showOpenRouterSetupPanel = false
     @State private var openCodeGoKeyDraft = ""
     @State private var openCodeGoWorkspaceDraft = ""
     @State private var openCodeGoAuthCookieDraft = ""
+    @State private var openRouterKeyDraft = ""
     @State private var isSavingOpenCodeGoKey = false
+    @State private var isSavingOpenRouterKey = false
     @State private var openCodeGoKeyMessage: String?
+    @State private var openRouterKeyMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1335,6 +1339,9 @@ struct SettingsProviderRowsWithDeviceStatus: View {
             )
             if showOpenCodeGoSetupPanel {
                 openCodeGoSetupPanel
+            }
+            if showOpenRouterSetupPanel {
+                openRouterSetupPanel
             }
             if !deviceStatuses.isEmpty {
                 Button {
@@ -1374,6 +1381,8 @@ struct SettingsProviderRowsWithDeviceStatus: View {
         )
         await ChatProviderProbe.shared.invalidate()
         await CursorModelProbe.shared.invalidate()
+        await OpenCodeGoModelProbe.shared.invalidate()
+        await OpenRouterModelProbe.shared.invalidate()
     }
 
     private func performSetup(providerId: String, action: ProviderDeviceSetupAction) async {
@@ -1390,7 +1399,12 @@ struct SettingsProviderRowsWithDeviceStatus: View {
             }
         case .openOpencodeSignIn:
             await MainActor.run { opencodeSetupCommand = .signIn }
-        case .addOpenRouterKey, .addOpenCodeGoKey:
+        case .addOpenRouterKey:
+            await MainActor.run {
+                showOpenRouterSetupPanel = true
+                openRouterKeyDraft = ""
+            }
+        case .addOpenCodeGoKey:
             await MainActor.run {
                 showOpenCodeGoSetupPanel = true
                 openCodeGoKeyDraft = ""
@@ -1498,9 +1512,67 @@ struct SettingsProviderRowsWithDeviceStatus: View {
             openCodeGoKeyDraft = ""
             runtime?.opencodeModel.forcePoll()
             await OpenCodeGoModelProbe.shared.invalidate()
+            await OpenRouterModelProbe.shared.invalidate()
             await refreshDiscovery()
         } catch {
             openCodeGoKeyMessage = error.localizedDescription
+        }
+    }
+
+    private var openRouterSetupPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("OpenRouter")
+                    .font(TahoeFont.body(12.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Spacer(minLength: 0)
+                Button {
+                    showOpenRouterSetupPanel = false
+                } label: {
+                    TahoeIcon("xmark", size: 10, weight: .bold)
+                        .foregroundStyle(t.fg3)
+                }
+                .buttonStyle(.plain)
+            }
+            Text("Paste your OpenRouter API key from openrouter.ai/keys. Models route through opencode serve; the key is stored in ~/.local/share/opencode/auth.json.")
+                .font(TahoeFont.body(11.5))
+                .foregroundStyle(t.fg3)
+            SecureField("OpenRouter API key", text: $openRouterKeyDraft)
+                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 8) {
+                Button {
+                    Task { await saveOpenRouterCredentials() }
+                } label: {
+                    Text(isSavingOpenRouterKey ? "Saving…" : "Save")
+                        .font(TahoeFont.body(12, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(openRouterKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSavingOpenRouterKey)
+            }
+            if let openRouterKeyMessage {
+                Text(openRouterKeyMessage)
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg3)
+            }
+        }
+        .padding(12)
+        .background(t.glassTintHi.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func saveOpenRouterCredentials() async {
+        let key = openRouterKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        isSavingOpenRouterKey = true
+        defer { isSavingOpenRouterKey = false }
+        do {
+            try await OpencodeAuthFile.shared.setAPIKey(providerId: "openrouter", key: key)
+            openRouterKeyMessage = "OpenRouter connected."
+            openRouterKeyDraft = ""
+            runtime?.opencodeModel.forcePoll()
+            await OpenRouterModelProbe.shared.invalidate()
+            await refreshDiscovery()
+        } catch {
+            openRouterKeyMessage = error.localizedDescription
         }
     }
 }
@@ -1645,11 +1717,13 @@ struct ProviderPreferenceRows: View {
     }
 
     private func providerEnablementId(for vendor: ChatVendor) -> String {
-        vendor.backingProvider.rawValue
+        ProviderRegistry.descriptor(chatVendor: vendor)?.id ?? vendor.backingProvider.rawValue
     }
 
     private func refreshCatalogIfNeeded() async {
-        guard ProviderEnablement.isEnabled("cursor") || ProviderEnablement.isEnabled("opencode") else {
+        guard ProviderEnablement.isEnabled("cursor")
+            || ProviderEnablement.isEnabled("opencode")
+            || ProviderEnablement.isEnabled("openrouter") else {
             catalog = .bundled
             return
         }
@@ -1658,7 +1732,7 @@ struct ProviderPreferenceRows: View {
 
     private func refreshCatalogIfAllowed(for vendor: ChatVendor) async {
         let id = providerEnablementId(for: vendor)
-        guard id == "cursor" || id == "opencode" else { return }
+        guard id == "cursor" || id == "opencode" || id == "openrouter" else { return }
         guard ProviderEnablement.isEnabled(id) else { return }
         await refreshCatalog()
     }
@@ -1675,6 +1749,9 @@ struct ProviderPreferenceRows: View {
             if ProviderEnablement.isEnabled("opencode") {
                 next = next.replacingOpenCodeGo(await OpenCodeGoModelProbe.shared.currentModels())
             }
+            if ProviderEnablement.isEnabled("openrouter") {
+                next = next.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
+            }
             catalog = next
         }
     }
@@ -1685,6 +1762,8 @@ struct ProviderPreferenceRows: View {
             await CursorModelProbe.shared.invalidate()
         } else if id == "opencode" {
             await OpenCodeGoModelProbe.shared.invalidate()
+        } else if id == "openrouter" {
+            await OpenRouterModelProbe.shared.invalidate()
         }
     }
 
@@ -1743,13 +1822,13 @@ private struct ProviderPreferenceRow: View {
     }
 
     private var providerId: String {
-        vendor.backingProvider.rawValue
+        ProviderRegistry.descriptor(chatVendor: vendor)?.id ?? vendor.backingProvider.rawValue
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 12) {
-                TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 28)
+                AnyProviderGlyph(choice: .builtin(vendor), catalog: catalog, size: 28)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text(vendor.displayName)

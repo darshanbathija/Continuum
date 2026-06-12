@@ -902,7 +902,7 @@ struct ChatThreadScroll: View {
             density: density,
             isBookmarked: isBookmarked,
             highlight: highlight,
-            providerGlyph: session.agent.tahoeProvider,
+            providerGlyph: session.tahoeProvider,
             repoRoot: transcriptPathRoot,
             syntaxTheme: presentationStore.snapshot.syntaxTheme,
             isToolRunOpen: isToolRunOpen,

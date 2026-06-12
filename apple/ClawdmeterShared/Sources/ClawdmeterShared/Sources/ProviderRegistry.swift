@@ -16,9 +16,16 @@ public extension ProviderDescriptor {
     var usageProvider: UsageRecord.Provider? { analyticsProvider }
 
     var capabilities: Set<ProviderCapability> {
-        // OpenCode Go is now a full live-usage provider, identical to every
-        // other kind — no per-id divergence to special-case.
-        [.chat, .code, .liveUsage, .historicalUsage, .menuBar, .mobileMirror, .widget]
+        switch id {
+        case "openrouter":
+            // BYOK via OpenRouter — no subscription quota API to poll.
+            return [.chat, .code, .historicalUsage, .mobileMirror]
+        case "opencode":
+            // OpenCode Go ships live quota meters (5h / weekly / monthly).
+            return [.chat, .code, .liveUsage, .historicalUsage, .menuBar, .mobileMirror, .widget]
+        default:
+            return [.chat, .code, .liveUsage, .historicalUsage, .menuBar, .mobileMirror, .widget]
+        }
     }
 }
 
@@ -52,7 +59,6 @@ public enum ProviderRegistry {
             return String(id[..<slash])
         }
         if id == "antigravity" { return "gemini" }
-        if id == "openrouter" { return "opencode" }
         return id
     }
 

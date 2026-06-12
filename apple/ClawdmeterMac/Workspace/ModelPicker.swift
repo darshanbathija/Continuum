@@ -84,7 +84,12 @@ struct ModelPicker: View {
         case .claude: return catalog.claude
         case .codex:  return catalog.codex
         case .gemini: return catalog.gemini
-        case .opencode: return catalog.opencode
+        case .opencode:
+            var merged = catalog.opencode
+            if ProviderEnablement.isEnabled("openrouter") {
+                merged.append(contentsOf: catalog.openrouter)
+            }
+            return merged
         case .cursor: return catalog.cursor
         case .grok: return catalog.grok
         case .unknown: return []  // X3: no catalog slice for forward-compat unknown

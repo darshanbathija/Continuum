@@ -55,7 +55,7 @@ struct SessionComparisonSheet: View {
         return TahoeGlass(radius: 6, tone: .panel) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
-                    TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 24)
+                    TahoeProviderGlyph(provider: session.tahoeProvider, size: 24)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(session.displayLabel)
                             .font(TahoeFont.body(13, weight: .bold))

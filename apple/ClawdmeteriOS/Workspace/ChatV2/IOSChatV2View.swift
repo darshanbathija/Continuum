@@ -8,7 +8,7 @@ fileprivate func chatProviderDisplayName(session: AgentSession, catalog: ModelCa
        let summary = catalog.customProviders.first(where: { $0.id == id }) {
         return summary.label
     }
-    return session.agent.tahoeProvider.displayName
+    return session.tahoeProvider.displayName
 }
 
 public struct IOSChatV2View: View {
@@ -1313,7 +1313,7 @@ private struct Composer: View {
         if let customProviderId = choice.customProviderId {
             return CustomProviderAccent.dot(for: customProviderId)
         }
-        return choice.chatVendor?.backingProvider.tahoeProvider.dot ?? t.fg4
+        return choice.chatVendor?.tahoeProvider.dot ?? t.fg4
     }
 
     private func isProviderAvailable(_ provider: AgentKind) -> Bool {

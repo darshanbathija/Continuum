@@ -38,6 +38,7 @@ fileprivate func chatProviderDisplayName(session: AgentSession, catalog: ModelCa
 
 fileprivate func pendingColumnDisplayName(
     provider: AgentKind,
+    chatVendor: ChatVendor? = nil,
     customProviderId: String?,
     catalog: ModelCatalog
 ) -> String {
@@ -45,7 +46,21 @@ fileprivate func pendingColumnDisplayName(
        let summary = catalog.customProviders.first(where: { $0.id == customProviderId }) {
         return summary.label
     }
+    if let chatVendor {
+        return chatVendor.displayName
+    }
     return provider.brandedChatName
+}
+
+fileprivate func broadcastTahoeProvider(
+    agent: AgentKind,
+    chatVendor: ChatVendor?,
+    model: String?
+) -> TahoeProvider {
+    if let chatVendor {
+        return chatVendor.tahoeProvider
+    }
+    return TahoeProvider.resolved(agent: agent, modelId: model)
 }
 
 /// A broadcast that's been requested but whose child sessions haven't spawned
@@ -58,6 +73,7 @@ fileprivate struct PendingBroadcast {
     struct Column: Identifiable {
         let id = UUID()
         let provider: AgentKind
+        let chatVendor: ChatVendor?
         let model: String?
         let customProviderId: String?
         let displayName: String
@@ -70,6 +86,7 @@ fileprivate struct PendingBroadcast {
 fileprivate struct FailedBroadcastColumn: Identifiable {
     let id = UUID()
     let provider: AgentKind
+    let chatVendor: ChatVendor?
     let model: String?
     let customProviderId: String?
     let displayName: String
@@ -704,7 +721,7 @@ private struct ProviderDraftSummary: View {
         if let customProviderId = choice.customProviderId {
             return CustomProviderAccent.dot(for: customProviderId)
         }
-        return choice.chatVendor?.backingProvider.tahoeProvider.dot ?? t.fg4
+        return choice.chatVendor?.tahoeProvider.dot ?? t.fg4
     }
 }
 
@@ -745,7 +762,7 @@ private struct ProviderSummary: View {
             )
             .accessibilityIdentifier("provider.glyph.custom.\(customProviderId)")
         } else {
-            TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 22)
+            TahoeProviderGlyph(provider: session.tahoeProvider, size: 22)
         }
     }
 
@@ -753,7 +770,7 @@ private struct ProviderSummary: View {
         if let customProviderId = session.customProviderId {
             return CustomProviderAccent.dot(for: customProviderId)
         }
-        return session.agent.tahoeProvider.dot
+        return session.tahoeProvider.dot
     }
 }
 
@@ -971,6 +988,7 @@ private struct BroadcastTranscript: View {
                             ForEach(failedColumns) { col in
                                 BroadcastStatusColumn(
                                     provider: col.provider,
+                                    chatVendor: col.chatVendor,
                                     model: col.model,
                                     displayName: col.displayName,
                                     customProviderId: col.customProviderId,
@@ -990,6 +1008,7 @@ private struct BroadcastTranscript: View {
                                 ForEach(failedColumns) { col in
                                     BroadcastStatusColumn(
                                         provider: col.provider,
+                                        chatVendor: col.chatVendor,
                                         model: col.model,
                                         displayName: col.displayName,
                                         customProviderId: col.customProviderId,
@@ -1057,7 +1076,7 @@ private struct ProviderColumn: View {
             VStack(alignment: .leading, spacing: 0) {
                 // Provider identity = a 3px column-top edge (DESIGN.md broadcast),
                 // never a colored panel.
-                ProviderEdge(session.agent.tahoeProvider, axis: .horizontal, thickness: 3)
+                ProviderEdge(session.tahoeProvider, axis: .horizontal, thickness: 3)
                     .opacity(session.customProviderId == nil ? 1 : 0)
                 if session.customProviderId != nil {
                     Rectangle()
@@ -1073,8 +1092,8 @@ private struct ProviderColumn: View {
                         )
                         .accessibilityIdentifier("provider.glyph.custom.\(customProviderId)")
                     } else {
-                        ProviderDot(session.agent.tahoeProvider, size: 6)
-                        TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 20)
+                        ProviderDot(session.tahoeProvider, size: 6)
+                        TahoeProviderGlyph(provider: session.tahoeProvider, size: 20)
                     }
                     VStack(alignment: .leading, spacing: 1) {
                         Text(chatProviderDisplayName(session: session, catalog: client.modelCatalog))
@@ -1088,7 +1107,7 @@ private struct ProviderColumn: View {
                     Button {
                         Task { _ = await client.setFrontierTurnWinner(groupId: groupId, turnId: turnId, childIndex: session.frontierChildIndex ?? 0) }
                     } label: {
-                        TahoeIcon("bookmark", size: 13).foregroundStyle(winner == nil ? t.fg3 : session.agent.tahoeProvider.dot)
+                        TahoeIcon("bookmark", size: 13).foregroundStyle(winner == nil ? t.fg3 : session.tahoeProvider.dot)
                     }
                     .buttonStyle(PressableButtonStyle())
                     .disabled(turnId == "turn-0")
@@ -1182,6 +1201,7 @@ private struct ProviderColumn: View {
 private struct BroadcastStatusColumn: View {
     @Environment(\.tahoe) private var t
     let provider: AgentKind
+    let chatVendor: ChatVendor?
     let model: String?
     let displayName: String
     let customProviderId: String?
@@ -1254,7 +1274,10 @@ private struct BroadcastStatusColumn: View {
             CustomProviderGlyph(label: displayName, size: 20)
                 .accessibilityIdentifier("provider.glyph.custom.\(customProviderId)")
         } else {
-            TahoeProviderGlyph(provider: provider.tahoeProvider, size: 20)
+            TahoeProviderGlyph(
+                provider: broadcastTahoeProvider(agent: provider, chatVendor: chatVendor, model: model),
+                size: 20
+            )
         }
     }
 }
@@ -1280,6 +1303,7 @@ private struct PendingBroadcastView: View {
                         ForEach(pending.columns) { col in
                             BroadcastStatusColumn(
                                 provider: col.provider,
+                                chatVendor: col.chatVendor,
                                 model: col.model,
                                 displayName: col.displayName,
                                 customProviderId: col.customProviderId,
@@ -1296,6 +1320,7 @@ private struct PendingBroadcastView: View {
                             ForEach(pending.columns) { col in
                                 BroadcastStatusColumn(
                                     provider: col.provider,
+                                    chatVendor: col.chatVendor,
                                     model: col.model,
                                     displayName: col.displayName,
                                     customProviderId: col.customProviderId,
@@ -2383,10 +2408,12 @@ private struct ComposerBar: View {
                         columns: slots.map { slot in
                             PendingBroadcast.Column(
                                 provider: slot.provider,
+                                chatVendor: slot.chatVendor,
                                 model: slot.model,
                                 customProviderId: slot.customProviderId,
                                 displayName: pendingColumnDisplayName(
                                     provider: slot.provider,
+                                    chatVendor: slot.chatVendor,
                                     customProviderId: slot.customProviderId,
                                     catalog: client.modelCatalog
                                 )
@@ -2416,10 +2443,12 @@ private struct ComposerBar: View {
                             columns: slots.map { s in
                                 PendingBroadcast.Column(
                                     provider: s.provider,
+                                    chatVendor: s.chatVendor,
                                     model: s.model,
                                     customProviderId: s.customProviderId,
                                     displayName: pendingColumnDisplayName(
                                         provider: s.provider,
+                                        chatVendor: s.chatVendor,
                                         customProviderId: s.customProviderId,
                                         catalog: client.modelCatalog
                                     ),
@@ -2434,10 +2463,12 @@ private struct ComposerBar: View {
                         let s = slots[r.index]
                         return FailedBroadcastColumn(
                             provider: s.provider,
+                            chatVendor: s.chatVendor,
                             model: s.model,
                             customProviderId: s.customProviderId,
                             displayName: pendingColumnDisplayName(
                                 provider: s.provider,
+                                chatVendor: s.chatVendor,
                                 customProviderId: s.customProviderId,
                                 catalog: client.modelCatalog
                             ),
@@ -2467,6 +2498,7 @@ private struct ComposerBar: View {
                         prompt: trimmed,
                         columns: [PendingBroadcast.Column(
                             provider: agent,
+                            chatVendor: choice.chatVendor,
                             model: store.model(forChoice: choice, catalog: client.modelCatalog),
                             customProviderId: choice.customProviderId,
                             displayName: choice.displayName(in: client.modelCatalog)

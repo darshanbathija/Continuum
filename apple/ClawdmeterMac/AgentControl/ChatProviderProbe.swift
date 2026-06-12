@@ -376,7 +376,7 @@ public actor OpenRouterModelProbe {
         let key = environmentKey?.isEmpty == false ? environmentKey : fileKey
         guard let key, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return OpenRouterModelProbeState(
-                models: ModelCatalog.bundled.opencode,
+                models: ModelCatalog.bundled.openrouter,
                 authenticated: false,
                 discoverySucceeded: false,
                 reason: "Add an OpenRouter key in Settings",
@@ -392,7 +392,7 @@ public actor OpenRouterModelProbe {
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 let status = (response as? HTTPURLResponse)?.statusCode ?? -1
                 return OpenRouterModelProbeState(
-                    models: ModelCatalog.bundled.opencode,
+                    models: ModelCatalog.bundled.openrouter,
                     authenticated: true,
                     discoverySucceeded: false,
                     reason: "OpenRouter model discovery failed with HTTP \(status)",
@@ -402,7 +402,7 @@ public actor OpenRouterModelProbe {
             let models = try Self.parseModelsResponse(data)
             guard !models.isEmpty else {
                 return OpenRouterModelProbeState(
-                    models: ModelCatalog.bundled.opencode,
+                    models: ModelCatalog.bundled.openrouter,
                     authenticated: true,
                     discoverySucceeded: false,
                     reason: "OpenRouter returned no text models",
@@ -418,7 +418,7 @@ public actor OpenRouterModelProbe {
             )
         } catch {
             return OpenRouterModelProbeState(
-                models: ModelCatalog.bundled.opencode,
+                models: ModelCatalog.bundled.openrouter,
                 authenticated: true,
                 discoverySucceeded: false,
                 reason: "OpenRouter model discovery failed: \(error.localizedDescription)",
@@ -436,7 +436,7 @@ public actor OpenRouterModelProbe {
             let supportsReasoning = parameters.contains("reasoning") || parameters.contains("include_reasoning")
             let supportsEffort = supportsReasoning
             let displayName = model.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let bundled = ModelCatalog.bundled.opencode.first(where: { $0.id == id })
+            let bundled = ModelCatalog.bundled.openrouter.first(where: { $0.id == id })
             return ModelCatalogEntry(
                 id: id,
                 provider: .opencode,
@@ -455,7 +455,7 @@ public actor OpenRouterModelProbe {
     private static func featuredFirst(_ entries: [ModelCatalogEntry]) -> [ModelCatalogEntry] {
         var byId = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
         var ordered: [ModelCatalogEntry] = []
-        for featured in ModelCatalog.bundled.opencode {
+        for featured in ModelCatalog.bundled.openrouter {
             if let entry = byId.removeValue(forKey: featured.id) {
                 ordered.append(entry)
             }

@@ -30,4 +30,46 @@ public extension AgentKind {
         tahoeProvider.displayName
     }
 }
+
+public extension ChatVendor {
+    var tahoeProvider: TahoeProvider {
+        switch self {
+        case .chatgpt: return .codex
+        case .claude: return .claude
+        case .antigravity: return .gemini
+        case .cursor: return .cursor
+        case .opencode: return .opencode
+        case .openrouter: return .openrouter
+        case .grok: return .grok
+        }
+    }
+}
+
+public extension TahoeProvider {
+    /// Resolve the branded glyph lane when the wire agent is shared
+    /// (`AgentKind.opencode` backs both OpenCode Go and OpenRouter BYOK).
+    static func resolved(
+        agent: AgentKind,
+        modelId: String? = nil,
+        chatVendorRaw: String? = nil
+    ) -> TahoeProvider {
+        if let chatVendorRaw, let vendor = ChatVendor(rawValue: chatVendorRaw) {
+            return vendor.tahoeProvider
+        }
+        if agent == .opencode, let modelId, modelId.contains("/") {
+            return .openrouter
+        }
+        return agent.tahoeProvider
+    }
+}
+
+public extension AgentSession {
+    var tahoeProvider: TahoeProvider {
+        TahoeProvider.resolved(
+            agent: agent,
+            modelId: model,
+            chatVendorRaw: runtimeBinding?.metadata["chatVendor"]
+        )
+    }
+}
 #endif
