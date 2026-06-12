@@ -283,6 +283,9 @@ struct MacRootView: View {
                         let _ = cursorModel.usage
                         let _ = grokModel.usage
                         let _ = runtime.opencodeModel.usage
+                        let _ = runtime.tahoeSecondaryColumns.map {
+                            ($0.model.usage?.sessionPct, $0.model.usage?.sessionResetMins)
+                        }
                         MacUsageView(
                             data: runtime.tahoeLive,
                             claudeModel: claudeModel,
@@ -433,6 +436,9 @@ struct MacRootView: View {
         if ProviderEnablement.isEnabled("gemini") { geminiModel.forcePoll() }
         if ProviderEnablement.isEnabled("cursor") { cursorModel.forcePoll() }
         if ProviderEnablement.isEnabled("grok") { grokModel.forcePoll() }
+        for column in runtime.tahoeSecondaryColumns {
+            column.model.forcePoll()
+        }
         runtime.usageHistoryStore.forceRefresh()
     }
 

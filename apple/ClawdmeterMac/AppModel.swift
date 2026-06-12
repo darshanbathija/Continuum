@@ -133,7 +133,15 @@ public final class AppModel: ObservableObject {
     }
 
     public func forcePoll() {
-        Task { _ = await poller.forcePoll() }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if !isStarted { start() }
+            let event = await poller.forcePoll()
+            // Belt-and-suspenders: the poller also fires `onEvent`, but
+            // consume directly so a RunLoop scheduling miss can't leave
+            // secondary account gauges stuck at the nil-usage placeholder.
+            consume(event)
+        }
     }
 
     public func setAutoReviveEnabled(_ enabled: Bool) {

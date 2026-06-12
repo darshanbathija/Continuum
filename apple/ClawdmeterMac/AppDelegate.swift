@@ -32,6 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var grokController: ProviderStatusController?
     private var cursorController: ProviderStatusController?
     private var opencodeController: ProviderStatusController?
+    /// One menu-bar gauge per secondary (multi-account) instance.
+    private var secondaryControllers: [String: ProviderStatusController] = [:]
+    private var runtimeObserver: AnyCancellable?
+    private var lastAppliedSecondaryVisibility: [String: Bool] = [:]
 
     private var prefsObserver: NSObjectProtocol?
     private var windowCloseObserver: NSObjectProtocol?
@@ -94,6 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             opencodeController = ProviderStatusController(model: runtime.opencodeModel, runtime: runtime)
         }
         installObserversIfNeeded()
+        observeRuntimeInstanceChanges()
+        syncSecondaryControllers()
         applyVisibilityFromPrefs()
         Task(priority: .utility) { @MainActor in
             OpencodeProcessManager.shared.prepareRuntimeHost()
@@ -327,7 +333,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             opencode: opencodeShown,
             grok: grokShown
         )
-        guard lastAppliedVisibility == nil || lastAppliedVisibility! != next else { return }
+        guard lastAppliedVisibility == nil || lastAppliedVisibility! != next else {
+            applySecondaryVisibilityFromPrefs()
+            return
+        }
         lastAppliedVisibility = next
         claudeController?.setVisible(claudeShown)
         codexController?.setVisible(codexShown)
@@ -335,6 +344,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         grokController?.setVisible(grokShown)
         cursorController?.setVisible(cursorShown)
         opencodeController?.setVisible(opencodeShown)
+        applySecondaryVisibilityFromPrefs()
+    }
+
+    /// Keep one `ProviderStatusController` per secondary instance in
+    /// sync with `AppRuntime.allAppModelsByWireId`. Boot replay and
+    /// Settings add/remove both mutate that map asynchronously.
+    private func syncSecondaryControllers() {
+        guard let runtime = AppDelegate.runtime else { return }
+        let secondaries = runtime.allAppModelsByWireId.filter {
+            ProviderInstanceId.isSecondaryWireId($0.key)
+        }
+        for wireId in secondaryControllers.keys where secondaries[wireId] == nil {
+            secondaryControllers.removeValue(forKey: wireId)?.tearDown()
+        }
+        for (wireId, model) in secondaries where secondaryControllers[wireId] == nil {
+            secondaryControllers[wireId] = ProviderStatusController(model: model, runtime: runtime)
+        }
+    }
+
+    private func observeRuntimeInstanceChanges() {
+        guard runtimeObserver == nil, let runtime = AppDelegate.runtime else { return }
+        runtimeObserver = runtime.objectWillChange
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.syncSecondaryControllers()
+                    self?.applySecondaryVisibilityFromPrefs()
+                }
+            }
+    }
+
+    private func applySecondaryVisibilityFromPrefs() {
+        syncSecondaryControllers()
+        let defaults = UserDefaults.standard
+        for (wireId, controller) in secondaryControllers {
+            guard let parsed = ProviderInstanceId.parseWireId(wireId) else { continue }
+            let enabled = ProviderEnablement.isEnabled(parsed.kind)
+            let shown = (defaults.object(forKey: ProviderStatusController.prefKey(forWireId: wireId)) as? Bool ?? true)
+                && enabled
+            guard lastAppliedSecondaryVisibility[wireId] != shown else { continue }
+            lastAppliedSecondaryVisibility[wireId] = shown
+            controller.setVisible(shown)
+        }
+        for staleWireId in lastAppliedSecondaryVisibility.keys where secondaryControllers[staleWireId] == nil {
+            lastAppliedSecondaryVisibility.removeValue(forKey: staleWireId)
+        }
     }
 }
 
@@ -384,6 +438,22 @@ final class ProviderStatusController: NSObject {
 
     static func prefKey(_ providerID: String) -> String {
         "clawdmeter.\(providerID).menuBarShown"
+    }
+
+    /// Per-instance menu-bar visibility for secondary accounts
+    /// (e.g. `claude/personal` → `clawdmeter.claude.personal.menuBarShown`).
+    static func prefKey(forWireId wireId: String) -> String {
+        "clawdmeter.\(wireId.replacingOccurrences(of: "/", with: ".")).menuBarShown"
+    }
+
+    func tearDown() {
+        if let item = statusItem {
+            NSStatusBar.system.removeStatusItem(item)
+        }
+        statusItem = nil
+        popover = nil
+        pairingPopover = nil
+        cancellables.removeAll()
     }
 
     func setVisible(_ visible: Bool) {
@@ -550,6 +620,9 @@ final class ProviderStatusController: NSObject {
                 runtime.geminiModel.forcePoll()
                 runtime.cursorModel.forcePoll()
                 runtime.grokModel.forcePoll()
+                for column in runtime.tahoeSecondaryColumns {
+                    column.model.forcePoll()
+                }
             }
             // #38: re-target the cached popover to this provider's tab so
             // re-opening always lands on the clicked provider, not the last
