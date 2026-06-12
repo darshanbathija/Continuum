@@ -153,14 +153,22 @@ final class SpawnModeStoreTests: XCTestCase {
         let result = await store.createGroup(allocations: [
             SpawnAgentAllocation(agent: .claude, count: 1),
         ])
-        guard let group = result.group, let tileId = group.tiles.first?.id else {
+        guard let group = result.group, let tile = group.tiles.first else {
             return XCTFail("expected a tile")
         }
         store.closeGroup(id: group.id)
-        // The kill-driven exit lands after close; the staleness guard must
-        // keep the dead tile id out of exitedTileIds.
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        XCTAssertFalse(store.exitedTileIds.contains(tileId))
+        // Deterministic wait: poll until the kill actually lands (host no
+        // longer running) so the exit event is GUARANTEED delivered before
+        // the negative assertion — a fixed sleep can pass vacuously.
+        var stillRunning = await tile.host.isRunning
+        for _ in 0..<100 where stillRunning {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            stillRunning = await tile.host.isRunning
+        }
+        XCTAssertFalse(stillRunning, "kill never landed — cannot exercise the staleness guard")
+        // One more beat for the onExit Task hop onto the main actor.
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertFalse(store.exitedTileIds.contains(tile.id))
         await drainTeardown(store)
     }
 }

@@ -80,9 +80,13 @@ struct SpawnConfigSheet: View {
         .sheet(item: $installTerminal) { terminal in
             SetupTerminalSheet(terminal: terminal) {
                 installTerminal = nil
-                // Re-probe so a just-installed CLI flips its row live.
+                // Re-probe so a just-installed CLI flips its row live, and
+                // re-seed: when NOTHING was spawnable at onAppear the
+                // allocation is still empty — the first installed CLI must
+                // restore the two-click flow, not leave Spawn dead at 0/N.
                 availability = [:]
                 resolveAvailability()
+                seedDefaultAllocation()
             }
         }
     }
@@ -334,40 +338,26 @@ struct SpawnConfigSheet: View {
         availability = resolved
     }
 
-    /// Install command per agent CLI. Codex/Cursor/Grok reuse the
-    /// provider-discovery setup actions (single source of truth); the rest
-    /// use the vendor's documented installer.
-    private static func installCommand(for agent: AgentKind) -> String? {
+    /// Install action per agent CLI — `ProviderDeviceSetupAction` is the
+    /// one install-command inventory (onboarding + Settings read it too).
+    private static func installAction(for agent: AgentKind) -> ProviderDeviceSetupAction? {
         switch agent {
-        case .claude:
-            return "npm install -g @anthropic-ai/claude-code || echo 'npm not found — install Node first: https://nodejs.org'"
-        case .codex:
-            return ProviderDeviceSetupAction.installCodexCLI.shellCommand
-        case .cursor:
-            return ProviderDeviceSetupAction.installCursorCLI.shellCommand
-        case .grok:
-            return ProviderDeviceSetupAction.installGrokCLI.shellCommand
-        case .gemini:
-            return "npm install -g @google/gemini-cli || echo 'npm not found — install Node first: https://nodejs.org'"
-        case .opencode:
-            return "echo 'Install OpenCode: https://opencode.ai' && open https://opencode.ai"
-        case .unknown:
-            return nil
+        case .claude:   return .installClaudeCLI
+        case .codex:    return .installCodexCLI
+        case .cursor:   return .installCursorCLI
+        case .grok:     return .installGrokCLI
+        case .gemini:   return .installGeminiCLI
+        case .opencode: return .installOpencodeCLI
+        case .unknown:  return nil
         }
     }
 
     private func launchInstallTerminal(for agent: AgentKind) {
-        guard let command = Self.installCommand(for: agent) else { return }
+        guard let command = Self.installAction(for: agent)?.shellCommand else { return }
         let title = "Install \(AgentKindUI.displayName(for: agent)) CLI"
-        let wrapped = "\(command); echo ''; echo 'Press Done when finished.'"
         Task { @MainActor in
             do {
-                let host = try await TerminalPtyRegistry.shared.spawnCommand(
-                    wrapped,
-                    cwd: ClawdmeterRealHome.path(),
-                    title: title
-                )
-                installTerminal = SetupTerminalSession(id: host.id.uuidString, title: title, host: host)
+                installTerminal = try await SetupTerminalSession.launch(title: title, command: command)
             } catch {
                 spawnErrorMessage = "Couldn't open the install terminal: \(error.localizedDescription)"
             }

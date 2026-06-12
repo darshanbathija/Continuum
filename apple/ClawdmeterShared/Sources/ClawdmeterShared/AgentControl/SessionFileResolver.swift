@@ -209,7 +209,10 @@ public final class SessionFileResolver: @unchecked Sendable {
 
     /// The cwd a Codex rollout records about itself (`session_meta` /
     /// `turn_context` payload), parsed once per file and cached — it is
-    /// written at rollout creation and never changes.
+    /// written at rollout creation and never changes. A rollout probed in
+    /// the instant between file creation and the meta flush parses as
+    /// `.empty`; that result is NOT cached, so the next scan re-probes
+    /// instead of permanently exempting the file from the cwd guard.
     private func recordedRolloutCwd(at url: URL) -> String? {
         lock.lock()
         if let cached = rolloutCwdCache[url.path] {
@@ -217,26 +220,48 @@ public final class SessionFileResolver: @unchecked Sendable {
             return cached
         }
         lock.unlock()
-        let parsed = Self.parseRolloutCwd(at: url)
+        let parsed = Self.parseRolloutCwdResult(at: url)
+        if case .empty = parsed {
+            return nil
+        }
+        let value: String? = {
+            if case .cwd(let cwd) = parsed { return cwd }
+            return nil
+        }()
         lock.lock()
         if rolloutCwdCache[url.path] == nil {
             rolloutCwdCacheOrder.append(url.path)
         }
-        rolloutCwdCache[url.path] = parsed
+        rolloutCwdCache[url.path] = value
         while rolloutCwdCacheOrder.count > rolloutCwdCacheCap {
             rolloutCwdCache.removeValue(forKey: rolloutCwdCacheOrder.removeFirst())
         }
         lock.unlock()
-        return parsed
+        return value
+    }
+
+    /// Head-parse outcome. `.empty` (no bytes / unreadable — likely a file
+    /// mid-creation) must not be conflated with `.noMeta` (real lines,
+    /// no meta — legacy/foreign format): only the latter is cacheable.
+    enum RolloutCwdParse: Equatable {
+        case cwd(String)
+        case noMeta
+        case empty
+    }
+
+    /// Convenience used by tests and call sites that only need the value.
+    static func parseRolloutCwd(at url: URL) -> String? {
+        if case .cwd(let cwd) = parseRolloutCwdResult(at: url) { return cwd }
+        return nil
     }
 
     /// Scan the head of a rollout file for the first `session_meta` /
     /// `turn_context` line carrying a `cwd`. Reads at most 64KB — the
     /// meta line is the first line Codex writes.
-    static func parseRolloutCwd(at url: URL) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+    static func parseRolloutCwdResult(at url: URL) -> RolloutCwdParse {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return .empty }
         defer { try? handle.close() }
-        guard let data = try? handle.read(upToCount: 64 * 1024), !data.isEmpty else { return nil }
+        guard let data = try? handle.read(upToCount: 64 * 1024), !data.isEmpty else { return .empty }
         for lineData in data.split(separator: UInt8(ascii: "\n")).prefix(20) {
             guard let root = try? JSONSerialization.jsonObject(with: Data(lineData)) as? [String: Any] else { continue }
             let type = root["type"] as? String
@@ -244,17 +269,26 @@ public final class SessionFileResolver: @unchecked Sendable {
             if let payload = root["payload"] as? [String: Any],
                let cwd = payload["cwd"] as? String,
                !cwd.isEmpty {
-                return cwd
+                return .cwd(cwd)
             }
         }
-        return nil
+        return .noMeta
     }
 
-    /// Path comparison form: standardized + symlink-resolved so
-    /// `/var/folders/...` and `/private/var/folders/...` (and `~`-style
-    /// variants) compare equal.
+    /// Path comparison form: standardized + symlink-resolved, then
+    /// `/private`-prefix-normalized. Foundation's `resolvingSymlinksInPath`
+    /// is asymmetric about the macOS `/private` firmlink family —
+    /// `/tmp/x` and `/private/tmp/x` do NOT resolve to the same string —
+    /// so both spellings are folded to the prefix-less form explicitly.
     private static func canonicalPath(_ path: String) -> String {
-        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+        var resolved = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+        for prefix in ["/private/tmp", "/private/var", "/private/etc"] {
+            if resolved == prefix || resolved.hasPrefix(prefix + "/") {
+                resolved = String(resolved.dropFirst("/private".count))
+                break
+            }
+        }
+        return resolved
     }
 
     // MARK: - Gemini resolution

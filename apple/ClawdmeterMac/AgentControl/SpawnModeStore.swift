@@ -95,6 +95,17 @@ final class SpawnModeStore: ObservableObject {
         groups.first(where: { $0.id == id })
     }
 
+    /// Tiles whose agent process is still running. Both destructive
+    /// close-spawn gates (grid header + sidebar context menu) key their
+    /// confirm-or-close-immediately decision off this ONE definition.
+    func liveTileCount(in group: SpawnGroup) -> Int {
+        group.tiles.filter { !exitedTileIds.contains($0.id) }.count
+    }
+
+    func hasLiveTiles(in group: SpawnGroup) -> Bool {
+        liveTileCount(in: group) > 0
+    }
+
     // MARK: - Spawning
 
     /// Availability for the spawn config page. An agent is spawnable when

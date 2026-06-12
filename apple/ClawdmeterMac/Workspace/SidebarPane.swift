@@ -213,6 +213,25 @@ struct SidebarPane: View {
         .sheet(item: $comparisonPair) { pair in
             SessionComparisonSheet(pair: pair, model: model)
         }
+        // Close-spawn confirmation lives at the pane level (one dialog,
+        // Bool + presenting payload — same pattern as the rename alerts
+        // above). Attaching it per-row would mount N sibling dialogs all
+        // bound to the same Bool.
+        .confirmationDialog(
+            "Close \(closeSpawnTarget?.name ?? "spawn")?",
+            isPresented: $showingCloseSpawnConfirm,
+            presenting: closeSpawnTarget
+        ) { target in
+            Button("End all agents in \(target.name)", role: .destructive) {
+                spawnStore.closeGroup(id: target.id)
+                closeSpawnTarget = nil
+            }
+            Button("Cancel", role: .cancel) {
+                closeSpawnTarget = nil
+            }
+        } message: { target in
+            Text("Every terminal in \(target.name) ends immediately. Sessions are not recoverable.")
+        }
         .onReceive(NotificationCenter.default.publisher(for: .renameOpenSession)) { _ in
             guard let session = model.openSession else { return }
             renameTarget = session
@@ -548,8 +567,7 @@ struct SidebarPane: View {
         .padding(.horizontal, 8)
         .contextMenu {
             Button(role: .destructive) {
-                let hasLiveTiles = group.tiles.contains { !spawnStore.exitedTileIds.contains($0.id) }
-                if hasLiveTiles {
+                if spawnStore.hasLiveTiles(in: group) {
                     closeSpawnTarget = group
                     showingCloseSpawnConfirm = true
                 } else {
@@ -558,21 +576,6 @@ struct SidebarPane: View {
             } label: {
                 Label("Close spawn", systemImage: "xmark")
             }
-        }
-        .confirmationDialog(
-            "Close \(closeSpawnTarget?.name ?? "spawn")?",
-            isPresented: $showingCloseSpawnConfirm,
-            presenting: closeSpawnTarget
-        ) { target in
-            Button("End all agents in \(target.name)", role: .destructive) {
-                spawnStore.closeGroup(id: target.id)
-                closeSpawnTarget = nil
-            }
-            Button("Cancel", role: .cancel) {
-                closeSpawnTarget = nil
-            }
-        } message: { target in
-            Text("Every terminal in \(target.name) ends immediately. Sessions are not recoverable.")
         }
         .accessibilityIdentifier("code.sidebar.spawn.row.\(group.name)")
     }

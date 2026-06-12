@@ -66,7 +66,7 @@ struct SpawnGridView: View {
     }
 
     private var liveTileCount: Int {
-        group.tiles.filter { !store.exitedTileIds.contains($0.id) }.count
+        store.liveTileCount(in: group)
     }
 
     // MARK: - Header
