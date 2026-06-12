@@ -70,17 +70,19 @@ struct IOSWorkspaceTabStrip: View {
     @ViewBuilder
     private func sessionChip(_ session: AgentSession) -> some View {
         let active = activeDocumentTabId == nil && session.id == activeSessionId
+        let labels = WorkspaceSessionTabLabel.labels(for: session)
         HStack(spacing: 8) {
-            TahoeProviderGlyph(provider: session.tahoeProvider, size: 18)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title(for: session))
+            VStack(alignment: .leading, spacing: labels.subtitle.isEmpty ? 0 : 1) {
+                Text(labels.title)
                     .font(TahoeFont.body(11.5, weight: active ? .bold : .semibold))
                     .foregroundStyle(active ? .white : t.fg)
                     .lineLimit(1)
-                Text(subtitle(for: session))
-                    .font(TahoeFont.body(9.5, weight: .medium))
-                    .foregroundStyle(active ? Color.white.opacity(0.72) : t.fg3)
-                    .lineLimit(1)
+                if !labels.subtitle.isEmpty {
+                    Text(labels.subtitle)
+                        .font(TahoeFont.body(9.5, weight: .medium))
+                        .foregroundStyle(active ? Color.white.opacity(0.72) : t.fg3)
+                        .lineLimit(1)
+                }
             }
             .frame(maxWidth: 126, alignment: .leading)
         }
@@ -153,30 +155,14 @@ struct IOSWorkspaceTabStrip: View {
         }
     }
 
-    private func title(for session: AgentSession) -> String {
-        if let custom = session.customName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !custom.isEmpty {
-            return custom
-        }
-        if let goal = session.goal?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !goal.isEmpty {
-            return goal
-        }
-        return session.displayLabel
-    }
-
-    private func subtitle(for session: AgentSession) -> String {
-        let workspace = (WorkspaceKey.workspacePath(for: session) as NSString).lastPathComponent
-        if workspace.isEmpty {
-            return session.agent.rawValue
-        }
-        return "\(session.agent.rawValue) - \(workspace)"
-    }
-
     private func tabAccessibilityLabel(for session: AgentSession) -> String {
+        let labels = WorkspaceSessionTabLabel.labels(for: session)
+        let spokenTitle = labels.subtitle.isEmpty
+            ? labels.title
+            : "\(labels.title), \(labels.subtitle)"
         if activeDocumentTabId == nil && session.id == activeSessionId {
-            return "\(title(for: session)), current workspace tab"
+            return "\(spokenTitle), current workspace tab"
         }
-        return "Open \(title(for: session)) workspace tab"
+        return "Open \(spokenTitle) workspace tab"
     }
 }

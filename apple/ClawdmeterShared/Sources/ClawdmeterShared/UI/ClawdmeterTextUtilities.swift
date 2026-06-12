@@ -12,6 +12,18 @@ public enum ClawdmeterTextUtilities {
         return String(scalars, radix: 16)
     }
 
+    /// First `limit` words of `text`, single-lined, with an ellipsis when longer.
+    public static func firstWords(_ text: String, _ limit: Int = 5) -> String {
+        let words = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .split(separator: " ", omittingEmptySubsequences: true)
+            .map(String.init)
+        guard !words.isEmpty else { return "" }
+        let head = words.prefix(limit).joined(separator: " ")
+        return words.count > limit ? head + "…" : head
+    }
+
     public static func collapsedWhitespacePreview(_ text: String, limit: Int = 80) -> String {
         var cleaned = text
             .replacingOccurrences(of: "\n", with: " ")

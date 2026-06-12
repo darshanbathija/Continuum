@@ -206,11 +206,10 @@ struct WorkspaceTabStrip: View {
         let isActive = activeTerminalTabId == nil
             && activeDocumentTabId == nil
             && session.id == activeSessionId
-        let displayAgent = model.displayAgent(for: session)
-        let displayModelId = model.displayModelId(for: session)
+        let labels = WorkspaceSessionTabLabel.labels(for: session)
         return tabRow(
-            title: title(for: session),
-            subtitle: model.workspaceTabSubtitle(for: session),
+            title: labels.title,
+            subtitle: labels.subtitle,
             systemImage: nil,
             isActive: isActive,
             labelWidth: labelWidth,
@@ -219,7 +218,7 @@ struct WorkspaceTabStrip: View {
         )
         .help(session.effectiveCwd)
         .accessibilityIdentifier("code.workspace.tab.session")
-        .accessibilityValue("\(isActive ? "selected" : "not selected") \(session.id.uuidString) \(displayAgent.rawValue) \(displayModelId ?? "")")
+        .accessibilityValue("\(isActive ? "selected" : "not selected") \(session.id.uuidString) \(session.agent.rawValue) \(session.model ?? "")")
         .contextMenu {
             Button("Close", role: .destructive) {
                 Task { await model.endSession(id: session.id) }
@@ -241,7 +240,7 @@ struct WorkspaceTabStrip: View {
             && activeDocumentTabId == nil
         return tabRow(
             title: "Untitled",
-            subtitle: model.workspaceDraftTabSubtitle(for: draft),
+            subtitle: "Draft",
             systemImage: nil,
             isActive: isActive,
             labelWidth: labelWidth,
@@ -250,7 +249,7 @@ struct WorkspaceTabStrip: View {
         )
         .help("Draft chat tab")
         .accessibilityIdentifier("code.workspace.tab.draft")
-        .accessibilityValue("\(isActive ? "selected" : "not selected") \(draft.id.uuidString) \(draft.agent.rawValue) \(draft.modelId ?? "")")
+        .accessibilityValue("\(isActive ? "selected" : "not selected") \(draft.id.uuidString)")
     }
 
     private func terminalButton(_ tab: WorkspaceTerminalTab, session: AgentSession, labelWidth: CGFloat) -> some View {
@@ -314,16 +313,18 @@ struct WorkspaceTabStrip: View {
                             .font(.system(size: 10.5, weight: .semibold))
                             .foregroundStyle(isActive ? t.accent : t.fg3)
                     }
-                    VStack(alignment: .leading, spacing: 1) {
+                    VStack(alignment: .leading, spacing: subtitle.isEmpty ? 0 : 1) {
                         Text(title)
                             .font(TahoeFont.body(12.5, weight: isActive ? .semibold : .medium))
                             .foregroundStyle(isActive ? t.fg : t.fg2)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        Text(subtitle)
-                            .font(TahoeFont.body(9.5))
-                            .foregroundStyle(t.fg3)
-                            .lineLimit(1)
+                        if !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(TahoeFont.body(9.5))
+                                .foregroundStyle(t.fg3)
+                                .lineLimit(1)
+                        }
                     }
                     .frame(width: labelWidth, alignment: .leading)
                 }
@@ -360,18 +361,6 @@ struct WorkspaceTabStrip: View {
                     .padding(.horizontal, 8)
             }
         }
-    }
-
-    private func title(for session: AgentSession) -> String {
-        if let custom = session.customName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !custom.isEmpty {
-            return custom
-        }
-        if let goal = session.goal?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !goal.isEmpty {
-            return goal
-        }
-        return session.displayLabel
     }
 
     private func terminalTitle(for tab: WorkspaceTerminalTab, session: AgentSession) -> String {
