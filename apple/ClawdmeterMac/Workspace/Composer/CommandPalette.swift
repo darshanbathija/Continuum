@@ -368,6 +368,58 @@ final class SkillCatalog: ObservableObject {
 
 }
 
+enum SkillShareWriter {
+    enum Error: Swift.Error, LocalizedError {
+        case noSourceFile
+
+        var errorDescription: String? {
+            switch self {
+            case .noSourceFile: return "This skill has no file to download."
+            }
+        }
+    }
+
+    static func sanitizedFilename(for title: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safe = trimmed
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        return safe.isEmpty ? "skill" : safe
+    }
+
+    static func export(detail: SkillDetail, outputRoot: URL? = nil) throws -> URL {
+        guard let sourcePath = detail.command.filePath else {
+            throw Error.noSourceFile
+        }
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+        let root = outputRoot ?? downloads
+        let filename = "\(sanitizedFilename(for: detail.command.label)).md"
+        let destURL = uniqueDestinationURL(
+            root.appendingPathComponent(filename)
+        )
+        try FileManager.default.copyItem(
+            at: URL(fileURLWithPath: sourcePath),
+            to: destURL
+        )
+        return destURL
+    }
+
+    private static func uniqueDestinationURL(_ url: URL) -> URL {
+        guard FileManager.default.fileExists(atPath: url.path) else { return url }
+        let base = url.deletingPathExtension().lastPathComponent
+        let directory = url.deletingLastPathComponent()
+        var counter = 1
+        while true {
+            let candidate = directory.appendingPathComponent("\(base) (\(counter)).md")
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            counter += 1
+        }
+    }
+}
+
 /// Anchored popover above the composer when the user types '/' at the
 /// start of the input (or just '/' on a new line). Up/Down/Enter/Esc
 /// nav; substring fuzzy filter (11A locked).

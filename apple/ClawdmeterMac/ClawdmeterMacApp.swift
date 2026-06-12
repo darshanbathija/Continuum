@@ -59,6 +59,7 @@ struct ClawdmeterMacApp: App {
     }
 
     init() {
+        PostHogSetup.configureIfNeeded()
         // Hand the AppDelegate a reference to the runtime so its
         // applicationDidFinishLaunching has the models in hand. The delegate
         // creates the menu bar status items based on user prefs.

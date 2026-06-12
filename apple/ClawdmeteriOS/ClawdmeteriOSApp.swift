@@ -60,6 +60,7 @@ struct ClawdmeteriOSApp: App {
         #endif
         _agentClient = StateObject(wrappedValue: client)
         _outbox = StateObject(wrappedValue: MobileCommandOutbox(client: client))
+        PostHogSetup.configureIfNeeded()
         // Relay + BGTask registration run once from `IOSAppBootstrap.finishLaunching()`
         // in `iOSAppDelegate` — not here. `App.init()` can run twice on device
         // (iOS 18.4+/27), and duplicate `BGTaskScheduler.register` crashes instantly.

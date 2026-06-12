@@ -8,6 +8,27 @@ struct SetupTerminalSession: Identifiable {
     let id: String
     let title: String
     let host: TerminalPtyHost
+
+    /// Single launcher for every embedded setup-terminal command (CLI
+    /// installs + logins). Onboarding, Settings → Providers, and the
+    /// spawn-mode config sheet all wrap commands identically — the
+    /// "Press Done" suffix and session construction live here so the
+    /// call sites can't drift. Throws when the PTY can't spawn; callers
+    /// decide the fallback (AppleScript Terminal vs inline error).
+    @MainActor
+    static func launch(
+        title: String,
+        command: String,
+        cwd: String = ClawdmeterRealHome.path()
+    ) async throws -> SetupTerminalSession {
+        let wrapped = "\(command); echo ''; echo 'Press Done when finished.'"
+        let host = try await TerminalPtyRegistry.shared.spawnCommand(
+            wrapped,
+            cwd: cwd,
+            title: title
+        )
+        return SetupTerminalSession(id: host.id.uuidString, title: title, host: host)
+    }
 }
 
 /// Sheet chrome around `DirectPtyTerminalView` for setup commands

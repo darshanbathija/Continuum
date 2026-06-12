@@ -243,38 +243,11 @@ struct SkillsSettingsView: View {
     }
 
     private func pluginRow(_ group: SkillPluginGroup) -> some View {
-        let isSelected = group.id == selectedGroupID
-        return Button {
-            selectedGroupID = group.id
-        } label: {
-            HStack(spacing: 8) {
-                Text(group.title)
-                    .font(TahoeFont.body(13, weight: isSelected ? .bold : .semibold))
-                    .foregroundStyle(isSelected ? t.fg : t.fg2)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                if group.isDisabled {
-                    Text("Disabled")
-                        .font(TahoeFont.body(10, weight: .bold))
-                        .foregroundStyle(t.fg3)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(t.glassTintHi.opacity(0.5), in: Capsule(style: .continuous))
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
-                        .fill(t.segmentActiveFill)
-                }
-            }
-            .contentShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("settings.skills.plugin.\(group.id)")
+        SkillPluginSidebarRow(
+            group: group,
+            isSelected: group.id == selectedGroupID,
+            onSelect: { selectedGroupID = group.id }
+        )
     }
 
     // MARK: Middle — skills list
@@ -360,64 +333,24 @@ struct SkillsSettingsView: View {
     }
 
     private func skillRow(_ skill: PaletteCommand) -> some View {
-        let isSelected = selectedSkillID == skill.id
-        let isExpanded = expandedSkillIDs.contains(skill.id)
-        return VStack(alignment: .leading, spacing: 0) {
-            Button {
+        SkillCommandRow(
+            skill: skill,
+            isSelected: selectedSkillID == skill.id,
+            isExpanded: expandedSkillIDs.contains(skill.id),
+            detail: detail,
+            onSelect: {
                 selectedSkillID = skill.id
                 if skill.filePath != nil {
                     withAnimation(.easeOut(duration: 0.15)) {
-                        if isExpanded {
+                        if expandedSkillIDs.contains(skill.id) {
                             expandedSkillIDs.remove(skill.id)
                         } else {
                             expandedSkillIDs.insert(skill.id)
                         }
                     }
                 }
-            } label: {
-                HStack(spacing: 6) {
-                    if skill.filePath != nil {
-                        TahoeIcon(isExpanded ? "chevD" : "chevR", size: 8)
-                            .foregroundStyle(t.fg4)
-                    } else {
-                        Color.clear.frame(width: 10)
-                    }
-                    Text(skill.label)
-                        .font(TahoeFont.body(13, weight: isSelected ? .bold : .semibold))
-                        .foregroundStyle(isSelected ? t.fg : t.fg2)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background {
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
-                            .fill(t.segmentActiveFill)
-                    }
-                }
-                .contentShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("settings.skills.skill.\(skill.id)")
-
-            if isExpanded, let detail, detail.command.id == skill.id {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(detail.children) { child in
-                        HStack(spacing: 6) {
-                            TahoeIcon(child.isDirectory ? "folder" : "doc", size: 9)
-                                .foregroundStyle(t.fg4)
-                            Text(child.name)
-                                .font(TahoeFont.mono(10.5))
-                                .foregroundStyle(t.fg3)
-                        }
-                        .padding(.leading, 30)
-                        .padding(.vertical, 3)
-                    }
-                }
-                .padding(.bottom, 4)
-            }
-        }
+        )
     }
 
     // MARK: Right — detail
@@ -579,6 +512,108 @@ struct SkillsSettingsView: View {
     }
 }
 
+// MARK: - Sidebar rows
+
+private struct SkillPluginSidebarRow: View {
+    @Environment(\.tahoe) private var t
+    let group: SkillPluginGroup
+    let isSelected: Bool
+    let onSelect: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                Text(group.title)
+                    .font(TahoeFont.body(13, weight: isSelected ? .bold : .semibold))
+                    .foregroundStyle(isSelected ? t.fg : t.fg2)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if group.isDisabled {
+                    Text("Disabled")
+                        .font(TahoeFont.body(10, weight: .bold))
+                        .foregroundStyle(t.fg3)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(t.glassTintHi.opacity(0.5), in: Capsule(style: .continuous))
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                if isSelected || isHovered {
+                    RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                        .fill(isSelected ? t.segmentActiveFill : t.hover)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .accessibilityIdentifier("settings.skills.plugin.\(group.id)")
+    }
+}
+
+private struct SkillCommandRow: View {
+    @Environment(\.tahoe) private var t
+    let skill: PaletteCommand
+    let isSelected: Bool
+    let isExpanded: Bool
+    let detail: SkillDetail?
+    let onSelect: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: onSelect) {
+                HStack(spacing: 6) {
+                    if skill.filePath != nil {
+                        TahoeIcon(isExpanded ? "chevD" : "chevR", size: 8)
+                            .foregroundStyle(t.fg4)
+                    } else {
+                        Color.clear.frame(width: 10)
+                    }
+                    Text(skill.label)
+                        .font(TahoeFont.body(13, weight: isSelected ? .bold : .semibold))
+                        .foregroundStyle(isSelected ? t.fg : t.fg2)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background {
+                    if isSelected || isHovered {
+                        RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                            .fill(isSelected ? t.segmentActiveFill : t.hover)
+                    }
+                }
+                .contentShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+            .accessibilityIdentifier("settings.skills.skill.\(skill.id)")
+
+            if isExpanded, let detail, detail.command.id == skill.id {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(detail.children) { child in
+                        HStack(spacing: 6) {
+                            TahoeIcon(child.isDirectory ? "folder" : "doc", size: 9)
+                                .foregroundStyle(t.fg4)
+                            Text(child.name)
+                                .font(TahoeFont.mono(10.5))
+                                .foregroundStyle(t.fg3)
+                        }
+                        .padding(.leading, 30)
+                        .padding(.vertical, 3)
+                    }
+                }
+                .padding(.bottom, 4)
+            }
+        }
+    }
+}
+
 // MARK: - Detail pane
 
 private struct SkillDetailPane: View {
@@ -632,6 +667,21 @@ private struct SkillDetailPane: View {
                     .font(TahoeFont.body(13.5, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer()
+                if detail.command.filePath != nil {
+                    Button {
+                        shareSkill()
+                    } label: {
+                        HStack(spacing: 5) {
+                            TahoeIcon("share", size: 10)
+                            Text("Share")
+                                .font(TahoeFont.body(11, weight: .semibold))
+                        }
+                        .foregroundStyle(t.fg2)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Download skill as Markdown")
+                    .accessibilityIdentifier("settings.skills.share")
+                }
                 Button {
                     showSource.toggle()
                 } label: {
@@ -685,6 +735,16 @@ private struct SkillDetailPane: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: date)
+    }
+
+    private func shareSkill() {
+        do {
+            let url = try SkillShareWriter.export(detail: detail)
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            WorkspaceFeedback.success("Downloaded skill", detail: url.lastPathComponent)
+        } catch {
+            WorkspaceFeedback.failure("Couldn't download skill", detail: error.localizedDescription)
+        }
     }
 }
 

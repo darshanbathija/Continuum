@@ -82,6 +82,7 @@ public struct TahoeIcon: View {
         case "command":    return "command"
         case "ellipsis":   return "ellipsis"
         case "stack":      return "rectangle.stack.fill.badge.plus"
+        case "share":      return "square.and.arrow.up"
         default:           return "circle"
         }
     }

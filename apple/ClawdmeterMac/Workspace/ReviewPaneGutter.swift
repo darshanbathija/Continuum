@@ -73,7 +73,10 @@ private struct ReviewPaneGutterTab: View {
             return Color.secondary.opacity(0.12)
         }
         if isHovered {
-            return t.hair2.opacity(t.dark ? 0.95 : 1.0)
+            // Canonical row/control hover token (appearance-aware), per
+            // DESIGN.md — not the hairline color, which renders too strong
+            // in light mode.
+            return t.hover
         }
         return .clear
     }

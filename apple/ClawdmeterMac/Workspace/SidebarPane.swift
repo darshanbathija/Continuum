@@ -6,6 +6,7 @@ struct SidebarPane: View {
     @ObservedObject var model: SessionsModel
     @ObservedObject var workbenchState: WorkbenchState
     @ObservedObject var presentationStore: SessionPresentationStore
+    @ObservedObject private var spawnStore = SpawnModeStore.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -55,6 +56,12 @@ struct SidebarPane: View {
     @State private var renameWorktreeTarget: WorktreeGroup?
     @State private var renameWorktreeInput: String = ""
     @State private var showingRenameWorktreeAlert: Bool = false
+    /// Spawn mode (grid of agent terminals in ~) config sheet.
+    @State private var showingSpawnSheet: Bool = false
+    /// Close-spawn confirmation target (context menu path). Closing kills
+    /// every agent in the group, so live groups confirm first.
+    @State private var closeSpawnTarget: SpawnGroup?
+    @State private var showingCloseSpawnConfirm: Bool = false
     @State private var collapsedStatusGroupIDs: Set<String> = []
     @State private var collapsedPrioritySectionIDs: Set<String> = []
     @State private var sidebarViewportHeight: CGFloat = 0
@@ -92,6 +99,10 @@ struct SidebarPane: View {
     var body: some View {
         VStack(spacing: 0) {
             searchField
+            spawnButton
+            if !spawnStore.groups.isEmpty {
+                spawnGroupList
+            }
             sidebarHeader
             TahoeHairline()
             content
@@ -201,6 +212,25 @@ struct SidebarPane: View {
         }
         .sheet(item: $comparisonPair) { pair in
             SessionComparisonSheet(pair: pair, model: model)
+        }
+        // Close-spawn confirmation lives at the pane level (one dialog,
+        // Bool + presenting payload — same pattern as the rename alerts
+        // above). Attaching it per-row would mount N sibling dialogs all
+        // bound to the same Bool.
+        .confirmationDialog(
+            "Close \(closeSpawnTarget?.name ?? "spawn")?",
+            isPresented: $showingCloseSpawnConfirm,
+            presenting: closeSpawnTarget
+        ) { target in
+            Button("End all agents in \(target.name)", role: .destructive) {
+                spawnStore.closeGroup(id: target.id)
+                closeSpawnTarget = nil
+            }
+            Button("Cancel", role: .cancel) {
+                closeSpawnTarget = nil
+            }
+        } message: { target in
+            Text("Every terminal in \(target.name) ends immediately. Sessions are not recoverable.")
         }
         .onReceive(NotificationCenter.default.publisher(for: .renameOpenSession)) { _ in
             guard let session = model.openSession else { return }
@@ -426,6 +456,143 @@ struct SidebarPane: View {
         .onReceive(NotificationCenter.default.publisher(for: .focusSidebarSearch)) { _ in
             searchFocused = true
         }
+    }
+
+    // MARK: - Spawn mode (grid of agent terminals in ~)
+
+    /// Entry point for spawn mode. Sits between the search field and the
+    /// Projects header; the resulting spawn groups list above all projects
+    /// because they're home-directory agent batches, not repo sessions.
+    private var spawnButton: some View {
+        Button(action: { showingSpawnSheet = true }) {
+            HStack(spacing: 7) {
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                Text("Spawn")
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Spacer()
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(
+                t.dark ? Color.white.opacity(0.04) : Color.black.opacity(0.03),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(t.hairline, lineWidth: 0.5)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .help("Open a grid of agent terminal sessions in your home directory")
+        .accessibilityIdentifier("code.sidebar.spawn")
+        .sheet(isPresented: $showingSpawnSheet) {
+            SpawnConfigSheet(store: spawnStore, onSpawned: clearModelSelectionForSpawn)
+        }
+    }
+
+    private var spawnGroupList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Spawns")
+                .font(TahoeFont.body(11, weight: .bold))
+                .tracking(0.5)
+                .textCase(.uppercase)
+                .foregroundStyle(t.fg3)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 4)
+            // The Spawns section lives above the Projects scroll area, so it
+            // must bound its own height — many groups would otherwise
+            // squeeze the repo list to nothing.
+            if spawnStore.groups.count > 4 {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(spawnStore.groups) { group in
+                            spawnGroupRow(group)
+                        }
+                    }
+                }
+                .frame(maxHeight: 180)
+            } else {
+                ForEach(spawnStore.groups) { group in
+                    spawnGroupRow(group)
+                }
+            }
+        }
+        .padding(.bottom, 6)
+    }
+
+    private func spawnGroupRow(_ group: SpawnGroup) -> some View {
+        let isSelected = spawnStore.selectedGroupId == group.id
+        return Button(action: { selectSpawnGroup(group) }) {
+            HStack(spacing: 8) {
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(isSelected ? t.accent : t.fg3)
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(group.name)
+                        .font(TahoeFont.body(12, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text(group.agentSummary)
+                        .font(TahoeFont.mono(9.5))
+                        .foregroundStyle(t.fg3)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer()
+                Text("\(group.tiles.count)")
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(t.hair2, in: Capsule())
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                isSelected ? t.selection : Color.clear,
+                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .padding(.horizontal, 8)
+        .contextMenu {
+            Button(role: .destructive) {
+                if spawnStore.hasLiveTiles(in: group) {
+                    closeSpawnTarget = group
+                    showingCloseSpawnConfirm = true
+                } else {
+                    spawnStore.closeGroup(id: group.id)
+                }
+            } label: {
+                Label("Close spawn", systemImage: "xmark")
+            }
+        }
+        .accessibilityIdentifier("code.sidebar.spawn.row.\(group.name)")
+    }
+
+    /// Opening a spawn grid takes over the center pane — drop the session /
+    /// draft / terminal / document selection so SessionWorkspaceView's
+    /// branches fall through to the spawn branch (and the review pane stays
+    /// collapsed: no open session means no active workspace key).
+    private func selectSpawnGroup(_ group: SpawnGroup) {
+        spawnStore.selectedGroupId = group.id
+        clearModelSelectionForSpawn()
+    }
+
+    private func clearModelSelectionForSpawn() {
+        // Same five selections the model's own close path clears — reuse it
+        // so a future center-pane occupant can't be missed by spawn mode.
+        model.closeChatView()
     }
 
     private func setStatusFilter(_ filter: SessionStatusFilter) {
