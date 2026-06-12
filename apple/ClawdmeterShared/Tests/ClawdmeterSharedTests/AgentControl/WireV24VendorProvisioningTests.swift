@@ -98,4 +98,49 @@ final class WireV24VendorProvisioningTests: XCTestCase {
         XCTAssertEqual(decoded.workspaceIds, [])
         XCTAssertEqual(decoded.candidates, [])
     }
+
+    func testOnboardingGuideHidesInstallWhenCLIInstalled() {
+        let installed = VendorProvisioningStatus(
+            vendorId: "supabase",
+            cliStatus: .unauthenticated,
+            installedBinary: "/opt/homebrew/bin/supabase",
+            message: "CLI installed, authentication not confirmed."
+        )
+        let guide = VendorProvisioningOnboardingGuide.resolve(status: installed)
+
+        XCTAssertEqual(guide.step, .authenticate)
+        XCTAssertFalse(guide.showsInstall)
+        XCTAssertTrue(guide.showsAuthenticate)
+        XCTAssertEqual(guide.primaryActionKind, .authenticate)
+        XCTAssertEqual(guide.statusLabel, "Needs Auth")
+    }
+
+    func testOnboardingGuideShowsInstallOnlyWhenMissing() {
+        let missing = VendorProvisioningStatus(
+            vendorId: "upstash",
+            cliStatus: .notInstalled,
+            message: "CLI not installed."
+        )
+        let guide = VendorProvisioningOnboardingGuide.resolve(status: missing)
+
+        XCTAssertEqual(guide.step, .installCLI)
+        XCTAssertTrue(guide.showsInstall)
+        XCTAssertFalse(guide.showsAuthenticate)
+        XCTAssertEqual(guide.primaryActionKind, .install)
+    }
+
+    func testOnboardingGuideTreatsProbeErrorsAsAuthStep() {
+        let timedOut = VendorProvisioningStatus(
+            vendorId: "gcp",
+            cliStatus: .error,
+            installedBinary: "/opt/homebrew/bin/gcloud",
+            message: "timedOut(after: 6.0)"
+        )
+        let guide = VendorProvisioningOnboardingGuide.resolve(status: timedOut)
+
+        XCTAssertEqual(guide.step, .authenticate)
+        XCTAssertFalse(guide.showsInstall)
+        XCTAssertTrue(guide.showsAuthenticate)
+        XCTAssertEqual(guide.statusLabel, "Needs Auth")
+    }
 }

@@ -588,3 +588,151 @@ public struct VendorEnvImportResponse: Codable, Hashable, Sendable {
         self.materializedCurrentRepo = materializedCurrentRepo
     }
 }
+
+// MARK: - Guided onboarding
+
+public enum VendorProvisioningInstallPhase: String, Sendable, Equatable {
+    case idle
+    case installing
+    case failed
+    case succeeded
+}
+
+public struct VendorProvisioningOnboardingGuide: Sendable, Equatable {
+    public enum Step: String, Sendable, Equatable {
+        case unchecked
+        case installingCLI
+        case installCLI
+        case authenticate
+        case configureEnv
+        case complete
+    }
+
+    public let step: Step
+    public let guidance: String
+    public let statusLabel: String
+    public let showsInstall: Bool
+    public let showsAuthenticate: Bool
+    public let showsSignup: Bool
+    public let showsAddEnv: Bool
+    public let primaryActionKind: VendorProvisioningActionKind?
+
+    public static func resolve(
+        status: VendorProvisioningStatus?,
+        installPhase: VendorProvisioningInstallPhase = .idle
+    ) -> VendorProvisioningOnboardingGuide {
+        switch installPhase {
+        case .installing:
+            return VendorProvisioningOnboardingGuide(
+                step: .installingCLI,
+                guidance: "Installing the CLI in the background…",
+                statusLabel: "Installing",
+                showsInstall: false,
+                showsAuthenticate: false,
+                showsSignup: false,
+                showsAddEnv: false,
+                primaryActionKind: nil
+            )
+        case .failed:
+            return VendorProvisioningOnboardingGuide(
+                step: .installCLI,
+                guidance: "Step 1 of 3 · Install the CLI, then sign in.",
+                statusLabel: "Install Failed",
+                showsInstall: true,
+                showsAuthenticate: false,
+                showsSignup: true,
+                showsAddEnv: false,
+                primaryActionKind: .install
+            )
+        case .succeeded:
+            return guideForCLIInstalled(status: status, afterInstall: true)
+        case .idle:
+            break
+        }
+
+        switch status?.cliStatus {
+        case .none, .unknown:
+            return VendorProvisioningOnboardingGuide(
+                step: .unchecked,
+                guidance: "Run Check Device to detect installed CLIs on this Mac.",
+                statusLabel: "Unchecked",
+                showsInstall: false,
+                showsAuthenticate: false,
+                showsSignup: true,
+                showsAddEnv: false,
+                primaryActionKind: nil
+            )
+        case .notInstalled:
+            return VendorProvisioningOnboardingGuide(
+                step: .installCLI,
+                guidance: "Step 1 of 3 · Install the CLI, then sign in.",
+                statusLabel: "Not Installed",
+                showsInstall: true,
+                showsAuthenticate: false,
+                showsSignup: true,
+                showsAddEnv: false,
+                primaryActionKind: .install
+            )
+        case .installed, .unauthenticated, .error:
+            return guideForCLIInstalled(status: status, afterInstall: false)
+        case .authenticated:
+            return VendorProvisioningOnboardingGuide(
+                step: .configureEnv,
+                guidance: "Step 3 of 3 · Import deployment env variables into repo sets (optional).",
+                statusLabel: "Authenticated",
+                showsInstall: false,
+                showsAuthenticate: false,
+                showsSignup: false,
+                showsAddEnv: true,
+                primaryActionKind: nil
+            )
+        }
+    }
+
+    private static func guideForCLIInstalled(
+        status: VendorProvisioningStatus?,
+        afterInstall: Bool
+    ) -> VendorProvisioningOnboardingGuide {
+        if status?.cliStatus == .authenticated {
+            return resolve(status: status)
+        }
+
+        let authGuidance = afterInstall
+            ? "CLI installed. Step 2 of 3 · Sign in to your account."
+            : "Step 2 of 3 · Sign in to your account."
+
+        let statusLabel: String
+        switch status?.cliStatus {
+        case .error:
+            statusLabel = "Needs Auth"
+        case .installed:
+            statusLabel = "Needs Auth"
+        default:
+            statusLabel = "Needs Auth"
+        }
+
+        return VendorProvisioningOnboardingGuide(
+            step: .authenticate,
+            guidance: authGuidance,
+            statusLabel: statusLabel,
+            showsInstall: false,
+            showsAuthenticate: true,
+            showsSignup: true,
+            showsAddEnv: false,
+            primaryActionKind: .authenticate
+        )
+    }
+}
+
+public extension VendorProvisioningStatus {
+    var isCLIInstalled: Bool {
+        switch cliStatus {
+        case .installed, .unauthenticated, .authenticated, .error:
+            return true
+        case .notInstalled:
+            return false
+        case .unknown:
+            return installedBinary != nil
+        }
+    }
+}
