@@ -761,7 +761,7 @@ struct SidebarPane: View {
                 // Two levels only (Conductor parity): Repo → Worktree (branch).
                 // A worktree is one leaf row; the model sessions running on it
                 // (Claude → Codex handoff) live as TABS in the workspace, sorted
-                // by age — NOT a third sidebar tier. Newest worktree first.
+                // by age — NOT a third sidebar tier. Newest-created worktree first.
                 ForEach(worktreeGroups(section.sessions, repoKey: section.repo.key), id: \.path) { wt in
                     worktreeRow(wt)
                 }
@@ -774,6 +774,7 @@ struct SidebarPane: View {
         let repoKey: String
         let path: String
         let branch: String
+        let createdAt: Date
         let sessions: [AgentSession]
         var id: String { path }
     }
@@ -810,7 +811,7 @@ struct SidebarPane: View {
         }
     }
 
-    /// Group a repo's sessions by their worktree (branch), newest-active first.
+    /// Group a repo's sessions by their worktree (branch), newest-created first.
     /// Also surfaces worktrees that only have open draft/terminal/document tabs
     /// so closing every session tab doesn't hide the branch from the sidebar.
     private func worktreeGroups(_ sessions: [AgentSession], repoKey: String) -> [WorktreeGroup] {
@@ -828,12 +829,28 @@ struct SidebarPane: View {
                 repoKey: repoKey,
                 path: path,
                 branch: last.isEmpty ? path : last,
+                createdAt: worktreeCreatedAt(path: path, repoKey: repoKey, sessions: ss),
                 sessions: ss.sorted { $0.createdAt < $1.createdAt }
             )
         }
         .sorted {
-            ($0.sessions.map(\.lastEventAt).max() ?? .distantPast) > ($1.sessions.map(\.lastEventAt).max() ?? .distantPast)
+            if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+            return $0.path > $1.path
         }
+    }
+
+    /// Stable creation timestamp for sidebar ordering. Uses the earliest
+    /// session on the worktree, or the earliest open client-side tab when no
+    /// session exists yet.
+    private func worktreeCreatedAt(path: String, repoKey: String, sessions: [AgentSession]) -> Date {
+        if let earliestSession = sessions.map(\.createdAt).min() {
+            return earliestSession
+        }
+        let key = WorkspaceKey(repoKey: repoKey, workspacePath: path)
+        let tabDates = model.workspaceDraftTabs(in: key).map(\.createdAt)
+            + model.workspaceTerminalTabs(in: key).map(\.createdAt)
+            + model.workspaceDocumentTabs(in: key).map(\.createdAt)
+        return tabDates.min() ?? .distantPast
     }
 
     /// A single worktree (branch) leaf row. Clicking it opens the workspace at
@@ -853,58 +870,53 @@ struct SidebarPane: View {
         let diffStat = worktreeDiffs.stat(for: wt.path)
         let showsDiff = !isHovered && diffStat.map { !$0.isEmpty } == true
         let showsSessionCount = !isHovered && wt.sessions.count > 1
-        let labelTrailingPadding = WorktreeRowChromeLayout.labelTrailingPadding(
-            showsArchive: showsArchiveAction,
-            showsSessionCount: showsSessionCount,
-            showsDiff: showsDiff,
-            provisioning: provisioning
-        )
-        Button {
-            // openSession() keeps any in-progress draft alive (don't clear it).
-            if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
-                model.openSession(primary)
-            } else if let draft = model.workspaceDraftTabs(in: worktreeKey).last {
-                model.selectDraftWorkspaceTab(draft)
-            } else if let terminal = model.workspaceTerminalTabs(in: worktreeKey).last {
-                model.selectWorkspaceTerminalTab(terminal)
-            } else if let document = model.workspaceDocumentTabs(in: worktreeKey).last {
-                model.selectWorkspaceDocumentTab(document)
+        let archiveAction = {
+            let sessions = wt.sessions
+            let ids = sessions.map(\.id)
+            Task { @MainActor in
+                try? await model.registry.archive(ids: ids)
             }
-        } label: {
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(wt.branch)
-                        .font(TahoeFont.body(12.5, weight: .medium))
-                        .foregroundStyle(t.fg)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Text(worktreeSubtitle(wt))
-                        .font(TahoeFont.body(9.5))
-                        .foregroundStyle(t.fg4)
-                        .lineLimit(1).truncationMode(.tail)
-                }
-                Spacer(minLength: 4)
+            if let primary = sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
+                postArchiveUndoToast(for: primary)
             }
-            .padding(.leading, 48)
-            .padding(.trailing, labelTrailingPadding)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                isOpen
-                    ? t.accent.opacity(0.12)
-                    : (isHovered ? t.hair2.opacity(colorScheme == .dark ? 1.0 : 1.35) : Color.clear),
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(isOpen ? t.accentAlpha(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
-            )
-            .contentShape(Rectangle())
         }
-        .buttonStyle(PressableButtonStyle())
-        .accessibilityIdentifier("code.worktree.row")
-        .accessibilityValue(isOpen ? "selected" : "not selected")
-        .overlay(alignment: .trailing) {
+        // Sibling select + archive buttons (not nested) so clicking archive
+        // never also opens the worktree row.
+        HStack(spacing: 0) {
+            Button {
+                // openSession() keeps any in-progress draft alive (don't clear it).
+                if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
+                    model.openSession(primary)
+                } else if let draft = model.workspaceDraftTabs(in: worktreeKey).last {
+                    model.selectDraftWorkspaceTab(draft)
+                } else if let terminal = model.workspaceTerminalTabs(in: worktreeKey).last {
+                    model.selectWorkspaceTerminalTab(terminal)
+                } else if let document = model.workspaceDocumentTabs(in: worktreeKey).last {
+                    model.selectWorkspaceDocumentTab(document)
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(wt.branch)
+                            .font(TahoeFont.body(12.5, weight: .medium))
+                            .foregroundStyle(t.fg)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Text(worktreeSubtitle(wt))
+                            .font(TahoeFont.body(9.5))
+                            .foregroundStyle(t.fg4)
+                            .lineLimit(1).truncationMode(.tail)
+                    }
+                    Spacer(minLength: 4)
+                }
+                .padding(.leading, 48)
+                .padding(.trailing, 8)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressableButtonStyle())
+
             worktreeTrailingChrome(
                 provisioning: provisioning,
                 showsArchive: showsArchiveAction,
@@ -913,18 +925,22 @@ struct SidebarPane: View {
                 diffStat: diffStat,
                 showsDiff: showsDiff,
                 emphasizedDiff: isOpen,
-                onArchive: {
-                    let sessions = wt.sessions
-                    let ids = sessions.map(\.id)
-                    Task { @MainActor in
-                        try? await model.registry.archive(ids: ids)
-                    }
-                    if let primary = sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
-                        postArchiveUndoToast(for: primary)
-                    }
-                }
+                onArchive: archiveAction
             )
         }
+        .background(
+            isOpen
+                ? t.accent.opacity(0.12)
+                : (isHovered ? t.hair2.opacity(colorScheme == .dark ? 1.0 : 1.35) : Color.clear),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isOpen ? t.accentAlpha(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("code.worktree.row")
+        .accessibilityValue(isOpen ? "selected" : "not selected")
         .onHover { inside in
             if inside {
                 hoveredWorktreePath = wt.path
