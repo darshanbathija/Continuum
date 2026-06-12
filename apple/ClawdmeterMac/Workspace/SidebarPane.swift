@@ -79,6 +79,12 @@ struct SidebarPane: View {
     @StateObject private var worktreeDiffs = WorktreeDiffTracker()
     @ObservedObject private var handoffAutoSuggest = HandoffAutoSuggestService.shared
 
+    /// Horizontal inset for sidebar chrome — kept minimal so repo rows use
+    /// the full pane width.
+    private enum SidebarLayout {
+        static let edgeInset: CGFloat = 2
+    }
+
     /// A11: single-slot cache for the sidebar projection. Persists across
     /// body re-evals (reference type held via @State) so SwiftUI ticking
     /// the body for unrelated reasons (registry mutation that doesn't
@@ -326,7 +332,7 @@ struct SidebarPane: View {
             filterMenu
             addRepoMenu
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.top, 8)
         .padding(.bottom, 6)
         .sheet(isPresented: $showingCloneRepoSheet) {
@@ -596,7 +602,7 @@ struct SidebarPane: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(t.hairline, lineWidth: 0.5)
         )
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.top, 12)
         .padding(.bottom, 8)
         .onReceive(NotificationCenter.default.publisher(for: .focusSidebarSearch)) { _ in
@@ -636,7 +642,7 @@ struct SidebarPane: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.bottom, 8)
         .help("Open a grid of agent terminal sessions in your home directory")
         .accessibilityIdentifier("code.sidebar.spawn")
@@ -652,7 +658,7 @@ struct SidebarPane: View {
                 .tracking(0.5)
                 .textCase(.uppercase)
                 .foregroundStyle(t.fg3)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, SidebarLayout.edgeInset)
                 .padding(.bottom, 4)
             // The Spawns section lives above the Projects scroll area, so it
             // must bound its own height — many groups would otherwise
@@ -701,7 +707,7 @@ struct SidebarPane: View {
                     .padding(.vertical, 1)
                     .background(t.hair2, in: Capsule())
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, SidebarLayout.edgeInset)
             .padding(.vertical, 5)
             .background(
                 isSelected ? t.selection : Color.clear,
@@ -710,7 +716,7 @@ struct SidebarPane: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
-        .padding(.horizontal, 8)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .contextMenu {
             Button(role: .destructive) {
                 if spawnStore.hasLiveTiles(in: group) {
@@ -962,7 +968,7 @@ struct SidebarPane: View {
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
-            .padding(.horizontal, 12)
+            .padding(.horizontal, SidebarLayout.edgeInset)
             .padding(.top, 8)
             .padding(.bottom, 6)
         }
@@ -1004,7 +1010,7 @@ struct SidebarPane: View {
                 }
             }
             .contentShape(Rectangle())
-            .padding(.horizontal, 12)
+            .padding(.horizontal, SidebarLayout.edgeInset)
             .padding(.top, 8)
             .padding(.bottom, 3)
         }
@@ -1020,7 +1026,7 @@ struct SidebarPane: View {
                 .foregroundStyle(.tertiary)
             Spacer()
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.top, 8)
         .padding(.bottom, 3)
     }
@@ -1029,7 +1035,7 @@ struct SidebarPane: View {
         Rectangle()
             .fill(t.hairline)
             .frame(height: 1)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, SidebarLayout.edgeInset)
             .padding(.top, 10)
             .padding(.bottom, 2)
     }
@@ -1046,7 +1052,7 @@ struct SidebarPane: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.vertical, 24)
         .frame(maxWidth: .infinity)
     }
@@ -1105,7 +1111,7 @@ struct SidebarPane: View {
     /// for accessories that are actually visible so branch names aren't
     /// squeezed when idle.
     private enum WorktreeRowChromeLayout {
-        static let trailingInset: CGFloat = 18
+        static let trailingInset: CGFloat = 4
         static let archiveWidth: CGFloat = 22
         static let accessorySpacing: CGFloat = 6
         static let provisioningWidth: CGFloat = 14
@@ -1238,8 +1244,8 @@ struct SidebarPane: View {
                     }
                     Spacer(minLength: 4)
                 }
-                .padding(.leading, 28)
-                .padding(.trailing, 8)
+                .padding(.leading, 20)
+                .padding(.trailing, SidebarLayout.edgeInset)
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -1280,7 +1286,7 @@ struct SidebarPane: View {
         .contextMenu {
             worktreeContextMenu(wt)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, SidebarLayout.edgeInset)
     }
 
     @ViewBuilder
@@ -1669,7 +1675,7 @@ struct SidebarPane: View {
                 statusGroupHeader(group)
             }
             .disclosureGroupStyle(QuietDisclosure())
-            .padding(.horizontal, 12)
+            .padding(.horizontal, SidebarLayout.edgeInset)
             .padding(.top, 8)
             .padding(.bottom, 4)
         } else {
@@ -1706,7 +1712,7 @@ struct SidebarPane: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.top, 8)
         .padding(.bottom, 4)
     }
@@ -1838,7 +1844,7 @@ struct SidebarPane: View {
                                 .foregroundStyle(.secondary)
                             Spacer()
                         }
-                        .padding(.horizontal, 26)
+                        .padding(.horizontal, 8)
                         .padding(.vertical, 5)
                         .contentShape(Rectangle())
                     }
@@ -1885,8 +1891,8 @@ struct SidebarPane: View {
             }
             Spacer(minLength: 4)
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 14)
+        .padding(.leading, SidebarLayout.edgeInset)
+        .padding(.trailing, SidebarLayout.edgeInset)
         .padding(.vertical, 5)
         .background(
             isOpen
@@ -1898,7 +1904,7 @@ struct SidebarPane: View {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .stroke(isOpen ? terraCotta.opacity(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
         )
-        .padding(.horizontal, 6)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .contentShape(Rectangle())
         .onHover { inside in
             if inside {
@@ -2142,7 +2148,7 @@ struct SidebarPane: View {
             .help("New workspace — Codex · GPT-5.5 · extra-high effort · plan mode (option-click to customize)")
             .accessibilityIdentifier("code.repo.new-session")
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.vertical, subtitle == nil ? 6 : 5)
     }
 
@@ -2354,8 +2360,8 @@ struct SidebarPane: View {
                 // `SessionHoverActions` above — the duplicate inline button was
                 // removed so the row shows ONE clean Conductor-style icon.)
             }
-            .padding(.leading, 24 + CGFloat(depth) * 6)
-            .padding(.trailing, 24)
+            .padding(.leading, 8 + CGFloat(depth) * 6)
+            .padding(.trailing, 8)
             .padding(.vertical, 7)
             .background(isOpen
                 ? t.accentAlpha(colorScheme == .dark ? 0.18 : 0.12)
@@ -2365,7 +2371,7 @@ struct SidebarPane: View {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .stroke(isOpen ? t.accentAlpha(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
             )
-            .padding(.horizontal, 6)
+            .padding(.horizontal, SidebarLayout.edgeInset)
             .contentShape(Rectangle())
             .onHover { inside in
                 if inside {
@@ -2397,7 +2403,7 @@ struct SidebarPane: View {
                         postArchiveUndoToast(for: session)
                     }
                 )
-                .padding(.trailing, 16)
+                .padding(.trailing, SidebarLayout.edgeInset)
             }
         }
         .opacity(session.archivedAt != nil ? 0.6 : 1.0)
@@ -2873,7 +2879,7 @@ struct SidebarPane: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.vertical, 24)
         .frame(maxWidth: .infinity)
     }
@@ -2903,7 +2909,7 @@ struct SidebarPane: View {
         }
         .buttonStyle(PressableButtonStyle())
         .keyboardShortcut("n", modifiers: [.command])
-        .padding(10)
+        .padding(SidebarLayout.edgeInset)
     }
 
     private var sidebarBg: Color {
