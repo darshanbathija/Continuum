@@ -2745,14 +2745,14 @@ public final class SessionsModel: ObservableObject {
     func applyCrossProviderModelSelection(
         sessionId: UUID,
         entry: ModelCatalogEntry,
-        effort: ReasoningEffort?,
-        customProviderId: String? = nil
+        effort: ReasoningEffort?
     ) {
         guard let session = registry.session(id: sessionId) else { return }
         let store = composerStore(for: session, catalog: .bundled)
         store.agent = entry.provider
         store.modelId = entry.id
-        store.customProviderId = customProviderId
+        // Use the PICKED entry's custom-provider id, not the running session's.
+        store.customProviderId = entry.customProviderId
         store.effort = entry.supportsEffort ? effort : nil
     }
 
@@ -2763,8 +2763,7 @@ public final class SessionsModel: ObservableObject {
             applyCrossProviderModelSelection(
                 sessionId: sessionId,
                 entry: entry,
-                effort: effort,
-                customProviderId: session.customProviderId
+                effort: effort
             )
             return
         }
