@@ -109,6 +109,8 @@ final class UpdateCoordinator: ObservableObject {
     @Published private(set) var releaseMetadataError: String?
     @Published private(set) var isLoadingReleaseMetadata: Bool = false
     @Published private(set) var awaitingManualCheckPopover: Bool = false
+    /// True while a manual check is refreshing an already-displayed status.
+    @Published private(set) var isRefreshingUpdateStatus: Bool = false
 
     static let manualCheckDebounce: TimeInterval = 2
 
@@ -169,6 +171,7 @@ final class UpdateCoordinator: ObservableObject {
 
         evaluateInstallLocation()
         startSparkleIfPossible()
+        restorePersistedStatusIfNeeded()
     }
 
     deinit {
@@ -323,7 +326,8 @@ final class UpdateCoordinator: ObservableObject {
         if !bypassDebounce,
            let lastManualCheckAt,
            nowProvider().timeIntervalSince(lastManualCheckAt) < Self.manualCheckDebounce {
-            updateLogger.debug("Skipping update check because it is inside the manual debounce window")
+            awaitingManualCheckPopover = true
+            updateLogger.debug("Skipping network update check inside debounce window; showing cached status")
             return
         }
 
@@ -342,12 +346,61 @@ final class UpdateCoordinator: ObservableObject {
 
         lastManualCheckAt = nowProvider()
         awaitingManualCheckPopover = true
-        state = .checking
-        switch mode {
-        case .foreground:
-            driver.checkForUpdates()
-        case .informationOnly:
-            driver.checkForUpdateInformation()
+
+        if hasDisplayedUpdateStatus {
+            isRefreshingUpdateStatus = true
+        } else {
+            state = .checking
+        }
+
+        scheduleSparkleCheck(mode: mode, driver: driver)
+    }
+
+    private var hasDisplayedUpdateStatus: Bool {
+        switch state {
+        case .upToDate, .updateAvailable:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func scheduleSparkleCheck(mode: ManualCheckMode, driver: SparkleUpdateDriving) {
+        Task { @MainActor in
+            // Yield so SwiftUI can paint "Checking" / the cached status
+            // before Sparkle's synchronous appcast work on the main actor.
+            await Task.yield()
+            switch mode {
+            case .foreground:
+                driver.checkForUpdates()
+            case .informationOnly:
+                driver.checkForUpdateInformation()
+            }
+        }
+    }
+
+    private func restorePersistedStatusIfNeeded() {
+        guard canUseSparkle else { return }
+        guard case .idle = state else { return }
+        guard let record = UpdateStatusPersistence.load() else { return }
+        switch record {
+        case .upToDate(let checkedAt):
+            lastCheckedAt = checkedAt
+            state = .upToDate(lastCheckedAt: checkedAt)
+        case .updateAvailable(let update):
+            currentUpdate = update
+            state = .updateAvailable(update)
+        }
+    }
+
+    private func persistCompletedStatus() {
+        switch state {
+        case .upToDate(let checkedAt):
+            UpdateStatusPersistence.save(.upToDate(lastCheckedAt: checkedAt))
+        case .updateAvailable(let update):
+            UpdateStatusPersistence.save(.updateAvailable(update))
+        default:
+            break
         }
     }
 
@@ -403,19 +456,24 @@ final class UpdateCoordinator: ObservableObject {
 
 extension UpdateCoordinator: SparkleUpdateDriverDelegate {
     func updateDriverDidStartChecking() {
+        guard !isRefreshingUpdateStatus else { return }
         state = .checking
     }
 
     func updateDriverDidFindUpdate(_ update: SparkleUpdateInfo) {
+        isRefreshingUpdateStatus = false
         currentUpdate = update
         state = .updateAvailable(update)
+        persistCompletedStatus()
         refreshReleaseMetadata()
     }
 
     func updateDriverDidNotFindUpdate() {
+        isRefreshingUpdateStatus = false
         currentUpdate = nil
         lastCheckedAt = driver?.lastUpdateCheckDate ?? nowProvider()
         state = .upToDate(lastCheckedAt: lastCheckedAt)
+        persistCompletedStatus()
         refreshReleaseMetadata()
     }
 
@@ -429,10 +487,12 @@ extension UpdateCoordinator: SparkleUpdateDriverDelegate {
     }
 
     func updateDriverDidCancel(version: String?) {
+        isRefreshingUpdateStatus = false
         state = .userCancelled(version: version ?? currentUpdate?.displayVersion)
     }
 
     func updateDriverDidFail(_ error: Error) {
+        isRefreshingUpdateStatus = false
         state = SparkleErrorClassifier.state(for: error, fallbackURL: fallbackURL)
     }
 

@@ -226,6 +226,7 @@ struct MacRootView: View {
                     },
                     theme: theme,
                     runtime: runtime,
+                    updateCoordinator: runtime.updateCoordinator,
                     workbenchState: workbenchState
                 )
                     .padding(.horizontal, 10)
@@ -1270,6 +1271,7 @@ struct MacTitlebar: View {
     /// sync popover trigger). Nil falls back to static text for Previews.
     /// v0.27.0: .design chip removed along with the Design tab.
     var runtime: AppRuntime?
+    @ObservedObject var updateCoordinator: UpdateCoordinator
     @ObservedObject var workbenchState: WorkbenchState
 
     init(
@@ -1277,12 +1279,14 @@ struct MacTitlebar: View {
         onTab: @escaping (MacRootView.Tab) -> Void,
         theme: TahoeThemeStore,
         runtime: AppRuntime? = nil,
+        updateCoordinator: UpdateCoordinator,
         workbenchState: WorkbenchState
     ) {
         self.active = active
         self.onTab = onTab
         self.theme = theme
         self.runtime = runtime
+        self.updateCoordinator = updateCoordinator
         self.workbenchState = workbenchState
     }
 
@@ -1387,7 +1391,7 @@ struct MacTitlebar: View {
                     HStack(spacing: 10) {
                         tabStrip
                         Spacer(minLength: 0)
-                        UpdateAppControl(coordinator: runtime?.updateCoordinator)
+                        UpdateAppControl(coordinator: updateCoordinator)
                         secondaryRight
                     }
                     .padding(.horizontal, 14)
@@ -1411,7 +1415,7 @@ struct MacTitlebar: View {
     private var codeActions: some View {
         TahoeGlass(radius: 6, tone: .chip) {
             HStack(spacing: 2) {
-                UpdateAppControl(coordinator: runtime?.updateCoordinator, compact: true)
+                UpdateAppControl(coordinator: updateCoordinator, compact: true)
                 codeActionButton(icon: "sliders", help: "Focus Code filters") {
                     NotificationCenter.default.post(name: .focusSidebarSearch, object: nil)
                 }
