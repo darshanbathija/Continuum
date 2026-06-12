@@ -311,6 +311,13 @@ struct ComposerInputCore: View {
     /// `.sending` so the bubble doesn't flicker out and back in. Nil =
     /// no retry chip rendered.
     var onRetryPending: (() -> Void)?
+    /// Queued follow-ups staged while the agent runs. Rendered above the
+    /// text field with hover actions (edit / delete / steer).
+    var queuedSends: [QueuedWorkbenchSend] = []
+    var isDispatchingQueuedSend: Bool = false
+    var onQueuedSendUpdate: ((UUID, String) -> Void)?
+    var onQueuedSendDelete: ((UUID) -> Void)?
+    var onQueuedSendSteer: ((QueuedWorkbenchSend) -> Void)?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -340,6 +347,19 @@ struct ComposerInputCore: View {
                 }
                 if !store.browserComments.isEmpty {
                     browserCommentChipsRow
+                }
+                if !queuedSends.isEmpty,
+                   let onQueuedSendUpdate,
+                   let onQueuedSendDelete,
+                   let onQueuedSendSteer {
+                    QueuedSendsStrip(
+                        drafts: queuedSends,
+                        sessionIsRunning: sessionIsRunning,
+                        isDispatching: isDispatchingQueuedSend,
+                        onUpdateText: onQueuedSendUpdate,
+                        onDelete: onQueuedSendDelete,
+                        onSteer: onQueuedSendSteer
+                    )
                 }
                 inputRow
                     .opacity(planApprovalMode ? 0.56 : 1)
