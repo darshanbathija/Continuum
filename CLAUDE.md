@@ -1225,6 +1225,121 @@ live in `TODOS.md` under "v0.32.0 follow-ups".
   resolver matrix including the Claude token-required gate.
 - Mac / iOS / Watch schemes build clean.
 
+## Spawn mode (Code tab terminal grid, 2026-06-12)
+
+Mac-only batch launcher for interactive agent CLIs. A Spawn button in the
+Code sidebar (between search and Projects) opens a config sheet: pick a
+total terminal count (4 / 6 / 8) and an agent mix ("4 Claude, 2 Codex,
+2 Cursor"); the Mac opens that many agent CLI PTY tiles in a grid, all
+cwd'd to the user's HOME. Groups ("Spawn 1", "Spawn 2", …) list in a
+Spawns sidebar section above Projects with a "4 Claude · 2 Codex"
+subtitle. Spawn groups are ephemeral — they die with the app and are
+never persisted or paired to iOS.
+
+### Allocation model — shared package
+
+- `apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/SpawnPlan.swift`
+  is the pure value half so the PTY-owning Mac store stays a thin shell:
+  `slots(for:)` expands an allocation into ordered tiles
+  (largest-count agent first, ties keep caller order, duplicate entries
+  merged so per-kind numbering never restarts), `seededAllocation` puts
+  the whole batch on the first spawnable agent so "just spawn 4" is a
+  two-click flow, `rebalancedAllocation` grows into the first available
+  agent / shrinks from the bottom of display order when the total
+  changes, and `gridColumns(forTileCount:)` maps 4 → 2×2, 6 → 3×2,
+  8 → 4×2 (mid-session closes round to the nearest ≤2-row shape).
+
+### Store + lifecycle — Mac
+
+- `apple/ClawdmeterMac/AgentControl/SpawnModeStore.swift` — `@MainActor`
+  process-wide singleton (like `TerminalPtyRegistry`) owning every
+  group's `TerminalPtyHost` tiles plus grid selection/expansion state, so
+  PTYs survive tab switches and view teardown. Launch argv is the plain
+  TUI binary (no permission-skip flags — the user types into the agent
+  directly): `claude`/`codex`/`gemini`/`opencode`/`grok` via
+  `ShellRunner.locateBinary`, Cursor via `AgentSpawner.cursorBinaryPath()`.
+  Claude gets `AgentSpawner.claudePtyEnv()` (sanitized subscription-rail
+  env); everything else gets the PATH merge. Availability =
+  binary-on-disk AND `ProviderEnablement` (same gate as the daemon's
+  spawn path). Partial failures surface as a transient failure toast
+  naming the failed slots (`SpawnCreateResult.failedSlotTitles`) after
+  the group opens; a CLI that dies between
+  `start()` and `setOnExit` is caught by an `isRunning` recheck so
+  fast-failing CLIs don't render as live tiles forever.
+- Teardown: closing a tile/group kills hosts sequentially on one
+  detached utility task (`TerminalPtyHost.kill` blocks ~1s worst case;
+  eight concurrent kills would pin eight cooperative-pool threads).
+  Close confirmations gate on `hasLiveTiles`. `terminateAllForAppQuit()`
+  (called from `applicationWillTerminate`) signals each LIVE child's
+  process group synchronously — HUP, TERM, KILL with no waits, because
+  termination can't await an actor hop and an agent ignoring the
+  master-close SIGHUP would outlive the app and keep burning quota.
+  Exited tiles are skipped to avoid signaling recycled pids.
+
+### Grid UI — Mac
+
+- `apple/ClawdmeterMac/Workspace/SpawnConfigSheet.swift` — count picker +
+  per-agent steppers; availability resolved ONCE on appear (`binaryPath`
+  falls through to a synchronous `which` for missing CLIs). Missing CLIs
+  get an Install… affordance reusing the onboarding `SetupTerminalSheet`
+  flow; `ProviderDeviceSetupAction` is the ONE install-command inventory
+  (onboarding, Settings → Providers, and this sheet all read it — this
+  ship added `installClaudeCLI` / `installGeminiCLI` /
+  `installOpencodeCLI` cases and a shared `SetupTerminalSession.launch`
+  so the "Press Done" wrapping can't drift across call sites).
+- `apple/ClawdmeterMac/Workspace/SpawnGridView.swift` — tile grid with a
+  provider-colored selection border on the typing target; any tile
+  expands to fill the pane and compacts back. `SpawnTilesLayout` is a
+  custom `Layout` whose expand mode PARKS non-expanded tiles just below
+  the visible bounds instead of removing/zero-sizing them — SwiftTerm
+  views are never torn down or resized, so no PTY-ring replay, no
+  scrollback loss, no mid-escape garbling. One flat `ForEach` keeps
+  SwiftUI identity across expand/compact and post-close reflow.
+- `apple/ClawdmeterMac/Workspace/SpawnTerminalView.swift` — SwiftTerm
+  tile with the two focus hooks the grid needs: a local mouseDown
+  monitor reports click-focus (`TerminalView.becomeFirstResponder` is
+  `public`, not `open`, so a subclass can't observe it) and a
+  `focusToken` bump makes the terminal first responder from header taps.
+- `SessionWorkspaceView` treats the open spawn grid as a center-pane
+  occupant mutually exclusive with session/draft/terminal/document
+  selections — opening either side dismisses the other (PTYs keep
+  running; the group stays one click away in the sidebar). The review
+  pane and its gutter stay collapsed while a grid is open. An incoming
+  X1 compose-draft dismisses the grid and re-posts the notification once
+  so the draft reaches a mounted composer instead of evaporating.
+  Opening a spawn grid does NOT clobber the persisted session selection
+  (groups die with the app; relaunch restores the last real session).
+
+### SessionFileResolver hardening (anti-transcript-hijack)
+
+- Shipped alongside because spawn tiles mass-produce Codex rollouts:
+  `findCodexRollout` previously accepted any rollout whose mtime fell in
+  the session's activity window, so the newest foreign rollout (a spawn
+  tile, or any Terminal-launched codex) would silently re-point a live
+  session's transcript at a different conversation. Now the rollout's
+  own recorded cwd (`session_meta` / `turn_context` payload, head-parsed
+  ≤64KB) must match the session's cwd. `.noMeta` (real parsed lines, no
+  meta — legacy format) stays accepted for back-compat; `.empty` (no
+  complete JSON line — likely mid-creation) is never selected and never
+  cached, so the verdict is re-probed once the meta line lands. Per-path
+  verdicts cache in a bounded FIFO (512); path comparison standardizes +
+  resolves symlinks and folds the `/private/{tmp,var,etc}` firmlink
+  spellings explicitly because `resolvingSymlinksInPath` is asymmetric
+  about them.
+
+### Tests
+
+- `SpawnPlanTests` (15): slot ordering/merging, seeded + rebalanced
+  allocation, grid shape.
+- `SessionFileResolverTests` +12: cwd-mismatch rejection, `.noMeta`
+  back-compat, `.empty` non-caching/mid-write probes, `/private`
+  canonicalization, cache behavior.
+- New Mac `apple/ClawdmeterMacTests/SpawnModeStoreTests.swift` (7):
+  hermetic `/bin/cat` spawns via the `launchArgvOverride` test seam —
+  group creation, partial failure, exit tracking, close/teardown paths.
+- Deferred follow-ups live in `TODOS.md` under the spawn-mode review
+  deferrals entry.
+
 ## Style + voice
 
 - Code comments lead with **what + why**, not implementation play-by-play.
