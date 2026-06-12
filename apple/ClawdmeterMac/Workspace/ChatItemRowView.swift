@@ -245,8 +245,15 @@ struct ChatItemRowContent: View {
     private func toolRunBody(runId: String, pairs: [ToolPair]) -> some View {
         let editPairs = pairs.filter { !TranscriptEditedFile.from($0.call).isEmpty }
         let askPairs  = pairs.filter { $0.call.askUserQuestion != nil }
-        let otherPairs = pairs.filter {
-            TranscriptEditedFile.from($0.call).isEmpty && $0.call.askUserQuestion == nil
+        let flatPairs = pairs.filter {
+            TranscriptEditedFile.from($0.call).isEmpty
+                && $0.call.askUserQuestion == nil
+                && ToolActionSummary.rendersFlatRow(toolName: $0.call.title)
+        }
+        let bashPairs = pairs.filter {
+            TranscriptEditedFile.from($0.call).isEmpty
+                && $0.call.askUserQuestion == nil
+                && !ToolActionSummary.rendersFlatRow(toolName: $0.call.title)
         }
         VStack(alignment: .leading, spacing: 6) {
             ForEach(editPairs) { pair in
@@ -294,8 +301,12 @@ struct ChatItemRowContent: View {
             ForEach(previewableArtifacts(in: pairs)) { artifact in
                 generatedArtifactButton(artifact)
             }
-            if !otherPairs.isEmpty {
-                toolRunGroup(id: runId, pairs: otherPairs)
+            ForEach(flatPairs) { pair in
+                AgentToolActionRow(pair: pair)
+                    .id("pair:\(pair.id)")
+            }
+            if !bashPairs.isEmpty {
+                toolRunGroup(id: runId, pairs: bashPairs)
             }
         }
     }
@@ -568,15 +579,22 @@ struct ChatItemRowContent: View {
         .help("Open in Code tab")
     }
 
+    @ViewBuilder
     private func metaRow(_ msg: SessionChatStore.ChatMessage) -> some View {
-        HStack {
-            Spacer()
-            Text(msg.body)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Spacer()
+        if msg.title == "Thinking" {
+            ThinkingActionRow(summary: msg.body)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 2)
+        } else {
+            HStack {
+                Spacer()
+                Text(msg.body)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.vertical, 4)
         }
-        .padding(.vertical, 4)
     }
 
     // MARK: Tool-run / pair rendering
@@ -607,8 +625,16 @@ struct ChatItemRowContent: View {
             // the row narrows.
             HStack(alignment: .center, spacing: 6) {
                 HStack(spacing: 6) {
-                    TahoeIcon("terminal", size: 10)
-                        .foregroundStyle(t.fg3)
+                    Group {
+                        if let running = runningStep {
+                            ToolIconView(toolName: running.call.title, size: 10)
+                        } else if let first = pairs.first {
+                            ToolIconView(toolName: first.call.title, size: 10)
+                        } else {
+                            TahoeIcon("terminal", size: 10)
+                                .foregroundStyle(t.fg3)
+                        }
+                    }
                     HStack(spacing: 0) {
                         Text("Ran ")
                         // v0.29.27: dropped the trailing-aligned 20pt
@@ -711,9 +737,14 @@ struct ChatItemRowContent: View {
             .padding(.top, 4)
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: toolIcon(pair.call.title))
-                    .font(.system(size: 10))
-                    .foregroundStyle(toolTint(pair.call.title))
+                ToolIconView(toolName: pair.call.title, size: 10, isError: isError)
+                if let path = TechStackIconCatalog.filePathHint(
+                    toolTitle: pair.call.title,
+                    body: pair.call.body,
+                    detail: pair.call.detail
+                ) {
+                    TechStackIconView(path: path, size: 12)
+                }
                 Text(pair.call.title)
                     .font(TahoeFont.mono(11, weight: .semibold))
                     .foregroundStyle(toolTint(pair.call.title))
@@ -829,19 +860,7 @@ struct ChatItemRowContent: View {
     }
 
     private func toolTint(_ name: String) -> Color {
-        // Generic-tool tints. Avoid the AI-slop purple — `.web` is just a
-        // network fetch, not a provider identity. Route through the Codex
-        // blue token so the palette stays consistent with the rest of the
-        // app's tool chrome.
-        switch ToolPresentationCatalog.presentation(for: name).tone {
-        case .read: return SessionsV2Theme.codexBlue
-        case .write: return terraCotta
-        case .shell: return SessionsV2Theme.success
-        case .web: return SessionsV2Theme.codexBlue
-        case .agent: return SessionsV2Theme.warn
-        case .warning: return SessionsV2Theme.danger
-        case .neutral: return .secondary
-        }
+        ToolIconView.tint(for: ToolPresentationCatalog.presentation(for: name).tone)
     }
 
     private var terraCotta: Color { SessionsV2Theme.accent }

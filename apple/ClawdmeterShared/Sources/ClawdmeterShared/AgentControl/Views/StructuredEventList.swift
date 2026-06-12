@@ -111,19 +111,10 @@ public struct StructuredEventList: View {
     }
 
     private func toolCallCard(_ item: Item) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "wrench.adjustable")
-                .font(.system(size: 11))
-                .foregroundStyle(toolTintColor(item.title))
-            Text(item.title)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(toolTintColor(item.title))
-            Text(item.body)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer()
-        }
+        AgentToolActionRow(
+            toolName: item.title,
+            callBody: item.body
+        )
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(secondaryBg, in: RoundedRectangle(cornerRadius: 6))
@@ -161,12 +152,7 @@ public struct StructuredEventList: View {
     }
 
     private func toolTintColor(_ name: String) -> Color {
-        switch name {
-        case "Read", "Glob", "Grep": return .blue
-        case "Write", "Edit": return terraCotta
-        case "Bash": return .green
-        default: return .purple
-        }
+        ToolIconView.tint(for: ToolPresentationCatalog.presentation(for: name).tone)
     }
 
     private var terraCotta: Color { SessionsV2Theme.accent }
