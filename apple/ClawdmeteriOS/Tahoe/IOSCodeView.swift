@@ -81,9 +81,13 @@ public struct IOSCodeView: View {
     @State private var searchQuery: String = ""
     @State private var statusScope: StatusScope = .all
     @State private var providerFilter: TahoeProvider?
+    @State private var executionHostFilterId: UUID?
     @State private var includeRecents: Bool = true
     @State private var filtersDialogPresented: Bool = false
     @State private var workspaceSwitcherPresented: Bool = false
+    @State private var handoffSessionId: UUID?
+    @State private var handoffCurrentHostId: UUID?
+    @State private var showHandoffSheet = false
 
     public var body: some View {
         ScrollView {
@@ -143,7 +147,13 @@ public struct IOSCodeView: View {
                 // "All" scope, rather than hiding status state entirely
                 // behind the filter menu.
                 statusBuckets
-                    .padding(.bottom, 16)
+                    .padding(.bottom, 8)
+
+                if let agentClient, agentClient.supportsExecutionHosts, !agentClient.executionHosts.isEmpty {
+                    hostFilterBar(client: agentClient)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
+                }
 
                 // Repo sections — apply the search query if non-empty.
                 let visible = filteredRepos
@@ -228,6 +238,20 @@ public struct IOSCodeView: View {
                 }
             }
             .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showHandoffSheet) {
+            if let client = agentClient, let sessionId = handoffSessionId {
+                HandoffExecutionHostSheet(
+                    client: client,
+                    sessionId: sessionId,
+                    currentHostId: handoffCurrentHostId,
+                    onDismiss: {
+                        showHandoffSheet = false
+                        handoffSessionId = nil
+                        handoffCurrentHostId = nil
+                    }
+                )
+            }
         }
     }
 
@@ -315,34 +339,28 @@ public struct IOSCodeView: View {
         .buttonStyle(.plain)
     }
 
-    private var filterBar: some View {
-        HStack(spacing: 8) {
-            Menu {
+    private func hostFilterBar(client: AgentControlClient) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
                 Button {
-                    providerFilter = nil
+                    executionHostFilterId = nil
                 } label: {
-                    Label("All providers", systemImage: providerFilter == nil ? "checkmark" : "circle")
+                    filterChip(icon: "square.grid.2x2", text: "All", active: executionHostFilterId == nil)
                 }
-                ForEach(availableProviders, id: \.id) { provider in
+                .buttonStyle(.plain)
+                ForEach(client.executionHosts) { host in
                     Button {
-                        providerFilter = provider
+                        executionHostFilterId = host.id
                     } label: {
-                        Label(provider.displayName, systemImage: providerFilter?.rawValue == provider.rawValue ? "checkmark" : "circle")
+                        filterChip(
+                            icon: "desktopcomputer",
+                            text: host.displayName,
+                            active: executionHostFilterId == host.id
+                        )
                     }
+                    .buttonStyle(.plain)
                 }
-            } label: {
-                filterChip(
-                    icon: "sliders",
-                    text: providerFilter?.displayName ?? "All providers",
-                    active: providerFilter != nil
-                )
             }
-            Toggle(isOn: $includeRecents) {
-                filterChip(icon: "archive", text: "Recent", active: includeRecents)
-            }
-            .toggleStyle(.button)
-            .buttonStyle(.plain)
-            Spacer(minLength: 0)
         }
     }
 
@@ -372,6 +390,14 @@ public struct IOSCodeView: View {
             if let providerFilter {
                 sessions = sessions.filter { $0.agent == providerFilter }
                 recents = recents.filter { $0.provider == providerFilter }
+            }
+            if let executionHostFilterId, let client = agentClient {
+                let allowed = Set(
+                    client.sessions
+                        .filter { $0.executionHostId == executionHostFilterId }
+                        .map(\.id)
+                )
+                sessions = sessions.filter { allowed.contains($0.id) }
             }
             switch statusScope {
             case .all:
@@ -607,6 +633,15 @@ private struct IOSRepoCard: View {
                     .buttonStyle(.plain)
                     .contextMenu {
                         Button("Open Session", systemImage: "arrow.right", action: ContinuumAnalytics.wrapButton("open_session", { onOpen(s.id) }))
+                        if let client = agentClient,
+                           client.supportsExecutionHosts,
+                           s.status != .done {
+                            Button("Continue on…", systemImage: "arrow.right.circle", action: ContinuumAnalytics.wrapButton("continue_on_host", {
+                                handoffSessionId = s.id
+                                handoffCurrentHostId = client.sessions.first(where: { $0.id == s.id })?.executionHostId
+                                showHandoffSheet = true
+                            }))
+                        }
                         Button(presentationStore.snapshot.pinnedSessionIds.contains(s.id) ? "Unpin" : "Pin", systemImage: "pin", action: ContinuumAnalytics.wrapButton("toggle_pin_session", { try? presentationStore.togglePin(s.id) }))
                         Button(presentationStore.snapshot.unreadSessionIds.contains(s.id) ? "Mark Read" : "Mark Unread", systemImage: "circle.fill", action: ContinuumAnalytics.wrapButton("toggle_unread_session", { try? presentationStore.markUnread(s.id, unread: !presentationStore.snapshot.unreadSessionIds.contains(s.id)) }))
                         Button(presentationStore.snapshot.mutedSessionIds.contains(s.id) ? "Unmute" : "Mute", systemImage: "bell.slash", action: ContinuumAnalytics.wrapButton("toggle_mute_session", { try? presentationStore.setMuted(s.id, muted: !presentationStore.snapshot.mutedSessionIds.contains(s.id)) }))
@@ -715,6 +750,10 @@ private struct IOSRepoCard: View {
         }
         if session.status == .planning {
             items.append(.init(text: "Plan", icon: "sparkles", tone: t.accent))
+        }
+        if let hostLabel = session.executionHostLabel,
+           hostLabel != "My Mac" {
+            items.append(.init(text: hostLabel, icon: "desktopcomputer", tone: t.fg3))
         }
         if pending > 0 {
             items.append(.init(text: "\(pending)", icon: "arrowU", tone: t.fg3))

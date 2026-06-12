@@ -77,6 +77,8 @@ public enum SessionSidebarGrouper {
             return groupByStatus(sessions: filtered, sorting: sorting, reviewSessionIds: reviewSessionIds, now: now)
         case .agent:
             return groupByAgent(sessions: filtered, repos: canonicalRepos.repos, sorting: sorting)
+        case .host:
+            return groupByHost(sessions: filtered, sorting: sorting)
         case .none:
             return [SessionSidebarGroup(
                 id: "all",
@@ -311,6 +313,29 @@ public enum SessionSidebarGrouper {
                 title: agent.rawValue.capitalized,
                 repoKey: nil,
                 sortRank: rank,
+                sessions: live,
+                recents: []
+            )
+        }
+    }
+
+    private static func groupByHost(
+        sessions: [AgentSession],
+        sorting: SessionSorting
+    ) -> [SessionSidebarGroup] {
+        var buckets: [String: [AgentSession]] = [:]
+        for session in sessions {
+            let label = session.executionHostLabel ?? "My Mac"
+            buckets[label, default: []].append(session)
+        }
+        return buckets.keys.sorted().enumerated().compactMap { idx, label in
+            let live = sorted(buckets[label] ?? [], by: sorting)
+            guard !live.isEmpty else { return nil }
+            return SessionSidebarGroup(
+                id: "host:\(label)",
+                title: label,
+                repoKey: nil,
+                sortRank: idx,
                 sessions: live,
                 recents: []
             )

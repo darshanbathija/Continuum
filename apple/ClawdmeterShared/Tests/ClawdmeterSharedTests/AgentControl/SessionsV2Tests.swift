@@ -97,7 +97,7 @@ final class SessionsV2Tests: XCTestCase {
 
     func testSessionGroupingCases() {
         let names = SessionGrouping.allCases.map(\.displayName)
-        XCTAssertEqual(names, ["Repo", "Date", "Status", "Agent", "None"])
+        XCTAssertEqual(names, ["Repo", "Date", "Status", "Agent", "Device", "None"])
     }
 
     func testSessionSortingCases() {

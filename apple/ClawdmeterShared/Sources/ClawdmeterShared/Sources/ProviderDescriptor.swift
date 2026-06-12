@@ -86,7 +86,7 @@ public struct ProviderDescriptor: Sendable, Identifiable {
             agent: .opencode,
             chatVendor: .opencode,
             analyticsProvider: .opencode,
-            agentDisplayName: "OpenCode",
+            agentDisplayName: "OpenCode Go",
             assetName: "OpencodeLogo",
             isTemplateAsset: true,
             accentRGB: (0x9B, 0x87, 0xD4),

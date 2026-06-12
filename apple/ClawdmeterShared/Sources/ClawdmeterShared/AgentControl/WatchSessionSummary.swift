@@ -15,6 +15,8 @@ public struct WatchSessionSummary: Codable, Hashable, Sendable, Identifiable {
     public let goalSnippet: String?  // first 60 chars
     public let needsAttention: Bool  // planText != nil && status == .planning, etc.
     public let updatedAt: Date
+    /// Wire v30: device label for complication / list subtitle.
+    public let executionHostLabel: String?
 
     public init(
         id: UUID,
@@ -24,7 +26,8 @@ public struct WatchSessionSummary: Codable, Hashable, Sendable, Identifiable {
         status: String,
         goalSnippet: String?,
         needsAttention: Bool,
-        updatedAt: Date
+        updatedAt: Date,
+        executionHostLabel: String? = nil
     ) {
         self.id = id
         self.repoDisplayName = repoDisplayName
@@ -34,6 +37,7 @@ public struct WatchSessionSummary: Codable, Hashable, Sendable, Identifiable {
         self.goalSnippet = goalSnippet
         self.needsAttention = needsAttention
         self.updatedAt = updatedAt
+        self.executionHostLabel = executionHostLabel
     }
 
     public static func from(session: AgentSession, modelCatalog: ModelCatalog) -> WatchSessionSummary {
@@ -57,7 +61,8 @@ public struct WatchSessionSummary: Codable, Hashable, Sendable, Identifiable {
             status: session.status.rawValue,
             goalSnippet: snippet,
             needsAttention: session.planText != nil && session.status == .planning,
-            updatedAt: session.lastEventAt
+            updatedAt: session.lastEventAt,
+            executionHostLabel: session.executionHostLabel
         )
     }
 }

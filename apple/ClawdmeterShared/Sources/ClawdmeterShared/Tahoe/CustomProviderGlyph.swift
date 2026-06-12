@@ -102,6 +102,14 @@ public struct AnyProviderGlyph: View {
             )
             .accessibilityLabel(choice.displayName(in: catalog))
             .accessibilityIdentifier("provider.glyph.custom.\(providerId)")
+        case .opencodePartner(let partnerId):
+            OpenCodeProviderLogoView(
+                providerId: partnerId,
+                fallbackLabel: choice.displayName(in: catalog),
+                size: size
+            )
+            .accessibilityLabel(choice.displayName(in: catalog))
+            .accessibilityIdentifier("provider.glyph.opencode-partner.\(partnerId)")
         }
     }
 }

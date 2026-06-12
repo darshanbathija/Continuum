@@ -73,9 +73,11 @@ struct SidebarPane: View {
     @State private var colorTagInput: String = ""
     @State private var showingColorTagAlert = false
     @State private var comparisonPair: SessionComparisonPair?
+    @State private var handoffSessionTarget: AgentSession?
     @State private var externalActivityNow: Date = Date()
     @State private var requestedRepoIdentityKeys: Set<String> = []
     @StateObject private var worktreeDiffs = WorktreeDiffTracker()
+    @ObservedObject private var handoffAutoSuggest = HandoffAutoSuggestService.shared
 
     /// A11: single-slot cache for the sidebar projection. Persists across
     /// body re-evals (reference type held via @State) so SwiftUI ticking
@@ -104,6 +106,7 @@ struct SidebarPane: View {
                 spawnGroupList
             }
             sidebarHeader
+            handoffAutoSuggestBanner
             TahoeHairline()
             content
         }
@@ -277,6 +280,16 @@ struct SidebarPane: View {
         } message: { target in
             Text("Every terminal in \(target.name) ends immediately. Sessions are not recoverable.")
         }
+        .sheet(item: $handoffSessionTarget) { session in
+            if let client = AppDelegate.runtime?.loopbackClient {
+                HandoffExecutionHostSheet(
+                    client: client,
+                    sessionId: session.id,
+                    currentHostId: session.executionHostId,
+                    onDismiss: { handoffSessionTarget = nil }
+                )
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .renameOpenSession)) { _ in
             guard let session = model.openSession else { return }
             renameTarget = session
@@ -321,6 +334,49 @@ struct SidebarPane: View {
         }
         .sheet(isPresented: $showingQuickStartRepoSheet) {
             QuickStartRepoSheet(onboarding: model.repoOnboarding) { _ in }
+        }
+    }
+
+    /// R1 1D: nudge handoff when Mac battery is low and local sessions are running.
+    @ViewBuilder
+    private var handoffAutoSuggestBanner: some View {
+        if handoffAutoSuggest.shouldSuggestHandoff,
+           let session = handoffAutoSuggestCandidateSession {
+            HStack(spacing: 8) {
+                Image(systemName: "battery.25")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(handoffAutoSuggest.triggerReason == .willSleep
+                         ? "Mac sleeping soon — hand off session?"
+                         : "Battery low — hand off session?")
+                        .font(TahoeFont.body(11, weight: .semibold))
+                    if handoffAutoSuggest.triggerReason == .lowBattery,
+                       let pct = handoffAutoSuggest.batteryPercent {
+                        Text("\(pct)% remaining")
+                            .font(TahoeFont.body(10))
+                            .foregroundStyle(t.fg3)
+                    }
+                }
+                Spacer(minLength: 4)
+                Button("Hand off") {
+                    handoffSessionTarget = session
+                }
+                .font(TahoeFont.body(11, weight: .semibold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color.orange.opacity(0.12))
+        }
+    }
+
+    private var handoffAutoSuggestCandidateSession: AgentSession? {
+        guard let localId = AppDelegate.runtime?.loopbackClient?.localExecutionHostId else { return nil }
+        return model.registry.sessions.first { session in
+            session.archivedAt == nil
+                && (session.status == .running || session.status == .planning)
+                && (session.executionHostId == nil || session.executionHostId == localId)
         }
     }
 
@@ -2187,6 +2243,11 @@ struct SidebarPane: View {
                                 .padding(.vertical, 1)
                                 .background(colorTagTint(tag).opacity(0.14), in: Capsule())
                         }
+                        if let hostLabel = session.executionHostLabel,
+                           let localId = AppDelegate.runtime?.loopbackClient?.localExecutionHostId,
+                           session.executionHostId != localId {
+                            ExecutionHostBadge(label: hostLabel)
+                        }
                     }
                     // Daemon-computed "progress vs approved plan" bar.
                     // Appears only when the session has an approved plan
@@ -2454,6 +2515,15 @@ struct SidebarPane: View {
             
                     }
                 ))
+            Divider()
+        }
+        if let client = AppDelegate.runtime?.loopbackClient,
+           client.supportsExecutionHosts,
+           session.archivedAt == nil,
+           session.status != .done {
+            Button("Continue on…", systemImage: "arrow.right.circle") {
+                handoffSessionTarget = session
+            }
             Divider()
         }
         Button(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin.fill", action: ContinuumAnalytics.wrapButton(
