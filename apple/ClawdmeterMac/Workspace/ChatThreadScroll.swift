@@ -822,14 +822,7 @@ struct ChatThreadScroll: View {
                     .buttonStyle(PressableButtonStyle())
                     .help(helpText(for: artifact))
                 }
-                ForEach(files.prefix(6)) { file in
-                    transcriptChip(
-                        icon: "pencil.and.scribble",
-                        title: "\(file.basename) \(editDeltaLabel(file))",
-                        tint: SessionsV2Theme.success
-                    )
-                    .help(file.filePath)
-                }
+                TranscriptEditedFileChipStripView(files: files, repoRoot: transcriptPathRoot)
             }
             .padding(.leading, 38)
             .padding(.top, 2)
@@ -1067,12 +1060,6 @@ struct ChatThreadScroll: View {
         case .archive: return "archivebox"
         case .data: return "tablecells.badge.ellipsis"
         }
-    }
-
-    private func editDeltaLabel(_ file: TranscriptEditedFile) -> String {
-        let additions = file.additions > 0 ? "+\(file.additions)" : ""
-        let deletions = file.deletions > 0 ? "-\(file.deletions)" : ""
-        return [additions, deletions].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     /// v0.5.6 — fire-and-forget answer send for AskUserQuestion. Mirrors

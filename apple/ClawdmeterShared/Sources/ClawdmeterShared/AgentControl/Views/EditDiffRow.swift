@@ -200,22 +200,22 @@ public struct EditDiffRow: View {
     }
 }
 
-struct EditDiffPreviewLine: Identifiable, Equatable {
-    enum Kind: Equatable {
+public struct EditDiffPreviewLine: Identifiable, Equatable {
+    public enum Kind: Equatable {
         case context
         case addition
         case deletion
         case header
     }
 
-    let id: Int
-    let oldText: String?
-    let newText: String?
-    let kind: Kind
+    public let id: Int
+    public let oldText: String?
+    public let newText: String?
+    public let kind: Kind
 }
 
-enum EditDiffPreviewModel {
-    static func lines(from preview: String) -> [EditDiffPreviewLine] {
+public enum EditDiffPreviewModel {
+    public static func lines(from preview: String) -> [EditDiffPreviewLine] {
         var rows: [EditDiffPreviewLine] = []
         var index = 0
         for raw in preview.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
@@ -238,7 +238,7 @@ enum EditDiffPreviewModel {
         return rows
     }
 
-    static func hasSideBySideChanges(_ lines: [EditDiffPreviewLine]) -> Bool {
+    public static func hasSideBySideChanges(_ lines: [EditDiffPreviewLine]) -> Bool {
         lines.contains { $0.kind == .addition || $0.kind == .deletion }
     }
 }

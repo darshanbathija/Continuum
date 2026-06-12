@@ -180,6 +180,7 @@
 		617DB0CB782DE699B87B7E10 /* PairingQRGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D4E6E7B93FF13BD93C26D90 /* PairingQRGenerator.swift */; };
 		62C7229BE15443B5FF6B2555 /* PlanModeWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDDB2A4C242F45EC4FCD4241 /* PlanModeWatcher.swift */; };
 		62FFE97A5091E96F5BA3EB86 /* TranscriptPathLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87DB105B08B1AE734AF7FF4B /* TranscriptPathLinks.swift */; };
+		63AA11BB22CC33DD44EE55FF /* TranscriptEditedFileChipStripView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63AA11BB22CC33DD44EE55FE /* TranscriptEditedFileChipStripView.swift */; };
 		634D9A7C944F029435551A5E /* TahoeEmptyReviewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 826D0434B2955A2580082742 /* TahoeEmptyReviewState.swift */; };
 		63B6862C7101C88DCC150054 /* WireInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94EDF3CEF7F199E2380D7927 /* WireInspector.swift */; };
 		64DA80D92F0080CAA8CD6338 /* RepoSetupScriptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B48819BE9916556D3DC59B4 /* RepoSetupScriptStore.swift */; };
@@ -755,6 +756,7 @@
 		85E7DC29DED7B2A2FE149E9E /* IOSMarkdownDocumentTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSMarkdownDocumentTabView.swift; sourceTree = "<group>"; };
 		85F55C883E5F75EF62E8168B /* RepoEnvVendorSecretsImporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoEnvVendorSecretsImporterTests.swift; sourceTree = "<group>"; };
 		87DB105B08B1AE734AF7FF4B /* TranscriptPathLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptPathLinks.swift; sourceTree = "<group>"; };
+		63AA11BB22CC33DD44EE55FE /* TranscriptEditedFileChipStripView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptEditedFileChipStripView.swift; sourceTree = "<group>"; };
 		882E7B0B1D24591A17536772 /* TailscaleHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TailscaleHost.swift; sourceTree = "<group>"; };
 		88501FECEB4876BDEAAF06B7 /* AntigravityPlanPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityPlanPane.swift; sourceTree = "<group>"; };
 		88B12CBC2716FBCC8CF6CA66 /* RepoSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSettingsSheet.swift; sourceTree = "<group>"; };
@@ -1347,6 +1349,7 @@
 				689B78BE553EFF9A09127D91 /* TerminalTabContainer.swift */,
 				8D721B0C9868F20FAE0B82ED /* TranscriptMessageGutter.swift */,
 				87DB105B08B1AE734AF7FF4B /* TranscriptPathLinks.swift */,
+				63AA11BB22CC33DD44EE55FE /* TranscriptEditedFileChipStripView.swift */,
 				9F486A19ECD4582BD0CBA9C7 /* WorkbenchPaneResizeHandle.swift */,
 				9D3DBEBE9BF592FA1BC71A42 /* WorkbenchState.swift */,
 				C77ADCCCF27A10F5786160F6 /* WorkspaceFeedback.swift */,
@@ -2427,6 +2430,7 @@
 				D9D0C23F96A52B7F41CBD04F /* TranscriptLoader.swift in Sources */,
 				F83690B678EAD7122793643E /* TranscriptMessageGutter.swift in Sources */,
 				62FFE97A5091E96F5BA3EB86 /* TranscriptPathLinks.swift in Sources */,
+				63AA11BB22CC33DD44EE55FF /* TranscriptEditedFileChipStripView.swift in Sources */,
 				BEE0A480281823DFA1BC2157 /* UpdateCoordinator.swift in Sources */,
 				746DE6340D2348882DC47AB3 /* UpdateStatusPersistence.swift in Sources */,
 				BBC17451B2115D6D2351BA97 /* UpdatesUI.swift in Sources */,
