@@ -1587,26 +1587,40 @@ public final class AgentControlServer {
     }
 
     private func providerEnabledModelCatalog(live: Bool = true) async -> ModelCatalog {
-        var catalog = ModelCatalog.bundled
-        if ProviderEnablement.isEnabled("cursor") {
-            let cursorModels = live
+        let cursorEnabled = ProviderEnablement.isEnabled("cursor")
+        let opencodeEnabled = ProviderEnablement.isEnabled("opencode")
+        let openrouterEnabled = ProviderEnablement.isEnabled("openrouter")
+
+        // Probe each dynamic provider concurrently. These hit independent CLIs
+        // (cursor-agent, opencode) and network endpoints (OpenRouter), so
+        // awaiting them serially stacked their timeouts into a multi-second
+        // stall on every `/models` fetch — the catalog the model dropdowns wait
+        // on. Concurrent worst case is the slowest single probe, not the sum.
+        async let cursorModels: [ModelCatalogEntry] = {
+            guard cursorEnabled else { return [] }
+            return live
                 ? await CursorModelProbe.shared.currentModels()
                 : await CursorModelProbe.shared.cachedModels()
-            catalog = catalog.replacingCursor(cursorModels)
-        }
-        if ProviderEnablement.isEnabled("opencode") {
-            let openCodeModels = live
+        }()
+        async let openCodeModels: [ModelCatalogEntry] = {
+            guard opencodeEnabled else { return [] }
+            return live
                 ? await OpenCodeGoModelProbe.shared.currentModels()
                 : await OpenCodeGoModelProbe.shared.cachedModels()
-            catalog = catalog.replacingOpenCodeGo(openCodeModels)
-        }
-        if ProviderEnablement.isEnabled("openrouter") {
-            let openRouterModels = live
+        }()
+        async let openRouterModels: [ModelCatalogEntry] = {
+            guard openrouterEnabled else { return [] }
+            return live
                 ? await OpenRouterModelProbe.shared.currentModels()
                 : await OpenRouterModelProbe.shared.currentState().models
-            catalog = catalog.replacingOpenRouter(openRouterModels)
-        }
-        let partnerSummaries = await OpenCodePartnerModelProbe.shared.summaries()
+        }()
+        async let partnerSummariesTask = OpenCodePartnerModelProbe.shared.summaries()
+
+        var catalog = ModelCatalog.bundled
+        if cursorEnabled { catalog = catalog.replacingCursor(await cursorModels) }
+        if opencodeEnabled { catalog = catalog.replacingOpenCodeGo(await openCodeModels) }
+        if openrouterEnabled { catalog = catalog.replacingOpenRouter(await openRouterModels) }
+        let partnerSummaries = await partnerSummariesTask
         catalog = catalog.replacingOpenCodePartners(partnerSummaries)
         let enabledIDs = ProviderEnablement.enabledProviderIDs(for: .code)
             + partnerSummaries.filter(\.enabled).map { OpenCodePartnerSupport.enablementId(for: $0.id) }

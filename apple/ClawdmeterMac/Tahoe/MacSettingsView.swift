@@ -2661,6 +2661,13 @@ struct ProviderPreferenceRows: View {
                 }
                 onEnabledProvidersChanged?(ProviderEnablement.enabledProviderIDs())
                 if newValue {
+                    // Show the just-connected provider's bundled models
+                    // immediately. The catalog last fetched from the daemon
+                    // strips disabled providers' arrays, so without this the
+                    // new row's "Default model" dropdown stays empty until the
+                    // next slow live-probe refresh (~10s). This is a pure
+                    // in-memory splice — sub-millisecond.
+                    catalog = catalog.ensuringBundledModels(for: vendor.backingProvider)
                     Task { await refreshCatalogIfAllowed(for: vendor) }
                     if id == "claude" {
                         let claudeModel = runtime?.claudeModel
@@ -2708,17 +2715,30 @@ struct ProviderPreferenceRows: View {
             await client.refreshModelCatalog()
             catalog = client.modelCatalog
         } else {
+            let cursorEnabled = ProviderEnablement.isEnabled("cursor")
+            let opencodeEnabled = ProviderEnablement.isEnabled("opencode")
+            let openrouterEnabled = ProviderEnablement.isEnabled("openrouter")
+            // Probe dynamic providers concurrently — serial awaits stacked
+            // each probe's timeout into a multi-second stall before the model
+            // dropdowns could populate.
+            async let cursorModels: [ModelCatalogEntry] = {
+                guard cursorEnabled else { return [] }
+                return await CursorModelProbe.shared.currentModels()
+            }()
+            async let openCodeModels: [ModelCatalogEntry] = {
+                guard opencodeEnabled else { return [] }
+                return await OpenCodeGoModelProbe.shared.currentModels()
+            }()
+            async let openRouterModels: [ModelCatalogEntry] = {
+                guard openrouterEnabled else { return [] }
+                return await OpenRouterModelProbe.shared.currentModels()
+            }()
+            async let partnerSummaries = OpenCodePartnerModelProbe.shared.summaries()
             var next = ModelCatalog.bundled
-            if ProviderEnablement.isEnabled("cursor") {
-                next = next.replacingCursor(await CursorModelProbe.shared.currentModels())
-            }
-            if ProviderEnablement.isEnabled("opencode") {
-                next = next.replacingOpenCodeGo(await OpenCodeGoModelProbe.shared.currentModels())
-            }
-            if ProviderEnablement.isEnabled("openrouter") {
-                next = next.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
-            }
-            next = next.replacingOpenCodePartners(await OpenCodePartnerModelProbe.shared.summaries())
+            if cursorEnabled { next = next.replacingCursor(await cursorModels) }
+            if opencodeEnabled { next = next.replacingOpenCodeGo(await openCodeModels) }
+            if openrouterEnabled { next = next.replacingOpenRouter(await openRouterModels) }
+            next = next.replacingOpenCodePartners(await partnerSummaries)
             catalog = next
         }
     }
