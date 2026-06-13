@@ -1156,7 +1156,9 @@ struct SidebarPane: View {
                 .padding(.leading, 20)
                 .padding(.trailing, SidebarLayout.edgeInset)
                 .padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Roomier row height (Conductor-style) without padding the
+                // content — the branch icon + name center in a taller row.
+                .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(PressableButtonStyle())
