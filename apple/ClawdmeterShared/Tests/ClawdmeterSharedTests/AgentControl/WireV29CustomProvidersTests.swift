@@ -166,7 +166,7 @@ final class WireV29CustomProvidersTests: XCTestCase {
         let catalog = ModelCatalog.bundled
         let enabled: [ProviderChoice] = [.builtin(.chatgpt), .builtin(.claude)]
         let choice = ProviderChoice.resolvedForDisplay(
-            modelId: "claude-fable-5-1m",
+            modelId: "claude-opus-4-8-1m",
             customProviderId: nil,
             agent: .codex,
             catalog: catalog,
@@ -175,7 +175,7 @@ final class WireV29CustomProvidersTests: XCTestCase {
         XCTAssertEqual(choice, .builtin(.claude))
         XCTAssertEqual(
             TahoeProvider.resolvedForModelEntry(
-                modelId: "claude-fable-5-1m",
+                modelId: "claude-opus-4-8-1m",
                 customProviderId: nil,
                 fallbackAgent: .codex,
                 catalog: catalog
