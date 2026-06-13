@@ -33,7 +33,8 @@ final class InstanceLoginCoordinator: ObservableObject {
 /// support config-dir isolation (Claude / Codex — see
 /// `ProviderInstanceEnvironment.configDirVariable`).
 private enum ProviderAccountRowMetrics {
-    static let defaultColumnWidth: CGFloat = 56
+    static let terminalCommandColumnWidth: CGFloat = 132
+    static let preferredColumnWidth: CGFloat = 108
     static let disconnectColumnWidth: CGFloat = 84
     static let trailingColumnSpacing: CGFloat = 10
 }
@@ -58,7 +59,7 @@ struct ProviderAccountsSection: View {
         instances
     }
 
-    private var showsCodeDefaultColumn: Bool {
+    private var showsAccountColumns: Bool {
         displayedAccounts.count >= 2
     }
 
@@ -135,13 +136,19 @@ struct ProviderAccountsSection: View {
 
     @ViewBuilder
     private var trailingColumnsHeader: some View {
-        if showsCodeDefaultColumn {
-            Text("Default")
+        if showsAccountColumns {
+            Text("Terminal Command")
                 .font(TahoeFont.mono(10, weight: .semibold))
                 .kerning(0.3)
                 .foregroundStyle(t.fg3)
                 .lineLimit(1)
-                .frame(width: ProviderAccountRowMetrics.defaultColumnWidth, alignment: .center)
+                .frame(width: ProviderAccountRowMetrics.terminalCommandColumnWidth, alignment: .leading)
+            Text("Preferred Account")
+                .font(TahoeFont.mono(10, weight: .semibold))
+                .kerning(0.3)
+                .foregroundStyle(t.fg3)
+                .lineLimit(1)
+                .frame(width: ProviderAccountRowMetrics.preferredColumnWidth, alignment: .center)
         }
         Color.clear
             .frame(width: ProviderAccountRowMetrics.disconnectColumnWidth, height: 1)
@@ -172,9 +179,11 @@ struct ProviderAccountsSection: View {
                     .foregroundStyle(t.fg3)
             }
             Spacer(minLength: 8)
-            if showsCodeDefaultColumn {
+            if showsAccountColumns {
+                terminalCommandLabel(for: instance)
+                    .frame(width: ProviderAccountRowMetrics.terminalCommandColumnWidth, alignment: .leading)
                 codeDefaultPicker(for: instance, label: label, isSelected: isCodeDefault)
-                    .frame(width: ProviderAccountRowMetrics.defaultColumnWidth, alignment: .center)
+                    .frame(width: ProviderAccountRowMetrics.preferredColumnWidth, alignment: .center)
             }
             accountDisconnectButton(for: instance, label: label)
                 .frame(width: ProviderAccountRowMetrics.disconnectColumnWidth, alignment: .trailing)
@@ -201,6 +210,24 @@ struct ProviderAccountsSection: View {
             .help("Disconnect account “\(label)”")
             .accessibilityIdentifier("settings.provider.\(instance.wireId).disconnect")
         }
+    }
+
+    /// Terminal command that launches this account. The primary is the
+    /// bare CLI (`claude` / `codex`); secondaries get the installed shim
+    /// (`claude-personal`, …) — see ProviderInstanceShellShim.
+    private func terminalCommand(for instance: ProviderInstanceId) -> String {
+        ProviderInstanceShellShim.commandName(for: instance) ?? instance.kind.rawValue
+    }
+
+    private func terminalCommandLabel(for instance: ProviderInstanceId) -> some View {
+        let command = terminalCommand(for: instance)
+        return Text(command)
+            .font(TahoeFont.mono(10.5, weight: .medium))
+            .foregroundStyle(t.fg2)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help("Run “\(command)” in Terminal to use this account")
+            .accessibilityIdentifier("settings.provider.\(instance.wireId).terminalCommand")
     }
 
     private func codeDefaultPicker(
