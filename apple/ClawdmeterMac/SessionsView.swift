@@ -2375,6 +2375,60 @@ public final class SessionsModel: ObservableObject {
                 expandedRepoKeys.insert(repo.key)
             }
         }
+        reconcileManagedWorkspaces()
+    }
+
+    /// Guarantee a persistent `WorkspaceStore` record for every repo the user is
+    /// actively working in, so archiving the *last* session in a repo doesn't
+    /// drop the repo out of the Code sidebar. Records are only ever created /
+    /// refreshed here — never deleted — so `Archive entire repo` / `Remove from
+    /// list` (which delete the record AND leave zero live sessions) still make a
+    /// repo disappear. Single path-independent chokepoint: the spawn call sites
+    /// already feed `recordWorkspaceSession`, but this closes the gaps where a
+    /// spawn path didn't.
+    private func reconcileManagedWorkspaces() {
+        // Match existence by the SAME canonical key the sidebar dedupes on
+        // (`RepoIdentity.normalize` — see SidebarPane.workspaceRepoKeys), not by
+        // exact repoRoot string. Otherwise a session whose raw repoKey is a
+        // symlink / trailing-slash / worktree-alias variant of an already-
+        // registered repo would create a SECOND CodeWorkspaceRecord for the same
+        // repo, forking its provider defaults / files-to-copy.
+        var registeredKeys = Set(workspaceStore.all().map { RepoIdentity.normalize($0.repoRoot) })
+        for (root, ids) in Self.liveManagedRepoRoots(in: registry.sessions) {
+            // Create-once: we only need the record to EXIST so the repo persists
+            // in the sidebar after its last session is archived. Skip when one
+            // already covers this repo — otherwise we'd rewrite workspaces.json
+            // on every 60s refresh, since `archive()` never prunes archived ids
+            // from `activeSessionIds` and `syncActiveSessions`'s equality check
+            // (live-only ids != stored live+archived ids) would never short-circuit.
+            let normalized = RepoIdentity.normalize(root)
+            guard !registeredKeys.contains(normalized) else { continue }
+            // Don't create a record for a path that no longer exists on disk
+            // (a stale repoKey on a still-"live" row).
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: root, isDirectory: &isDir),
+                  isDir.boolValue
+            else { continue }
+            workspaceStore.syncActiveSessions(repoRoot: root, sessionIds: ids)
+            registeredKeys.insert(normalized)   // dedupe variant spellings within this pass
+        }
+    }
+
+    /// Live (non-archived) first-party code sessions grouped by their canonical
+    /// repo root — the same predicate the sidebar projection uses for a
+    /// "first-party code session" (`kind == .code` + a resolvable
+    /// `WorkspaceKey`). Pure + static so it's unit-testable without RepoIndex.
+    static func liveManagedRepoRoots(in sessions: [AgentSession]) -> [String: [UUID]] {
+        var liveByRoot: [String: [UUID]] = [:]
+        for session in sessions {
+            guard session.kind == .code,
+                  session.archivedAt == nil,
+                  WorkspaceKey.of(session) != nil,
+                  let root = session.repoKey, !root.isEmpty
+            else { continue }
+            liveByRoot[root, default: []].append(session.id)
+        }
+        return liveByRoot
     }
 
     public func startPeriodicRefresh() -> Task<Void, Never> {
