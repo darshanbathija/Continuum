@@ -2007,16 +2007,14 @@ private struct ComposerBar: View {
                     .foregroundStyle(t.fg4)
             } else if store.selectedChoiceCount == 1 {
                 let choice = store.primaryChoice
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(choice.displayName(in: client.modelCatalog))
-                        .font(TahoeFont.body(11.5, weight: .semibold))
-                        .foregroundStyle(t.fg).lineLimit(1)
-                    if let model = compactModelLabel(for: choice) {
-                        Text(model)
-                            .font(TahoeFont.mono(8.5))
-                            .foregroundStyle(t.fg4).lineLimit(1).truncationMode(.middle)
-                    }
-                }
+                // Solo: match the Code composer's model pill — logo + the model
+                // name on one bold line. The glyph already conveys the vendor,
+                // so the old two-line vendor-title / mono-model-subtitle stack
+                // was redundant. (Multi-provider compare keeps its own label.)
+                Text(compactModelLabel(for: choice) ?? choice.displayName(in: client.modelCatalog))
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                    .lineLimit(1)
             } else {
                 Text("\(store.selectedChoiceCount) models")
                     .font(TahoeFont.body(11.5, weight: .semibold))
