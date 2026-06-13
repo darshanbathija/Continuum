@@ -27,6 +27,11 @@ struct SpawnGroup: Identifiable {
     let id: UUID
     let name: String
     let createdAt: Date
+    /// Grid cell count the spawn opened at (= tiles that actually launched).
+    /// Closing a tile leaves an empty cell that hosts a "Start New Session"
+    /// button rather than reflowing the grid, so a 6-spawn keeps presenting
+    /// 6 cells and can be refilled to its original size.
+    let capacity: Int
     var tiles: [SpawnTile]
 
     /// "4 Claude · 2 Codex" — sidebar subtitle, most-to-least like the grid.
@@ -124,54 +129,14 @@ final class SpawnModeStore: ObservableObject {
     func createGroup(allocations: [SpawnAgentAllocation]) async -> SpawnCreateResult {
         let slots = SpawnPlan.slots(for: allocations)
         guard !slots.isEmpty else { return SpawnCreateResult(group: nil, failedSlotTitles: []) }
-        // Real user home, not the sandbox container — matches every other
-        // provider-state path in the codebase (ClawdmeterRealHome doc).
-        let home = ClawdmeterRealHome.path()
         var tiles: [SpawnTile] = []
         var failedSlotTitles: [String] = []
         for slot in slots {
-            // When the test seam is installed, its nil means "no binary" —
-            // never fall through to the real PATH lookup.
-            let resolvedArgv: [String]?
-            if let launchArgvOverride {
-                resolvedArgv = launchArgvOverride(slot.agent)
+            if let tile = await spawnTile(agent: slot.agent, title: slot.title) {
+                tiles.append(tile)
             } else {
-                resolvedArgv = Self.launchArgv(for: slot.agent)
-            }
-            guard let argv = resolvedArgv else {
-                spawnLogger.error("spawn slot \(slot.title, privacy: .public) skipped: no binary for \(slot.agent.rawValue, privacy: .public)")
                 failedSlotTitles.append(slot.title)
-                continue
             }
-            let tileId = UUID()
-            let host = TerminalPtyHost(
-                title: slot.title,
-                argv: argv,
-                cwd: home,
-                env: Self.launchEnv(for: slot.agent)
-            )
-            let pid: pid_t
-            do {
-                pid = try await host.start()
-            } catch {
-                spawnLogger.error("spawn slot \(slot.title, privacy: .public) failed to start: \(error.localizedDescription, privacy: .public)")
-                failedSlotTitles.append(slot.title)
-                continue
-            }
-            // Pending window: between handler registration and the group
-            // append below, an exit must not be dropped by the staleness
-            // guard in markTileExited.
-            pendingSpawnTileIds.insert(tileId)
-            await host.setOnExit { [weak self] _ in
-                Task { @MainActor in self?.markTileExited(tileId) }
-            }
-            // setOnExit registers AFTER start(); a child that died in that
-            // window already fired (and dropped) its onExit. Catch up here
-            // so a fast-failing CLI doesn't render as a live tile forever.
-            if await !host.isRunning {
-                exitedTileIds.insert(tileId)
-            }
-            tiles.append(SpawnTile(id: tileId, agent: slot.agent, title: slot.title, host: host, pid: pid))
         }
         defer { pendingSpawnTileIds.subtract(tiles.map(\.id)) }
         guard !tiles.isEmpty else {
@@ -181,6 +146,7 @@ final class SpawnModeStore: ObservableObject {
             id: UUID(),
             name: "Spawn \(nextSpawnNumber)",
             createdAt: Date(),
+            capacity: tiles.count,
             tiles: tiles
         )
         nextSpawnNumber += 1
@@ -188,6 +154,100 @@ final class SpawnModeStore: ObservableObject {
         selectedGroupId = group.id
         selectedTileByGroup[group.id] = tiles.first?.id
         return SpawnCreateResult(group: group, failedSlotTitles: failedSlotTitles)
+    }
+
+    /// Spawn one interactive agent tile (PTY started, exit handler wired,
+    /// fast-exit catch-up applied). Returns nil when no binary resolves or
+    /// `start()` throws. The caller owns appending the tile into a group and
+    /// clearing the pending-exit guard once it does — until then the tile id
+    /// sits in `pendingSpawnTileIds` so `markTileExited` won't drop an early
+    /// exit. Shared by the batch `createGroup` path and the single-tile
+    /// `addTile` ("Start New Session") refill path.
+    private func spawnTile(agent: AgentKind, title: String) async -> SpawnTile? {
+        // When the test seam is installed, its nil means "no binary" — never
+        // fall through to the real PATH lookup.
+        let resolvedArgv: [String]?
+        if let launchArgvOverride {
+            resolvedArgv = launchArgvOverride(agent)
+        } else {
+            resolvedArgv = Self.launchArgv(for: agent)
+        }
+        guard let argv = resolvedArgv else {
+            spawnLogger.error("spawn slot \(title, privacy: .public) skipped: no binary for \(agent.rawValue, privacy: .public)")
+            return nil
+        }
+        let tileId = UUID()
+        let host = TerminalPtyHost(
+            title: title,
+            // Real user home, not the sandbox container — matches every other
+            // provider-state path in the codebase (ClawdmeterRealHome doc).
+            argv: argv,
+            cwd: ClawdmeterRealHome.path(),
+            env: Self.launchEnv(for: agent)
+        )
+        let pid: pid_t
+        do {
+            pid = try await host.start()
+        } catch {
+            spawnLogger.error("spawn slot \(title, privacy: .public) failed to start: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        // Pending window: between handler registration and the caller's group
+        // append, an exit must not be dropped by markTileExited's guard.
+        pendingSpawnTileIds.insert(tileId)
+        await host.setOnExit { [weak self] _ in
+            Task { @MainActor in self?.markTileExited(tileId) }
+        }
+        // setOnExit registers AFTER start(); a child that died in that window
+        // already fired (and dropped) its onExit. Catch up here so a
+        // fast-failing CLI doesn't render as a live tile forever.
+        if await !host.isRunning {
+            exitedTileIds.insert(tileId)
+        }
+        return SpawnTile(id: tileId, agent: agent, title: title, host: host, pid: pid)
+    }
+
+    /// Refill one empty grid cell of an existing group — the "Start New
+    /// Session" affordance shown where a tile was closed. Numbering continues
+    /// past the highest live index for that kind so a refilled slot never
+    /// collides with a still-running tile's title. Capped at the group's
+    /// original `capacity` (the UI only shows the button while a cell is free,
+    /// so this guard is belt-and-suspenders). Returns false when the group is
+    /// gone/full or the CLI fails to start.
+    @discardableResult
+    func addTile(groupId: UUID, agent: AgentKind) async -> Bool {
+        guard let current = group(id: groupId), current.tiles.count < current.capacity else {
+            return false
+        }
+        let title = nextTileTitle(in: current, agent: agent)
+        guard let tile = await spawnTile(agent: agent, title: title) else { return false }
+        defer { pendingSpawnTileIds.remove(tile.id) }
+        // The await above could have raced a closeGroup; re-resolve the index
+        // and kill the orphan host rather than leaking a PTY into nowhere.
+        guard let groupIndex = groups.firstIndex(where: { $0.id == groupId }) else {
+            let host = tile.host
+            Task.detached(priority: .utility) { await host.kill() }
+            return false
+        }
+        groups[groupIndex].tiles.append(tile)
+        selectTile(groupId: groupId, tileId: tile.id)
+        return true
+    }
+
+    /// Next per-kind label for a refilled slot: one past the highest numeric
+    /// suffix among the group's live tiles of that agent (not a count, which
+    /// would collide after a middle tile was closed).
+    private func nextTileTitle(in group: SpawnGroup, agent: AgentKind) -> String {
+        let name = AgentKindUI.displayName(for: agent)
+        let prefix = "\(name) "
+        let maxIndex = group.tiles
+            .filter { $0.agent == agent }
+            .compactMap { tile -> Int? in
+                guard tile.title.hasPrefix(prefix) else { return nil }
+                return Int(tile.title.dropFirst(prefix.count))
+            }
+            .max() ?? 0
+        return "\(name) \(maxIndex + 1)"
     }
 
     /// Guarded: a tile closed (and killed) before its natural exit lands
