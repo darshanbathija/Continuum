@@ -2865,17 +2865,47 @@ public final class SessionsModel: ObservableObject {
         // shows the new value; the respawn confirms asynchronously and only
         // failure needs a follow-up toast.
         WorkspaceFeedback.info("Model → \(entry.displayName)")
+        let modelToUse = entry.cliAlias ?? entry.id
+        // Harness sessions (Grok/Codex/Cursor/Gemini) have no CLI argv, so the
+        // Claude-PTY SessionConfigChanger can't reconfigure them. Respawn the
+        // harness bridge in place with the new model + carry the transcript so
+        // it's seamless instead of a `legacy_session_retired` error. (Legacy
+        // pane sessions + OpenCode aren't reconfigurable — they fall through to
+        // SessionConfigChanger below.)
+        if let server = AppDelegate.runtime?.agentControlServer,
+           let session = registry.session(id: sessionId),
+           session.isReconfigurableHarnessCodeSession {
+            WorkspaceFeedback.info("Restarting \(entry.displayName)…")
+            let ok = await server.reconfigureHarnessCodeSession(
+                sessionId: sessionId, newModel: modelToUse, newEffort: .some(effort)
+            )
+            if !ok {
+                WorkspaceFeedback.failure("Couldn't switch model", detail: "The agent couldn't restart with the new model.")
+            }
+            return
+        }
         let changer = SessionConfigChanger(
             registry: registry,
             repoEnvResolver: repoEnvResolver
         )
-        let modelToUse = entry.cliAlias ?? entry.id
         let result = await changer.swap(sessionId: sessionId, newModel: modelToUse, newEffort: .some(effort))
         surfaceSwap(result, succeeded: "Model → \(entry.displayName)", failed: "Couldn't switch model", successToast: false)
     }
 
     /// Sessions v2 Phase 1: swap the effort dial mid-session.
     public func switchEffort(sessionId: UUID, to effort: ReasoningEffort) async {
+        // Harness sessions respawn the bridge in place (see switchModel); the
+        // Claude-PTY SessionConfigChanger only handles direct Claude sessions.
+        if let server = AppDelegate.runtime?.agentControlServer,
+           let session = registry.session(id: sessionId),
+           session.isReconfigurableHarnessCodeSession {
+            WorkspaceFeedback.info("Restarting at \(effort.displayName) effort…")
+            let ok = await server.reconfigureHarnessCodeSession(sessionId: sessionId, newEffort: .some(effort))
+            if !ok {
+                WorkspaceFeedback.failure("Couldn't change effort", detail: "The agent couldn't restart at the new effort.")
+            }
+            return
+        }
         let changer = SessionConfigChanger(
             registry: registry,
             repoEnvResolver: repoEnvResolver
@@ -2943,6 +2973,24 @@ public final class SessionsModel: ObservableObject {
         // trip made this toast land seconds after the click. Failure below
         // still replaces it with the rollback explanation.
         WorkspaceFeedback.success("Permission mode → \(newMode.displayName)")
+        guard let session = registry.session(id: sessionId) else { return }
+        // Managed transports (Codex/Cursor/Gemini/Grok) take their approval
+        // policy only at bridge-launch, so changing the chip on a live harness
+        // session means respawning the bridge with the new policy. The store
+        // write above persists the chip (and survives if the respawn is a no-op
+        // for an idle session); the reconfigure flips the RUNNING bridge so
+        // Bypass/Accept skip approvals and Ask raises real prompts immediately,
+        // carrying the transcript across. (Previously every provider was
+        // force-routed through the Claude-PTY swap → a misleading
+        // "legacy_session_retired" toast + a rollback that snapped the chip back.)
+        if !SessionConfigChanger.isClaudePty(session) {
+            if let server = AppDelegate.runtime?.agentControlServer,
+               session.isReconfigurableHarnessCodeSession {
+                let skip = (newMode == .bypass || newMode == .acceptEdits)
+                await server.reconfigureHarnessCodeSession(sessionId: sessionId, newAlwaysApprove: skip)
+            }
+            return
+        }
         let changer = SessionConfigChanger(
             registry: registry,
             repoEnvResolver: repoEnvResolver
