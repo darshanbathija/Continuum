@@ -62,7 +62,8 @@ struct CodeWorkspaceDraftComposer: View {
                 },
                 permissionMode: store.permissionMode,
                 placeholderOverride: "Ask to make changes, @mention files, run /commands",
-                selectedAccountWireId: $selectedAccountWireId
+                selectedAccountWireId: $selectedAccountWireId,
+                repoRoot: workspaceDraft.workspaceKey.workspacePath
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

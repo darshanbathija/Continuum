@@ -8,7 +8,7 @@ final class CustomProviderSpawnPlanTests: XCTestCase {
         var values: [String: String] = [:]
         func read(account: String) -> String? { values[account] }
         func write(_ value: String, account: String) -> Bool { values[account] = value; return true }
-        func delete(account: String) -> Bool { values.removeValue(forKey: account) != nil; return true }
+        func delete(account: String) -> Bool { values.removeValue(forKey: account) != nil }
     }
 
     private func makeStore(

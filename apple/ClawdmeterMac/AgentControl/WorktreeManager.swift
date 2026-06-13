@@ -869,7 +869,7 @@ public actor WorktreeManager {
         }
 
         worktreeLogger.info(
-            "Renamed worktree \(oldPath, privacy: .public) → \(newPath, privacy: .public) branch=\(newBranchName ?? "(unchanged)", privacy: .public)"
+            "Renamed worktree \(oldPath, privacy: .public) → \(newPath, privacy: .public) branch=\(newBranchName, privacy: .public)"
         )
         return RenamedWorktree(
             oldPath: oldPath,

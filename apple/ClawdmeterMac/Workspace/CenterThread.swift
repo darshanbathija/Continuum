@@ -644,6 +644,7 @@ struct CenterThread: View {
             showApprovePlan: session.planText != nil,
             sessionIsRunning: turnIsStreaming && !composerStore.isSending,
             isReadOnly: isReadOnly,
+            repoRoot: session.effectiveCwd,
             mentionSourceProvider: {
                 let openSessions = model.registry.sessions.filter { $0.id != session.id && $0.archivedAt == nil }
                 let store = model.chatStore(for: session)

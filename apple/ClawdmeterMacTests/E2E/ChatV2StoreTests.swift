@@ -39,10 +39,13 @@ final class ChatV2StoreTests: XCTestCase {
         try await super.tearDown()
     }
 
-    /// Enable specific chat vendors (by their backing provider) so the
+    /// Enable specific chat vendors (by their canonical provider id) so the
     /// opt-in default + choice-normalization logic keeps them.
     private func enable(_ vendors: ChatVendor...) {
-        for vendor in vendors { ProviderEnablement.setEnabled(vendor.backingProvider.rawValue, true) }
+        for vendor in vendors {
+            let providerId = ProviderRegistry.descriptor(chatVendor: vendor)?.id ?? vendor.backingProvider.rawValue
+            ProviderEnablement.setEnabled(providerId, true)
+        }
     }
 
     // MARK: - Defaults
@@ -210,6 +213,7 @@ final class ChatV2StoreTests: XCTestCase {
         XCTAssertEqual(effort, .max)
         XCTAssertTrue(deepResearch)
         XCTAssertNil(codexBackend)
+        XCTAssertNil(customProviderId)
     }
 
     func test_firstSendKind_omits_codexBackend_when_not_codex() {

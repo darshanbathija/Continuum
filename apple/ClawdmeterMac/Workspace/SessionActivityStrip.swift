@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import ClawdmeterShared
 
 /// Bottom-of-chat metadata strip that mirrors what Claude Code and Codex

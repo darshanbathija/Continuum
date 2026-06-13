@@ -64,7 +64,7 @@ public final class AgentEventStream: WSChannel {
     }
 
     public func start() {
-        Task { @MainActor in
+        Task { @MainActor [self] in
             // Phase 1: catch up — either snapshot (cursor too old) or replay.
             let cutoff = Date().addingTimeInterval(-Self.retentionWindow)
             let inWindow = Self.globalEventLog.filter { $0.at > cutoff }

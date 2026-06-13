@@ -137,6 +137,7 @@ public final class OpencodeProcessManager {
         }
         binaryPath = binary
         prepareBinaryForLaunch(atPath: binary)
+        FffAgentSearchProvisioning.ensureProvisioned()
 
         // Step 2: pick a free port.
         let port: Int
@@ -416,6 +417,9 @@ public final class OpencodeProcessManager {
         env["BUN_TMPDIR"] = tmp.path
         env["BUN_INSTALL_CACHE_DIR"] = cache.path
         env["XDG_CACHE_HOME"] = cache.path
+        for (key, value) in FffAgentSearchProvisioning.openCodeEnvironmentOverrides() {
+            env[key] = value
+        }
         for (key, value) in overrides {
             env[key] = value
         }

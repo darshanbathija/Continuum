@@ -135,6 +135,18 @@ else
   echo "⚠ Skipping bundled opencode download (CLAWDMETER_SKIP_BUNDLED_OPENCODE=1)"
 fi
 
+if [[ "${CLAWDMETER_SKIP_BUNDLED_FFF:-0}" != "1" ]]; then
+  ./tools/download-bundled-fff.sh
+else
+  echo "⚠ Skipping bundled FFF download (CLAWDMETER_SKIP_BUNDLED_FFF=1)"
+fi
+
+if [[ "${CLAWDMETER_SKIP_OPENCODE_FFF_PLUGIN:-0}" != "1" ]]; then
+  ./tools/stage-opencode-fff-plugin.sh
+else
+  echo "⚠ Skipping OpenCode FFF plugin staging (CLAWDMETER_SKIP_OPENCODE_FFF_PLUGIN=1)"
+fi
+
 # ────────────────────────────────────────────────────────────────────────
 # 3. (Developer ID only) point the Mac targets at the MAC_APP_DIRECT profiles
 #    with manual signing. App Groups require a profile even for Developer ID,
@@ -226,10 +238,21 @@ echo "✓ App exported: $APP_PATH"
 REQUIRED_VENDOR_BINS=(
   "$APP_PATH/Contents/Resources/Vendor/opencode/opencode"
   "$APP_PATH/Contents/Resources/Vendor/uv/uv"
+  "$APP_PATH/Contents/Resources/Vendor/fff/fff-mcp"
+)
+REQUIRED_VENDOR_LIBS=(
+  "$APP_PATH/Contents/Resources/Vendor/fff/libfff_c.dylib"
 )
 for BIN in "${REQUIRED_VENDOR_BINS[@]}"; do
   if [[ ! -x "$BIN" ]]; then
     echo "✗ Required bundled runtime missing or not executable: $BIN" >&2
+    echo "  Re-run without CLAWDMETER_SKIP_BUNDLED_* overrides." >&2
+    exit 1
+  fi
+done
+for LIB in "${REQUIRED_VENDOR_LIBS[@]}"; do
+  if [[ ! -f "$LIB" ]]; then
+    echo "✗ Required bundled library missing: $LIB" >&2
     echo "  Re-run without CLAWDMETER_SKIP_BUNDLED_* overrides." >&2
     exit 1
   fi
@@ -277,6 +300,12 @@ if [[ -n "$SIGN_ID" ]]; then
       codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" --entitlements "$HELPER_ENT" "$TS_FLAG" "$BIN" 2>&1 | sed 's/^/    /'
     fi
   done
+  if [[ -f "$V/fff/libfff_c.dylib" ]]; then
+    codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" "$TS_FLAG" "$V/fff/libfff_c.dylib" 2>&1 | sed 's/^/    /'
+  fi
+  if [[ -f "$V/fff/fff-mcp" ]]; then
+    codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" "$TS_FLAG" "$V/fff/fff-mcp" 2>&1 | sed 's/^/    /'
+  fi
   # Sparkle's nested helpers arrive ad-hoc signed from SwiftPM. Notarization
   # requires each Mach-O to be signed by our Developer ID identity with a
   # secure timestamp before the framework and outer app are sealed.

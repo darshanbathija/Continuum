@@ -71,7 +71,7 @@ public final class OpencodeSSEAdapter {
     /// xctest hosts, which made the 2026-06-10 live SSE failure opaque —
     /// this prints stream lifecycle + event TYPES (never bodies/tokens)
     /// to stderr only when the live-verify gate is already set.
-    private static let liveDebugEnabled =
+    nonisolated private static let liveDebugEnabled =
         ProcessInfo.processInfo.environment["CLAWDMETER_LIVE_VERIFY"] == "1"
     nonisolated private static func liveDebug(_ message: @autoclosure () -> String) {
         guard liveDebugEnabled else { return }

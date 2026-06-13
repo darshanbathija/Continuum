@@ -280,16 +280,9 @@ private final class AcceptedConnectionBox: @unchecked Sendable {
 private extension NWListener {
     func startAndWaitForPort() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let lock = NSLock()
-            var resumed = false
-            func resumeOnce(_ result: Result<Void, Error>) {
-                lock.lock()
-                guard !resumed else {
-                    lock.unlock()
-                    return
-                }
-                resumed = true
-                lock.unlock()
+            let gate = ContinuationResumeGate()
+            @Sendable func resumeOnce(_ result: Result<Void, Error>) {
+                guard gate.claim() else { return }
                 switch result {
                 case .success:
                     continuation.resume()
@@ -311,6 +304,19 @@ private extension NWListener {
             }
             start(queue: .global())
         }
+    }
+}
+
+private final class ContinuationResumeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resumed = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !resumed else { return false }
+        resumed = true
+        return true
     }
 }
 

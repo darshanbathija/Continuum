@@ -285,7 +285,6 @@ public struct ModelCatalog: Codable, Sendable {
             ModelCatalogEntry(id: "anthropic/claude-opus-4.7", provider: .opencode, displayName: "OpenRouter · Claude Opus 4.7", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: 200_000, recommendedFor: "Deep reasoning", badge: nil),
             ModelCatalogEntry(id: "anthropic/claude-sonnet-4.6", provider: .opencode, displayName: "OpenRouter · Claude Sonnet 4.6", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: 200_000, recommendedFor: "Plan mode", badge: nil),
             ModelCatalogEntry(id: "google/gemini-3-pro", provider: .opencode, displayName: "OpenRouter · Gemini 3 Pro", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: 2_000_000, recommendedFor: "Deep reasoning", badge: "Pro"),
-            ModelCatalogEntry(id: "opencode-default", provider: .opencode, displayName: "OpenCode default", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "BYOK provider", badge: "Default"),
         ],
         cursor: [
             ModelCatalogEntry(id: CursorModelCatalog.autoModelId, provider: .cursor, displayName: "Cursor default / Auto", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "Cursor account default", badge: "Auto"),
@@ -347,7 +346,10 @@ public struct ModelCatalog: Codable, Sendable {
         guard provider != .unknown else { return [] }
         if let enabledProviderIDs {
             let enabled = Set(enabledProviderIDs.map { ProviderRegistry.rootProviderID(for: $0) })
-            guard enabled.contains(ProviderRegistry.rootProviderID(for: provider.rawValue)) else {
+            let providerEnabled = provider == .opencode
+                ? (enabled.contains("opencode") || enabled.contains("openrouter"))
+                : enabled.contains(ProviderRegistry.rootProviderID(for: provider.rawValue))
+            guard providerEnabled else {
                 return []
             }
         }
@@ -356,13 +358,14 @@ public struct ModelCatalog: Codable, Sendable {
         case .codex: return codex
         case .gemini: return gemini
         case .opencode:
-            var merged = opencode
             if let enabledProviderIDs {
                 let enabled = Set(enabledProviderIDs.map { ProviderRegistry.rootProviderID(for: $0) })
-                if !enabled.contains("openrouter") {
-                    return merged
-                }
+                var merged: [ModelCatalogEntry] = []
+                if enabled.contains("opencode") { merged.append(contentsOf: opencode) }
+                if enabled.contains("openrouter") { merged.append(contentsOf: openrouter) }
+                return merged
             }
+            var merged = opencode
             merged.append(contentsOf: openrouter)
             return merged
         case .cursor: return cursor

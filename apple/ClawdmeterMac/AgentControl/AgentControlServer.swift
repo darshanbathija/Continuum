@@ -1953,6 +1953,7 @@ public final class AgentControlServer {
     /// OR the pinned account is no longer registered — never a silent
     /// fall-back to the primary subscription.
     func claudeSpawnPlan(for session: AgentSession) async -> ClaudePtyRegistry.SpawnPlan? {
+        FffAgentSearchProvisioning.ensureProvisioned()
         let argv = AgentSpawner.argv(for: session)
         guard !argv.isEmpty else { return nil }
         let cwd = session.effectiveCwd
@@ -4547,6 +4548,9 @@ public final class AgentControlServer {
             return
         }
         childEnv = instanceEnv
+        if req.agent == .codex {
+            FffAgentSearchProvisioning.ensureCodexMCPConfig(in: childEnv)
+        }
 
         // Step 1: write-ahead the Clawdmeter session. The
         // runtime kind is inferred as `.acpGrok` from `agent: .grok`.
@@ -6624,14 +6628,31 @@ public final class AgentControlServer {
 
     private func frontierProviderUnavailableReason(
         provider: AgentKind,
+        vendor: ChatVendor?,
         codexBackend: CodexChatBackend?
     ) async -> String? {
         switch provider {
-        case .cursor, .opencode:
+        case .cursor:
+            return await chatProviderUnavailableReason(provider: provider, codexBackend: codexBackend)
+        case .opencode:
+            if vendor == .openrouter {
+                return await openRouterUnavailableReason()
+            }
             return await chatProviderUnavailableReason(provider: provider, codexBackend: codexBackend)
         default:
             return nil
         }
+    }
+
+    private func openRouterUnavailableReason() async -> String? {
+        let state = await OpenRouterModelProbe.shared.currentState()
+        guard state.authenticated else {
+            return state.reason ?? "OpenRouter authentication unavailable"
+        }
+        guard state.discoverySucceeded else {
+            return state.reason ?? "OpenRouter model discovery failed"
+        }
+        return nil
     }
 
     /// `POST /chat-sessions`: spawn a new chat-kind AgentSession in an
@@ -7179,7 +7200,10 @@ public final class AgentControlServer {
         metadata: ResolvedChatRuntimeMetadata,
         connection: NWConnection
     ) async {
-        if let reason = await chatProviderUnavailableReason(provider: .opencode) {
+        let unavailableReason = metadata.vendor == .openrouter
+            ? await openRouterUnavailableReason()
+            : await chatProviderUnavailableReason(provider: .opencode)
+        if let reason = unavailableReason {
             sendChatProviderUnavailable(provider: .opencode, reason: reason, on: connection)
             return
         }
@@ -7333,8 +7357,14 @@ public final class AgentControlServer {
     }
 
     private func providerDisabledReason(provider: AgentKind, vendor: ChatVendor? = nil) -> String? {
+        if let vendor {
+            guard ProviderEnablement.isEnabled(vendor) else {
+                return "Enable \(vendor.displayName) in Settings → Providers."
+            }
+            return nil
+        }
         guard ProviderEnablement.isEnabled(provider) else {
-            return "Enable \(vendor?.displayName ?? providerDisplayName(provider)) in Settings → Providers."
+            return "Enable \(providerDisplayName(provider)) in Settings → Providers."
         }
         return nil
     }
@@ -7458,7 +7488,7 @@ public final class AgentControlServer {
                 sendResponse(.internalError, on: connection)
             }
         } catch let error as CustomProviderStoreError {
-            sendJSON(["error": "custom_provider_unavailable", "detail": error.localizedDescription ?? "unavailable"], on: connection, status: 503)
+            sendJSON(["error": "custom_provider_unavailable", "detail": error.localizedDescription], on: connection, status: 503)
         } catch {
             sendResponse(.internalError, on: connection)
         }
@@ -7960,6 +7990,7 @@ public final class AgentControlServer {
 
         if let reason = await frontierProviderUnavailableReason(
             provider: slot.provider,
+            vendor: metadata.vendor,
             codexBackend: metadata.codexBackend
         ) {
             throw SpawnFailure.message(reason)

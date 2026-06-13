@@ -43,7 +43,7 @@ struct CustomProviderSpawnPlan: Sendable, Equatable {
         do {
             apiKey = try store.resolveAPIKey(for: record)
         } catch let error as CustomProviderStoreError {
-            throw ResolveError.keyUnavailable(error.localizedDescription ?? "key unavailable")
+            throw ResolveError.keyUnavailable(error.localizedDescription)
         }
 
         switch record.kind {
