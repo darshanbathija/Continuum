@@ -673,6 +673,7 @@ final class AppRuntime: ObservableObject {
                         )
                     }
                 }
+                self.objectWillChange.send()
             }
         } else {
             Task { @MainActor [self] in
@@ -874,6 +875,7 @@ final class AppRuntime: ObservableObject {
             }
         }
         Task(priority: .utility) { @MainActor in
+            FffAgentSearchProvisioning.ensureProvisioned()
             OpencodeProcessManager.shared.prepareRuntimeHost()
         }
         Task(priority: .utility) { @MainActor in
@@ -942,8 +944,20 @@ final class AppRuntime: ObservableObject {
     @MainActor
     func setProviderEnabled(_ id: String, _ enabled: Bool) {
         ProviderEnablement.setEnabled(id, enabled)
-        if let kind = AgentKind(rawValue: id), let model = appModel(for: kind) {
-            if enabled { model.start() } else { model.stop() }
+        if let kind = AgentKind(rawValue: id) {
+            if enabled {
+                if !Self.deferProviderSideEffectsForTesting {
+                    for (wireId, model) in modelsByInstanceWireId {
+                        guard ProviderInstanceId.parseWireId(wireId)?.kind == id else { continue }
+                        model.forcePoll()
+                    }
+                }
+            } else {
+                for (wireId, model) in modelsByInstanceWireId {
+                    guard ProviderInstanceId.parseWireId(wireId)?.kind == id else { continue }
+                    model.stop()
+                }
+            }
         }
         UserDefaults.standard.set(enabled, forKey: "clawdmeter.\(id).menuBarShown")
         Task {
@@ -986,14 +1000,6 @@ final class AppRuntime: ObservableObject {
         if modelsByInstanceWireId[instance.wireId] != nil { return false }
         guard await providerInstanceRegistry.upsert(instance) != nil else { return false }
         let model = makeInstanceAwareModel(config: config, instance: instance)
-        // Secondary pollers follow the same opt-in + testing gates as the
-        // primaries (init): an instance of a disabled provider registers
-        // (so pickers can list it) but doesn't poll until the kind is
-        // enabled.
-        if !Self.deferProviderSideEffectsForTesting,
-           ProviderEnablement.isEnabled(instance.kind.rawValue) {
-            model.start()
-        }
         modelsByInstanceWireId[instance.wireId] = model
         if persist {
             providerInstanceStore.upsert(ProviderInstanceRecord(instance: instance))
@@ -1001,6 +1007,10 @@ final class AppRuntime: ObservableObject {
             // the loader's root closures read the list per refresh.
             usageHistoryStore.forceRefresh()
         }
+        // Secondary pollers follow the same opt-in + testing gates as the
+        // primaries (init): an instance of a disabled provider registers
+        // (so pickers can list it) but doesn't poll until the kind is
+        // enabled. forcePoll() also start()s the model when needed.
         if !Self.deferProviderSideEffectsForTesting,
            ProviderEnablement.isEnabled(instance.kind.rawValue) {
             model.forcePoll()
@@ -1012,6 +1022,7 @@ final class AppRuntime: ObservableObject {
         runtimeLogger.info(
             "AppRuntime.addInstance wireId=\(instance.wireId, privacy: .public) configRoot=\(redactedRoot, privacy: .public) persist=\(persist)"
         )
+        objectWillChange.send()
         return true
     }
 
@@ -1041,6 +1052,7 @@ final class AppRuntime: ObservableObject {
         runtimeLogger.info(
             "AppRuntime.removeInstance wireId=\(instance.wireId, privacy: .public) deleteConfigRoot=\(deleteConfigRoot)"
         )
+        objectWillChange.send()
         return true
     }
 
