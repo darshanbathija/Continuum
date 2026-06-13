@@ -650,8 +650,20 @@ final class AppRuntime: ObservableObject {
         // the SECONDARY gauges, never the defaults.
         let persistedInstances = providerInstanceStore.load()
         if !persistedInstances.isEmpty {
+            // Seconds to wait before each secondary's first poll. Sized to clear
+            // the `/api/oauth/usage` per-IP rate-limit window so a secondary
+            // doesn't 429 against the primary's launch poll. Successive
+            // secondaries accumulate this delay (Nth waits N× before adding).
+            let secondaryBootReplayStaggerSeconds: TimeInterval = 4
             Task { @MainActor [self] in
                 for record in persistedInstances {
+                    // Stagger each secondary's first poll. The primaries above
+                    // already polled at launch; a secondary Claude account
+                    // shares the same per-IP-rate-limited `/api/oauth/usage`
+                    // endpoint, so adding it (which force-polls immediately) at
+                    // the same instant would 429 and leave its gauge empty.
+                    // Steady-state desync is handled by UsagePoller jitter.
+                    try? await Task.sleep(nanoseconds: UInt64(secondaryBootReplayStaggerSeconds * 1_000_000_000))
                     let ok = await self.addInstance(record.instanceId, persist: false)
                     if !ok {
                         runtimeLogger.error(

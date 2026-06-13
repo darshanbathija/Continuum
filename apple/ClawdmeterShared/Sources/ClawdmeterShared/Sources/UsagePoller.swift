@@ -30,6 +30,15 @@ public final class UsagePoller: @unchecked Sendable {
         /// (network/rate-limit) keep `maxBackoffSeconds`. Reset to 0 on the
         /// explicit foreground path (`forcePoll`).
         public var authFailureBackoffSeconds: TimeInterval = 21_600 // 6h
+        /// Random 0...N seconds added to every inter-poll delay. Multiple
+        /// accounts of the same provider (multi-account: a primary + secondary
+        /// Claude) share one aggressively per-IP-rate-limited endpoint
+        /// (`/api/oauth/usage`). Without jitter their loops, both anchored near
+        /// app launch on the same fixed interval, poll in lockstep forever —
+        /// the one that fires microseconds later always 429s and its gauge
+        /// never populates. Jitter desyncs them within a cycle or two so each
+        /// account gets a clean window. 0 disables (deterministic for tests).
+        public var intervalJitterSeconds: TimeInterval = 8
         /// Time-Sensitive `WarningGate` for predictor (V1.5 surface).
         public var predictorEnabled: Bool = true
 
@@ -113,8 +122,12 @@ public final class UsagePoller: @unchecked Sendable {
             }
             while !Task.isCancelled {
                 await self.tick()
-                let nextDelay = max(self.configuration.foregroundInterval, self.currentBackoffSeconds)
-                try? await Task.sleep(nanoseconds: UInt64(nextDelay * 1_000_000_000))
+                // Base cadence (or active backoff), plus jitter so concurrent
+                // same-provider pollers don't collide on the shared rate-limited
+                // endpoint every cycle (see `intervalJitterSeconds`).
+                let base = max(self.configuration.foregroundInterval, self.currentBackoffSeconds)
+                let delay = Self.nextDelay(base: base, jitterCap: self.configuration.intervalJitterSeconds)
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
         }
     }
@@ -122,6 +135,17 @@ public final class UsagePoller: @unchecked Sendable {
     public func stop() {
         task?.cancel()
         task = nil
+    }
+
+    /// Inter-poll delay: `base` plus a random jitter in `0...jitterCap`.
+    /// A negative cap clamps to 0; a 0 cap returns exactly `base`
+    /// (deterministic — the seam tests rely on this). Jitter desyncs
+    /// multiple same-provider pollers off the shared rate-limited endpoint
+    /// (see `Configuration.intervalJitterSeconds`).
+    static func nextDelay(base: TimeInterval, jitterCap: TimeInterval) -> TimeInterval {
+        let cap = max(0, jitterCap)
+        let jitter = cap > 0 ? Double.random(in: 0...cap) : 0
+        return base + jitter
     }
 
     /// Single poll cycle. Public so apps can also `forcePoll()` on foreground.

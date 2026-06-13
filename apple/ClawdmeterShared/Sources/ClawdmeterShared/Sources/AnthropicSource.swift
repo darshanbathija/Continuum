@@ -241,7 +241,9 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
 private struct OAuthUsageEnvelope: Decodable {
     let bindingType: BindingType?
     /// Used when the envelope reports a single binding only:
-    /// `{rate_limit_type:"five_hour", utilization:0.27, resets_at:"…"}`.
+    /// `{rate_limit_type:"five_hour", utilization:27, resets_at:"…"}`.
+    /// `utilization` is a percentage (0...100), same as the nested shape —
+    /// see `WindowReading`; it is NOT a 0...1 fraction.
     let flatUtilization: Double?
     let flatResetsAt: AnyDate?
 
@@ -273,8 +275,14 @@ private struct OAuthUsageEnvelope: Decodable {
     }
 
     struct WindowReading: Decodable {
-        let utilization: Double?      // 0.0...1.0 or 0...100, depending on API shape
-        let usedPercentage: Double?   // 0...100 (statusline-style)
+        // Both fields are PERCENTAGE units (0...100), NOT 0...1 fractions.
+        // `utilization` is empirically confirmed against the live
+        // `/api/oauth/usage` (`five_hour: 8.0` = 8%, `seven_day: 1.0` = 1%);
+        // `usedPercentage` is the statusline contract's documented 0...100
+        // value. Do not reintroduce a fraction (×100) heuristic for either —
+        // see the percent-scaling note in `window(...)`.
+        let utilization: Double?      // 0...100 (empirically confirmed)
+        let usedPercentage: Double?   // 0...100 (statusline contract)
         let resetsAt: AnyDate?
     }
 
@@ -299,7 +307,7 @@ private struct OAuthUsageEnvelope: Decodable {
         }
 
         func epoch(server: Int) -> Int {
-            max(server, Int(date.timeIntervalSince1970))
+            max(server, OAuthUsageEnvelope.safeEpoch(date))
         }
     }
 
@@ -338,27 +346,49 @@ private struct OAuthUsageEnvelope: Decodable {
     func window(for which: UsageData.BindingWindow,
                 fallbackBinding: Double?,
                 fallbackResetEpoch: Int?) -> (pct: Int, resetEpoch: Int)? {
+        // `utilization` and `used_percentage` are both percentages (0...100).
+        // A previous "value <= 1 ⇒ a 0...1 fraction, multiply by 100" heuristic
+        // mis-scaled genuine sub-1% usage: a weekly `utilization` of 1.0 (1%
+        // used) became 100%, pinning the gauge. Treat every reading as a
+        // percentage and only clamp/round.
         let reading: WindowReading? = (which == .fiveHour) ? fiveHourReading : sevenDayReading
         if let reading {
             let pct: Int
-            if let p = reading.usedPercentage { pct = Self.normalizedPercent(p, alreadyPercent: true) }
-            else if let u = reading.utilization { pct = Self.normalizedPercent(u, alreadyPercent: false) }
+            if let p = reading.usedPercentage { pct = Self.clampPercent(p) }
+            else if let u = reading.utilization { pct = Self.clampPercent(u) }
             else { return nil }
-            let resetEpoch = reading.resetsAt.map { Int($0.date.timeIntervalSince1970) }
+            let resetEpoch = reading.resetsAt.map { Self.safeEpoch($0.date) }
                 ?? Int(Date().addingTimeInterval(60).timeIntervalSince1970)
             return (pct, resetEpoch)
         }
         if let u = fallbackBinding {
-            let pct = Self.normalizedPercent(u, alreadyPercent: false)
+            let pct = Self.clampPercent(u)
             let resetEpoch = fallbackResetEpoch ?? Int(Date().addingTimeInterval(60).timeIntervalSince1970)
             return (pct, resetEpoch)
         }
         return nil
     }
 
-    private static func normalizedPercent(_ value: Double, alreadyPercent: Bool) -> Int {
-        let percent = alreadyPercent || abs(value) > 1 ? value : value * 100
-        return min(100, max(0, Int(percent.rounded())))
+    private static func clampPercent(_ value: Double) -> Int {
+        // Clamp as a Double BEFORE the Int conversion, and reject non-finite
+        // inputs. `Int(_:)` TRAPS (app-wide crash) on NaN/±Inf or a
+        // finite-but-huge Double > Int.max — a garbage or MITM'd
+        // `/api/oauth/usage` body could otherwise crash the poller's task and
+        // take the whole process down. After this, Int() only ever sees 0...100.
+        guard value.isFinite else { return 0 }
+        return Int(min(100, max(0, value.rounded())))
+    }
+
+    /// Safe `Date` → epoch-seconds for an untrusted `resets_at`. A garbage or
+    /// MITM'd timestamp (NaN, ±Inf, or absurdly large) would otherwise trap
+    /// `Int(_:)` the same way the huge-`utilization` path did and crash the
+    /// poller's task. Out-of-range values collapse to 0, so the caller's
+    /// `max(server, …)` / reset-minutes math degrades to "no countdown"
+    /// instead of crashing. 4_102_444_800 = 2100-01-01 (well under Int.max).
+    static func safeEpoch(_ date: Date) -> Int {
+        let ti = date.timeIntervalSince1970
+        guard ti.isFinite, ti >= 0, ti < 4_102_444_800 else { return 0 }
+        return Int(ti)
     }
 }
 

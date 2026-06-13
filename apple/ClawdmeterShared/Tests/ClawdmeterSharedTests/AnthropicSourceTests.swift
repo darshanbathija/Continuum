@@ -30,7 +30,7 @@ final class AnthropicSourceTests: XCTestCase {
         var observedBody: Data?
         var observedBeta: String?
         let usageBody = """
-        {"rate_limit_type":"five_hour","utilization":0.14,"resets_at":"2026-05-14T11:00:00Z","organization_uuid":"test-org"}
+        {"rate_limit_type":"five_hour","utilization":14,"resets_at":"2026-05-14T11:00:00Z","organization_uuid":"test-org"}
         """.data(using: .utf8)!
 
         MockURLProtocol.responder = { request in
@@ -61,7 +61,7 @@ final class AnthropicSourceTests: XCTestCase {
         let usageBody = """
         {
           "rate_limits": {
-            "five_hour": {"utilization": 0.31, "resets_at": "2026-05-14T11:00:00Z"},
+            "five_hour": {"utilization": 31, "resets_at": "2026-05-14T11:00:00Z"},
             "seven_day": {"used_percentage": 81, "resets_at": "2026-05-20T13:00:00Z"}
           }
         }
@@ -96,6 +96,105 @@ final class AnthropicSourceTests: XCTestCase {
         XCTAssertEqual(usage.sessionPct, 37)
         XCTAssertEqual(usage.weeklyPct, 68)
         XCTAssertEqual(usage.status, .allowed)
+    }
+
+    /// Regression for the "Weekly 100%" gauge bug. The live
+    /// `/api/oauth/usage` reports `utilization` in PERCENTAGE units
+    /// (`five_hour: 8.0` = 8%, `seven_day: 1.0` = 1%). The old heuristic
+    /// treated values <= 1.0 as a 0...1 fraction and multiplied by 100, so a
+    /// genuine 1% weekly read rendered as 100%. Sub-1% usage must stay sub-1%.
+    func test_poll_utilizationIsPercentNotFraction_subOnePercentDoesNotPin() async throws {
+        let usageBody = """
+        {
+          "five_hour":  {"utilization": 8.0, "resets_at": "2026-06-13T06:29:59Z"},
+          "seven_day":  {"utilization": 1.0, "resets_at": "2026-06-17T00:59:59Z"},
+          "seven_day_sonnet": {"utilization": 0.0, "resets_at": "2026-06-17T01:00:00Z"}
+        }
+        """.data(using: .utf8)!
+
+        MockURLProtocol.responder = { _ in
+            (200, ["date": "Sat, 13 Jun 2026 02:23:06 GMT"], usageBody)
+        }
+
+        let usage = try await makeSource().poll()
+        XCTAssertEqual(usage.sessionPct, 8)
+        XCTAssertEqual(usage.weeklyPct, 1, "1.0% weekly utilization must read as 1%, not 100%")
+        XCTAssertEqual(usage.status, .allowed)
+    }
+
+    /// A fractional value in (0, 1) is a sub-1% PERCENT, not a 0..1 fraction:
+    /// `0.4` = 0.4% (rounds to 0), `0.6` = 0.6% (rounds to 1). The removed
+    /// heuristic would have multiplied these by 100 (→ 40% / 60%). This pins
+    /// the round-as-percent semantics so a revert to the fraction heuristic
+    /// fails loudly.
+    func test_poll_fractionalUtilizationRoundsAsPercentNotFraction() async throws {
+        let usageBody = """
+        {
+          "five_hour": {"utilization": 0.6, "resets_at": "2026-06-13T06:29:59Z"},
+          "seven_day": {"utilization": 0.4, "resets_at": "2026-06-17T00:59:59Z"}
+        }
+        """.data(using: .utf8)!
+
+        MockURLProtocol.responder = { _ in
+            (200, ["date": "Sat, 13 Jun 2026 02:23:06 GMT"], usageBody)
+        }
+
+        let usage = try await makeSource().poll()
+        XCTAssertEqual(usage.sessionPct, 1, "0.6% rounds to 1%, not 60%")
+        XCTAssertEqual(usage.weeklyPct, 0, "0.4% rounds to 0%, not 40%")
+    }
+
+    /// `utilization` above 100 (overage states) clamps to 100, not >100.
+    func test_poll_utilizationAboveOneHundredClampsTo100() async throws {
+        let usageBody = """
+        {
+          "five_hour": {"utilization": 150.0, "resets_at": "2026-06-13T06:29:59Z"},
+          "seven_day": {"utilization": 103.0, "resets_at": "2026-06-17T00:59:59Z"}
+        }
+        """.data(using: .utf8)!
+
+        MockURLProtocol.responder = { _ in
+            (200, ["date": "Sat, 13 Jun 2026 02:23:06 GMT"], usageBody)
+        }
+
+        let usage = try await makeSource().poll()
+        XCTAssertEqual(usage.sessionPct, 100)
+        XCTAssertEqual(usage.weeklyPct, 100)
+        XCTAssertEqual(usage.status, .limited)
+    }
+
+    /// A finite-but-huge utilization (garbage / hostile body) must clamp to
+    /// 100, not trap `Int(_:)` and crash the poller's task. Regression for the
+    /// adversarial-review F1 overflow finding.
+    func test_poll_hugeUtilizationClampsInsteadOfCrashing() async throws {
+        let usageBody = """
+        {"five_hour": {"utilization": 1e308, "resets_at": "2026-06-13T06:29:59Z"}}
+        """.data(using: .utf8)!
+
+        MockURLProtocol.responder = { _ in
+            (200, ["date": "Sat, 13 Jun 2026 02:23:06 GMT"], usageBody)
+        }
+
+        let usage = try await makeSource().poll()
+        XCTAssertEqual(usage.sessionPct, 100)
+    }
+
+    /// A garbage/hostile numeric `resets_at` must not trap the Date→Int epoch
+    /// conversion and crash the poller. Regression for the adversarial-review
+    /// follow-up (the sibling overflow path to `utilization`).
+    func test_poll_hugeResetsAtDoesNotCrash() async throws {
+        let usageBody = """
+        {"five_hour": {"utilization": 50, "resets_at": 1e308}}
+        """.data(using: .utf8)!
+
+        MockURLProtocol.responder = { _ in
+            (200, ["date": "Sat, 13 Jun 2026 02:23:06 GMT"], usageBody)
+        }
+
+        let usage = try await makeSource().poll()
+        XCTAssertEqual(usage.sessionPct, 50)
+        // Absurd reset collapses to "no countdown" rather than crashing.
+        XCTAssertEqual(usage.sessionResetMins, 0)
     }
 
     func test_poll_limitedWhenEitherWindowAtOneHundred() async throws {
