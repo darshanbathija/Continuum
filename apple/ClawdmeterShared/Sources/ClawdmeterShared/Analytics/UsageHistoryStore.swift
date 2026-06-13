@@ -453,4 +453,24 @@ public final class UsageHistoryStore {
             .map { $0.tokens.costUSD }
             .reduce(Decimal(0), +)
     }
+
+    /// Per-day OpenCode spend for the trailing `days` local-calendar days,
+    /// ordered oldest→newest (last element = today). Days with no records
+    /// return 0 so the Usage strip's spend sparkline keeps a stable bar
+    /// count. Calendar-day aligned in the user's local timezone, matching
+    /// the analytics windows elsewhere in the app.
+    public func opencodeDailySpendUSD(days: Int = 7) -> [Decimal] {
+        let count = max(days, 1)
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        var buckets = [Decimal](repeating: 0, count: count)
+        for record in opencodeLiveRecords {
+            let recordDay = cal.startOfDay(for: record.timestamp)
+            guard let delta = cal.dateComponents([.day], from: recordDay, to: today).day,
+                  delta >= 0, delta < count else { continue }
+            // delta 0 = today → last bucket; delta count-1 = oldest → bucket 0.
+            buckets[(count - 1) - delta] += record.tokens.costUSD
+        }
+        return buckets
+    }
 }
