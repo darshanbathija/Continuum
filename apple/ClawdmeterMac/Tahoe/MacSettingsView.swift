@@ -2308,7 +2308,9 @@ enum ProviderAuthType: String {
 enum ProviderSettingsCopy {
     static func authType(for vendor: ChatVendor) -> ProviderAuthType {
         switch vendor {
-        case .opencode, .openrouter: return .apiKey
+        // OpenCode Go (opencode.ai Zen) is a subscription product; OpenRouter
+        // is a pay-as-you-go API partner. Badge them distinctly.
+        case .openrouter: return .apiKey
         default: return .subscription
         }
     }
@@ -2494,8 +2496,6 @@ struct ProviderPreferenceRows: View {
                                 deviceStatus: deviceStatuses[providerEnablementId(for: vendor)],
                                 accountsRuntime: runtime,
                                 onSetupAction: onSetupAction,
-                                onOpencodeShowMoreProviders: onOpencodeShowMoreProviders,
-                                onOpencodeCustomProviderConnect: onOpencodeCustomProviderConnect,
                                 onSelectModel: { entry in update(vendor: vendor, model: entry.id) },
                                 onOpenModelMenu: { Task { await refreshCatalogIfAllowed(for: vendor) } }
                             )
@@ -2541,8 +2541,15 @@ struct ProviderPreferenceRows: View {
                     }
                 }
             }
+            if opencodeBackendConnected {
+                ProviderSettingsSubsection(title: "OpenCode Authenticated Providers") {
+                    OpencodeProviderExtrasSection(
+                        onCustomProviderConnect: { onOpencodeCustomProviderConnect?() }
+                    )
+                }
+            }
             if !popularVendors.isEmpty || !disabledCustomRecords.isEmpty
-                || (onCustomProviderAdd != nil && !ProviderEnablement.isEnabled("opencode")) {
+                || (onCustomProviderAdd != nil && !opencodeBackendConnected) {
                 ProviderSettingsSubsection(title: "Popular providers") {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(popularVendors, id: \.self) { vendor in
@@ -2552,7 +2559,7 @@ struct ProviderPreferenceRows: View {
                             )
                             if vendor != popularVendors.last
                                 || !disabledCustomRecords.isEmpty
-                                || (onCustomProviderAdd != nil && !ProviderEnablement.isEnabled("opencode")) {
+                                || (onCustomProviderAdd != nil && !opencodeBackendConnected) {
                                 TahoeHair()
                             }
                         }
@@ -2568,18 +2575,33 @@ struct ProviderPreferenceRows: View {
                                     }
                                 )
                                 if record.id != disabledCustomRecords.last?.id
-                                    || (onCustomProviderAdd != nil && !ProviderEnablement.isEnabled("opencode")) {
+                                    || (onCustomProviderAdd != nil && !opencodeBackendConnected) {
                                     TahoeHair()
                                 }
                             }
                         }
-                        if onCustomProviderAdd != nil, !ProviderEnablement.isEnabled("opencode") {
+                        if onCustomProviderAdd != nil, !opencodeBackendConnected {
                             AddCustomProviderSettingsRow(onConnect: { onCustomProviderAdd?() })
                         }
                     }
                 }
             }
+            // The OpenCode catalog opener lives at the foot of every provider —
+            // outside the OpenCode section — so it reads as "add another
+            // provider" rather than an OpenCode-nested action.
+            if opencodeBackendConnected {
+                OpencodeShowMoreProvidersButton(
+                    onShowMoreProviders: { onOpencodeShowMoreProviders?() }
+                )
+            }
         }
+    }
+
+    /// True when OpenCode Go or OpenRouter is connected — both route through the
+    /// shared `opencode serve` backend whose auth.json drives the authenticated
+    /// providers subsection + catalog opener.
+    private var opencodeBackendConnected: Bool {
+        connectedVendors.contains { $0.backingProvider == .opencode }
     }
 
     private func selectCustomDefaultModel(_ modelId: String, record: CustomProviderRecord, store: CustomProviderStore) {
@@ -2874,8 +2896,6 @@ private struct ConnectedProviderRow: View {
     var deviceStatus: ProviderDeviceStatus?
     var accountsRuntime: AppRuntime? = nil
     var onSetupAction: ((String, ProviderDeviceSetupAction) -> Void)? = nil
-    var onOpencodeShowMoreProviders: (() -> Void)? = nil
-    var onOpencodeCustomProviderConnect: (() -> Void)? = nil
     let onSelectModel: (ModelCatalogEntry) -> Void
     let onOpenModelMenu: () -> Void
 
@@ -2920,12 +2940,6 @@ private struct ConnectedProviderRow: View {
             if let accountsRuntime,
                ProviderAccountsSection.supportsMultiAccount(vendor.backingProvider) {
                 ProviderAccountsSection(runtime: accountsRuntime, kind: vendor.backingProvider)
-            }
-            if vendor.backingProvider == .opencode {
-                OpencodeProviderExtrasSection(
-                    onCustomProviderConnect: { onOpencodeCustomProviderConnect?() },
-                    onShowMoreProviders: { onOpencodeShowMoreProviders?() }
-                )
             }
         }
         .frame(minHeight: 36)

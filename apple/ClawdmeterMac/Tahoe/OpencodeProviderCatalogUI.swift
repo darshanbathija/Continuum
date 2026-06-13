@@ -49,13 +49,14 @@ struct OpencodeProviderLogoView: View {
 
 // MARK: - OpenCode row extras
 
-/// Compact extras rendered under the connected OpenCode row — upstream
-/// auth chips, a custom-provider shortcut, and the catalog picker entry.
+/// The providers a user has authenticated through OpenCode (auth.json) plus
+/// the custom-provider shortcut. Rendered as its own top-level Settings
+/// subsection ("OpenCode Authenticated Providers"), not nested under a row,
+/// so OpenCode Go and OpenRouter stay clean single-line providers above it.
 struct OpencodeProviderExtrasSection: View {
     @Environment(\.tahoe) private var t
 
     var onCustomProviderConnect: () -> Void
-    var onShowMoreProviders: () -> Void
 
     @State private var connectedProviders: [OpencodeSupportedProvider] = []
 
@@ -65,9 +66,7 @@ struct OpencodeProviderExtrasSection: View {
                 connectedRow(provider)
             }
             customProviderRow
-            showMoreButton
         }
-        .padding(.leading, 40)
         .task { await refreshConnected() }
         .onReceive(NotificationCenter.default.publisher(for: .opencodeAuthChanged)) { _ in
             Task { await refreshConnected() }
@@ -132,16 +131,6 @@ struct OpencodeProviderExtrasSection: View {
         }
     }
 
-    private var showMoreButton: some View {
-        Button(action: ContinuumAnalytics.wrapButton("opencode_show_more_providers", onShowMoreProviders)) {
-            Text("Show more providers")
-                .font(TahoeFont.body(12, weight: .semibold))
-                .foregroundStyle(t.accent)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("settings.provider.opencode.showMore")
-    }
-
     private func refreshConnected() async {
         let ids = Set(await OpencodeAuthFile.shared.providerIds())
         let snapshot = await OpencodeSupportedProviderCatalogStore.shared.currentSnapshot()
@@ -152,6 +141,25 @@ struct OpencodeProviderExtrasSection: View {
                 if id == OpencodeSupportedProvider.customEntryID { return nil }
                 return byID[id] ?? OpencodeSupportedProvider(id: id, name: OpencodeAuthFile.defaultDisplayName(for: id))
             }
+    }
+}
+
+/// Bottom-of-list link that opens the full OpenCode provider catalog. Lives
+/// outside the OpenCode subsection, at the foot of every provider, so it reads
+/// as "add another provider" rather than an OpenCode-nested action.
+struct OpencodeShowMoreProvidersButton: View {
+    @Environment(\.tahoe) private var t
+
+    var onShowMoreProviders: () -> Void
+
+    var body: some View {
+        Button(action: ContinuumAnalytics.wrapButton("opencode_show_more_providers", onShowMoreProviders)) {
+            Text("Show more providers")
+                .font(TahoeFont.body(12, weight: .semibold))
+                .foregroundStyle(t.accent)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("settings.provider.opencode.showMore")
     }
 }
 
