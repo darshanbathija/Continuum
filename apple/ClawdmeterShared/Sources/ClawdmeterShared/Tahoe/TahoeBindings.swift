@@ -134,7 +134,7 @@ public struct TahoeLiveBindings: Equatable, Sendable {
         case .codex:  return codex
         case .gemini: return gemini
         case .opencode: return opencode
-        case .openrouter: return .demo(.openrouter)
+        case .openrouter: return opencode
         case .cursor: return cursor
         case .grok: return grok
         }

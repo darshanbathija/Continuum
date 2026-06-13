@@ -19,7 +19,7 @@ public struct IOSRootView: View {
     // repo-pre-selection work from other entry points.
     @State private var focusedCodeRepoKey: String?
 
-    public enum Tab: String, CaseIterable { case chat, live, analytics, code }
+    public enum Tab: String, CaseIterable { case home, usage, code, chat }
     /// Routes the modal/pushed screens above the tab bar. `sessionDetail`
     /// carries the opened session's UUID so the detail view can look up
     /// real data instead of rendering a fixture.
@@ -51,12 +51,13 @@ public struct IOSRootView: View {
         self.relayService = .shared
         let args = ProcessInfo.processInfo.arguments
         let demo = args.contains("--ios-code-demo")
+        let skipConsent = demo || args.contains("--ios-skip-consent")
         self.screenshotDemo = demo
         // Gate the app behind the AI data-sharing disclosure until the user
-        // agrees (skipped in screenshot-demo mode). Persisted → one-time.
-        _showConsent = State(initialValue: !demo && !AIDataSharingConsent.hasConsented)
-        _theme = State(initialValue: TahoeThemeStore.loaded())
-        _tab = State(initialValue: demo ? .code : .chat)
+        // agrees (skipped in screenshot-demo / verify modes). Persisted → one-time.
+        _showConsent = State(initialValue: !skipConsent && !AIDataSharingConsent.hasConsented)
+        _theme = State(initialValue: Self.continuumMobileTheme)
+        _tab = State(initialValue: Self.initialTab(from: args, demo: demo))
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         _presentationStore = StateObject(wrappedValue: SessionPresentationStore(
@@ -90,29 +91,25 @@ public struct IOSRootView: View {
         // the pairing UX is "done" the moment the keys exchanged. UI
         // surfaces should treat both transports as "paired" for the
         // empty-state banner purpose.
-        let isUnpaired = !screenshotDemo
-            && !agentClient.isConfigured
-            && !relayService.hasActivePairing
-        // Extra bottom clearance when banner is visible so content
-        // doesn't slide under it.
-        let bottomClearance: CGFloat = isUnpaired ? 168 : 92
+        let isPaired = screenshotDemo
+            || agentClient.isConfigured
+            || relayService.hasActivePairing
+        let bottomClearance: CGFloat = isPaired && pushedScreen == nil ? 92 : 0
         return ZStack {
-            TahoeWallpaperView()
-            contentView(live: live, code: code)
-                .padding(.bottom, bottomClearance)
-            if pushedScreen == nil {
-                VStack(spacing: 12) {
-                    if isUnpaired {
-                        IOSUnpairedBanner(
-                            onPair: { pushedScreen = .pairing }
-                        )
-                        .padding(.horizontal, 16)
-                    }
-                    IOSTabBar(tab: $tab)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 24)
+            if !isPaired {
+                IOSPairingView(
+                    client: agentClient,
+                    onClose: {}
+                )
+            } else {
+                contentView(live: live, code: code)
+                    .padding(.bottom, bottomClearance)
+                if pushedScreen == nil {
+                    IOSContinuumTabBar(tab: $tab)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 26)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
                 }
-                .frame(maxHeight: .infinity, alignment: .bottom)
             }
         }
         .ignoresSafeArea(.container, edges: .bottom)
@@ -169,15 +166,31 @@ public struct IOSRootView: View {
         }
     }
 
-    private var usesCodeReferenceTheme: Bool {
-        switch pushedScreen {
-        case .sessionDetail:
-            return true
-        case .pairing:
-            return false
-        case nil:
-            return tab == .code
+    private var usesCodeReferenceTheme: Bool { false }
+
+    private static func initialTab(from args: [String], demo: Bool) -> Tab {
+        if let raw = args.first(where: { $0.hasPrefix("--ios-verify-tab=") }) {
+            let value = String(raw.dropFirst("--ios-verify-tab=".count))
+            switch value.lowercased() {
+            case "usage": return .usage
+            case "code": return .code
+            case "chat": return .chat
+            default: return .home
+            }
         }
+        return demo ? .code : .home
+    }
+
+    @MainActor
+    private static var continuumMobileTheme: TahoeThemeStore {
+        TahoeThemeStore(
+            appearance: .dark,
+            surface: .solid,
+            accent: .halo,
+            wallpaper: .studio,
+            glassIntensity: 0,
+            providerFocus: .claude
+        )
     }
 
     @MainActor
@@ -214,33 +227,24 @@ public struct IOSRootView: View {
             )
         case nil:
             switch tab {
+            case .home:
+                IOSHomeView(
+                    agentClient: agentClient,
+                    onOpenSession: { id in pushedScreen = .sessionDetail(id) },
+                    onNewSession: { newSessionPresented = true },
+                    onOpenSettings: { settingsPresented = true }
+                )
+                .postHogScreenScope("home")
+            case .usage:
+                IOSContinuumUsageView(
+                    usageModel: usageModel,
+                    agentClient: agentClient,
+                    onOpenSettings: { settingsPresented = true }
+                )
+                .postHogScreenScope("usage")
             case .chat:
                 IOSChatV2View(agentClient: agentClient, outbox: outbox)
                     .postHogScreenScope("chat")
-            case .live:
-                IOSLiveView(
-                    data: live,
-                    enabledProviderIDs: usageModel.enabledProviderIDs,
-                    secondaryAccounts: usageModel.secondaryAccounts,
-                    onRefresh: { await agentClient.refreshAll() },
-                    onOpenSettings: { settingsPresented = true },
-                    agentClient: agentClient
-                )
-                .postHogScreenScope("live")
-            case .analytics:
-                // v0.14.0 (plan v2.1 D1): fold Live gauges into Analytics
-                // as a permanent header. Settings sheet trigger moves here
-                // so the gear that used to live in the Live tab still works.
-                IOSAnalyticsView(usageModel: usageModel, agentClient: agentClient) {
-                    LiveGaugesHeader(
-                        model: usageModel,
-                        agentClient: agentClient,
-                        showingSettings: $settingsPresented
-                    )
-                } onPairWithDesktop: {
-                    pushedScreen = .pairing
-                }
-                .postHogScreenScope("analytics")
             case .code:
                 // v0.22.30: drop `focusedRepoKey:` — IOSCodeView init
                 // doesn't declare it yet (the parallel-agent's repo-
@@ -280,10 +284,10 @@ public struct IOSTabBar: View {
     // it's no longer surfaced in the tab bar. Full LiveGaugesHeader →
     // Analytics integration is tracked as a follow-up (see plan T6).
     private let items: [(IOSRootView.Tab, String, String)] = [
-        (.chat,      "Chat",      "sparkles"),
-        (.live,      "Live",      "moon"),
-        (.analytics, "Analytics", "diff"),
-        (.code,      "Code",      "chat"),
+        (.home,  "Home",  "square.grid.2x2"),
+        (.usage, "Usage", "chart.bar"),
+        (.code,  "Code",  "chevron.left.forwardslash.chevron.right"),
+        (.chat,  "Chat",  "bubble.left"),
     ]
 
     public var body: some View {
@@ -409,7 +413,7 @@ public struct IOSUnpairedBanner: View {
                     Text("Not paired to a Mac")
                         .font(TahoeFont.body(13.5, weight: .bold))
                         .foregroundStyle(t.fg)
-                    Text("Tahoe surfaces fall back to demo data until you pair.")
+                    Text("Pair with your Mac to see live sessions and usage.")
                         .font(TahoeFont.body(11))
                         .foregroundStyle(t.fg3)
                         .lineLimit(2)
