@@ -138,6 +138,70 @@ final class SpawnPlanTests: XCTestCase {
         )
     }
 
+    // MARK: - Increment (auto-debit the default agent)
+
+    func testIncrementConsumesFreeSlotWhenUnallocated() {
+        // 2 of 4 allocated → adding codex just takes a free slot, no debit.
+        let out = SpawnPlan.incrementAllocation(
+            [.claude: 2],
+            agent: .codex,
+            total: 4,
+            availableAgents: [.claude, .codex]
+        )
+        XCTAssertEqual(out, [.claude: 2, .codex: 1])
+    }
+
+    func testIncrementWhenFullDebitsDefaultAgent() {
+        // 4 of 4 on Claude → "+" on Codex steals one from Claude (the default).
+        let out = SpawnPlan.incrementAllocation(
+            [.claude: 4],
+            agent: .codex,
+            total: 4,
+            availableAgents: [.claude, .codex]
+        )
+        XCTAssertEqual(out[.claude], 3)
+        XCTAssertEqual(out[.codex], 1)
+        XCTAssertEqual(out.values.reduce(0, +), 4) // total preserved
+    }
+
+    func testIncrementPrefersDefaultDonorOverOtherHolders() {
+        // Default (first available = claude) donates even though codex also
+        // holds slots — "auto-debit the default one".
+        let out = SpawnPlan.incrementAllocation(
+            [.claude: 2, .codex: 2],
+            agent: .grok,
+            total: 4,
+            availableAgents: [.claude, .codex, .grok]
+        )
+        XCTAssertEqual(out[.claude], 1)
+        XCTAssertEqual(out[.codex], 2)
+        XCTAssertEqual(out[.grok], 1)
+    }
+
+    func testIncrementFallsBackWhenDefaultCannotDonate() {
+        // Incrementing the default agent itself while full: it can't debit
+        // itself, so the first other holder (codex) donates.
+        let out = SpawnPlan.incrementAllocation(
+            [.claude: 1, .codex: 3],
+            agent: .claude,
+            total: 4,
+            availableAgents: [.claude, .codex]
+        )
+        XCTAssertEqual(out[.claude], 2)
+        XCTAssertEqual(out[.codex], 2)
+    }
+
+    func testIncrementIsNoOpWhenAgentOwnsEverything() {
+        // Claude already holds all 4 — nothing to steal, "+" does nothing.
+        let out = SpawnPlan.incrementAllocation(
+            [.claude: 4],
+            agent: .claude,
+            total: 4,
+            availableAgents: [.claude, .codex]
+        )
+        XCTAssertEqual(out, [.claude: 4])
+    }
+
     // MARK: - Config invariants
 
     func testSessionCountOptions() {

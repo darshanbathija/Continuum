@@ -110,6 +110,41 @@ public enum SpawnPlan {
         return counts
     }
 
+    /// Bump `agent` up by one against a FIXED total. When unallocated slots
+    /// remain, consume one. When the batch is already full, steal a slot from
+    /// a donor so "+" is never a dead button — clicking it on a second agent
+    /// auto-debits the default (first available) agent, e.g. Claude. Falls
+    /// back to the first OTHER agent in display order that still holds a slot
+    /// when the default can't donate. A no-op only when `agent` already owns
+    /// every slot (nothing left to take).
+    public static func incrementAllocation(
+        _ counts: [AgentKind: Int],
+        agent: AgentKind,
+        total: Int,
+        availableAgents: [AgentKind],
+        displayOrder: [AgentKind] = selectableAgents
+    ) -> [AgentKind: Int] {
+        var counts = counts
+        let allocated = counts.values.reduce(0, +)
+        if allocated < total {
+            counts[agent, default: 0] += 1
+            return counts
+        }
+        func holdsSlot(_ candidate: AgentKind) -> Bool {
+            candidate != agent && (counts[candidate] ?? 0) > 0
+        }
+        let donor: AgentKind?
+        if let preferred = availableAgents.first, holdsSlot(preferred) {
+            donor = preferred
+        } else {
+            donor = displayOrder.first(where: holdsSlot)
+        }
+        guard let donor else { return counts }
+        counts[donor, default: 0] -= 1
+        counts[agent, default: 0] += 1
+        return counts
+    }
+
     /// Grid shape for a tile count: 4 → 2×2, 6 → 3×2, 8 → 4×2. Counts in
     /// between (tiles closed mid-session) round to the nearest shape that
     /// keeps at most two rows.
