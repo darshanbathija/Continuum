@@ -1158,13 +1158,15 @@ public final class SessionsModel: ObservableObject {
     func renameWorkspace(
         repoKey: String,
         workspacePath: String,
-        newName: String
+        newName: String,
+        renameBranch: Bool = true
     ) async -> Bool {
         do {
             let result = try await WorktreeManager.shared.renameWorktree(
                 repoRoot: repoKey,
                 worktreePath: workspacePath,
-                newDisplayName: newName
+                newDisplayName: newName,
+                renameBranch: renameBranch
             )
             try await registry.relocateWorktreeSessions(
                 oldWorkspacePath: workspacePath,

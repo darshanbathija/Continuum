@@ -746,15 +746,20 @@ public actor WorktreeManager {
         return .deleted
     }
 
-    /// Rename a worktree's sidebar label folder and its checked-out git branch.
-    /// Clawdmeter-managed worktrees move under `~/Clawdmeter/workspaces/…`;
-    /// Conductor-style paths (`…/conductor/workspaces/<repo>/<slug>`) swap the
-    /// last folder component. Ownership markers + branch alias symlinks are
-    /// updated when present.
+    /// Rename a worktree's sidebar label folder and, when `renameBranch` is
+    /// true, its checked-out git branch. Clawdmeter-managed worktrees move
+    /// under `~/Clawdmeter/workspaces/…`; Conductor-style paths
+    /// (`…/conductor/workspaces/<repo>/<slug>`) swap the last folder component.
+    /// Ownership markers + branch alias symlinks are updated when present.
+    ///
+    /// `renameBranch == false` keeps the existing branch name (the rename
+    /// sheet's "Also rename branch" toggle is off) while still moving the
+    /// folder, so an open PR or pushed branch keeps its identity.
     public func renameWorktree(
         repoRoot: String,
         worktreePath: String,
-        newDisplayName: String
+        newDisplayName: String,
+        renameBranch: Bool = true
     ) async throws -> RenamedWorktree {
         let trimmed = newDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -763,10 +768,9 @@ public actor WorktreeManager {
 
         let oldPath = WorkspaceKey.canonicalPath(worktreePath)
         let currentBranch = try await currentBranch(cwd: oldPath)
-        let newBranchName = Self.renamedBranchName(
-            currentBranch: currentBranch,
-            newDisplayName: trimmed
-        )
+        let newBranchName = renameBranch
+            ? Self.renamedBranchName(currentBranch: currentBranch, newDisplayName: trimmed)
+            : currentBranch
         let marker = try? readOwnershipMarker(worktreePath: oldPath)
 
         let newPath: String
@@ -800,7 +804,7 @@ public actor WorktreeManager {
         if newPath != oldPath && FileManager.default.fileExists(atPath: newPath) {
             throw WorktreeError.collisionUnresolvable
         }
-        if newBranchName != currentBranch {
+        if let newBranchName, newBranchName != currentBranch {
             let listResult = try await runGit(args: ["branch", "--list", newBranchName], cwd: repoRoot)
             let listed = listResult.stdoutString
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -809,7 +813,7 @@ public actor WorktreeManager {
             }
         }
 
-        if newBranchName != currentBranch {
+        if let newBranchName, newBranchName != currentBranch {
             let branchResult = try await runGit(args: ["branch", "-m", newBranchName], cwd: oldPath)
             guard branchResult.exitStatus == 0 else {
                 throw WorktreeError.gitFailed(operation: "branch -m", stderr: branchResult.stderrString)
@@ -827,6 +831,12 @@ public actor WorktreeManager {
             )
             let moveResult = try await runGit(args: ["worktree", "move", oldPath, newPath], cwd: repoRoot)
             guard moveResult.exitStatus == 0 else {
+                // Roll back the branch rename so a failed move doesn't leave the
+                // branch on the new name while the folder/marker still hold the
+                // old one (two-sources-of-truth drift with no recovery).
+                if let currentBranch, let newBranchName, newBranchName != currentBranch {
+                    _ = try? await runGit(args: ["branch", "-m", currentBranch], cwd: oldPath)
+                }
                 throw WorktreeError.gitFailed(operation: "worktree move", stderr: moveResult.stderrString)
             }
         }
@@ -869,7 +879,7 @@ public actor WorktreeManager {
         }
 
         worktreeLogger.info(
-            "Renamed worktree \(oldPath, privacy: .public) → \(newPath, privacy: .public) branch=\(newBranchName, privacy: .public)"
+            "Renamed worktree \(oldPath, privacy: .public) → \(newPath, privacy: .public) branch=\(newBranchName ?? "(unchanged)", privacy: .public)"
         )
         return RenamedWorktree(
             oldPath: oldPath,

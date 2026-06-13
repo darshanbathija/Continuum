@@ -40,9 +40,9 @@ struct SidebarPane: View {
     @State private var renameJSONLTarget: RecentSession?
     @State private var renameJSONLInput: String = ""
     @State private var showingRenameJSONLAlert: Bool = false
+    /// Item-driven: a non-nil target presents the rename sheet (see
+    /// `RenameWorktreeSheet`); committing or cancelling clears it.
     @State private var renameWorktreeTarget: WorktreeGroup?
-    @State private var renameWorktreeInput: String = ""
-    @State private var showingRenameWorktreeAlert: Bool = false
     /// Spawn mode (grid of agent terminals in ~) config sheet.
     @State private var showingSpawnSheet: Bool = false
     /// Close-spawn confirmation target (context menu path). Closing kills
@@ -193,26 +193,14 @@ struct SidebarPane: View {
         } message: { target in
             Text("Currently: \(recentTitle(target))")
         }
-        .alert(
-            "Rename workspace",
-            isPresented: $showingRenameWorktreeAlert,
-            presenting: renameWorktreeTarget
-        ) { target in
-            TextField("Name", text: $renameWorktreeInput)
-                .textFieldStyle(.roundedBorder)
-            Button("Save", action: ContinuumAnalytics.wrapButton("save", {
-                commitWorktreeRename(target, name: renameWorktreeInput)
-            }))
-            Button("Cancel", role: .cancel, action: ContinuumAnalytics.wrapButton(
-                    "cancel",
-                    {
-
-                resetWorktreeRenameState()
-            
-                    }
-                ))
-        } message: { target in
-            Text("Renames the workspace folder and git branch. Currently: \(target.branch)")
+        // Worktree rename is a sheet, not a SwiftUI `.alert`: stacking several
+        // `.alert`s on one pane made the macOS alert drop its inline TextField,
+        // so the user saw a non-editable popup. The sheet renders a real,
+        // auto-focused field plus the "Also rename branch" decoupling.
+        .sheet(item: $renameWorktreeTarget) { target in
+            RenameWorktreeSheet(currentName: target.branch) { newName, alsoRenameBranch in
+                commitWorktreeRename(target, name: newName, renameBranch: alsoRenameBranch)
+            }
         }
         .alert(
             "Color tag",
@@ -1259,9 +1247,7 @@ struct SidebarPane: View {
                 {
 
             renameWorktreeTarget = wt
-            renameWorktreeInput = wt.branch
-            showingRenameWorktreeAlert = true
-        
+
                 }
             ))
         .accessibilityIdentifier("code.worktree.rename")
@@ -2661,17 +2647,16 @@ struct SidebarPane: View {
         renameInput = ""
     }
 
-    private func commitWorktreeRename(_ worktree: WorktreeGroup, name: String) {
+    private func commitWorktreeRename(_ worktree: WorktreeGroup, name: String, renameBranch: Bool) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            resetWorktreeRenameState()
-            return
-        }
+        renameWorktreeTarget = nil
+        guard !trimmed.isEmpty else { return }
         Task { @MainActor in
             let ok = await model.renameWorkspace(
                 repoKey: worktree.repoKey,
                 workspacePath: worktree.path,
-                newName: trimmed
+                newName: trimmed,
+                renameBranch: renameBranch
             )
             if !ok {
                 NotificationCenter.default.post(
@@ -2680,14 +2665,7 @@ struct SidebarPane: View {
                     userInfo: ["toast": TransientToast(title: "Couldn't rename workspace")]
                 )
             }
-            resetWorktreeRenameState()
         }
-    }
-
-    private func resetWorktreeRenameState() {
-        showingRenameWorktreeAlert = false
-        renameWorktreeTarget = nil
-        renameWorktreeInput = ""
     }
 
     private func latestAssistantSummary(for session: AgentSession) -> String? {
