@@ -141,7 +141,9 @@ final class SpawnPlanTests: XCTestCase {
     // MARK: - Config invariants
 
     func testSessionCountOptions() {
-        XCTAssertEqual(SpawnPlan.sessionCountOptions, [4, 6, 8])
+        XCTAssertEqual(SpawnPlan.sessionCountOptions, [1, 2, 4, 6, 8])
+        // First entry is the default selection — now 1.
+        XCTAssertEqual(SpawnPlan.sessionCountOptions.first, 1)
     }
 
     func testSelectableAgentsExcludeUnknown() {
