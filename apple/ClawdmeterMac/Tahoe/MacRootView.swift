@@ -1417,7 +1417,9 @@ struct MacTitlebar: View {
                 text: "Pair with iPhone"
             )
         }
-        .buttonStyle(.plain)
+        // Capsule chip with an opaque `surface-2` fill — overlay the highlight so
+        // it isn't hidden behind the fill, and round it to a capsule.
+        .buttonStyle(HoverableButtonStyle(cornerRadius: 100, overlay: true))
         .help("Pair an iPhone")
         // PR #34 (audit retro): the original TODO from PR #26b. The
         // titlebar chip now opens the same `PairingQRPopoverContent`
@@ -1546,7 +1548,7 @@ struct MacTitlebar: View {
                 .frame(width: 24, height: 24)
                 .background(t.hair2.opacity(0.65), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
-        .buttonStyle(PressableButtonStyle())
+        .buttonStyle(HoverableButtonStyle(cornerRadius: 7))
         .fixedSize()
         .help(workbenchState.showingReviewPane ? "Collapse right pane" : "Expand right pane")
         .accessibilityLabel(workbenchState.showingReviewPane ? "Collapse right pane" : "Expand right pane")
