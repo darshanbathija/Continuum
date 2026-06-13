@@ -4,6 +4,31 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.39.0 build 243] - 2026-06-13 - Parakeet local voice + Spawn-mode and Code-tab improvements
+
+On-device Parakeet speech-to-text alongside WhisperKit, several Spawn-mode
+upgrades, editable workspace rename, and live harness reconfigure.
+
+### Added
+
+- **Parakeet local speech-to-text** with model tradeoff cards in Settings → Voice (quality vs speed). (#459)
+- **"Start New Session" button** on empty spawn-grid cells to refill closed tiles. (#449)
+- **Spawn "+" auto-debits the default agent** when the grid is full. (#455)
+- **Spawn 1 or 2 sessions** added to the session-count picker. (#458)
+- **Editable workspace rename** sheet with an "Also rename branch" toggle. (#453)
+- **Live harness reconfigure** of model/effort/permission mode mid-session. (#457)
+
+### Fixed
+
+- **In-chat provider login recovery** to re-authenticate without leaving the conversation. (#446)
+- **Spawn selection border** now follows the clicked tile across grid reflows. (#448)
+
+### Polish
+
+- **Hover + click feedback** on sidebar/titlebar buttons; pointing-hand cursor on composer pickers. (#451, #454)
+- **Taller Code worktree rows**; "Term" tab renamed to "Terminal" on Mac and iOS. (#452, #450)
+- **Chat model pill** matched to the Code composer pill. (#456)
+
 ## [0.36.0 build 236] - 2026-06-12 - Vendor secret sharing + Code tab document tabs
 
 Vendor secret sharing and guided CLI onboarding, document tabs and
