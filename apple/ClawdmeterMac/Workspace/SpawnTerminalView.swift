@@ -119,6 +119,15 @@ struct SpawnTerminalView: NSViewRepresentable {
                       let window = view.window,
                       event.window === window
                 else { return event }
+                // Gate on THIS terminal's own frame before trusting first
+                // responder. A terminal's bounds are geometry-true regardless
+                // of sibling z-order, so this rejects clicks on a tile header
+                // or another tile WITHOUT reintroducing the contentView.hitTest
+                // z-order/overlay bug. Without it, a header click (which makes
+                // no terminal first responder) lets the *previously* focused
+                // tile's deferred block still match and snap the border back.
+                let pointInView = view.convert(event.locationInWindow, from: nil)
+                guard view.bounds.contains(pointInView) else { return event }
                 // Deferred: first responder only updates once this click
                 // finishes dispatching, and this publishes selection outside
                 // event handling.
