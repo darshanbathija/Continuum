@@ -105,7 +105,7 @@ private struct PermissionModeMenuButton: NSViewRepresentable {
         // SwiftUI label draws the text + chevron underneath). Borderless +
         // empty content = invisible, but still hit-tests its entire bounds, so
         // clicking anywhere on the capsule opens the menu.
-        let button = NSButton()
+        let button = PointingHandButton()
         button.isBordered = false
         button.title = ""
         button.imagePosition = .noImage
@@ -182,5 +182,16 @@ private struct PermissionModeMenuButton: NSViewRepresentable {
         func menuDidClose(_ menu: NSMenu) {
             button?.setAccessibilityValue("Closed" as NSString)
         }
+    }
+}
+
+/// Borderless NSButton that shows the macOS link (pointing-hand) cursor over
+/// its whole bounds, so the composer's menu pills read as clickable. SwiftUI's
+/// `.pointerStyle(.link)` does not reliably reach an NSButton hosted via
+/// NSViewRepresentable, so we manage the cursor rect directly. Shared by the
+/// permission + effort pills (both overlay a full-bleed transparent NSButton).
+final class PointingHandButton: NSButton {
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
     }
 }
