@@ -439,6 +439,59 @@ final class SidebarProjectionCacheTests: XCTestCase {
         XCTAssertEqual(projection.visibleSessions.map(\.id), [newestB.id, newA.id, oldA.id, oldC.id])
     }
 
+    /// Projects sort oldest-first by first use, and creating a session must
+    /// NOT reorder the list (the bug: a brand-new repo jumped above an older
+    /// one the moment a session landed in it). `makeSession` sets
+    /// `createdAt = lastEventAt - 60`, so `lastEventAt` drives first-use here.
+    func test_workspaceSectionsOrderByFirstUseAndDoNotReorderOnNewActivity() {
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+        let oldRepo = "/Users/dev/clawdmeter"      // long-standing project
+        let newRepo = "/Users/dev/mac-tv-remote"   // just created, freshest activity
+
+        let oldSession = Self.makeSession(
+            index: 1,
+            repoKey: oldRepo,
+            workspacePath: "\(oldRepo)/.claude/worktrees/a",
+            lastEventAt: now.addingTimeInterval(-10_000)   // first used long ago
+        )
+        let newSession = Self.makeSession(
+            index: 2,
+            repoKey: newRepo,
+            workspacePath: "\(newRepo)/.claude/worktrees/b",
+            lastEventAt: now                                // newest activity of all
+        )
+
+        let initial = Self.buildProjection(
+            sessions: [newSession, oldSession],
+            repos: [Self.repo(key: newRepo), Self.repo(key: oldRepo)],
+            now: now
+        )
+        XCTAssertEqual(
+            initial.workspaceSections.map { ($0.workspacePath as NSString).lastPathComponent },
+            ["clawdmeter", "mac-tv-remote"],
+            "Oldest-first by first use: the brand-new repo stays at the bottom even though it has the freshest activity."
+        )
+
+        // Create another (even newer) session in the new repo — the screenshot
+        // scenario. Order must stay put: firstActivity is immutable per repo.
+        let newerSession = Self.makeSession(
+            index: 3,
+            repoKey: newRepo,
+            workspacePath: "\(newRepo)/.claude/worktrees/c",
+            lastEventAt: now.addingTimeInterval(60)
+        )
+        let afterNewActivity = Self.buildProjection(
+            sessions: [newSession, oldSession, newerSession],
+            repos: [Self.repo(key: newRepo), Self.repo(key: oldRepo)],
+            now: now
+        )
+        XCTAssertEqual(
+            afterNewActivity.workspaceSections.map { ($0.workspacePath as NSString).lastPathComponent },
+            ["clawdmeter", "mac-tv-remote"],
+            "Creating a session must not float its repo to the top."
+        )
+    }
+
     func test_priorityProjectionHidesArchivedInNormalStatusAndShowsOnlyArchiveFilter() {
         let now = Date(timeIntervalSince1970: 1_900_000_000)
         let repoKey = "/Users/dev/clawdmeter"

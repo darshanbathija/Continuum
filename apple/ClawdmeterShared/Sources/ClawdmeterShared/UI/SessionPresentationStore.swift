@@ -125,6 +125,11 @@ public struct NotificationPresentationPreferences: Codable, Hashable, Sendable {
 
 public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
     public var pinnedSessionIds: [UUID]
+    /// User-defined order of Code-sidebar project (repo) sections, by repo
+    /// key. Empty until the user first drags a project; the sidebar then
+    /// falls back to its oldest-first default. Repos not in the list render
+    /// after the listed ones (so a newly-added repo lands at the bottom).
+    public var repoOrder: [String]
     public var unreadSessionIds: Set<UUID>
     public var titleOverrides: [UUID: String]
     public var snoozedUntil: [UUID: Date]
@@ -152,6 +157,7 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
 
     public init(
         pinnedSessionIds: [UUID] = [],
+        repoOrder: [String] = [],
         unreadSessionIds: Set<UUID> = [],
         titleOverrides: [UUID: String] = [:],
         snoozedUntil: [UUID: Date] = [:],
@@ -178,6 +184,7 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         updatedAt: Date = Date()
     ) {
         self.pinnedSessionIds = pinnedSessionIds
+        self.repoOrder = repoOrder
         self.unreadSessionIds = unreadSessionIds
         self.titleOverrides = titleOverrides
         self.snoozedUntil = snoozedUntil
@@ -207,6 +214,7 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.pinnedSessionIds = try c.decodeIfPresent([UUID].self, forKey: .pinnedSessionIds) ?? []
+        self.repoOrder = try c.decodeIfPresent([String].self, forKey: .repoOrder) ?? []
         self.unreadSessionIds = try c.decodeIfPresent(Set<UUID>.self, forKey: .unreadSessionIds) ?? []
         self.titleOverrides = try c.decodeIfPresent([UUID: String].self, forKey: .titleOverrides) ?? [:]
         self.snoozedUntil = try c.decodeIfPresent([UUID: Date].self, forKey: .snoozedUntil) ?? [:]
@@ -236,6 +244,7 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case pinnedSessionIds
+        case repoOrder
         case unreadSessionIds
         case titleOverrides
         case snoozedUntil
@@ -307,6 +316,15 @@ public final class SessionPresentationStore: ObservableObject, @unchecked Sendab
             guard target != index else { return }
             snapshot.pinnedSessionIds.remove(at: index)
             snapshot.pinnedSessionIds.insert(id, at: target)
+        }
+    }
+
+    /// Persist the user's manual Code-sidebar project order. Callers pass the
+    /// full current visible order with their move applied, so undragged repos
+    /// keep their slots and a later-added repo still falls to the bottom.
+    public func setRepoOrder(_ keys: [String]) throws {
+        try update { snapshot in
+            snapshot.repoOrder = keys
         }
     }
 
