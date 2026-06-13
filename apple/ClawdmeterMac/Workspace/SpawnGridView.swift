@@ -19,6 +19,10 @@ struct SpawnGridView: View {
     /// inside the terminal itself).
     @State private var focusTokens: [UUID: Int] = [:]
     @State private var showingCloseConfirm = false
+    /// True while a "Start New Session" tile is spawning — disables the
+    /// placeholder controls and shows a spinner so a double-click can't
+    /// over-fill past the empty cell.
+    @State private var isAddingTile = false
 
     private var selectedTileId: UUID? { store.selectedTileByGroup[group.id] }
     private var expandedTileId: UUID? {
@@ -144,7 +148,10 @@ struct SpawnGridView: View {
     /// so structural identity here is load-bearing, not stylistic.
     private var tilesSurface: some View {
         SpawnTilesLayout(
-            columns: SpawnPlan.gridColumns(forTileCount: group.tiles.count),
+            // Shape the grid to the spawn's original capacity, not the live
+            // tile count, so a closed tile leaves a stable empty cell instead
+            // of reflowing the remaining tiles.
+            columns: SpawnPlan.gridColumns(forTileCount: group.capacity),
             expandedIndex: expandedTileId.flatMap { id in
                 group.tiles.firstIndex(where: { $0.id == id })
             }
@@ -156,12 +163,138 @@ struct SpawnGridView: View {
                     // click can never reach an invisible terminal.
                     .allowsHitTesting(expandedTileId == nil || expandedTileId == tile.id)
             }
+            // A closed tile leaves an empty trailing cell; each one hosts a
+            // "Start New Session" button so the spawn refills to its size.
+            ForEach(Array(0..<emptyCellCount), id: \.self) { _ in
+                placeholderCell
+                    .allowsHitTesting(expandedTileId == nil)
+            }
         }
         // Explicit flexible frame: sizeThatFits echoes the proposal, so
         // an unspecified proposal must not collapse the grid to zero.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(8)
         .clipped()  // parked (offscreen) tiles must not paint outside
+    }
+
+    /// Empty grid cells = capacity minus live tiles. Each becomes a "Start
+    /// New Session" placeholder.
+    private var emptyCellCount: Int {
+        max(0, group.capacity - group.tiles.count)
+    }
+
+    /// Distinct agents in the group, in first-seen order — the menu of kinds
+    /// "Start New Session" can refill with.
+    private var distinctGroupAgents: [AgentKind] {
+        var seen = Set<AgentKind>()
+        var ordered: [AgentKind] = []
+        for tile in group.tiles where !seen.contains(tile.agent) {
+            seen.insert(tile.agent)
+            ordered.append(tile.agent)
+        }
+        return ordered
+    }
+
+    // MARK: - Empty-cell placeholder
+
+    private var placeholderCell: some View {
+        startNewSessionControl
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                t.surface1.opacity(0.5),
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            )
+            .overlay(
+                // Dashed hairline reads as an addable empty slot, distinct
+                // from the solid border on live terminal tiles.
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(
+                        t.hairline,
+                        style: StrokeStyle(lineWidth: 0.5, dash: [5, 4])
+                    )
+            )
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("code.spawn.tile.new")
+    }
+
+    /// One agent in the group → a plain "Start New Session" button that spawns
+    /// it. A mixed group → a menu so the user picks which kind to refill with.
+    @ViewBuilder
+    private var startNewSessionControl: some View {
+        let agents = distinctGroupAgents
+        if agents.count <= 1 {
+            let agent = agents.first ?? group.tiles.first?.agent ?? .claude
+            Button {
+                requestAddTile(agent)
+            } label: {
+                startNewSessionLabel(subtitle: nil)
+            }
+            .buttonStyle(PressableButtonStyle())
+            .disabled(isAddingTile)
+            .help("Open a new \(AgentKindUI.displayName(for: agent)) session in this spawn")
+            .accessibilityLabel("Start a new session")
+            .accessibilityIdentifier("code.spawn.tile.new.button")
+        } else {
+            Menu {
+                ForEach(agents, id: \.self) { agent in
+                    Button("New \(AgentKindUI.displayName(for: agent))") {
+                        requestAddTile(agent)
+                    }
+                }
+            } label: {
+                startNewSessionLabel(subtitle: "Pick an agent")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .disabled(isAddingTile)
+            .help("Start a new session in this spawn")
+            .accessibilityIdentifier("code.spawn.tile.new.menu")
+        }
+    }
+
+    private func startNewSessionLabel(subtitle: String?) -> some View {
+        VStack(spacing: 7) {
+            if isAddingTile {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: "plus")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+            }
+            Text("Start New Session")
+                .font(TahoeFont.body(12, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            if let subtitle {
+                Text(subtitle)
+                    .font(TahoeFont.mono(9.5))
+                    .foregroundStyle(t.fg4)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+    }
+
+    /// Spawn a tile into the open empty cell, surfacing a transient toast if
+    /// the agent CLI fails to start (mirrors the config-sheet partial-failure
+    /// path). Guarded by `isAddingTile` against double taps.
+    private func requestAddTile(_ agent: AgentKind) {
+        guard !isAddingTile else { return }
+        isAddingTile = true
+        let groupId = group.id
+        Task { @MainActor in
+            let ok = await store.addTile(groupId: groupId, agent: agent)
+            isAddingTile = false
+            guard !ok else { return }
+            NotificationCenter.default.post(
+                name: .clawdmeterShowTransientToast,
+                object: nil,
+                userInfo: ["toast": TransientToast(
+                    title: "Couldn't start a new \(AgentKindUI.displayName(for: agent)) session",
+                    severity: .failure
+                )]
+            )
+        }
     }
 
     @ViewBuilder
