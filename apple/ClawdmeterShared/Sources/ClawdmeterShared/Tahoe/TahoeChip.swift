@@ -123,6 +123,11 @@ public struct TahoeDashTab: View {
                 }
         }
         .buttonStyle(.plain)
+        // It's a clickable nav tab — show the link (pointing-hand) cursor
+        // on hover so it reads as interactive, not as static label text.
+        #if os(macOS)
+        .pointerStyle(.link)
+        #endif
         .help(tooltip)
         .accessibilityIdentifier("dash.tab.\(label.lowercased())")
         #if !os(watchOS)
@@ -131,8 +136,9 @@ public struct TahoeDashTab: View {
     }
 
     private var tooltip: String {
-        if let shortcut, let help { return "\(help) \(shortcut)" }
-        return help ?? shortcut ?? label
+        let base = help ?? label
+        if let shortcut { return "\(base) \(shortcut)" }
+        return base
     }
 }
 
