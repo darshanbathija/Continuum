@@ -1,16 +1,10 @@
 import Foundation
 
 /// Cross-platform attributes / content state for the Gemini quota Live
-/// Activity (plan D5 cherry-pick). Distinct from `SessionLiveActivityAttributes`
-/// — that one tracks an *aggregate* "N active sessions" pill; this one
-/// surfaces Gemini's 5h-window quota burn on the Lock Screen + Dynamic
-/// Island so the user notices saturation without unlocking.
-///
-/// Why a separate activity type instead of multiplexing into the existing
-/// one: the existing aggregate activity changes shape (active count, agent
-/// emoji, attention state) — quota is a steady-state percent + reset time
-/// that wants its own widget. ActivityKit can run both simultaneously when
-/// the user has both surfaces installed.
+/// Activity (plan D5 cherry-pick). Surfaces Gemini's 5h-window quota burn
+/// on the Lock Screen + Dynamic Island so the user notices saturation
+/// without unlocking. Quota is a steady-state percent + reset time, so it
+/// gets its own dedicated widget.
 ///
 /// ActivityKit is iOS-only (16.1+). Mac / watchOS targets compile the
 /// content-state struct only — the `ActivityAttributes` conformance lives

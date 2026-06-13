@@ -10,17 +10,15 @@ private let geminiLiveActivityLogger = Logger(subsystem: "com.clawdmeter.ios", c
 /// Plan D5: dedicated Live Activity for Gemini quota. Lock Screen pill +
 /// Dynamic Island compact/expanded + always-on dimmed glyph.
 ///
-/// Lives separately from `LiveActivityCoordinator` (which owns the
-/// aggregate "N active sessions" activity) — Gemini quota is a steady-
-/// state percent that's worth seeing without unlocking, especially as the
-/// 5h window narrows toward exhaustion. ActivityKit lets us run both
-/// simultaneously when the user has them both enabled.
+/// Gemini quota is a steady-state percent that's worth seeing without
+/// unlocking, especially as the 5h window narrows toward exhaustion.
 ///
-/// Updates are driven by `UsageModel`'s daemon-refresh path. Background
-/// push (APNS) follows the same pattern `LiveActivityCoordinator` uses —
-/// the Mac daemon's `MacAPNSPusher` accepts the registered push token via
-/// the existing `/live-activities/push-token` endpoint and ships payloads
-/// from the cloudcode-pa poller.
+/// Updates are driven foreground-in-process by `UsageModel`'s
+/// daemon-refresh path (`refresh(usage:)`); there is no background-push
+/// path. The `pushType: .token` request below still asks ActivityKit for
+/// a push token, but the token-registration plumbing is dormant (no
+/// `client` is ever wired) — kept as forward-compat scaffolding for if a
+/// dedicated Gemini-quota APNS push ever lands.
 @MainActor
 public final class GeminiQuotaLiveActivityCoordinator: ObservableObject {
     public static let shared = GeminiQuotaLiveActivityCoordinator()

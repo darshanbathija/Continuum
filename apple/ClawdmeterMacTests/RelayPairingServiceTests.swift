@@ -156,7 +156,6 @@ final class CredentialLoggingRedactionTests: XCTestCase {
             "ClawdmeterShared/Sources/ClawdmeterShared/Sources/AnthropicSource.swift",
             "ClawdmeterShared/Sources/ClawdmeterShared/Sources/WatchTokenBridge.swift",
             "ClawdmeterMac/AppRuntime.swift",
-            "ClawdmeterMac/AgentControl/MacAPNSPusher.swift",
             "ClawdmeterMac/AgentControl/APNSGatewayClient.swift",
             "ClawdmeterMac/AgentControl/APNSPushDeviceTokenStore.swift"
         ]
