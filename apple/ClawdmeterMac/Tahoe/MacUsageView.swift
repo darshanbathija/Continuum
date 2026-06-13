@@ -72,11 +72,11 @@ public struct MacUsageView: View {
 
                 if usageAccessGranted {
                     if ProviderRegistry.isVisible(id: "opencode", capability: .historicalUsage) {
-                        // PR #31 chunk 3 (A2): OpenCode dollar-cost row.
-                        // Renders as a single full-width strip beneath the live
-                        // provider columns because OpenCode doesn't have a 5h
-                        // rolling quota — only dollar totals.
-                        OpencodeDollarRow(usageHistory: usageHistoryStore)
+                        // OpenCode is a full-width strip, not a quota column
+                        // (DESIGN.md). Two zones: $ spend (always) + quota rails
+                        // when the account is OpenCode Go, else a pay-as-you-go
+                        // caption — never an empty 0% gauge.
+                        OpencodeUsageStrip(row: data.opencode, usageHistory: usageHistoryStore)
                             .padding(.horizontal, 6).padding(.bottom, 18)
                     }
                     if ProviderRegistry.isVisible(id: "grok", capability: .historicalUsage) {
@@ -229,7 +229,9 @@ public struct MacUsageView: View {
             LiveColumn(provider: .gemini, row: data.gemini, model: geminiModel),
             LiveColumn(provider: .cursor, row: data.cursor, model: cursorModel),
             LiveColumn(provider: .grok, row: data.grok, model: grokModel),
-            LiveColumn(provider: .opencode, row: data.opencode, model: opencodeModel),
+            // OpenCode is intentionally NOT a quota column: pay-as-you-go has
+            // no rolling % window, so a column renders an empty 0% gauge.
+            // DESIGN.md routes it to the full-width OpencodeUsageStrip below.
         ].filter { enabledProviderIDs.contains(ProviderRegistry.rootProviderID(for: $0.provider.rawValue)) }
     }
 
@@ -1171,32 +1173,73 @@ private struct RepoList: View {
     }
 }
 
-// MARK: - OpencodeDollarRow (PR #31 chunk 3, A2)
+// MARK: - OpencodeUsageStrip (Option 3 — two-zone spend + quota)
 
-/// OpenCode usage row — dollar-cost gauge variant per A2.
-/// Renders as a single full-width strip beneath the live provider columns.
-/// Shows `$X today` + `$Y this week` (no rolling 5h quota — OpenCode
-/// is pay-as-you-go through whichever underlying provider the user
-/// signed in with).
-private struct OpencodeDollarRow: View {
+/// OpenCode usage strip. OpenCode is a full-width strip (not a quota
+/// column) because pay-as-you-go has no rolling % window — a column would
+/// render an empty 0% gauge (DESIGN.md, Mac Usage Dashboard). The strip is
+/// split into two hairline-divided zones that adapt to the billing mode:
+///
+///   • Spend (always): `$ today` / `$ this week` + a 7-day spend spark.
+///   • Quota (OpenCode Go only): 5h / weekly / monthly rails when the
+///     subscription actually returned them; otherwise a single
+///     "Pay-as-you-go · no quota" caption. Never a fabricated 0% meter.
+///
+/// The menu-bar checkbox is carried here so removing the OpenCode column
+/// doesn't drop the only in-dashboard control for its menu-bar gauge.
+private struct OpencodeUsageStrip: View {
     @Environment(\.tahoe) private var t
-    // C2 — was `@ObservedObject var usageHistory: UsageHistoryStore`
-    // pre-C2. Now `@Observable`, so a plain stored reference is
-    // sufficient — SwiftUI's `withObservationTracking` registers
-    // dependencies on whichever fields the body actually reads
-    // (`opencodeTodayCostUSD` / `opencodeWeekCostUSD`).
+    /// Live row for OpenCode — carries the OpenCode Go quota windows
+    /// (`opencodeGoQuota`, `sessionPercent`, weekly) when the account is a
+    /// subscription. Nil quota ⇒ pay-as-you-go.
+    let row: TahoeLiveRow
+    // @Observable store — body reads opencodeTodayCostUSD / WeekCostUSD /
+    // the daily series, and SwiftUI tracks exactly those.
     let usageHistory: UsageHistoryStore
+    @State private var menuBar: Bool = false
 
-    init(usageHistory: UsageHistoryStore?) {
-        // Bind to whichever store the parent injected; for Previews
-        // a fresh store is fine — opencodeLive* default to empty
-        // arrays so the row shows "$0.00".
+    /// Mirrors `ProviderStatusController.prefKey("opencode")` /
+    /// AppDelegate's observer; default OFF (opencode menu-bar is opt-in).
+    private var menuBarPrefKey: String { "clawdmeter.opencode.menuBarShown" }
+
+    /// OpenCode Go (subscription) is active when the source returned a quota
+    /// block. PAYG accounts have nil here and get the spend-only caption.
+    private var hasGoQuota: Bool { row.opencodeGoQuota != nil }
+
+    init(row: TahoeLiveRow, usageHistory: UsageHistoryStore?) {
+        self.row = row
         self.usageHistory = usageHistory ?? UsageHistoryStore()
     }
 
     var body: some View {
         TahoeGlass(radius: 8, tone: .panel) {
-            HStack(spacing: 18) {
+            HStack(alignment: .top, spacing: 0) {
+                spendZone
+                Rectangle()
+                    .fill(t.hairline)
+                    .frame(width: 0.5)
+                    .padding(.vertical, 2)
+                quotaZone
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 22)
+            }
+            .padding(.horizontal, 18).padding(.vertical, 16)
+        }
+        .onAppear {
+            menuBar = UserDefaults.standard.object(forKey: menuBarPrefKey) as? Bool ?? false
+        }
+        .onChange(of: menuBar) { _, v in
+            // AppDelegate's UserDefaults observer picks this up and shows /
+            // hides the OpenCode NSStatusItem. No notification needed.
+            UserDefaults.standard.set(v, forKey: menuBarPrefKey)
+        }
+    }
+
+    // MARK: Zone A — spend (always present)
+
+    private var spendZone: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
                 TahoeProviderGlyph(provider: .opencode, size: 36)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("OpenCode")
@@ -1206,11 +1249,38 @@ private struct OpencodeDollarRow: View {
                         .font(TahoeFont.body(11.5))
                         .foregroundStyle(t.fg3)
                 }
-                Spacer()
+                Spacer(minLength: 14)
+                MenuBarCheckbox(on: $menuBar)
+            }
+            HStack(alignment: .bottom, spacing: 22) {
+                spark
                 metric(label: "Today", value: format(usageHistory.opencodeTodayCostUSD))
                 metric(label: "This week", value: format(usageHistory.opencodeWeekCostUSD))
             }
-            .padding(.horizontal, 18).padding(.vertical, 16)
+        }
+        .padding(.trailing, 22)
+        .frame(minWidth: 360, alignment: .leading)
+    }
+
+    /// 7-day spend sparkline. Hidden when there's no recorded spend (a
+    /// fresh PAYG account is all-zero — bars would read as fake data).
+    @ViewBuilder
+    private var spark: some View {
+        let series = usageHistory.opencodeDailySpendUSD(days: 7)
+        let values = series.map { NSDecimalNumber(decimal: $0).doubleValue }
+        let peak = max(values.max() ?? 0, 0)
+        if peak > 0 {
+            HStack(alignment: .bottom, spacing: 3) {
+                ForEach(Array(values.enumerated()), id: \.offset) { _, v in
+                    RoundedRectangle(cornerRadius: 1, style: .continuous)
+                        .fill(LinearGradient(colors: TahoeProvider.opencode.meterFill,
+                                             startPoint: .top, endPoint: .bottom))
+                        .frame(width: 6, height: max(2, CGFloat(v / peak) * 34))
+                        .opacity(v > 0 ? 0.95 : 0.22)
+                }
+            }
+            .frame(height: 34, alignment: .bottom)
+            .accessibilityHidden(true)
         }
     }
 
@@ -1227,12 +1297,63 @@ private struct OpencodeDollarRow: View {
                 .tracking(-0.4)
                 .foregroundStyle(t.fg)
         }
-        .padding(.leading, 18)
     }
 
-    /// Currency formatter for the dollar gauge. Mac users see USD by
-    /// default — locale formatting matches what AnalyticsTotalsGrid
-    /// uses elsewhere in the app.
+    // MARK: Zone B — quota (OpenCode Go) or pay-as-you-go caption
+
+    @ViewBuilder
+    private var quotaZone: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if hasGoQuota {
+                Text("OPENCODE GO QUOTA")
+                    .font(TahoeFont.mono(10, weight: .medium))
+                    .tracking(0.9)
+                    .foregroundStyle(t.fg3)
+                VStack(alignment: .leading, spacing: 10) {
+                    quotaRail(label: "5 hour", percent: row.sessionPercent, detail: row.sessionResetIn)
+                    if row.hasWeekly, row.opencodeGoQuota?.weeklyAvailable == true {
+                        quotaRail(label: "Weekly", percent: row.weeklyPercent, detail: row.weeklyResetIn)
+                    }
+                    if let quota = row.opencodeGoQuota, let monthly = quota.monthlyPct {
+                        quotaRail(label: "Monthly", percent: Double(monthly),
+                                  detail: TahoeFmt.resetIn(minutes: quota.monthlyResetMins))
+                    }
+                }
+                .frame(maxWidth: 360, alignment: .leading)
+            } else {
+                Text("PAY-AS-YOU-GO · NO QUOTA")
+                    .font(TahoeFont.mono(10, weight: .medium))
+                    .tracking(0.9)
+                    .foregroundStyle(t.fg4)
+                Text("Billed per token through your authenticated provider. No rolling rate-limit window.")
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 300, alignment: .leading)
+            }
+        }
+    }
+
+    /// One quota rail — label + `N% · resets-in` + provider pill bar. Shared
+    /// shape with the column meters so the OpenCode Go reading reads the same
+    /// as Claude/Codex quota.
+    private func quotaRail(label: String, percent: Double, detail: String) -> some View {
+        let value = min(100, max(0, Int(percent.rounded())))
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(label)
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                Spacer()
+                Text("\(value)% · \(detail.isEmpty ? "\u{2014}" : detail)")
+                    .font(TahoeFont.mono(10.5))
+                    .foregroundStyle(t.fg3)
+            }
+            TahoePillBar(percent: Double(value), provider: .opencode, height: 5)
+        }
+    }
+
+    /// Currency formatter for the dollar metrics. Matches AnalyticsTotalsGrid.
     private func format(_ value: Decimal) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency

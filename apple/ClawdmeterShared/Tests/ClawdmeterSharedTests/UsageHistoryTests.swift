@@ -806,6 +806,38 @@ final class UsageHistoryTests: XCTestCase {
         XCTAssertTrue(resolved.isPriced)
     }
 
+    /// The Usage strip's 7-day spend spark buckets OpenCode records by local
+    /// calendar day, oldest→newest, with empty days at 0 and out-of-window
+    /// records excluded.
+    @MainActor
+    func test_opencodeDailySpendUSD_bucketsByLocalDay() {
+        let store = UsageHistoryStore()
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        func record(daysAgo: Int, cost: String) -> UsageRecord {
+            // noon of the target local day — away from midnight edges.
+            let ts = cal.date(byAdding: .day, value: -daysAgo, to: today)!.addingTimeInterval(12 * 3600)
+            return UsageRecord(
+                provider: .opencode, timestamp: ts, model: "byok",
+                tokens: TokenTotals(inputTokens: 10, outputTokens: 1, costUSD: Decimal(string: cost)!),
+                repo: "/r", dedupKey: nil
+            )
+        }
+        store.appendOpencodeRecord(record(daysAgo: 0, cost: "1.00"))
+        store.appendOpencodeRecord(record(daysAgo: 0, cost: "0.50")) // same day → sums
+        store.appendOpencodeRecord(record(daysAgo: 2, cost: "2.00"))
+        store.appendOpencodeRecord(record(daysAgo: 8, cost: "9.00")) // outside 7-day window → excluded
+
+        let series = store.opencodeDailySpendUSD(days: 7)
+
+        XCTAssertEqual(series.count, 7, "series length equals the requested day count")
+        XCTAssertEqual(series[6], Decimal(string: "1.50"), "today (last bucket) sums same-day records")
+        XCTAssertEqual(series[4], Decimal(string: "2.00"), "2-days-ago lands two buckets before today")
+        XCTAssertEqual(series[5], 0, "a day with no records is zero, not copied")
+        XCTAssertEqual(series.reduce(Decimal(0), +), Decimal(string: "3.50"),
+                       "the 8-days-ago record is excluded from the 7-day window")
+    }
+
     // MARK: - Helpers
 
     private func writeTempFile(name: String, lines: [String]) throws -> URL {
