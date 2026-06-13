@@ -1498,11 +1498,17 @@ struct MacTitlebar: View {
 
     private var tabStrip: some View {
         HStack(spacing: 10) {
-            TahoeDashTab("Chat",     active: active == .chat)     { onTab(.chat) }
-            TahoeDashTab("Usage",    active: active == .usage)    { onTab(.usage) }
-            TahoeDashTab("Code",     active: active == .code)     { onTab(.code) }
-            TahoeDashTab("Settings", active: active == .settings) { onTab(.settings) }
+            TahoeDashTab("Chat",     active: active == .chat,     shortcut: Self.tabChord("nav.chat"))     { onTab(.chat) }
+            TahoeDashTab("Usage",    active: active == .usage,    shortcut: Self.tabChord("nav.usage"))    { onTab(.usage) }
+            TahoeDashTab("Code",     active: active == .code,     shortcut: Self.tabChord("nav.code"))     { onTab(.code) }
+            TahoeDashTab("Settings", active: active == .settings, shortcut: Self.tabChord("nav.settings")) { onTab(.settings) }
         }
+    }
+
+    /// Default keyboard chord (e.g. "⌘4") for a nav shortcut id, pulled from
+    /// the shortcut registry so the tooltip can't drift from the real binding.
+    private static func tabChord(_ id: String) -> String? {
+        ClawdmeterShortcutRegistry.defaults.first { $0.id == id }?.displayChord
     }
 
     private var codeActions: some View {
