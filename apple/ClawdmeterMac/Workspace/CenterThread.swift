@@ -622,7 +622,7 @@ struct CenterThread: View {
             onSend: { Task { await performBoundSend() } },
             onQueue: { queueCurrentDraft() },
             onInterrupt: { Task { await performInterrupt() } },
-            onToggleAutopilot: { showingAutopilotConfirm = true },
+            onToggleAutopilot: { Task { await changePermissionMode(to: .bypass) } },
             onChangePermissionMode: { newMode in
                 Task { await changePermissionMode(to: newMode) }
             },
@@ -1222,11 +1222,16 @@ struct CenterThread: View {
     /// the daemon-side bypass flag.
     @MainActor
     private func changePermissionMode(to newMode: PermissionMode) async {
-        // `.bypass` is the trust-gated path; defer to the existing
-        // autopilot confirm sheet so the user explicitly opts in.
+        // `.bypass` is the trust-gated path. Only the first-time trust grant
+        // (untrusted repo → "give agents free rein") warrants a confirm sheet.
+        // Once a repo is on the trust list, flipping into bypass is a one-click
+        // action — no redundant "already on your trust list" prompt.
         if newMode == .bypass {
-            // Only show the confirm if we're moving INTO bypass — flipping
-            // back out is always safe.
+            let repoTrusted = AutopilotState.shared.isRepoTrusted(session.repoKey ?? "")
+            if repoTrusted {
+                await model.setPermissionMode(sessionId: session.id, to: .bypass)
+                return
+            }
             pendingBypassMode = true
             showingAutopilotConfirm = true
             return
