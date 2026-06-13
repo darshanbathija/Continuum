@@ -371,6 +371,19 @@ struct SessionWorkspaceView: View {
             }
             if newValue != nil { spawnStore.selectedGroupId = nil }
         }
+        // Archiving the foreground session should drop the user back to the
+        // centered create-new composer, not leave the now-archived transcript
+        // on screen. Key on (id, isArchived): only deselect when the SAME open
+        // session flips live → archived. Opening an already-archived session
+        // from the Archived filter changes the id, so it stays viewable.
+        .onChange(of: OpenSessionArchiveKey(
+            id: model.openSessionId,
+            archived: model.openSession?.archivedAt != nil
+        )) { old, new in
+            if let id = new.id, id == old.id, !old.archived, new.archived {
+                model.closeChatView()
+            }
+        }
         // Spawn grids and the session/draft/terminal/document selections are
         // mutually exclusive center-pane occupants. Opening any model-owned
         // surface dismisses the spawn grid (the PTYs keep running; the group
@@ -823,6 +836,15 @@ struct SessionWorkspaceView: View {
     }
 
     private var terraCotta: Color { SessionsV2Theme.accent }
+}
+
+/// `.onChange` key that detects the open session flipping live → archived.
+/// Pairs the open id with its archived flag so the observer can tell a real
+/// archive-while-viewing transition (same id) apart from the user opening an
+/// already-archived session from the Archived filter (id changes).
+private struct OpenSessionArchiveKey: Equatable {
+    let id: UUID?
+    let archived: Bool
 }
 
 // MARK: - Sidebar (left pane)

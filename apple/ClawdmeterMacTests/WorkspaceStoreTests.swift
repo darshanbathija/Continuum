@@ -679,6 +679,86 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(store.all().count, 0)
     }
 
+    // MARK: - Managed-workspace reconcile (persist repos after archive)
+
+    /// The sidebar drops a repo when its last live session is archived unless a
+    /// `WorkspaceStore` record persists it. `SessionsModel.refresh()` reconciles
+    /// from `liveManagedRepoRoots`: only live first-party code sessions count,
+    /// so an all-archived repo won't be resurrected and `Archive entire repo`
+    /// keeps working.
+    func test_liveManagedRepoRoots_keepsLiveCodeReposAndDropsArchivedAndChat() {
+        let liveA1 = makeCodeSession(repoKey: "/repos/alpha")
+        let liveA2 = makeCodeSession(repoKey: "/repos/alpha")
+        let liveB = makeCodeSession(repoKey: "/repos/beta")
+        let archived = makeCodeSession(repoKey: "/repos/gamma", archivedAt: Date())
+        let chat = makeCodeSession(repoKey: nil)               // WorkspaceKey.of == nil
+
+        let roots = SessionsModel.liveManagedRepoRoots(
+            in: [liveA1, liveA2, liveB, archived, chat]
+        )
+
+        XCTAssertEqual(Set(roots.keys), ["/repos/alpha", "/repos/beta"])
+        XCTAssertEqual(roots["/repos/alpha"].map(Set.init), Set([liveA1.id, liveA2.id]))
+        XCTAssertEqual(roots["/repos/beta"], [liveB.id])
+        XCTAssertNil(roots["/repos/gamma"])   // all-archived repo is not revived
+    }
+
+    /// Archiving never deletes the workspace record, so once reconcile has
+    /// registered a repo it survives the repo going session-less — which is what
+    /// keeps the row in the sidebar after the last session is archived.
+    func test_syncActiveSessions_recordSurvivesWhenSessionsGoAway() {
+        let store = WorkspaceStore(storeURL: workspacesURL, sessionsURL: sessionsURL)
+        store.syncActiveSessions(repoRoot: "/repos/alpha", sessionIds: [UUID()])
+        XCTAssertNotNil(store.workspace(forRepoRoot: "/repos/alpha"))
+        // No further sync (sessions archived) — the record must remain.
+        XCTAssertNotNil(store.workspace(forRepoRoot: "/repos/alpha"))
+        XCTAssertEqual(store.all().count, 1)
+    }
+
+    /// Documents why `reconcileManagedWorkspaces` must gate on
+    /// `workspace(forRepoRoot:) == nil`: `syncActiveSessions` with a different
+    /// id set rewrites the record (the F1 write-amplification hazard). Once a
+    /// record exists, reconcile skips it via this gate, so it is created once
+    /// and never rewritten on the 60s refresh loop.
+    func test_reconcileGate_existingRecordIsDetectedSoReconcileSkips() {
+        let store = WorkspaceStore(storeURL: workspacesURL, sessionsURL: sessionsURL)
+        let live = UUID()
+        store.syncActiveSessions(repoRoot: "/repos/alpha", sessionIds: [live, UUID(), UUID()])
+        let created = store.workspace(forRepoRoot: "/repos/alpha")
+        XCTAssertNotNil(created, "gate precondition: record exists ⇒ reconcile skips")
+
+        // Proof of the hazard the gate avoids: re-syncing the live-only id set
+        // (what reconcile would compute) mutates the stored record, because the
+        // stored set still carries the now-archived ids.
+        let before = created?.updatedAt
+        store.syncActiveSessions(repoRoot: "/repos/alpha", sessionIds: [live])
+        XCTAssertEqual(store.workspace(forRepoRoot: "/repos/alpha")?.activeSessionIds, [live])
+        XCTAssertNotEqual(store.workspace(forRepoRoot: "/repos/alpha")?.updatedAt, before)
+    }
+
+    private func makeCodeSession(repoKey: String?, archivedAt: Date? = nil) -> AgentSession {
+        AgentSession(
+            id: UUID(),
+            repoKey: repoKey,
+            repoDisplayName: repoKey.map { ($0 as NSString).lastPathComponent } ?? "Chat",
+            agent: .codex,
+            model: "gpt-5-codex",
+            goal: nil,
+            worktreePath: repoKey,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            status: .running,
+            planText: nil,
+            createdAt: Date(),
+            lastEventAt: Date(),
+            lastEventSeq: 1,
+            mode: .worktree,
+            archivedAt: archivedAt,
+            runtimeCwd: repoKey,
+            kind: .code
+        )
+    }
+
     // MARK: - Deterministic UUID
 
     func test_deterministicUUID_isStable() {
