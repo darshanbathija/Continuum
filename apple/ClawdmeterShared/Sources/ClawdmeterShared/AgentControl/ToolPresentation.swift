@@ -5,6 +5,14 @@ public enum TranscriptDensity: String, Codable, CaseIterable, Sendable {
     case balanced
     case detailed
 
+    public var label: String {
+        switch self {
+        case .compact: return "Compact"
+        case .balanced: return "Balanced"
+        case .detailed: return "Detailed"
+        }
+    }
+
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = Self(rawValue: raw) ?? .balanced

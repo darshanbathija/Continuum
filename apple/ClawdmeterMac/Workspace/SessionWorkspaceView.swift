@@ -189,8 +189,6 @@ struct SessionWorkspaceView: View {
                                     catalog: launcher.modelCatalog,
                                     workbenchState: workbenchState,
                                     presentationStore: presentationStore,
-                                    density: workbenchState.density,
-                                    onDensityChange: { workbenchState.setDensity($0) },
                                     onModeSwitch: { newMode in
                                         Task { await switchMode(session: session, to: newMode) }
                                     },

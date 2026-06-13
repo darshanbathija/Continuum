@@ -146,6 +146,11 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
     public var repoIdentityBadges: [String: RepoIdentityBadge]
     public var syntaxTheme: CodeSyntaxTheme
     public var diffDisplayMode: DiffDisplayMode
+    /// How densely the Code-tab chat transcript renders tool runs and
+    /// previews. A global visual default (lives here next to syntax/diff
+    /// presentation), not per-session — the picker moved out of the chat
+    /// header into Settings → Visual.
+    public var transcriptDensity: TranscriptDensity
     public var collapsedDiffHunks: [UUID: Set<String>]
     public var fileReviewDispositions: [UUID: [String: FileReviewDisposition]]
     public var exportedSessionURLs: [String]
@@ -174,6 +179,7 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         repoIdentityBadges: [String: RepoIdentityBadge] = [:],
         syntaxTheme: CodeSyntaxTheme = .tahoe,
         diffDisplayMode: DiffDisplayMode = .unified,
+        transcriptDensity: TranscriptDensity = .balanced,
         collapsedDiffHunks: [UUID: Set<String>] = [:],
         fileReviewDispositions: [UUID: [String: FileReviewDisposition]] = [:],
         exportedSessionURLs: [String] = [],
@@ -201,6 +207,7 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         self.repoIdentityBadges = repoIdentityBadges
         self.syntaxTheme = syntaxTheme
         self.diffDisplayMode = diffDisplayMode
+        self.transcriptDensity = transcriptDensity
         self.collapsedDiffHunks = collapsedDiffHunks
         self.fileReviewDispositions = fileReviewDispositions
         self.exportedSessionURLs = exportedSessionURLs
@@ -231,6 +238,7 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         self.repoIdentityBadges = try c.decodeIfPresent([String: RepoIdentityBadge].self, forKey: .repoIdentityBadges) ?? [:]
         self.syntaxTheme = try c.decodeIfPresent(CodeSyntaxTheme.self, forKey: .syntaxTheme) ?? .tahoe
         self.diffDisplayMode = try c.decodeIfPresent(DiffDisplayMode.self, forKey: .diffDisplayMode) ?? .unified
+        self.transcriptDensity = try c.decodeIfPresent(TranscriptDensity.self, forKey: .transcriptDensity) ?? .balanced
         self.collapsedDiffHunks = try c.decodeIfPresent([UUID: Set<String>].self, forKey: .collapsedDiffHunks) ?? [:]
         self.fileReviewDispositions = try c.decodeIfPresent([UUID: [String: FileReviewDisposition]].self, forKey: .fileReviewDispositions) ?? [:]
         self.exportedSessionURLs = try c.decodeIfPresent([String].self, forKey: .exportedSessionURLs) ?? []
@@ -261,6 +269,7 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         case repoIdentityBadges
         case syntaxTheme
         case diffDisplayMode
+        case transcriptDensity
         case collapsedDiffHunks
         case fileReviewDispositions
         case exportedSessionURLs
@@ -500,6 +509,12 @@ public final class SessionPresentationStore: ObservableObject, @unchecked Sendab
     public func setDiffDisplayMode(_ mode: DiffDisplayMode) throws {
         try update { snapshot in
             snapshot.diffDisplayMode = mode
+        }
+    }
+
+    public func setTranscriptDensity(_ density: TranscriptDensity) throws {
+        try update { snapshot in
+            snapshot.transcriptDensity = density
         }
     }
 

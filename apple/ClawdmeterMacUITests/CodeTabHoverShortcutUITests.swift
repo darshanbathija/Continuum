@@ -511,25 +511,10 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         )
     }
 
-    func testCenterHeaderDensityMenuUpdatesTranscriptDensity() throws {
-        openCodeTab()
-
-        let row = workspaceLeafRowElement()
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
-        row.click()
-
-        let density = element("code.header.density")
-        XCTAssertTrue(density.waitForExistence(timeout: 10), "Center header should expose transcript density.")
-        XCTAssertTrue(element("code.header.density.selected.balanced").waitForExistence(timeout: 5), "Seeded workspace should start with balanced density.")
-
-        density.click()
-        clickMenuItem(identifier: "code.header.density.detailed", title: "Detailed")
-        XCTAssertTrue(element("code.header.density.selected.detailed").waitForExistence(timeout: 5), "Selecting Detailed should update the density state.")
-
-        density.click()
-        clickMenuItem(identifier: "code.header.density.compact", title: "Compact")
-        XCTAssertTrue(element("code.header.density.selected.compact").waitForExistence(timeout: 5), "Selecting Compact should update the density state.")
-    }
+    // v0.38: the transcript-density picker moved out of the Code center
+    // header into Settings → Visual ("Code and diff themes"), so the old
+    // `code.header.density` menu test was removed. Density now persists in
+    // SessionPresentationStore (see UIPrimitivesTests round-trip coverage).
 
     func testWorkspaceNewTabButtonCreatesUnboundedChatDraftTabsFromCodeTab() throws {
         openCodeTab()

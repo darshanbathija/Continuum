@@ -258,6 +258,17 @@ public struct MacSettingsView: View {
                 .frame(width: 180)
             }
             TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Transcript density", hint: "How much detail the Code chat shows for each tool run and preview.") {
+                Picker("Transcript density", selection: transcriptDensityBinding) {
+                    ForEach(TranscriptDensity.allCases, id: \.self) { density in
+                        Text(density.label).tag(density)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 240)
+            }
+            TahoeHair().padding(.vertical, 14)
             SyntaxThemePreview(
                 theme: presentationStore.snapshot.syntaxTheme,
                 diffMode: presentationStore.snapshot.diffDisplayMode
@@ -1109,6 +1120,13 @@ public struct MacSettingsView: View {
         )
     }
 
+    private var transcriptDensityBinding: Binding<TranscriptDensity> {
+        Binding(
+            get: { presentationStore.snapshot.transcriptDensity },
+            set: { try? presentationStore.setTranscriptDensity($0) }
+        )
+    }
+
     private func shortcutOverrideBinding(_ id: String) -> Binding<String> {
         Binding(
             get: { presentationStore.snapshot.shortcutOverrides[id] ?? "" },
@@ -1210,7 +1228,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .visual:
-            return "Theme, glass surface, wallpaper, and accent color."
+            return "Theme, code and diff themes, transcript density, and accent color."
         case .providers:
             return "Choose providers, default models, and manage skills."
         case .workspaces:

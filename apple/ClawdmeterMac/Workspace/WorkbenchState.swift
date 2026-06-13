@@ -278,7 +278,6 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
     var selectedSessionId: UUID?
     var selectedRightPane: WorkbenchPaneTab
     var showingReviewPane: Bool
-    var density: TranscriptDensity
     var workspaceWidth: Double
     var sidebarWidth: Double?
     var centerWidth: Double?
@@ -301,7 +300,6 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
         // Persisted state takes over on subsequent launches, so a user
         // who opens the pane keeps it open.
         showingReviewPane: Bool = false,
-        density: TranscriptDensity = .balanced,
         workspaceWidth: Double = 1400,
         sidebarWidth: Double? = nil,
         centerWidth: Double? = nil,
@@ -318,7 +316,6 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
         self.selectedSessionId = selectedSessionId
         self.selectedRightPane = selectedRightPane
         self.showingReviewPane = showingReviewPane
-        self.density = density
         self.workspaceWidth = workspaceWidth
         self.sidebarWidth = sidebarWidth
         self.centerWidth = centerWidth
@@ -334,7 +331,7 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case selectedSessionId, selectedRightPane, showingReviewPane, density
+        case selectedSessionId, selectedRightPane, showingReviewPane
         case workspaceWidth, sidebarWidth, centerWidth, reviewWidth
         case selectedRightPaneBySession, immersiveBrowserSessionId, queuedSends, runProfiles, prCache, checkpoints, refresh, updatedAt
     }
@@ -346,7 +343,6 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
             try c.decodeIfPresent(WorkbenchPaneTab.self, forKey: .selectedRightPane) ?? .plan
         )
         showingReviewPane = try c.decodeIfPresent(Bool.self, forKey: .showingReviewPane) ?? false
-        density = try c.decodeIfPresent(TranscriptDensity.self, forKey: .density) ?? .balanced
         workspaceWidth = try c.decodeIfPresent(Double.self, forKey: .workspaceWidth) ?? 1400
         sidebarWidth = try c.decodeIfPresent(Double.self, forKey: .sidebarWidth)
         centerWidth = try c.decodeIfPresent(Double.self, forKey: .centerWidth)
@@ -458,7 +454,6 @@ final class WorkbenchState: ObservableObject {
     var selectedRightPane: WorkbenchPaneTab { snapshot.selectedRightPane }
     var showingReviewPane: Bool { snapshot.showingReviewPane }
     var immersiveBrowserSessionId: UUID? { snapshot.immersiveBrowserSessionId }
-    var density: TranscriptDensity { snapshot.density }
     var workspaceWidth: CGFloat { CGFloat(snapshot.workspaceWidth) }
     var queuedSends: [QueuedWorkbenchSend] { snapshot.queuedSends }
 
@@ -545,9 +540,6 @@ final class WorkbenchState: ObservableObject {
         update { $0.immersiveBrowserSessionId = nil }
     }
 
-    func setDensity(_ density: TranscriptDensity) {
-        update { $0.density = density }
-    }
 
     func updateWorkspaceWidth(_ width: CGFloat) {
         let newWidth = Double(width)
