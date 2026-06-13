@@ -70,9 +70,11 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Continuum (Montauk Analytics).</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Continuum records audio for voice dictation in the agent composer (Ctrl+M). Recording only happens while you hold the mic button.</string>
+	<string>Continuum records audio while dictation is active (Fn double-tap or Control+M in the composer).</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Continuum uses speech recognition to dictate messages into the agent composer (Ctrl+M). Audio is processed on-device when possible.</string>
+	<string>Continuum uses speech recognition to dictate messages into composers and, when enabled, other apps. Audio is processed on-device when possible.</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Continuum needs Accessibility to detect Fn double-tap globally and paste dictated text into other apps.</string>
 	<!-- v0.7.7: NSUserActivity Handoff for the iOS Codex resume sheet's
 	     "Continue on Mac" button. iPhone advertises an activity with the
 	     threadId; macOS receives it via NSApplicationDelegate's continue:

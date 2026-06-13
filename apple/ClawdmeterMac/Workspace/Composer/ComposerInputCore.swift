@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import Combine
 import ClawdmeterShared
 
 /// Shared chip-row + text input + paperclip + mic core for the two composer
@@ -269,9 +270,9 @@ struct ComposerInputCore: View {
         )
     }
 
-    @StateObject private var dictation = SpeechDictation()
     @ObservedObject private var skillCatalog = SkillCatalog.shared
-    @State private var composerTextBeforeDictation: String = ""
+    @ObservedObject private var dictationRouting = DictationRouting.shared
+    @Environment(\.globalDictationCoordinator) private var globalDictationCoordinator
     @State private var isShowingFileImporter: Bool = false
     @State private var dropTargetActive: Bool = false
     @State private var showingPalette: Bool = false
@@ -325,6 +326,10 @@ struct ComposerInputCore: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        composerEventHandlers
+    }
+
+    private var composerVisualStack: some View {
         // Claude-Code-style stack: input box on top, attachments chip strip,
         // then a single compact bottom bar with all controls + the icon-only
         // send/stop action pinned to the right. The palette / mention popovers
@@ -378,11 +383,6 @@ struct ComposerInputCore: View {
                         .padding(.top, 2)
                         .padding(.horizontal, 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if case let .denied(reason) = dictation.state {
-                    Text(reason).font(.system(size: 10)).foregroundStyle(.red)
-                } else if case let .unavailable(reason) = dictation.state {
-                    Text(reason).font(.system(size: 10)).foregroundStyle(.orange)
                 }
             }
             .padding(.horizontal, 16)
@@ -449,13 +449,12 @@ struct ComposerInputCore: View {
                 .zIndex(2)
             }
         }
+    }
+
+    private var composerEventHandlers: some View {
+        composerVisualStack
         .padding(.horizontal, 18)
         .padding(.vertical, 18)
-        .onReceive(dictation.$partialTranscript) { newPartial in
-            guard dictation.state == .recording, !newPartial.isEmpty else { return }
-            let base = composerTextBeforeDictation
-            store.text = base.isEmpty ? newPartial : "\(base) \(newPartial)"
-        }
         .onReceive(NotificationCenter.default.publisher(for: .clawdmeterInsertComposerText)) { note in
             guard let inserted = note.userInfo?["text"] as? String else { return }
             applyExternalInsertion(text: inserted, autoSend: note.userInfo?["send"] as? Bool == true)
@@ -498,8 +497,15 @@ struct ComposerInputCore: View {
         .onReceive(NotificationCenter.default.publisher(for: .composerQueue)) { _ in
             queueCurrentDraft()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .composerToggleDictation)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .composerToggleDictation)) { note in
+            guard DictationToggleNotification.shouldHandle(note, as: .code) else { return }
             toggleDictation()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .globalDictationSessionStarted)) { note in
+            handleGlobalDictationSessionStarted(note)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .globalDictationApplyText)) { note in
+            handleGlobalDictationApplyText(note)
         }
         .onReceive(NotificationCenter.default.publisher(for: .composerAttach)) { _ in
             isShowingFileImporter = true
@@ -1040,15 +1046,24 @@ struct ComposerInputCore: View {
 
     private var micButton: some View {
         Button(action: ContinuumAnalytics.wrapButton("toggle_dictation", toggleDictation)) {
-            Image(systemName: dictation.state == .recording ? "mic.fill" : "mic")
+            Image(systemName: isDictationRecording ? "mic.fill" : "mic")
                 .font(.system(size: 13))
-                .foregroundStyle(dictation.state == .recording ? terraCotta : .secondary)
-                .symbolEffect(.pulse, isActive: dictation.state == .recording)
+                .foregroundStyle(isDictationRecording ? terraCotta : .secondary)
+                .symbolEffect(.pulse, isActive: isDictationRecording)
         }
         .buttonStyle(PressableButtonStyle())
         .keyboardShortcut("m", modifiers: [.control])
+        .disabled(dictationRouting.globalSessionActive && !isGlobalDictationActiveForCode)
         .help(dictationTooltip)
         .accessibilityIdentifier("code.composer.dictation")
+    }
+
+    private var isGlobalDictationActiveForCode: Bool {
+        dictationRouting.globalSessionActive && dictationRouting.globalSessionTarget == .code
+    }
+
+    private var isDictationRecording: Bool {
+        isGlobalDictationActiveForCode && globalDictationCoordinator?.phase == .recording
     }
 
     private var attachmentChipsRow: some View {
@@ -1369,25 +1384,30 @@ struct ComposerInputCore: View {
     }
 
     private func toggleDictation() {
-        if dictation.state == .recording {
-            dictation.stop()
-        } else if case .denied = dictation.state {
-            // Permission was previously denied — route to the matching pane.
-            dictation.openPrivacySettings()
-        } else {
-            composerTextBeforeDictation = store.text
-            Task { await dictation.start() }
+        if dictationRouting.globalSessionActive, !isGlobalDictationActiveForCode {
+            return
         }
+        globalDictationCoordinator?.toggleComposerDictation()
+    }
+
+    private func handleGlobalDictationSessionStarted(_ note: Notification) {
+        guard DictationToggleNotification.shouldHandle(note, as: .code) else { return }
+        globalDictationCoordinator?.noteComposerBaseText(store.text)
+    }
+
+    private func handleGlobalDictationApplyText(_ note: Notification) {
+        guard let parsed = GlobalDictationNotification.parseApplyText(note) else { return }
+        guard parsed.target == .code else { return }
+        store.text = parsed.text
     }
 
     private var dictationTooltip: String {
-        switch dictation.state {
-        case .recording: return "Stop dictation (Ctrl+M)"
-        case .requestingPermission: return "Requesting permission…"
-        case .denied(let r): return "\(r) Click to open System Settings."
-        case .unavailable(let r): return r
-        case .idle: return "Dictate (Ctrl+M)"
+        if isGlobalDictationActiveForCode {
+            return globalDictationCoordinator?.phase == .recording
+                ? "Stop dictation (Ctrl+M or Fn double-tap)"
+                : "Dictation active — Ctrl+M or Fn to stop"
         }
+        return "Dictate (Ctrl+M or Fn double-tap)"
     }
 
     private var textFieldPlaceholder: String {

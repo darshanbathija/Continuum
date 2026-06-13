@@ -25,6 +25,12 @@ extension Notification.Name {
     static let composerSend = Notification.Name("clawdmeter.workspace.composerSend")
     static let composerQueue = Notification.Name("clawdmeter.workspace.composerQueue")
     static let composerToggleDictation = Notification.Name("clawdmeter.workspace.composerToggleDictation")
+    /// Global Fn-dictation session applies text to a targeted composer.
+    static let globalDictationApplyText = Notification.Name("clawdmeter.globalDictation.applyText")
+    /// Posted when the global Fn session starts so composers can snapshot base text.
+    static let globalDictationSessionStarted = Notification.Name("clawdmeter.globalDictation.sessionStarted")
+    /// Posted when the global Fn session ends (finished or cancelled).
+    static let globalDictationSessionEnded = Notification.Name("clawdmeter.globalDictation.sessionEnded")
     static let openWorkspaceSwitcher = Notification.Name("clawdmeter.workspace.openWorkspaceSwitcher")
     static let sessionNextAttention = Notification.Name("clawdmeter.workspace.sessionNextAttention")
     /// Posted by iOS via the daemon's compose-draft WS event to seed the

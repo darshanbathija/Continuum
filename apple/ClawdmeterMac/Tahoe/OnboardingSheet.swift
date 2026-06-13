@@ -31,7 +31,8 @@ struct OnboardingSheet: View {
     @State private var isSavingOpenRouterKey = false
     @State private var openCodeGoKeyMessage: String?
     @State private var openRouterKeyMessage: String?
-    @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
+    @State private var showOpenCodeProviderPicker = false
+    @State private var openCodeAuthSetup: OpenCodeAuthSetupRequest?
     @State private var setupTerminal: SetupTerminalSession?
     @State private var customProviderEditorPresentation: CustomProviderEditorPresentation?
 
@@ -45,8 +46,21 @@ struct OnboardingSheet: View {
         .frame(width: 600)
         .background(t.surfaceSolid)
         .task { await runInitialDiscovery() }
-        .sheet(item: $opencodeSetupCommand) { command in
-            OpencodeSetupSheet(command: command) {
+        .sheet(isPresented: $showOpenCodeProviderPicker) {
+            OpenCodeProviderPickerSheet { request in
+                openCodeAuthSetup = request
+            }
+        }
+        .sheet(item: $openCodeAuthSetup) { request in
+            OpencodeSetupSheet(
+                command: request.command,
+                providerID: request.providerID,
+                providerName: request.providerName
+            ) {
+                ProviderEnablement.setEnabled(
+                    OpenCodePartnerSupport.enablementId(for: request.providerID),
+                    true
+                )
                 Task { await refreshDiscovery() }
             }
         }
@@ -354,7 +368,7 @@ struct OnboardingSheet: View {
                 NSWorkspace.shared.open(URL(string: "https://antigravity.google")!)
             }
         case .openOpencodeSignIn:
-            await MainActor.run { opencodeSetupCommand = .signIn }
+            await MainActor.run { showOpenCodeProviderPicker = true }
         case .addOpenRouterKey:
             await MainActor.run { openRouterKeyDraft = "" }
         case .addOpenCodeGoKey:

@@ -243,7 +243,7 @@ enum SidebarProjectionBuilder {
                 activeExternalSections: external.active,
                 historySections: external.history
             )
-        case .date, .status, .agent, .none:
+        case .date, .status, .agent, .host, .none:
             let groups = SessionSidebarGrouper.group(
                 sessions: priorityVisibleSessions,
                 repos: reposWithoutRecents(repos),

@@ -84,6 +84,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func configure(runtime: AppRuntime) {
         AppDelegate.runtime = runtime
+        if AppRuntime.isHeadlessAgentMode {
+            NSApp.setActivationPolicy(.accessory)
+            for window in NSApp.windows {
+                window.orderOut(nil)
+            }
+            logger.info("Headless agent mode — UI suppressed, daemon running")
+            return
+        }
         if claudeController == nil {
             claudeController = ProviderStatusController(model: runtime.claudeModel, runtime: runtime)
         }

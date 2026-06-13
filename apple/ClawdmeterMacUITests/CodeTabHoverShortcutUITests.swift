@@ -137,6 +137,14 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
     }
 
+    func testChatComposerDictationTargetIsPresent() throws {
+        openChatTab()
+        XCTAssertTrue(
+            element("chat.composer.dictation").waitForExistence(timeout: 10),
+            "Chat composer should expose a stable dictation target."
+        )
+    }
+
     func testContextUsageChipOpensRenderedPopoverRowsFromCodeComposer() throws {
         openCodeTab()
 
@@ -1476,6 +1484,44 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             }
             app.typeKey(.escape, modifierFlags: [])
         }
+    }
+
+    private func openChatTab() {
+        app.activate()
+        if waitForChatSurface(timeout: 1) {
+            return
+        }
+
+        for _ in 0..<2 {
+            app.typeKey("1", modifierFlags: .command)
+            if waitForChatSurface(timeout: 5) {
+                return
+            }
+
+            let chatTab = element("dash.tab.chat")
+            if chatTab.waitForExistence(timeout: 20) {
+                chatTab.click()
+                if waitForChatSurface(timeout: 10) {
+                    return
+                }
+            }
+
+            let labeledChatTab = app.buttons["Chat"]
+            if labeledChatTab.waitForExistence(timeout: 3) {
+                labeledChatTab.click()
+                if waitForChatSurface(timeout: 10) {
+                    return
+                }
+            }
+        }
+    }
+
+    private func waitForChatSurface(timeout: TimeInterval) -> Bool {
+        waitForAny([
+            element("chat.composer.dictation"),
+            app.textFields["Ask anything. Use / for skills, @ for files."],
+            app.staticTexts["Ask anything. Use / for skills, @ for files."],
+        ], timeout: timeout)
     }
 
     private func waitForCodeSurface(timeout: TimeInterval) -> Bool {

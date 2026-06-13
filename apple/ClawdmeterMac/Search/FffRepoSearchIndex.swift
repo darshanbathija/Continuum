@@ -39,8 +39,16 @@ actor FffRepoSearchIndex {
             self.storePreparedHandle(preparedHandle)
         }
         prepareTask = task
-        defer { prepareTask = nil }
-        try await task.value
+        // Clear the in-flight task only after it settles on the actor, so
+        // concurrent callers coalesce onto the same prepare and a failure
+        // doesn't silently drop the dedup mid-flight.
+        do {
+            try await task.value
+            prepareTask = nil
+        } catch {
+            prepareTask = nil
+            throw error
+        }
     }
 
     func search(query: String, recents: [String], limit: Int = 160) async throws -> [RepoFileMatch] {

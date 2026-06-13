@@ -1,5 +1,9 @@
 import SwiftUI
 import AppKit
+import ApplicationServices
+import AVFoundation
+import AVFAudio
+import Speech
 import ClawdmeterShared
 
 /// Mac Settings — drives the global TahoeThemeStore so flipping a switch
@@ -34,6 +38,7 @@ public struct MacSettingsView: View {
     @SceneStorage("clawdmeter.mac.settings.selectedSection") private var selectedSectionRaw: String = SettingsSection.visual.rawValue
     @SceneStorage("clawdmeter.mac.settings.providerTab") private var providerTabRaw: String = ProviderSettingsTab.providers.rawValue
     @State private var settingsSearch: String = ""
+    @State private var voicePermissionsRefreshToken = UUID()
 
     // v0.22.9: dropped to `internal` because the `runtime` parameter
     // exposes `AppRuntime`, which lives in the Mac target (not the
@@ -192,6 +197,8 @@ public struct MacSettingsView: View {
             notificationSettings
         case .externalTools:
             externalToolSettings
+        case .voice:
+            voiceSettings
         case .shortcuts:
             shortcutSettings
         }
@@ -325,6 +332,11 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var deviceSettings: some View {
+        SettingsCard(title: "Execution hosts",
+                     sub: "Mac, VPS, and Tailscale devices that can run agent sessions.") {
+            ExecutionHostSettingsView(client: runtime?.loopbackClient)
+        }
+
         if supportsAnyAutoRevive {
             SettingsCard(title: "Quota & sync",
                          sub: "Behavior that affects the menu-bar agent and the paired iPhone.") {
@@ -426,11 +438,574 @@ public struct MacSettingsView: View {
     }
 
     @ViewBuilder
+    private var voiceSettings: some View {
+        SettingsCard(title: "Primary trigger",
+                     sub: "No master switch — once Accessibility is granted below, double-tap Fn works in Continuum. Turn on System-wide only to paste into other apps.") {
+            SettingsRow(label: "Fn double-tap", hint: voiceFnTriggerHint) {
+                Text(voiceFnTriggerStatusLabel)
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(voiceFnTriggerStatusColor)
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "macOS Fn shortcut", hint: voiceMacOSDictationConflictHint) {
+                VStack(alignment: .trailing, spacing: 6) {
+                    Text("Set to Do Nothing")
+                        .font(TahoeFont.body(11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Button("Open Keyboard Settings") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(
+                label: "System-wide dictation",
+                hint: "Optional. When enabled, dictated text pastes into the frontmost app outside Continuum."
+            ) {
+                HStack(spacing: 8) {
+                    if presentationStore.snapshot.voicePresentationPreferences.systemWideDictationEnabled {
+                        Text("On")
+                            .font(TahoeFont.body(11, weight: .semibold))
+                            .foregroundStyle(.green)
+                    }
+                    Toggle("", isOn: systemWideDictationBinding)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Fn gesture", hint: "How Fn starts and stops dictation.") {
+                Picker("", selection: fnGestureModeBinding) {
+                    ForEach(FnGestureMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 180)
+            }
+        }
+
+        SettingsCard(title: "Composer dictation",
+                     sub: voiceComposerDictationSubtitle) {
+            if let dictationShortcut = voiceShortcut {
+                SettingsRow(
+                    label: dictationShortcut.label,
+                    hint: "Secondary in-app shortcut. Default \(dictationShortcut.displayChord). Routes to the active composer — Chat when you're on Chat, Code otherwise — or the last composer you used."
+                ) {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        HStack(spacing: 8) {
+                            TextField(dictationShortcut.displayChord, text: shortcutOverrideBinding(dictationShortcut.id))
+                                .textFieldStyle(.roundedBorder)
+                                .font(TahoeFont.mono(11))
+                                .frame(width: 96)
+                            Button("Reset") {
+                                try? presentationStore.setShortcutOverride(id: dictationShortcut.id, chord: nil)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(presentationStore.snapshot.shortcutOverrides[dictationShortcut.id] == nil)
+                        }
+                        if let conflict = shortcutConflict(for: dictationShortcut) {
+                            Text(conflict)
+                                .font(TahoeFont.body(10.5, weight: .semibold))
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+            }
+            SettingsRow(label: "Allow Control+M shortcut", hint: "When off, only Fn double-tap toggles dictation.") {
+                Toggle("", isOn: allowControlMShortcutBinding)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+        }
+
+        SettingsCard(title: "Permissions",
+                     sub: "Continuum only records while dictation is active. Grant all three permissions for Fn dictation everywhere.") {
+            SettingsRow(label: "Speech recognition", hint: voiceSpeechPermissionHint) {
+                HStack(spacing: 8) {
+                    Text(voiceSpeechPermissionLabel)
+                        .font(TahoeFont.body(11, weight: .semibold))
+                        .foregroundStyle(voiceSpeechPermissionColor)
+                    if voiceSpeechPermissionStatus != .authorized {
+                        Button("Open Settings") { openSystemPrivacyPane(.speechRecognition) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Microphone", hint: voiceMicrophonePermissionHint) {
+                HStack(spacing: 8) {
+                    Text(voiceMicrophonePermissionLabel)
+                        .font(TahoeFont.body(11, weight: .semibold))
+                        .foregroundStyle(voiceMicrophonePermissionColor)
+                    if !voiceMicrophonePermissionGranted {
+                        Button("Open Settings") { openSystemPrivacyPane(.microphone) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Accessibility", hint: voiceAccessibilityPermissionHint) {
+                HStack(spacing: 8) {
+                    Text(voiceAccessibilityPermissionLabel)
+                        .font(TahoeFont.body(11, weight: .semibold))
+                        .foregroundStyle(voiceAccessibilityPermissionColor)
+                    if !voiceAccessibilityPermissionGranted {
+                        Button("Grant Access") {
+                            runtime?.globalDictationCoordinator.requestAccessibilityPermission()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        Button("Open Settings") { openSystemPrivacyPane(.accessibility) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
+            }
+        }
+
+        SettingsCard(title: "Recognition",
+                     sub: voiceRecognitionSubtitle) {
+            SettingsRow(label: "Engine", hint: voiceEngineHint) {
+                Picker("", selection: sttEngineBinding) {
+                    Text("Apple Speech").tag(STTEngine.appleSpeech)
+                    Text("WhisperKit (local)").tag(STTEngine.whisperKit)
+                }
+                .labelsHidden()
+                .frame(width: 180)
+            }
+            if presentationStore.snapshot.voicePresentationPreferences.sttEngine == .whisperKit {
+                TahoeHair().padding(.vertical, 14)
+                if let manager = runtime?.sttModelDownloadManager {
+                    VoiceWhisperModelPicker(
+                        downloadManager: manager,
+                        selectedModelID: presentationStore.snapshot.voicePresentationPreferences.whisperModelID,
+                        onSelect: selectWhisperModel
+                    )
+                    if manager.installedModelsApproximateByteCount > 0 {
+                        TahoeHair().padding(.vertical, 14)
+                        SettingsRow(
+                            label: "Disk usage",
+                            hint: "Approximate size of downloaded Whisper models on this Mac."
+                        ) {
+                            Text(voiceInstalledModelsDiskUsageLabel(for: manager))
+                                .font(TahoeFont.body(11))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    voiceWhisperModelRows
+                }
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Language", hint: voiceLanguageHint) {
+                Picker("", selection: recognitionLocaleSelectionBinding) {
+                    ForEach(SpeechRecognitionLocaleCatalog.options()) { option in
+                        Text(option.label).tag(option.id)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 220)
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Processing", hint: voiceProcessingHint) {
+                Text(voiceProcessingLabel)
+                    .font(TahoeFont.body(11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .id(voicePermissionsRefreshToken)
+
+        if let runtime, !runtime.dictationHistoryStore.entries.isEmpty {
+            VoiceDictationHistoryCard(store: runtime.dictationHistoryStore)
+        }
+
+        Group { EmptyView() }
+            .onAppear {
+                refreshVoicePermissionState()
+                runtime?.sttModelDownloadManager.refreshInstalledModels()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                refreshVoicePermissionState()
+            }
+    }
+
+    @ViewBuilder
+    private var voiceWhisperModelRows: some View {
+        ForEach(STTModelCatalog.models) { model in
+            SettingsRow(
+                label: model.displayName,
+                hint: "\(model.sizeLabel) · on-device Whisper model"
+            ) {
+                voiceWhisperModelActions(for: model)
+            }
+            if model.id != STTModelCatalog.models.last?.id {
+                TahoeHair().padding(.vertical, 10)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func voiceWhisperModelActions(for model: STTModelDescriptor) -> some View {
+        let manager = runtime?.sttModelDownloadManager
+        let isSelected = presentationStore.snapshot.voicePresentationPreferences.whisperModelID == model.id
+        let isInstalled = manager?.isModelInstalled(model.id) ?? false
+
+        HStack(spacing: 8) {
+            if isSelected && isInstalled {
+                Text("Active")
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(.green)
+            } else if isInstalled {
+                Button("Use") {
+                    selectWhisperModel(model.id)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if let manager, case .downloading(let modelID, let progress) = manager.downloadState, modelID == model.id {
+                ProgressView(value: progress)
+                    .frame(width: 80)
+            } else if isInstalled {
+                Button("Delete") {
+                    try? manager?.delete(modelID: model.id)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            } else {
+                Button("Download") {
+                    downloadAndSelectWhisperModel(model.id, manager: manager)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func downloadAndSelectWhisperModel(_ modelID: String, manager: STTModelDownloadManager?) {
+        guard let manager else { return }
+        Task { @MainActor in
+            do {
+                try await manager.download(modelID: modelID)
+                guard manager.isModelInstalled(modelID) else { return }
+                selectWhisperModel(modelID)
+            } catch {
+                // STTModelDownloadManager publishes failed/cancelled state for the row UI.
+            }
+        }
+    }
+
+    private var voiceComposerDictationSubtitle: String {
+        switch presentationStore.snapshot.voicePresentationPreferences.sttEngine {
+        case .appleSpeech:
+            return "Speak into the Code or Chat composer. Uses Apple Speech when available on-device."
+        case .whisperKit:
+            return "Speak into the Code or Chat composer. Uses your downloaded WhisperKit model when installed."
+        }
+    }
+
+    private var voiceRecognitionLocale: Locale {
+        if let identifier = presentationStore.snapshot.voicePresentationPreferences.recognitionLocaleIdentifier {
+            return Locale(identifier: identifier)
+        }
+        return .current
+    }
+
+    private var recognitionLocaleSelectionBinding: Binding<String> {
+        Binding(
+            get: {
+                presentationStore.snapshot.voicePresentationPreferences.recognitionLocaleIdentifier
+                    ?? SpeechRecognitionLocaleCatalog.Option.systemDefaultToken
+            },
+            set: { newValue in
+                var preferences = presentationStore.snapshot.voicePresentationPreferences
+                preferences.recognitionLocaleIdentifier = newValue == SpeechRecognitionLocaleCatalog.Option.systemDefaultToken
+                    ? nil
+                    : newValue
+                try? presentationStore.setVoicePresentationPreferences(preferences)
+            }
+        )
+    }
+
+    private var voiceLanguageHint: String {
+        switch presentationStore.snapshot.voicePresentationPreferences.sttEngine {
+        case .appleSpeech:
+            return "Override the locale passed to Apple Speech. Default follows macOS."
+        case .whisperKit:
+            return "Optional language hint for WhisperKit. Default follows macOS."
+        }
+    }
+
+    private var voiceRecognitionSubtitle: String {
+        "Choose Apple Speech or a downloadable local Whisper model."
+    }
+
+    private var voiceEngineHint: String {
+        switch presentationStore.snapshot.voicePresentationPreferences.sttEngine {
+        case .appleSpeech:
+            return "Uses macOS system speech recognition — no download required."
+        case .whisperKit:
+            return "Runs entirely on your Mac after you download a model below."
+        }
+    }
+
+    private var fnGestureModeBinding: Binding<FnGestureMode> {
+        Binding(
+            get: { presentationStore.snapshot.voicePresentationPreferences.fnGestureMode },
+            set: { newValue in
+                var preferences = presentationStore.snapshot.voicePresentationPreferences
+                preferences.fnGestureMode = newValue
+                try? presentationStore.setVoicePresentationPreferences(preferences)
+                runtime?.globalDictationCoordinator.refreshHotkeyInstallation()
+            }
+        )
+    }
+
+    private var sttEngineBinding: Binding<STTEngine> {
+        Binding(
+            get: { presentationStore.snapshot.voicePresentationPreferences.sttEngine },
+            set: { newValue in
+                var preferences = presentationStore.snapshot.voicePresentationPreferences
+                preferences.sttEngine = newValue
+                try? presentationStore.setVoicePresentationPreferences(preferences)
+            }
+        )
+    }
+
+    private func selectWhisperModel(_ modelID: String) {
+        var preferences = presentationStore.snapshot.voicePresentationPreferences
+        preferences.sttEngine = .whisperKit
+        preferences.whisperModelID = modelID
+        try? presentationStore.setVoicePresentationPreferences(preferences)
+    }
+
+    private func voiceInstalledModelsDiskUsageLabel(for manager: STTModelDownloadManager) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useGB]
+        formatter.countStyle = .file
+        let total = manager.installedModelsApproximateByteCount
+        let count = manager.installedModelIDs.count
+        let size = formatter.string(fromByteCount: total)
+        return count == 1 ? "\(size) · 1 model" : "\(size) · \(count) models"
+    }
+
+    private func refreshVoicePermissionState() {
+        runtime?.globalDictationCoordinator.refreshHotkeyInstallation()
+        voicePermissionsRefreshToken = UUID()
+    }
+
+    private var voiceShortcut: ClawdmeterShortcut? {
+        ClawdmeterShortcutRegistry.defaults.first { $0.id == Self.composerDictationShortcutID }
+    }
+
+    private static let composerDictationShortcutID = "composer.dictation"
+
+    private var nonVoiceShortcuts: [ClawdmeterShortcut] {
+        ClawdmeterShortcutRegistry.defaults.filter { $0.id != Self.composerDictationShortcutID }
+    }
+
+    private var voiceSpeechPermissionStatus: SFSpeechRecognizerAuthorizationStatus {
+        SFSpeechRecognizer.authorizationStatus()
+    }
+
+    private var voiceSpeechPermissionLabel: String {
+        switch voiceSpeechPermissionStatus {
+        case .authorized: return "Granted"
+        case .denied: return "Denied"
+        case .restricted: return "Restricted"
+        case .notDetermined: return "Not requested"
+        @unknown default: return "Unknown"
+        }
+    }
+
+    private var voiceSpeechPermissionHint: String {
+        switch voiceSpeechPermissionStatus {
+        case .authorized: return "Apple Speech can transcribe composer dictation."
+        case .denied: return "Enable Continuum under Privacy & Security → Speech Recognition."
+        case .restricted: return "Speech recognition is restricted by system policy."
+        case .notDetermined: return "Press the mic button once to trigger the system prompt."
+        @unknown default: return "Speech recognition permission status is unknown."
+        }
+    }
+
+    private var voiceSpeechPermissionColor: Color {
+        voiceSpeechPermissionStatus == .authorized ? .green : .orange
+    }
+
+    private var voiceMicrophonePermissionGranted: Bool {
+        if #available(macOS 14.0, *) {
+            return AVAudioApplication.shared.recordPermission == .granted
+        }
+        return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+
+    private var voiceMicrophonePermissionLabel: String {
+        if #available(macOS 14.0, *) {
+            switch AVAudioApplication.shared.recordPermission {
+            case .granted: return "Granted"
+            case .denied: return "Denied"
+            case .undetermined: return "Not requested"
+            @unknown default: return "Unknown"
+            }
+        }
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return "Granted"
+        case .denied: return "Denied"
+        case .restricted: return "Restricted"
+        case .notDetermined: return "Not requested"
+        @unknown default: return "Unknown"
+        }
+    }
+
+    private var voiceMicrophonePermissionHint: String {
+        voiceMicrophonePermissionGranted
+            ? "The composer mic tap only runs while dictation is recording."
+            : "Enable Continuum under Privacy & Security → Microphone."
+    }
+
+    private var voiceMicrophonePermissionColor: Color {
+        voiceMicrophonePermissionGranted ? .green : .orange
+    }
+
+    private var voiceProcessingLabel: String {
+        switch presentationStore.snapshot.voicePresentationPreferences.sttEngine {
+        case .whisperKit:
+            if runtime?.sttModelDownloadManager.isModelInstalled(
+                presentationStore.snapshot.voicePresentationPreferences.whisperModelID
+            ) == true {
+                return "Local WhisperKit"
+            }
+            return "WhisperKit (model not installed — using Apple Speech fallback)"
+        case .appleSpeech:
+            let recognizer = SFSpeechRecognizer(locale: voiceRecognitionLocale)
+            if recognizer?.supportsOnDeviceRecognition == true {
+                return "Apple Speech · on-device"
+            }
+            return "Apple Speech · network may be used"
+        }
+    }
+
+    private var voiceProcessingHint: String {
+        switch presentationStore.snapshot.voicePresentationPreferences.sttEngine {
+        case .whisperKit:
+            return "Local models run entirely on your Mac. Falls back to Apple Speech if the selected model is missing."
+        case .appleSpeech:
+            if SFSpeechRecognizer(locale: voiceRecognitionLocale)?.supportsOnDeviceRecognition == true {
+                return "Audio stays on this Mac when macOS supports on-device recognition for your locale."
+            }
+            return "This locale may send audio to Apple for transcription."
+        }
+    }
+
+    private var systemWideDictationBinding: Binding<Bool> {
+        Binding(
+            get: { presentationStore.snapshot.voicePresentationPreferences.systemWideDictationEnabled },
+            set: { newValue in
+                var preferences = presentationStore.snapshot.voicePresentationPreferences
+                preferences.systemWideDictationEnabled = newValue
+                try? presentationStore.setVoicePresentationPreferences(preferences)
+                runtime?.globalDictationCoordinator.refreshHotkeyInstallation()
+                if newValue, runtime?.globalDictationCoordinator.isAccessibilityTrusted != true {
+                    runtime?.globalDictationCoordinator.requestAccessibilityPermission()
+                }
+            }
+        )
+    }
+
+    private var allowControlMShortcutBinding: Binding<Bool> {
+        Binding(
+            get: { presentationStore.snapshot.voicePresentationPreferences.allowControlMShortcut },
+            set: { newValue in
+                var preferences = presentationStore.snapshot.voicePresentationPreferences
+                preferences.allowControlMShortcut = newValue
+                try? presentationStore.setVoicePresentationPreferences(preferences)
+            }
+        )
+    }
+
+    private var voiceAccessibilityPermissionGranted: Bool {
+        runtime?.globalDictationCoordinator.isAccessibilityTrusted ?? AXIsProcessTrusted()
+    }
+
+    private var voiceFnTriggerStatusLabel: String {
+        if voiceFnTriggerReady {
+            return "Granted"
+        }
+        if voiceAccessibilityPermissionGranted {
+            return "Setting up…"
+        }
+        return "Needs Accessibility"
+    }
+
+    private var voiceFnTriggerStatusColor: Color {
+        voiceFnTriggerReady ? .green : .orange
+    }
+
+    private var voiceFnTriggerHint: String {
+        if voiceFnTriggerReady {
+            return "Double-tap Fn anywhere to start and stop dictation. A Continuum pill appears at the bottom of the screen while listening."
+        }
+        return "Grant Accessibility below, then double-tap Fn to dictate. Control+M remains available in-app."
+    }
+
+    private var voiceMacOSDictationConflictHint: String {
+        "If macOS Keyboard → Press fn key to is set to Start Dictation, Apple’s mic UI wins over Continuum. Set it to Do Nothing so double-tap Fn routes here."
+    }
+
+    private var voiceFnTriggerReady: Bool {
+        voiceAccessibilityPermissionGranted
+            && voiceSpeechPermissionStatus == .authorized
+            && voiceMicrophonePermissionGranted
+    }
+
+    private var voiceAccessibilityPermissionLabel: String {
+        voiceAccessibilityPermissionGranted ? "Granted" : "Not granted"
+    }
+
+    private var voiceAccessibilityPermissionHint: String {
+        voiceAccessibilityPermissionGranted
+            ? "Continuum can listen for Fn double-tap and paste dictated text into other apps."
+            : "Grant Accessibility so Continuum can capture Fn double-tap globally and paste outside the app."
+    }
+
+    private var voiceAccessibilityPermissionColor: Color {
+        voiceAccessibilityPermissionGranted ? .green : .orange
+    }
+
+    private enum VoicePrivacyPane {
+        case speechRecognition
+        case microphone
+        case accessibility
+    }
+
+    private func openSystemPrivacyPane(_ pane: VoicePrivacyPane) {
+        let urlString: String
+        switch pane {
+        case .speechRecognition:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
+        case .microphone:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        case .accessibility:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        }
+        guard let url = URL(string: urlString) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @ViewBuilder
     private var shortcutSettings: some View {
         SettingsCard(title: "Keyboard shortcuts",
                      sub: "Client-local overrides apply immediately to the command palette and global shortcut dispatcher.") {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(ClawdmeterShortcutRegistry.defaults) { shortcut in
+                ForEach(nonVoiceShortcuts) { shortcut in
                     SettingsRow(label: shortcut.label, hint: "\(shortcut.scope.rawValue.capitalized) · default \(shortcut.displayChord)") {
                         VStack(alignment: .trailing, spacing: 4) {
                             HStack(spacing: 8) {
@@ -452,7 +1027,7 @@ public struct MacSettingsView: View {
                             }
                         }
                     }
-                    if shortcut.id != ClawdmeterShortcutRegistry.defaults.last?.id {
+                    if shortcut.id != nonVoiceShortcuts.last?.id {
                         TahoeHair().padding(.vertical, 10)
                     }
                 }
@@ -612,6 +1187,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case devices
     case notifications
     case externalTools
+    case voice
     case shortcuts
 
     var id: String { rawValue }
@@ -626,6 +1202,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .devices: return "Devices"
         case .notifications: return "Notifications"
         case .externalTools: return "External Tools"
+        case .voice: return "Voice"
         case .shortcuts: return "Shortcuts"
         }
     }
@@ -648,6 +1225,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             return "DND, batching, chimes, previews, and event toggles."
         case .externalTools:
             return "Editor, Finder, terminal, GitHub, and file action preferences."
+        case .voice:
+            return "Composer dictation, permissions, and speech recognition."
         case .shortcuts:
             return "Searchable shortcut overrides and reset controls."
         }
@@ -663,6 +1242,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .devices: return "link"
         case .notifications: return "bell"
         case .externalTools: return "external"
+        case .voice: return "mic"
         case .shortcuts: return "command"
         }
     }
@@ -1319,7 +1899,8 @@ struct SettingsProviderRowsWithDeviceStatus: View {
     @State private var deviceStatuses: [String: ProviderDeviceStatus] = [:]
     @State private var isRefreshingDiscovery = false
     @State private var setupTerminal: SetupTerminalSession?
-    @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
+    @State private var showOpenCodeProviderPicker = false
+    @State private var openCodeAuthSetup: OpenCodeAuthSetupRequest?
     @State private var showOpenCodeGoSetupPanel = false
     @State private var showOpenRouterSetupPanel = false
     @State private var openCodeGoKeyDraft = ""
@@ -1331,6 +1912,7 @@ struct SettingsProviderRowsWithDeviceStatus: View {
     @State private var openRouterKeyMessage: String?
     @State private var showConnectProvidersOverlay = false
     @State private var apiKeyProvider: OpencodeSupportedProvider?
+    @State private var opencodeSetupCommand: OpencodeSetupSheet.Command?
     @State private var customProviderEditorPresentation: CustomProviderEditorPresentation?
 
     var body: some View {
@@ -1376,8 +1958,21 @@ struct SettingsProviderRowsWithDeviceStatus: View {
             }
         }
         .task { await refreshDiscovery() }
-        .sheet(item: $opencodeSetupCommand) { command in
-            OpencodeSetupSheet(command: command) {
+        .sheet(isPresented: $showOpenCodeProviderPicker) {
+            OpenCodeProviderPickerSheet { request in
+                openCodeAuthSetup = request
+            }
+        }
+        .sheet(item: $openCodeAuthSetup) { request in
+            OpencodeSetupSheet(
+                command: request.command,
+                providerID: request.providerID,
+                providerName: request.providerName
+            ) {
+                ProviderEnablement.setEnabled(
+                    OpenCodePartnerSupport.enablementId(for: request.providerID),
+                    true
+                )
                 Task { await refreshDiscovery() }
             }
         }
@@ -1403,6 +1998,11 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                     Task { await refreshDiscovery() }
                 }
             )
+        }
+        .sheet(item: $opencodeSetupCommand) { command in
+            OpencodeSetupSheet(command: command) {
+                Task { await refreshDiscovery() }
+            }
         }
         .sheet(item: $customProviderEditorPresentation) { presentation in
             if let runtime {
@@ -1450,6 +2050,7 @@ struct SettingsProviderRowsWithDeviceStatus: View {
         await CursorModelProbe.shared.invalidate()
         await OpenCodeGoModelProbe.shared.invalidate()
         await OpenRouterModelProbe.shared.invalidate()
+        await OpenCodePartnerModelProbe.shared.invalidate()
     }
 
     private func performSetup(providerId: String, action: ProviderDeviceSetupAction) async {
@@ -1465,7 +2066,7 @@ struct SettingsProviderRowsWithDeviceStatus: View {
                 NSWorkspace.shared.open(URL(string: "https://antigravity.google")!)
             }
         case .openOpencodeSignIn:
-            await MainActor.run { opencodeSetupCommand = .signIn }
+            await MainActor.run { showOpenCodeProviderPicker = true }
         case .addOpenRouterKey:
             await MainActor.run {
                 showOpenRouterSetupPanel = true
@@ -1723,7 +2324,7 @@ enum ProviderSettingsCopy {
         case .cursor:
             return "Cursor agent models via your Cursor subscription"
         case .opencode:
-            return "Curated models including Claude, GPT, Gemini and more"
+            return "OpenCode Go subscription models (Kimi, GLM, DeepSeek, …)"
         case .openrouter:
             return "Hundreds of models through a single API key"
         case .grok:
@@ -1875,9 +2476,13 @@ struct ProviderPreferenceRows: View {
         runtime?.customProviderStore.records.filter { !$0.isEnabled } ?? []
     }
 
+    private var connectedOpenCodePartners: [OpenCodePartnerWireSummary] {
+        catalog.opencodePartners.filter(\.enabled)
+    }
+
     private var connectDisconnectLayout: some View {
         VStack(alignment: .leading, spacing: 22) {
-            if !connectedVendors.isEmpty || !enabledCustomRecords.isEmpty {
+            if !connectedVendors.isEmpty || !enabledCustomRecords.isEmpty || !connectedOpenCodePartners.isEmpty {
                 ProviderSettingsSubsection(title: "Connected providers") {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(connectedVendors, id: \.self) { vendor in
@@ -1894,7 +2499,24 @@ struct ProviderPreferenceRows: View {
                                 onSelectModel: { entry in update(vendor: vendor, model: entry.id) },
                                 onOpenModelMenu: { Task { await refreshCatalogIfAllowed(for: vendor) } }
                             )
-                            if vendor != connectedVendors.last || !enabledCustomRecords.isEmpty {
+                            if vendor != connectedVendors.last || !connectedOpenCodePartners.isEmpty || !enabledCustomRecords.isEmpty {
+                                TahoeHair()
+                            }
+                        }
+                        ForEach(connectedOpenCodePartners) { partner in
+                            OpenCodePartnerConnectedRow(
+                                partner: partner,
+                                snapshot: snapshot,
+                                catalog: catalog,
+                                onSelectModel: { entry in
+                                    update(choice: .opencodePartner(partner.id), model: entry.id)
+                                },
+                                onOpenModelMenu: { Task { await refreshCatalog() } },
+                                onDisconnect: {
+                                    Task { await disconnectOpenCodePartner(partner.id) }
+                                }
+                            )
+                            if partner.id != connectedOpenCodePartners.last?.id || !enabledCustomRecords.isEmpty {
                                 TahoeHair()
                             }
                         }
@@ -2096,8 +2718,27 @@ struct ProviderPreferenceRows: View {
             if ProviderEnablement.isEnabled("openrouter") {
                 next = next.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
             }
+            next = next.replacingOpenCodePartners(await OpenCodePartnerModelProbe.shared.summaries())
             catalog = next
         }
+    }
+
+    private func disconnectOpenCodePartner(_ partnerId: String) async {
+        try? await OpencodeAuthFile.shared.removeProvider(providerId: partnerId)
+        ProviderEnablement.setEnabled(OpenCodePartnerSupport.enablementId(for: partnerId), false)
+        await OpencodeProcessManager.shared.refreshAuthStatus()
+        await OpenCodePartnerModelProbe.shared.invalidate()
+        await refreshAll()
+    }
+
+    private func update(choice: ProviderChoice, model: String) {
+        snapshot = localStore.setDefault(
+            forChoice: choice,
+            model: model,
+            effort: nil,
+            clearEffort: true,
+            catalog: catalog
+        )
     }
 
     private func invalidateProviderCaches(for id: String) async {
@@ -2108,6 +2749,8 @@ struct ProviderPreferenceRows: View {
             await OpenCodeGoModelProbe.shared.invalidate()
         } else if id == "openrouter" {
             await OpenRouterModelProbe.shared.invalidate()
+        } else if OpenCodePartnerSupport.partnerId(fromEnablementId: id) != nil {
+            await OpenCodePartnerModelProbe.shared.invalidate()
         }
     }
 
@@ -2564,6 +3207,107 @@ private struct CustomProviderStoreObserver: ViewModifier {
     }
 }
 
+private struct OpenCodePartnerConnectedRow: View {
+    @Environment(\.tahoe) private var t
+    let partner: OpenCodePartnerWireSummary
+    let snapshot: ProviderDefaultsSnapshot
+    let catalog: ModelCatalog
+    let onSelectModel: (ModelCatalogEntry) -> Void
+    let onOpenModelMenu: () -> Void
+    let onDisconnect: () -> Void
+
+    private var choice: ProviderChoice { .opencodePartner(partner.id) }
+    private var enablementId: String { OpenCodePartnerSupport.enablementId(for: partner.id) }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            AnyProviderGlyph(choice: choice, catalog: catalog, size: 28)
+            Text(partner.label)
+                .font(TahoeFont.body(13.5, weight: .semibold))
+                .foregroundStyle(t.fg)
+            Spacer(minLength: 12)
+            ProviderChoiceModelMenu(
+                choice: choice,
+                snapshot: snapshot,
+                catalog: catalog,
+                onSelectModel: onSelectModel,
+                onOpenModelMenu: onOpenModelMenu
+            )
+            Button("Disconnect") {
+                onDisconnect()
+            }
+            .buttonStyle(.plain)
+            .font(TahoeFont.body(12, weight: .semibold))
+            .foregroundStyle(t.fg2)
+            .help("Disconnect \(partner.label)")
+            .accessibilityIdentifier("settings.provider.\(enablementId).disconnect")
+        }
+        .frame(minHeight: 36)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings.provider.\(enablementId)")
+    }
+}
+
+private struct ProviderChoiceModelMenu: View {
+    @Environment(\.tahoe) private var t
+    let choice: ProviderChoice
+    let snapshot: ProviderDefaultsSnapshot
+    let catalog: ModelCatalog
+    let onSelectModel: (ModelCatalogEntry) -> Void
+    let onOpenModelMenu: () -> Void
+
+    private var selectedModelId: String? {
+        snapshot.modelId(forChoice: choice, catalog: catalog)
+    }
+
+    private var selectedEntry: ModelCatalogEntry? {
+        guard let selectedModelId else { return nil }
+        return choice.models(in: catalog).first { $0.id == selectedModelId || $0.cliAlias == selectedModelId }
+    }
+
+    var body: some View {
+        Menu {
+            let sections = ProviderModelPickerSupport.sections(for: choice, catalog: catalog, query: "")
+            if sections.isEmpty {
+                Text("No models available")
+            }
+            ForEach(sections) { section in
+                Section(section.title) {
+                    ForEach(section.entries) { entry in
+                        Button {
+                            onSelectModel(entry)
+                        } label: {
+                            HStack {
+                                Text(entry.displayName)
+                                if entry.id == selectedModelId {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(selectedEntry?.displayName ?? "Default model")
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                TahoeIcon("chevronDown", size: 9)
+            }
+            .foregroundStyle(t.fg)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(width: 200, alignment: .trailing)
+            .background(Color.white.opacity(0.055), in: Capsule())
+            .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
+        }
+        .menuStyle(.borderlessButton)
+        .simultaneousGesture(TapGesture().onEnded { onOpenModelMenu() })
+        .accessibilityIdentifier("settings.provider.\(choice.id).model")
+    }
+}
+
 private struct ProviderModelMenu: View {
     @Environment(\.tahoe) private var t
     let vendor: ChatVendor
@@ -2754,6 +3498,132 @@ private struct FullDiskAccessBanner: View {
                 }
                 .buttonStyle(.plain)
                 .help("Opens System Settings → Privacy & Security → Full Disk Access. Add Continuum and toggle it on.")
+            }
+        }
+    }
+}
+
+private struct VoiceWhisperModelPicker: View {
+    @ObservedObject var downloadManager: STTModelDownloadManager
+    let selectedModelID: String
+    let onSelect: (String) -> Void
+
+    @State private var pendingLargeDownload: STTModelDescriptor?
+
+    var body: some View {
+        ForEach(STTModelCatalog.models) { model in
+            SettingsRow(
+                label: model.displayName,
+                hint: modelRowHint(for: model)
+            ) {
+                modelRowActions(for: model)
+            }
+            if model.id != STTModelCatalog.models.last?.id {
+                TahoeHair().padding(.vertical, 10)
+            }
+        }
+        .alert(item: $pendingLargeDownload) { model in
+            Alert(
+                title: Text("Download \(model.displayName)?"),
+                message: Text("This model is about \(model.sizeLabel). Downloads run entirely on your Mac."),
+                primaryButton: .default(Text("Download")) {
+                    downloadAndSelect(model.id)
+                },
+                secondaryButton: .cancel()
+            )
+        }
+    }
+
+    private func requestDownload(for model: STTModelDescriptor) {
+        if model.approximateBytes >= STTModelCatalog.largeDownloadWarningBytes {
+            pendingLargeDownload = model
+            return
+        }
+        downloadAndSelect(model.id)
+    }
+
+    private func downloadAndSelect(_ modelID: String) {
+        Task { @MainActor in
+            do {
+                try await downloadManager.download(modelID: modelID)
+                guard downloadManager.isModelInstalled(modelID) else { return }
+                onSelect(modelID)
+            } catch {
+                // STTModelDownloadManager publishes failed/cancelled state for the row UI.
+            }
+        }
+    }
+
+    private func modelRowHint(for model: STTModelDescriptor) -> String {
+        var hint = "\(model.sizeLabel) · on-device Whisper model"
+        if case .failed(let modelID, let message) = downloadManager.downloadState, modelID == model.id {
+            hint += " · download failed: \(message)"
+        } else if case .cancelled(let modelID) = downloadManager.downloadState, modelID == model.id {
+            hint += " · download cancelled — tap Resume to continue"
+        }
+        return hint
+    }
+
+    @ViewBuilder
+    private func modelRowActions(for model: STTModelDescriptor) -> some View {
+        let isSelected = selectedModelID == model.id
+        let isInstalled = downloadManager.isModelInstalled(model.id)
+
+        HStack(spacing: 8) {
+            if isSelected && isInstalled {
+                Text("Active")
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(.green)
+            } else if isInstalled {
+                Button("Use") {
+                    onSelect(model.id)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if case .downloading(let modelID, let progress) = downloadManager.downloadState, modelID == model.id {
+                ProgressView(value: progress)
+                    .frame(width: 80)
+                Button("Cancel") {
+                    downloadManager.cancelDownload()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            } else if isInstalled {
+                Button("Delete") {
+                    try? downloadManager.delete(modelID: model.id)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            } else {
+                Button(downloadManager.canResumeDownload(for: model.id) ? "Resume" : "Download") {
+                    requestDownload(for: model)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+    }
+}
+
+private struct VoiceDictationHistoryCard: View {
+    @ObservedObject var store: DictationHistoryStore
+
+    var body: some View {
+        SettingsCard(title: "Recent dictations", sub: "Last 20 transcripts. Audio is never stored.") {
+            ForEach(store.entries) { entry in
+                SettingsRow(label: entry.createdAt.formatted(date: .omitted, time: .shortened), hint: entry.text) {
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(entry.text, forType: .string)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                if entry.id != store.entries.last?.id {
+                    TahoeHair().padding(.vertical, 10)
+                }
             }
         }
     }

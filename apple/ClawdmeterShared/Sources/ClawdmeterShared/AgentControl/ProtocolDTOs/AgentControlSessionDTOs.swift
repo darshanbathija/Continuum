@@ -343,6 +343,16 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// respawn/revive/approve-plan keep the same billing rail.
     public let customProviderId: String?
 
+    // MARK: - Schema v10 additions (wire v30, multi-device R1)
+
+    /// Which execution host runs this session. Nil on legacy sessions —
+    /// backfilled to the local Mac host on registry load.
+    public let executionHostId: UUID?
+    /// Denormalized host label for list rendering (survives host rename).
+    public let executionHostLabel: String?
+    /// Set on the source session while a handoff is in flight (D1).
+    public let handoff: HandoffState?
+
     public init(
         id: UUID,
         repoKey: String?,
@@ -388,7 +398,10 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         ownsWorktree: Bool = false,
         envSetId: UUID? = nil,
         envSetName: String? = nil,
-        customProviderId: String? = nil
+        customProviderId: String? = nil,
+        executionHostId: UUID? = nil,
+        executionHostLabel: String? = nil,
+        handoff: HandoffState? = nil
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -435,6 +448,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.envSetId = envSetId
         self.envSetName = envSetName
         self.customProviderId = customProviderId
+        self.executionHostId = executionHostId
+        self.executionHostLabel = executionHostLabel
+        self.handoff = handoff
     }
 
     public init(from decoder: Decoder) throws {
@@ -522,6 +538,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.envSetId = (try? c.decodeIfPresent(UUID.self, forKey: .envSetId)) ?? nil
         self.envSetName = (try? c.decodeIfPresent(String.self, forKey: .envSetName)) ?? nil
         self.customProviderId = (try? c.decodeIfPresent(String.self, forKey: .customProviderId)) ?? nil
+        self.executionHostId = (try? c.decodeIfPresent(UUID.self, forKey: .executionHostId)) ?? nil
+        self.executionHostLabel = (try? c.decodeIfPresent(String.self, forKey: .executionHostLabel)) ?? nil
+        self.handoff = (try? c.decodeIfPresent(HandoffState.self, forKey: .handoff)) ?? nil
     }
 
     /// User-facing label for the session. Prefers the user-set
@@ -595,7 +614,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              // v28 custom provider routing pin.
              customProviderId,
              // v6 (Track A): Claude PTY CLI session id.
-             claudeSessionId
+             claudeSessionId,
+             // v30 multi-device execution host.
+             executionHostId, executionHostLabel, handoff
     }
 
     /// Resolve `providerInstanceId` (a `ProviderInstanceId.wireId` string)
@@ -685,6 +706,19 @@ public struct NewSessionRequest: Codable, Sendable {
     /// v28: route spawn through a user-configured custom provider.
     public let customProviderId: String?
 
+    /// v30: spawn on a registered execution host. Nil = local Mac default.
+    public let targetHostId: UUID?
+
+    /// v30 handoff (D1): link spawned session to source session.
+    public let parentSessionId: UUID?
+
+    /// Remote execution source checkout metadata. When a session is spawned on
+    /// a different host, `repoKey` may be a Mac-local path that does not exist
+    /// remotely; these optional fields tell the remote daemon what to fetch.
+    public let sourceRemoteURL: String?
+    public let sourceBranch: String?
+    public let sourceCommit: String?
+
     public init(
         repoKey: String,
         agent: AgentKind,
@@ -698,7 +732,12 @@ public struct NewSessionRequest: Codable, Sendable {
         providerInstanceId: String? = nil,
         existingWorkspacePath: String? = nil,
         sessionId: UUID? = nil,
-        customProviderId: String? = nil
+        customProviderId: String? = nil,
+        targetHostId: UUID? = nil,
+        parentSessionId: UUID? = nil,
+        sourceRemoteURL: String? = nil,
+        sourceBranch: String? = nil,
+        sourceCommit: String? = nil
     ) {
         self.repoKey = repoKey
         self.agent = agent
@@ -713,6 +752,11 @@ public struct NewSessionRequest: Codable, Sendable {
         self.existingWorkspacePath = existingWorkspacePath
         self.sessionId = sessionId
         self.customProviderId = customProviderId
+        self.targetHostId = targetHostId
+        self.parentSessionId = parentSessionId
+        self.sourceRemoteURL = sourceRemoteURL
+        self.sourceBranch = sourceBranch
+        self.sourceCommit = sourceCommit
     }
 
     // Custom decoder to tolerate v2 requests missing the new fields.
@@ -739,11 +783,42 @@ public struct NewSessionRequest: Codable, Sendable {
         self.existingWorkspacePath = try c.decodeIfPresent(String.self, forKey: .existingWorkspacePath)
         self.sessionId = try c.decodeIfPresent(UUID.self, forKey: .sessionId)
         self.customProviderId = try c.decodeIfPresent(String.self, forKey: .customProviderId)
+        self.targetHostId = try c.decodeIfPresent(UUID.self, forKey: .targetHostId)
+        self.parentSessionId = try c.decodeIfPresent(UUID.self, forKey: .parentSessionId)
+        self.sourceRemoteURL = try c.decodeIfPresent(String.self, forKey: .sourceRemoteURL)
+        self.sourceBranch = try c.decodeIfPresent(String.self, forKey: .sourceBranch)
+        self.sourceCommit = try c.decodeIfPresent(String.self, forKey: .sourceCommit)
     }
 
     private enum CodingKeys: String, CodingKey {
         case repoKey, agent, model, planMode, goal, useWorktree, baseBranch, effort, abPair, providerInstanceId
-        case existingWorkspacePath, sessionId, customProviderId
+        case existingWorkspacePath, sessionId, customProviderId, targetHostId, parentSessionId
+        case sourceRemoteURL, sourceBranch, sourceCommit
+    }
+}
+
+public extension NewSessionRequest {
+    func withSourceRepository(remoteURL: String?, branch: String?, commit: String?) -> NewSessionRequest {
+        NewSessionRequest(
+            repoKey: repoKey,
+            agent: agent,
+            model: model,
+            planMode: planMode,
+            goal: goal,
+            useWorktree: useWorktree,
+            baseBranch: baseBranch,
+            effort: effort,
+            abPair: abPair,
+            providerInstanceId: providerInstanceId,
+            existingWorkspacePath: existingWorkspacePath,
+            sessionId: sessionId,
+            customProviderId: customProviderId,
+            targetHostId: targetHostId,
+            parentSessionId: parentSessionId,
+            sourceRemoteURL: remoteURL ?? sourceRemoteURL,
+            sourceBranch: branch ?? sourceBranch,
+            sourceCommit: commit ?? sourceCommit
+        )
     }
 }
 

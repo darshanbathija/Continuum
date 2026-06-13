@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Combine
 import ClawdmeterShared
@@ -22,6 +23,11 @@ extension Notification.Name {
 
 @MainActor
 final class AppRuntime: ObservableObject {
+
+    /// LaunchAgent / continuum-agent mode: daemon only, no UI chrome.
+    static var isHeadlessAgentMode: Bool {
+        ProcessInfo.processInfo.arguments.contains("--headless-agent")
+    }
 
     let claudeModel: AppModel
     let codexModel: AppModel
@@ -86,6 +92,14 @@ final class AppRuntime: ObservableObject {
     // bundle the Mac shows in a QR; iPhone scans it to derive the
     // shared symmetric key. See RelayPairingService for state machine.
     let relayPairingService: RelayPairingService
+
+    /// Phase 2: Fn double-tap dictation — app-scoped so the global event tap
+    /// stays live when the dashboard window is closed or minimized.
+    let globalDictationCoordinator: GlobalDictationCoordinator
+    let dictationHistoryStore: DictationHistoryStore
+    let sttModelDownloadManager: STTModelDownloadManager
+    let appDictationContext: AppDictationContext
+    private var dictationOverlayController: DictationOverlayController?
 
     // E3 (respin): outbound relay WebSocket client. Opens when paired
     // (E7 bundle available) and the user has explicitly flipped the
@@ -305,6 +319,31 @@ final class AppRuntime: ObservableObject {
         let appSupportDirectory = testingAppSupport
             ?? WorkspaceStore.defaultStoreURL().deletingLastPathComponent()
         self.appSupportDirectory = appSupportDirectory
+        let dictationHistoryStore = DictationHistoryStore(appSupportDirectory: appSupportDirectory)
+        self.dictationHistoryStore = dictationHistoryStore
+        self.globalDictationCoordinator = GlobalDictationCoordinator(historyStore: dictationHistoryStore)
+        self.sttModelDownloadManager = STTModelDownloadManager(appSupportDirectory: appSupportDirectory)
+        let dictationContext = AppDictationContext(appSupportDirectory: appSupportDirectory)
+        dictationContext.onApplyComposerText = { text, target, phase in
+            NotificationCenter.default.post(
+                name: .globalDictationApplyText,
+                object: nil,
+                userInfo: GlobalDictationNotification.applyTextUserInfo(
+                    target: target,
+                    text: text,
+                    phase: phase
+                )
+            )
+        }
+        dictationContext.onPrepareComposerRoute = { target in
+            let tab = target == .chat ? "chat" : "code"
+            NotificationCenter.default.post(
+                name: .clawdmeterSwitchTab,
+                object: nil,
+                userInfo: ["tab": tab]
+            )
+        }
+        self.appDictationContext = dictationContext
         let providerInstanceStore = ProviderInstanceStore(
             storeURL: appSupportDirectory.appendingPathComponent("provider-instances.json")
         )
@@ -550,6 +589,9 @@ final class AppRuntime: ObservableObject {
             Task { @MainActor [self] in
                 self.sessionsRefreshTask = self.sessionsModel.startPeriodicRefresh()
                 self.sessionScheduler.start()
+                if !Self.isHeadlessAgentMode {
+                    HandoffAutoSuggestService.shared.startMonitoring()
+                }
                 runtimeLogger.info("A7 deferred subsystems started (sessions refresh + scheduler)")
             }
             // v0.27.0: openDesignDaemon.ensureRunning() removed along with
@@ -605,6 +647,7 @@ final class AppRuntime: ObservableObject {
         }
 
         bootstrapProviderRuntimes()
+        wireGlobalDictationLifecycle()
 
         // Multi-account: secondary accounts' gauges over the wire. Set
         // AFTER init completes — an escaping self-capture inside init
@@ -630,6 +673,7 @@ final class AppRuntime: ObservableObject {
                         )
                     }
                 }
+                self.objectWillChange.send()
             }
         } else {
             Task { @MainActor [self] in
@@ -770,6 +814,22 @@ final class AppRuntime: ObservableObject {
         try? await relayClient?.send(op: RelayMux.op, payload: enc)
     }
 
+    private func wireGlobalDictationLifecycle() {
+        guard !Self.deferProviderSideEffectsForTesting else {
+            runtimeLogger.info("Global dictation hotkey deferred under test/no-spend gate")
+            return
+        }
+        globalDictationCoordinator.bind(context: appDictationContext)
+        dictationOverlayController = DictationOverlayController(coordinator: globalDictationCoordinator)
+        globalDictationCoordinator.refreshHotkeyInstallation()
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.globalDictationCoordinator.refreshHotkeyInstallation()
+            }
+            .store(in: &cancellables)
+    }
+
     private func bootstrapProviderRuntimes() {
         guard !Self.deferProviderSideEffectsForTesting else {
             runtimeLogger.info("Provider runtime warmers deferred under test/no-spend gate")
@@ -884,8 +944,20 @@ final class AppRuntime: ObservableObject {
     @MainActor
     func setProviderEnabled(_ id: String, _ enabled: Bool) {
         ProviderEnablement.setEnabled(id, enabled)
-        if let kind = AgentKind(rawValue: id), let model = appModel(for: kind) {
-            if enabled { model.start() } else { model.stop() }
+        if let kind = AgentKind(rawValue: id) {
+            if enabled {
+                if !Self.deferProviderSideEffectsForTesting {
+                    for (wireId, model) in modelsByInstanceWireId {
+                        guard ProviderInstanceId.parseWireId(wireId)?.kind == id else { continue }
+                        model.forcePoll()
+                    }
+                }
+            } else {
+                for (wireId, model) in modelsByInstanceWireId {
+                    guard ProviderInstanceId.parseWireId(wireId)?.kind == id else { continue }
+                    model.stop()
+                }
+            }
         }
         UserDefaults.standard.set(enabled, forKey: "clawdmeter.\(id).menuBarShown")
         Task {
@@ -928,14 +1000,6 @@ final class AppRuntime: ObservableObject {
         if modelsByInstanceWireId[instance.wireId] != nil { return false }
         guard await providerInstanceRegistry.upsert(instance) != nil else { return false }
         let model = makeInstanceAwareModel(config: config, instance: instance)
-        // Secondary pollers follow the same opt-in + testing gates as the
-        // primaries (init): an instance of a disabled provider registers
-        // (so pickers can list it) but doesn't poll until the kind is
-        // enabled.
-        if !Self.deferProviderSideEffectsForTesting,
-           ProviderEnablement.isEnabled(instance.kind.rawValue) {
-            model.start()
-        }
         modelsByInstanceWireId[instance.wireId] = model
         if persist {
             providerInstanceStore.upsert(ProviderInstanceRecord(instance: instance))
@@ -943,6 +1007,10 @@ final class AppRuntime: ObservableObject {
             // the loader's root closures read the list per refresh.
             usageHistoryStore.forceRefresh()
         }
+        // Secondary pollers follow the same opt-in + testing gates as the
+        // primaries (init): an instance of a disabled provider registers
+        // (so pickers can list it) but doesn't poll until the kind is
+        // enabled. forcePoll() also start()s the model when needed.
         if !Self.deferProviderSideEffectsForTesting,
            ProviderEnablement.isEnabled(instance.kind.rawValue) {
             model.forcePoll()
@@ -954,6 +1022,7 @@ final class AppRuntime: ObservableObject {
         runtimeLogger.info(
             "AppRuntime.addInstance wireId=\(instance.wireId, privacy: .public) configRoot=\(redactedRoot, privacy: .public) persist=\(persist)"
         )
+        objectWillChange.send()
         return true
     }
 
@@ -983,6 +1052,7 @@ final class AppRuntime: ObservableObject {
         runtimeLogger.info(
             "AppRuntime.removeInstance wireId=\(instance.wireId, privacy: .public) deleteConfigRoot=\(deleteConfigRoot)"
         )
+        objectWillChange.send()
         return true
     }
 

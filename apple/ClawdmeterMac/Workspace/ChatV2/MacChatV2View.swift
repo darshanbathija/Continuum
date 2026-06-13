@@ -1881,8 +1881,8 @@ private struct ComposerBar: View {
     // already instantiate their own stores — the picker does not
     // introduce a new divergence pattern.
     @StateObject private var providerDefaultsStore = ProviderDefaultsStore()
-    @StateObject private var dictation = SpeechDictation()
-    @State private var composerTextBeforeDictation: String = ""
+    @ObservedObject private var dictationRouting = DictationRouting.shared
+    @Environment(\.globalDictationCoordinator) private var globalDictationCoordinator
 
     var body: some View {
         composerBody
@@ -1911,16 +1911,6 @@ private struct ComposerBar: View {
                             .font(TahoeFont.body(11))
                             .foregroundStyle(.red)
                             .padding(.horizontal, 14)
-                    } else if case let .denied(reason) = dictation.state {
-                        Text(reason)
-                            .font(TahoeFont.body(11))
-                            .foregroundStyle(.red)
-                            .padding(.horizontal, 14)
-                    } else if case let .unavailable(reason) = dictation.state {
-                        Text(reason)
-                            .font(TahoeFont.body(11))
-                            .foregroundStyle(.orange)
-                            .padding(.horizontal, 14)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1946,11 +1936,25 @@ private struct ComposerBar: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .frame(height: maxComposerHeight, alignment: .topLeading)
-        .onAppear { focused = true }
-        .onReceive(dictation.$partialTranscript) { newPartial in
-            guard dictation.state == .recording, !newPartial.isEmpty else { return }
-            let base = composerTextBeforeDictation
-            sendCtl.text = base.isEmpty ? newPartial : "\(base) \(newPartial)"
+        .onAppear {
+            focused = true
+            DictationRouting.shared.setChatComposerReadOnly(openTarget?.isReadOnlyTranscript == true)
+        }
+        .onChange(of: openTarget?.isReadOnlyTranscript) { _, _ in
+            DictationRouting.shared.setChatComposerReadOnly(openTarget?.isReadOnlyTranscript == true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .composerToggleDictation)) { note in
+            guard DictationToggleNotification.shouldHandle(note, as: .chat) else { return }
+            toggleDictation()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .globalDictationSessionStarted)) { note in
+            guard DictationToggleNotification.shouldHandle(note, as: .chat) else { return }
+            globalDictationCoordinator?.noteComposerBaseText(sendCtl.text)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .globalDictationApplyText)) { note in
+            guard let parsed = GlobalDictationNotification.parseApplyText(note) else { return }
+            guard parsed.target == .chat else { return }
+            sendCtl.text = parsed.text
         }
     }
 
@@ -2371,17 +2375,27 @@ private struct ComposerBar: View {
 
     private var micButton: some View {
         Button(action: ContinuumAnalytics.wrapButton("toggle_dictation", toggleDictation)) {
-            Image(systemName: dictation.state == .recording ? "mic.fill" : "mic")
+            Image(systemName: isDictationRecording ? "mic.fill" : "mic")
                 .font(.system(size: 13))
-                .foregroundStyle(dictation.state == .recording ? t.accent : t.fg3)
-                .symbolEffect(.pulse, isActive: dictation.state == .recording)
+                .foregroundStyle(isDictationRecording ? t.accent : t.fg3)
+                .symbolEffect(.pulse, isActive: isDictationRecording)
                 .frame(width: 28, height: 28)
         }
         .buttonStyle(PressableButtonStyle())
-        .disabled(openTarget?.isReadOnlyTranscript == true)
+        .keyboardShortcut("m", modifiers: [.control])
+        .disabled(openTarget?.isReadOnlyTranscript == true
+            || (dictationRouting.globalSessionActive && !isGlobalDictationActiveForChat))
         .help(dictationTooltip)
         .accessibilityLabel("Dictate")
         .accessibilityIdentifier("chat.composer.dictation")
+    }
+
+    private var isGlobalDictationActiveForChat: Bool {
+        dictationRouting.globalSessionActive && dictationRouting.globalSessionTarget == .chat
+    }
+
+    private var isDictationRecording: Bool {
+        isGlobalDictationActiveForChat && globalDictationCoordinator?.phase == .recording
     }
 
     private var sendButton: some View {
@@ -2416,24 +2430,20 @@ private struct ComposerBar: View {
     }
 
     private func toggleDictation() {
-        if dictation.state == .recording {
-            dictation.stop()
-        } else if case .denied = dictation.state {
-            dictation.openPrivacySettings()
-        } else {
-            composerTextBeforeDictation = sendCtl.text
-            Task { await dictation.start() }
+        guard openTarget?.isReadOnlyTranscript != true else { return }
+        if dictationRouting.globalSessionActive, !isGlobalDictationActiveForChat {
+            return
         }
+        globalDictationCoordinator?.toggleComposerDictation()
     }
 
     private var dictationTooltip: String {
-        switch dictation.state {
-        case .recording: return "Stop dictation"
-        case .requestingPermission: return "Requesting permission…"
-        case .denied(let reason): return "\(reason) Click to open System Settings."
-        case .unavailable(let reason): return reason
-        case .idle: return "Dictate"
+        if isGlobalDictationActiveForChat {
+            return globalDictationCoordinator?.phase == .recording
+                ? "Stop dictation (Ctrl+M or Fn double-tap)"
+                : "Dictation active — Ctrl+M or Fn to stop"
         }
+        return "Dictate (Ctrl+M or Fn double-tap)"
     }
 
     private func dispatchSend() async {
@@ -2660,6 +2670,11 @@ private struct ComposerBar: View {
                 return true
             }
             return entry.available
+        case .opencodePartner(let partnerId):
+            guard client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled }) else {
+                return false
+            }
+            return OpencodeProcessManager.shared.binaryPath != nil
         }
     }
 
@@ -2675,6 +2690,15 @@ private struct ComposerBar: View {
             guard isChoiceAvailable(choice) else {
                 return providerMatrix?.customProviders.first(where: { $0.id == providerId && !$0.available })?.reason
                     ?? "\(label) is unavailable."
+            }
+            return nil
+        case .opencodePartner(let partnerId):
+            let label = choice.displayName(in: client.modelCatalog)
+            guard client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled }) else {
+                return "Connect \(label) in Settings → Providers."
+            }
+            guard isChoiceAvailable(choice) else {
+                return "\(label) is unavailable — install opencode on PATH."
             }
             return nil
         }
@@ -2698,6 +2722,10 @@ private struct ComposerBar: View {
                 }
             case .custom(let providerId):
                 if client.modelCatalog.customProviders.contains(where: { $0.id == providerId && $0.enabled }) {
+                    choices.append(choice)
+                }
+            case .opencodePartner(let partnerId):
+                if client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled }) {
                     choices.append(choice)
                 }
             }

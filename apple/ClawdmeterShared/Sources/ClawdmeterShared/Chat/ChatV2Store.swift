@@ -20,7 +20,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
         case .claude: return "Claude"
         case .antigravity: return "Antigravity"
         case .cursor: return "Cursor"
-        case .opencode: return "OpenCode"
+        case .opencode: return "OpenCode Go"
         case .openrouter: return "OpenRouter"
         case .grok: return "Grok"
         }
@@ -313,6 +313,7 @@ public final class ChatV2Store: ObservableObject {
         if AgentControlWireVersion.supportsCustomProviders(serverWireVersion: AgentControlWireVersion.current) {
             choices.append(contentsOf: catalog.customProviders.filter(\.enabled).map { .custom($0.id) })
         }
+        choices.append(contentsOf: catalog.opencodePartners.filter(\.enabled).map { .opencodePartner($0.id) })
         return sortModelPickerChoices(choices, usageSnapshot: usageSnapshot, catalog: catalog)
     }
 
@@ -598,6 +599,16 @@ public final class ChatV2Store: ObservableObject {
                     billingProvider: providerId,
                     customProviderId: providerId
                 )
+            case .opencodePartner:
+                return FrontierModelSlot(
+                    provider: .opencode,
+                    model: model(forChoice: choice, catalog: catalog),
+                    effort: nil,
+                    codexChatBackend: nil,
+                    deepResearch: deepResearch,
+                    chatVendor: nil,
+                    billingProvider: choice.billingProvider
+                )
             }
         }
     }
@@ -687,13 +698,23 @@ public final class ChatV2Store: ObservableObject {
             guard case .builtin(let vendor) = choice else { return nil }
             return defaultChatVendorOrder.contains(vendor) ? choice : nil
         }
-        let customs = decoded.filter { if case .custom = $0 { return true }; return false }
+        let customs = decoded.filter { choice in
+            switch choice {
+            case .custom, .opencodePartner: return true
+            default: return false
+            }
+        }
         return uniqueChoices(builtins + customs)
     }
 
     private static func mergeRestoredChoices(_ decoded: [ProviderChoice]) -> [ProviderChoice] {
         let builtins = decoded.filter { if case .builtin = $0 { return true }; return false }
-        let customs = decoded.filter { if case .custom = $0 { return true }; return false }
+        let customs = decoded.filter { choice in
+            switch choice {
+            case .custom, .opencodePartner: return true
+            default: return false
+            }
+        }
         let filteredBuiltins = normalizedChoices(builtins, enabledChoices: defaultEnabledBuiltinChoices)
         return uniqueChoices(filteredBuiltins + customs)
     }
@@ -728,7 +749,12 @@ public final class ChatV2Store: ObservableObject {
     private func normalizedChoicesForEnabledProviders(_ choices: [ProviderChoice]) -> [ProviderChoice] {
         let enabled = effectiveEnabledChatChoices
         let builtins = choices.filter { if case .builtin = $0 { return true }; return false }
-        let customs = choices.filter { if case .custom = $0 { return true }; return false }
+        let customs = choices.filter { choice in
+            switch choice {
+            case .custom, .opencodePartner: return true
+            default: return false
+            }
+        }
         let enabledBuiltins = enabled.filter { if case .builtin = $0 { return true }; return false }
         let filteredBuiltins = Self.normalizedChoices(builtins, enabledChoices: enabledBuiltins)
         let filteredCustoms = customs.filter { enabled.contains($0) }

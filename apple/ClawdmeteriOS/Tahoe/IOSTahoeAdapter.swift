@@ -122,7 +122,8 @@ extension AgentControlClient {
             subtitle: subtitle,
             runtimePlanText: s.planText,
             commitBranch: branch,
-            planProgress: s.planProgress
+            planProgress: s.planProgress,
+            executionHostLabel: s.executionHostLabel
         )
     }
 

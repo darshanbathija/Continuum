@@ -83,14 +83,29 @@ struct ClawdmeterMacApp: App {
             // global TahoeThemeStore. The runtime is threaded in so the
             // Usage tab + menu-bar popover render live per-provider data
             // via the `tahoeLive` adapter (see MacTahoeAdapter.swift).
-            MacRootView(runtime: runtime)
-                .background(DashboardOpener())   // bridges AppDelegate → openWindow
+            Group {
+                if AppRuntime.isHeadlessAgentMode {
+                    Color.clear
+                        .frame(width: 1, height: 1)
+                        .onAppear {
+                            NSApp.setActivationPolicy(.accessory)
+                            for window in NSApp.windows where window.title == "Continuum" {
+                                window.orderOut(nil)
+                            }
+                        }
+                } else {
+                    MacRootView(runtime: runtime)
+                        .background(DashboardOpener())   // bridges AppDelegate → openWindow
+                }
+            }
                 .onAppear {
                     appDelegate.configure(runtime: runtime)
-                    NotificationCenter.default.post(
-                        name: UserDefaults.didChangeNotification, object: nil
-                    )
-                    NSApp.setActivationPolicy(.regular)
+                    if !AppRuntime.isHeadlessAgentMode {
+                        NotificationCenter.default.post(
+                            name: UserDefaults.didChangeNotification, object: nil
+                        )
+                        NSApp.setActivationPolicy(.regular)
+                    }
                 }
         }
         // Sized to comfortably show the three-column Chat compare layout

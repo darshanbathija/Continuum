@@ -107,6 +107,12 @@ final class SessionLauncherModel: ObservableObject {
             nextCatalog = nextCatalog.replacingOpenRouter(openRouterState.models)
         }
 
+        nextCatalog = nextCatalog.replacingOpenCodePartners(await OpenCodePartnerModelProbe.shared.summaries())
+        if !opencodeReady {
+            opencodeReady = nextCatalog.opencodePartners.contains(where: \.enabled)
+                && OpencodeProcessManager.shared.binaryPath != nil
+        }
+
         if cursorEnabled {
             let cursorState = await CursorModelProbe.shared.currentState()
             nextCatalog = nextCatalog.replacingCursor(cursorState.models)
