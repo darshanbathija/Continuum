@@ -31,6 +31,11 @@ struct SpawnTerminalView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: TerminalView, context: Context) {
+        // Refresh the focus callback every update: the Coordinator caches the
+        // closure from makeCoordinator, but `onDidFocus` closes over the tile
+        // for THIS render. After a grid reflow (tile closed → grid reindexed)
+        // a stale closure would make the click monitor select the wrong tile.
+        context.coordinator.onDidFocus = onDidFocus
         guard context.coordinator.lastFocusToken != focusToken else { return }
         context.coordinator.lastFocusToken = focusToken
         // Deferred: makeFirstResponder mid-view-update triggers AppKit
@@ -45,7 +50,9 @@ struct SpawnTerminalView: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, @preconcurrency TerminalViewDelegate {
         let host: TerminalPtyHost
-        let onDidFocus: () -> Void
+        // var (not let): refreshed each updateNSView so a grid reflow can't
+        // leave the click monitor reporting focus for a stale tile.
+        var onDidFocus: () -> Void
         weak var terminalView: TerminalView?
         var lastFocusToken: Int = 0
         private var subscriptionTask: Task<Void, Never>?
@@ -91,27 +98,47 @@ struct SpawnTerminalView: NSViewRepresentable {
                     }
                 }
             }
-            // Click-into-terminal moves the tile selection. The monitor
-            // passes the event through untouched — AppKit still delivers
-            // it to the terminal for caret/selection handling. hitTest (not
-            // bounds.contains) so clicks on overlays stacked above the
-            // terminal — or on the ACTIVE tab while this grid sits in
-            // MacRootView's opacity-0 inactive-tab cache — don't silently
-            // steal the typing target.
+            // Click-into-terminal moves the tile selection. The monitor passes
+            // the event through untouched — AppKit still delivers it to the
+            // terminal for caret/selection handling.
+            //
+            // We decide "did THIS tile get the click?" from the window's actual
+            // first responder AFTER the click is dispatched, not from geometric
+            // hitTest. AppKit makes the clicked terminal first responder during
+            // event dispatch, so on the next runloop tick exactly one tile's
+            // view owns it — unambiguous. hitTest, by contrast, returned the
+            // wrong tile whenever an intervening hittable view sat at the click
+            // point (the TahoeGlass material, the SwiftUI selection-border
+            // overlay) or sibling AppKit z-order drifted from the visual grid
+            // after a reflow — which is what left the highlight on the wrong
+            // tile. First-responder is also the right gate for the opacity-0
+            // inactive-tab case: a non-hittable cached grid never takes focus.
             clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
                 guard let self,
                       let view = self.terminalView,
                       let window = view.window,
-                      event.window === window,
-                      let contentView = window.contentView
+                      event.window === window
                 else { return event }
-                let pointInContent = contentView.convert(event.locationInWindow, from: nil)
-                if let hit = contentView.hitTest(pointInContent),
-                   hit === view || hit.isDescendant(of: view) {
-                    // Deferred so selection publishes outside event dispatch.
-                    DispatchQueue.main.async { [onDidFocus = self.onDidFocus] in
-                        onDidFocus()
-                    }
+                // Gate on THIS terminal's own frame before trusting first
+                // responder. A terminal's bounds are geometry-true regardless
+                // of sibling z-order, so this rejects clicks on a tile header
+                // or another tile WITHOUT reintroducing the contentView.hitTest
+                // z-order/overlay bug. Without it, a header click (which makes
+                // no terminal first responder) lets the *previously* focused
+                // tile's deferred block still match and snap the border back.
+                let pointInView = view.convert(event.locationInWindow, from: nil)
+                guard view.bounds.contains(pointInView) else { return event }
+                // Deferred: first responder only updates once this click
+                // finishes dispatching, and this publishes selection outside
+                // event handling.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self,
+                          let view = self.terminalView,
+                          let window = view.window,
+                          let responder = window.firstResponder as? NSView,
+                          responder === view || responder.isDescendant(of: view)
+                    else { return }
+                    self.onDidFocus()
                 }
                 return event
             }
