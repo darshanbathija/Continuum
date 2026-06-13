@@ -46,6 +46,12 @@ public final class UsageModel: ObservableObject {
     /// provider-keyed path as Gemini.
     @Published public private(set) var cursorSnapshot: UsageStore.Snapshot?
 
+    /// OpenCode usage mirrored from the paired Mac daemon.
+    @Published public private(set) var opencodeSnapshot: UsageStore.Snapshot?
+
+    /// Grok usage mirrored from the paired Mac daemon.
+    @Published public private(set) var grokSnapshot: UsageStore.Snapshot?
+
     /// Aggregated token-analytics snapshot mirrored from the Mac via iCloud
     /// KV. `nil` until the Mac has run with the iCloud entitlement live.
     /// Drives the iOS Analytics tab. Plan A19.
@@ -238,6 +244,28 @@ public final class UsageModel: ObservableObject {
                 UsageStore.write(cursor, providerID: "cursor", displayName: "Cursor")
                 UsageStore.reloadWidgets(providerID: "cursor")
                 WatchTokenBridge.shared.pushUsage(providerID: "cursor", cursor)
+            }
+            if let opencode = usage.usageData(for: "opencode") {
+                opencodeSnapshot = UsageStore.Snapshot(
+                    providerID: "opencode",
+                    displayName: "OpenCode",
+                    usage: opencode,
+                    writtenAt: usage.lastChecked
+                )
+                UsageStore.write(opencode, providerID: "opencode", displayName: "OpenCode")
+                UsageStore.reloadWidgets(providerID: "opencode")
+                WatchTokenBridge.shared.pushUsage(providerID: "opencode", opencode)
+            }
+            if let grok = usage.usageData(for: "grok") {
+                grokSnapshot = UsageStore.Snapshot(
+                    providerID: "grok",
+                    displayName: "Grok",
+                    usage: grok,
+                    writtenAt: usage.lastChecked
+                )
+                UsageStore.write(grok, providerID: "grok", displayName: "Grok")
+                UsageStore.reloadWidgets(providerID: "grok")
+                WatchTokenBridge.shared.pushUsage(providerID: "grok", grok)
             }
         }
         if let snap = await analyticsPayload {

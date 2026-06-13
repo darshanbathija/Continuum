@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import UIKit
 import ClawdmeterShared
 
 /// E7 (Gate 3 GTM launch blocker): camera-based QR scanner for the new
@@ -24,6 +25,7 @@ public struct PairingScanView: View {
     @ObservedObject var service: IOSRelayPairingService
     var onDone: (Result<RelayPairingRecord, Error>) -> Void
 
+    @Environment(\.theme) private var theme
     @State private var pasteSheetPresented: Bool = false
     @State private var capturedError: String?
     @Environment(\.dismiss) private var dismiss
@@ -51,22 +53,44 @@ public struct PairingScanView: View {
             }
             .padding(.bottom, 28)
 
-            // Top-leading close + top-trailing paste button.
+            // Top label + cancel (Continuum scanner)
+            VStack(spacing: 0) {
+                VStack(spacing: 5) {
+                    Text("Scan the QR on your Mac")
+                        .font(ContinuumFont.body(15, weight: .semibold))
+                        .foregroundStyle(theme.fg)
+                    Text("Continuum › Settings › Pairing")
+                        .font(ContinuumFont.mono(11))
+                        .foregroundStyle(theme.fg3)
+                }
+                .padding(.top, 74)
+                Spacer()
+            }
+
+            VStack(spacing: 0) {
+                Spacer()
+                Button(action: ContinuumAnalytics.wrapButton(
+                        "pairing_scan_cancel",
+                        {
+ onDone(.failure(CancellationError())); dismiss() 
+                        }
+                    )) {
+                    Text("Cancel")
+                        .font(ContinuumFont.body(14, weight: .medium))
+                        .foregroundStyle(theme.fg2)
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 9)
+                        .background(theme.surface2)
+                        .clipShape(Capsule(style: .continuous))
+                        .overlay(Capsule(style: .continuous).strokeBorder(theme.hair2, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 96)
+            }
+            .padding(.horizontal, 16)
+
             VStack {
                 HStack {
-                    Button(action: ContinuumAnalytics.wrapButton(
-                            "pairing_scan_cancel",
-                            {
- onDone(.failure(CancellationError())); dismiss() 
-                            }
-                        )) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 38, height: 38)
-                            .background(Circle().fill(.black.opacity(0.45)))
-                    }
-                    .accessibilityLabel("Cancel pairing")
                     Spacer()
                     Button(action: ContinuumAnalytics.wrapButton(
                             "pairing_scan_paste",
@@ -83,6 +107,7 @@ public struct PairingScanView: View {
                     .accessibilityLabel("Paste pairing URL")
                 }
                 .padding(.horizontal, 16)
+                .padding(.top, 8)
                 Spacer()
             }
         }
@@ -302,6 +327,7 @@ private struct ScannerViewControllerRepresentable: UIViewControllerRepresentable
 /// (simulator, accessibility, no camera permission, etc.). Mirrors
 /// IOSPairingView's PasteURLSheet but accepts the new bundle URL form.
 struct PairingPasteURLSheet: View {
+    @Environment(\.theme) private var theme
     @Binding var isPresented: Bool
     var onAccept: (String) -> Void
 
@@ -310,47 +336,63 @@ struct PairingPasteURLSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Open Clawdmeter on your Mac → Settings → Sessions → Pair iPhone → Copy pairing URL. Then paste it below.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 15) {
+                Text("In Continuum on your Mac, open Settings › Pairing and copy the pairing token.")
+                    .font(ContinuumFont.body(13.5))
+                    .foregroundStyle(theme.fg2)
                     .fixedSize(horizontal: false, vertical: true)
-                TextField(
-                    "clawdmeter-pair://v1/…",
-                    text: $pastedURL,
-                    axis: .vertical
-                )
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .lineLimit(3...6)
-                .textFieldStyle(.roundedBorder)
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                        .fill(theme.surface3)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                                .strokeBorder(pastedURL.isEmpty ? theme.hair2 : theme.focus, lineWidth: 0.5)
+                        }
+                    TextEditor(text: $pastedURL)
+                        .font(ContinuumFont.mono(12.5))
+                        .foregroundStyle(theme.fg)
+                        .scrollContentBackground(.hidden)
+                        .padding(12)
+                        .frame(minHeight: 64)
+                }
                 if let error = pasteError {
                     Text(error)
-                        .foregroundStyle(.red)
-                        .font(.caption)
+                        .foregroundStyle(theme.error)
+                        .font(ContinuumFont.body(12))
                 }
-                Button("Pair", action: ContinuumAnalytics.wrapButton(
-                        "pair",
-                        {
-                    let trimmed = pastedURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                    // Don't double-parse — let the service do the
-                    // validation and surface its error.
-                    guard !trimmed.isEmpty else {
-                        pasteError = "Empty URL."
-                        return
+                Button(action: ContinuumAnalytics.wrapButton("pairing_paste_clipboard", pasteFromClipboard)) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "doc.on.clipboard")
+                        Text("Paste from clipboard")
                     }
-                    onAccept(trimmed)
-                    isPresented = false
-                
-                        }
-                    ))
-                .buttonStyle(.borderedProminent)
-                .tint(SessionsV2Theme.accent)
-                .disabled(pastedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .font(ContinuumFont.body(13.5, weight: .medium))
+                    .foregroundStyle(theme.fg2)
+                    .frame(maxWidth: .infinity, minHeight: 40)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous)
+                            .strokeBorder(theme.hairline, lineWidth: 0.5)
+                    }
+                }
+                .buttonStyle(.plain)
+                Button(action: ContinuumAnalytics.wrapButton("pairing_paste_submit", submit)) {
+                    Text("Pair this Mac")
+                        .font(ContinuumFont.body(15.5, weight: .semibold))
+                        .foregroundStyle(theme.primaryText)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .background(theme.primaryFill.opacity(pastedURL.trimmingCharacters(in: .whitespacesAndNewlines).count > 12 ? 1 : 0.4))
+                        .clipShape(RoundedRectangle(cornerRadius: ContinuumTokens.Radius.button, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(pastedURL.trimmingCharacters(in: .whitespacesAndNewlines).count <= 12)
+                Text("token is verified locally · never sent to us")
+                    .font(ContinuumFont.mono(10))
+                    .foregroundStyle(theme.fg4)
+                    .frame(maxWidth: .infinity)
                 Spacer()
             }
             .padding(20)
-            .navigationTitle("Paste pairing URL")
+            .background(theme.bg)
+            .navigationTitle("Paste pairing token")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -363,5 +405,21 @@ struct PairingPasteURLSheet: View {
                 }
             }
         }
+    }
+
+    private func pasteFromClipboard() {
+        if let text = UIPasteboard.general.string {
+            pastedURL = text
+        }
+    }
+
+    private func submit() {
+        let trimmed = pastedURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            pasteError = "Empty URL."
+            return
+        }
+        onAccept(trimmed)
+        isPresented = false
     }
 }
