@@ -437,6 +437,7 @@ struct SidebarPane: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(t.accentAlpha(0.32), lineWidth: 0.5)
                 )
+                .hoverHighlight(cornerRadius: 10)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -534,6 +535,7 @@ struct SidebarPane: View {
                 .foregroundStyle(isCustomised ? t.accent : t.fg3)
                 .frame(width: 24, height: 24)
                 .background(isCustomised ? t.accentAlpha(0.15) : t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .hoverHighlight(cornerRadius: 6)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -621,7 +623,7 @@ struct SidebarPane: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(PressableButtonStyle())
+        .buttonStyle(HoverableButtonStyle(cornerRadius: 10))
         .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.bottom, 8)
         .help("Open a grid of agent terminal sessions in your home directory")
@@ -1144,10 +1146,15 @@ struct SidebarPane: View {
                 .padding(.leading, 20)
                 .padding(.trailing, SidebarLayout.edgeInset)
                 .padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Roomier row height (Conductor-style) without padding the
+                // content — the branch icon + name center in a taller row.
+                .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(PressableButtonStyle())
+            #if os(macOS)
+            .pointerStyle(.link)
+            #endif
 
             worktreeTrailingChrome(
                 provisioning: provisioning,
@@ -1445,6 +1452,7 @@ struct SidebarPane: View {
                 .foregroundStyle(t.fg3)
                 .frame(width: 22, height: 22)
                 .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .hoverHighlight(cornerRadius: 6)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -1650,6 +1658,9 @@ struct SidebarPane: View {
                             recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path, repo: repo)
                         }
                         .buttonStyle(PressableButtonStyle())
+                        #if os(macOS)
+                        .pointerStyle(.link)
+                        #endif
                     }
                 }
                 if visibleSessions.isEmpty && recentSessions.isEmpty {
@@ -1953,7 +1964,7 @@ struct SidebarPane: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(PressableButtonStyle())
+            .buttonStyle(HoverableButtonStyle(cornerRadius: ContinuumTokens.Radius.button))
             .accessibilityIdentifier("code.repo.toggle")
 
             Spacer()
@@ -1991,7 +2002,7 @@ struct SidebarPane: View {
                     .frame(width: 22, height: 22)
                     .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
-            .buttonStyle(PressableButtonStyle())
+            .buttonStyle(HoverableButtonStyle(cornerRadius: 6))
             .help("New workspace — Codex · GPT-5.5 · extra-high effort · plan mode (option-click to customize)")
             .accessibilityIdentifier("code.repo.new-session")
         }
@@ -2254,6 +2265,9 @@ struct SidebarPane: View {
             }
         }
         .buttonStyle(PressableButtonStyle())
+        #if os(macOS)
+        .pointerStyle(.link)
+        #endif
         .accessibilityIdentifier("code.session.row")
         .onHover { inside in
             if inside {

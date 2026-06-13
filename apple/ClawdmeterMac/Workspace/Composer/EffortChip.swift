@@ -81,7 +81,9 @@ private struct EffortMenuButton: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSButton {
-        let button = NSButton()
+        // PointingHandButton (defined in PermissionModeChip.swift) shows the
+        // link cursor over the whole pill, matching the permission pill.
+        let button = PointingHandButton()
         button.isBordered = false
         button.title = ""
         button.imagePosition = .noImage

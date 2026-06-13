@@ -259,7 +259,14 @@ struct SpawnConfigSheet: View {
                 .accessibilityIdentifier("code.spawn.sheet.value.\(agent.rawValue)")
 
             Button {
-                counts[agent] = count + 1
+                // When the batch is full, "+" auto-debits the default
+                // (first spawnable) agent instead of being a dead button.
+                counts = SpawnPlan.incrementAllocation(
+                    counts,
+                    agent: agent,
+                    total: sessionCount,
+                    availableAgents: spawnableAgents
+                )
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 10, weight: .semibold))
@@ -267,8 +274,8 @@ struct SpawnConfigSheet: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(PressableButtonStyle())
-            .disabled(!spawnable || remainingCount <= 0)
-            .foregroundStyle(remainingCount <= 0 ? t.fg4 : t.fg2)
+            .disabled(!spawnable || count >= sessionCount)
+            .foregroundStyle(count >= sessionCount ? t.fg4 : t.fg2)
             .accessibilityLabel("Add a \(AgentKindUI.displayName(for: agent)) session")
             .accessibilityIdentifier("code.spawn.sheet.plus.\(agent.rawValue)")
         }

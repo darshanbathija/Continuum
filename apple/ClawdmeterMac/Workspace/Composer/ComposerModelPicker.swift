@@ -91,6 +91,7 @@ public struct ComposerModelPicker: View {
     @State private var activeRail: RailKey
     @State private var searchQuery: String = ""
     @State private var focusedRowIndex: Int? = nil
+    @State private var hoveredRail: RailKey? = nil
     @State private var draggingFavoriteId: String? = nil
     @FocusState private var searchFocused: Bool
 
@@ -264,6 +265,12 @@ public struct ComposerModelPicker: View {
                     .opacity(dimmed ? 0.38 : 1.0)
             }
             .frame(width: 44, height: 40)
+            // Hover wash so the rail reads as a set of pickable targets, not
+            // static brand glyphs. The active stripe still anchors "you are here".
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(hoveredRail == entry.key && !active ? t.hover : Color.clear)
+            )
             .overlay(alignment: .trailing) {
                 if active {
                     Rectangle()
@@ -285,6 +292,17 @@ public struct ComposerModelPicker: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
+        // Link (pointing-hand) cursor so the rail glyphs read as clickable.
+        #if os(macOS)
+        .pointerStyle(.link)
+        #endif
+        .onHover { hovering in
+            if hovering {
+                hoveredRail = entry.key
+            } else if hoveredRail == entry.key {
+                hoveredRail = nil
+            }
+        }
         .help(entry.tooltip)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(entry.tooltip)
@@ -509,6 +527,17 @@ public struct ComposerModelPicker: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Hover/keyboard-focus wash. `focusedRowIndex` is driven by both
+        // pointer hover (below) and arrow-key nav, so this doubles as the
+        // keyboard-focus highlight.
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(index == focusedRowIndex ? t.hover : Color.clear)
+        )
+        // Link (pointing-hand) cursor so rows read as clickable.
+        #if os(macOS)
+        .pointerStyle(.link)
+        #endif
         .opacity(isDragging ? 0.45 : 1.0)
         .onDrag {
             guard isFavoritesRail else {

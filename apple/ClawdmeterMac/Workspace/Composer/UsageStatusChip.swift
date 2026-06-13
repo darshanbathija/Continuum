@@ -96,6 +96,11 @@ struct ModelEffortChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(PressableButtonStyle())
+        // Link (pointing-hand) cursor so the pill reads as clickable, matching
+        // the sibling effort/permission pills.
+        #if os(macOS)
+        .pointerStyle(.link)
+        #endif
         .fixedSize(horizontal: true, vertical: false)
         .disabled(enabledChoices.isEmpty)
         .help(enabledChoices.isEmpty ? "Enable a provider in Settings → Providers." : "Change model (⌘⌥M)")
