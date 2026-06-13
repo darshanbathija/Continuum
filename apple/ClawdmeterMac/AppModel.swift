@@ -157,9 +157,13 @@ public final class AppModel: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             wirePollerEventsIfNeeded()
+            // Consume the forced event inline. poller.forcePoll() also drives
+            // onEvent for this same event, which defers a RunLoop.main.perform
+            // block; leave skipNextPublishedEvent = true so that deferred block
+            // skips the duplicate instead of double-consuming. Resetting the
+            // flag here would clear it before the deferred block runs.
             skipNextPublishedEvent = true
             let event = await poller.forcePoll()
-            skipNextPublishedEvent = false
             consume(event)
             if !isStarted {
                 isStarted = true

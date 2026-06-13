@@ -875,6 +875,7 @@ final class AppRuntime: ObservableObject {
             }
         }
         Task(priority: .utility) { @MainActor in
+            FffAgentSearchProvisioning.ensureProvisioned()
             OpencodeProcessManager.shared.prepareRuntimeHost()
         }
         Task(priority: .utility) { @MainActor in

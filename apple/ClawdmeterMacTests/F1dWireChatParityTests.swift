@@ -57,12 +57,12 @@ final class F1dWireChatParityTests: XCTestCase {
         var isAuthenticated: Bool { true }
         func refreshCredentialsIfNeeded() async throws -> Bool { false }
         func poll() async throws -> UsageData {
-            queueLock.lock()
-            defer { queueLock.unlock() }
-            guard !_queued.isEmpty else {
-                throw AISourceError.malformedResponse(detail: "queue empty")
+            try queueLock.withLock {
+                guard !_queued.isEmpty else {
+                    throw AISourceError.malformedResponse(detail: "queue empty")
+                }
+                return _queued.removeFirst()
             }
-            return _queued.removeFirst()
         }
     }
 
