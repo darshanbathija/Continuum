@@ -1,6 +1,6 @@
 import Foundation
 
-/// Spawn mode (Mac Code tab): the user picks a total terminal count (4/6/8)
+/// Spawn mode (Mac Code tab): the user picks a total terminal count (1/2/4/6/8)
 /// and an agent mix ("4 Claude, 2 Codex, 2 Cursor"); the Mac opens that many
 /// interactive agent CLIs in PTY tiles, all cwd'd to the home directory.
 ///
@@ -30,8 +30,9 @@ public enum SpawnPlan {
         }
     }
 
-    /// Terminal counts offered in the spawn config page.
-    public static let sessionCountOptions: [Int] = [4, 6, 8]
+    /// Terminal counts offered in the spawn config page. The first entry is
+    /// the default selection on a fresh page.
+    public static let sessionCountOptions: [Int] = [1, 2, 4, 6, 8]
 
     /// Agents offered in the spawn config page, in display order.
     /// `.unknown` is already excluded by `AgentKind.allCases`.

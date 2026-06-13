@@ -1,7 +1,7 @@
 import SwiftUI
 import ClawdmeterShared
 
-/// Spawn-mode config page: pick how many terminal sessions to open (4/6/8)
+/// Spawn-mode config page: pick how many terminal sessions to open (1/2/4/6/8)
 /// and the agent mix ("4 Claude, 2 Codex, 2 Cursor"). Spawning opens every
 /// terminal in the home directory and selects the new group in the Code tab.
 struct SpawnConfigSheet: View {
@@ -150,7 +150,7 @@ struct SpawnConfigSheet: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(PressableButtonStyle())
-                    .accessibilityLabel("\(option) sessions")
+                    .accessibilityLabel("\(option) session\(option == 1 ? "" : "s")")
                     .accessibilityIdentifier("code.spawn.sheet.count.\(option)")
                 }
             }
@@ -306,7 +306,7 @@ struct SpawnConfigSheet: View {
                     if isSpawning {
                         ProgressView().controlSize(.small)
                     }
-                    Text(isSpawning ? "Spawning…" : "Spawn \(sessionCount) sessions")
+                    Text(isSpawning ? "Spawning…" : "Spawn \(sessionCount) session\(sessionCount == 1 ? "" : "s")")
                         .font(TahoeFont.body(12.5, weight: .bold))
                 }
                 .foregroundStyle(canSpawn ? t.primaryText : t.fg4)
