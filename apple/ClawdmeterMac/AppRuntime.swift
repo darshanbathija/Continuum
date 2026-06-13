@@ -666,6 +666,15 @@ final class AppRuntime: ObservableObject {
         if !persistedInstances.isEmpty {
             Task { @MainActor [self] in
                 for record in persistedInstances {
+                    // Stagger each secondary's first poll. The primaries above
+                    // already polled at launch; a secondary Claude account
+                    // shares the same per-IP-rate-limited `/api/oauth/usage`
+                    // endpoint, so adding it (which force-polls immediately) at
+                    // the same instant would 429 and leave its gauge empty.
+                    // A few seconds of offset clears the rate-limit window
+                    // (and successive secondaries stagger further); steady-state
+                    // desync is handled by UsagePoller jitter.
+                    try? await Task.sleep(nanoseconds: UInt64(4.0 * 1_000_000_000))
                     let ok = await self.addInstance(record.instanceId, persist: false)
                     if !ok {
                         runtimeLogger.error(
