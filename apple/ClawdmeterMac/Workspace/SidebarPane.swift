@@ -1231,17 +1231,11 @@ struct SidebarPane: View {
                 HStack(spacing: 6) {
                     GitHubBranchStatusIcon(worktreeBranchIconKind(for: wt), size: 14)
                         .accessibilityIdentifier("code.worktree.branch-icon")
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(wt.branch)
-                            .font(TahoeFont.body(12.5, weight: .medium))
-                            .foregroundStyle(t.fg)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Text(worktreeSubtitle(wt))
-                            .font(TahoeFont.body(9.5))
-                            .foregroundStyle(t.fg4)
-                            .lineLimit(1).truncationMode(.tail)
-                    }
+                    Text(wt.branch)
+                        .font(TahoeFont.body(12.5, weight: .medium))
+                        .foregroundStyle(t.fg)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     Spacer(minLength: 4)
                 }
                 .padding(.leading, 20)
@@ -1380,32 +1374,6 @@ struct SidebarPane: View {
             }
         }
         return GitHubBranchIconKind.preferred(from: states)
-    }
-
-    /// The models running on a worktree, oldest→newest (the handoff chain) with
-    /// consecutive duplicates collapsed, e.g. "Claude · Codex".
-    private func worktreeSubtitle(_ wt: WorktreeGroup) -> String {
-        if wt.sessions.isEmpty {
-            let key = WorkspaceKey(repoKey: wt.repoKey, workspacePath: wt.path)
-            let drafts = model.workspaceDraftTabs(in: key)
-            if !drafts.isEmpty {
-                let names = drafts
-                    .sorted { $0.createdAt < $1.createdAt }
-                    .map { AgentKindUI.displayName(for: $0.agent) }
-                var chain: [String] = []
-                for n in names where chain.last != n { chain.append(n) }
-                return chain.isEmpty ? "Draft" : chain.joined(separator: " · ")
-            }
-            if !model.workspaceTerminalTabs(in: key).isEmpty { return "Terminal" }
-            if !model.workspaceDocumentTabs(in: key).isEmpty { return "Document" }
-            return "Worktree"
-        }
-        let names = wt.sessions
-            .sorted { $0.createdAt < $1.createdAt }
-            .map { AgentKindUI.displayName(for: $0.agent) }
-        var chain: [String] = []
-        for n in names where chain.last != n { chain.append(n) }
-        return chain.isEmpty ? "Worktree" : chain.joined(separator: " · ")
     }
 
     // MARK: - Workspace management (gear / context menu)
