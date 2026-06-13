@@ -30,6 +30,11 @@ public final class AppModel: ObservableObject {
     private var clockTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
     private var isStarted = false
+    /// Set while `forcePoll()` is awaiting its tick so the matching
+    /// `onEvent` publish is dropped — we consume the returned event
+    /// directly on the MainActor instead of relying on
+    /// `RunLoop.main.perform`, which can lag behind `await` on Tahoe.
+    private var skipNextPublishedEvent = false
 
     // F1d-wire (strangler-fig per D23): per-period sequence cursor for
     // the Cursor adapter. The polling loop calls
@@ -85,7 +90,15 @@ public final class AppModel: ObservableObject {
         logger.info("AppModel.start \(self.config.id) (isStarted=\(self.isStarted))")
         guard !isStarted else { return }
         isStarted = true
+        wirePollerEventsIfNeeded()
+        startBackgroundPollingIfNeeded()
+    }
 
+    /// Wire the poller's publish callback without starting the background
+    /// loop — used by `forcePoll()` so the forced tick doesn't race the
+    /// loop's first tick on a not-yet-started secondary account model.
+    private func wirePollerEventsIfNeeded() {
+        guard poller.onEvent == nil else { return }
         // RunLoop.main.perform — every other main-queue mechanism silently
         // drops closures for Claude's poller on Tahoe (verified for GCD,
         // Task @MainActor, Task.detached @MainActor, OperationQueue.main).
@@ -96,14 +109,22 @@ public final class AppModel: ObservableObject {
             RunLoop.main.perform { [weak self] in
                 providerLogger.info("RunLoop.main RUNNING")
                 MainActor.assumeIsolated {
-                    self?.consume(event)
+                    guard let self else { return }
+                    if self.skipNextPublishedEvent {
+                        self.skipNextPublishedEvent = false
+                        return
+                    }
+                    self.consume(event)
                 }
             }
             // Wake the runloop in case it's idle.
             CFRunLoopWakeUp(CFRunLoopGetMain())
         }
-        poller.start()
+    }
 
+    private func startBackgroundPollingIfNeeded() {
+        poller.start()
+        guard clockTimer == nil else { return }
         // AutoReviver only needs second-precision triggering near the reset
         // boundary. Don't publish anything — see the `now` doc-comment above
         // for why ticking @Published kills MenuBarExtra performance.
@@ -135,13 +156,15 @@ public final class AppModel: ObservableObject {
     public func forcePoll() {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            // Starting the model wires `onEvent` → consume; without this a
-            // not-yet-started secondary account gauge stayed at the nil-usage
-            // placeholder. The poll's event is consumed via `onEvent`; do NOT
-            // also consume the return value or every forced poll double-fires
-            // (duplicate Cursor canonical events downstream).
-            if !isStarted { start() }
-            _ = await poller.forcePoll()
+            wirePollerEventsIfNeeded()
+            skipNextPublishedEvent = true
+            let event = await poller.forcePoll()
+            skipNextPublishedEvent = false
+            consume(event)
+            if !isStarted {
+                isStarted = true
+                startBackgroundPollingIfNeeded()
+            }
         }
     }
 
