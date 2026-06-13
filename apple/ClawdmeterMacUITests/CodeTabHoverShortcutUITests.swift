@@ -511,25 +511,10 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         )
     }
 
-    func testCenterHeaderDensityMenuUpdatesTranscriptDensity() throws {
-        openCodeTab()
-
-        let row = workspaceLeafRowElement()
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
-        row.click()
-
-        let density = element("code.header.density")
-        XCTAssertTrue(density.waitForExistence(timeout: 10), "Center header should expose transcript density.")
-        XCTAssertTrue(element("code.header.density.selected.balanced").waitForExistence(timeout: 5), "Seeded workspace should start with balanced density.")
-
-        density.click()
-        clickMenuItem(identifier: "code.header.density.detailed", title: "Detailed")
-        XCTAssertTrue(element("code.header.density.selected.detailed").waitForExistence(timeout: 5), "Selecting Detailed should update the density state.")
-
-        density.click()
-        clickMenuItem(identifier: "code.header.density.compact", title: "Compact")
-        XCTAssertTrue(element("code.header.density.selected.compact").waitForExistence(timeout: 5), "Selecting Compact should update the density state.")
-    }
+    // v0.38: the transcript-density picker moved out of the Code center
+    // header into Settings → Visual ("Code and diff themes"), so the old
+    // `code.header.density` menu test was removed. Density now persists in
+    // SessionPresentationStore (see UIPrimitivesTests round-trip coverage).
 
     func testWorkspaceNewTabButtonCreatesUnboundedChatDraftTabsFromCodeTab() throws {
         openCodeTab()
@@ -1089,7 +1074,6 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         let gutterIds = [
             "code.review.gutter.plan",
             "code.review.gutter.diff",
-            "code.review.gutter.sources",
             "code.review.gutter.artifacts",
             "code.review.gutter.browser",
             "code.review.gutter.terminal",
@@ -1111,7 +1095,6 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         let paneTabs = [
             "code.review.tab.plan",
             "code.review.tab.diff",
-            "code.review.tab.sources",
             "code.review.tab.browser",
             "code.review.tab.terminal",
         ]
@@ -1161,33 +1144,15 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         )
     }
 
-    func testSourcesAndArtifactsReviewPanesRenderSeededTranscriptContentAndClicks() throws {
+    func testArtifactsReviewPaneRendersSeededTranscriptContentAndClicks() throws {
         openCodeTab()
 
         let row = workspaceLeafRowElement()
         XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded Code session should render in the sidebar.")
         row.click()
 
-        openReviewPaneTab(key: "sources", title: "Sources")
-        XCTAssertTrue(element("code.sources.pane").waitForExistence(timeout: 10), "Sources pane should render with stable target.")
-        let sourceRows = app.descendants(matching: .any).matching(identifier: "code.sources.row")
-        let notesSource = sourceRows.matching(NSPredicate(format: "label CONTAINS[c] %@", "notes.md")).firstMatch
-        XCTAssertTrue(
-            notesSource.waitForExistence(timeout: 10),
-            "Sources pane should render the seeded Read tool row; hierarchy:\n\(debugHierarchyLines(containing: ["code.sources", "notes.md", "continuum-docs"]))"
-        )
-        XCTAssertTrue(
-            sourceRows.matching(NSPredicate(format: "label CONTAINS[c] %@", "https://example.com/continuum-docs")).firstMatch.waitForExistence(timeout: 5),
-            "Sources pane should render the seeded WebFetch URL row."
-        )
-        notesSource.click()
-        XCTAssertTrue(
-            waitUntil(timeout: 5) {
-                self.accessibilityValue(of: self.element("code.sources.pane")).contains("file: notes.md")
-            },
-            "Clicking a source row should reach the open handler without launching external apps under UI tests."
-        )
-
+        // The Sources review-pane tab was removed from the visible tab set (#444),
+        // so it is no longer UI-reachable; only the Artifacts pane is exercised here.
         openReviewPaneTab(key: "artifacts", title: "Artifacts")
         XCTAssertTrue(element("code.artifacts.pane").waitForExistence(timeout: 10), "Artifacts pane should render with stable target.")
         let artifactCard = app.descendants(matching: .any)

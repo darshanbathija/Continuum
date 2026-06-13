@@ -23,10 +23,9 @@ final class WorkbenchStateTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func test_defaultSnapshotUsesBalancedDensityAndPlanPane() {
+    func test_defaultSnapshotUsesPlanPane() {
         let state = WorkbenchState(store: WorkbenchStateStore(storeURL: storeURL))
 
-        XCTAssertEqual(state.density, .balanced)
         XCTAssertEqual(state.selectedRightPane, .plan)
         // v0.30: new users default to a collapsed review pane — see
         // WorkbenchStateSnapshot.init(showingReviewPane:) for rationale.
@@ -42,7 +41,6 @@ final class WorkbenchStateTests: XCTestCase {
         state.selectSession(sessionId)
         state.selectRightPane(.diff)
         state.setReviewPaneVisible(true)
-        state.setDensity(.compact)
         state.updateWorkspaceWidth(1216)
         state.setSidebarWidth(300)
         state.setReviewWidth(420)
@@ -54,7 +52,6 @@ final class WorkbenchStateTests: XCTestCase {
         XCTAssertEqual(reloaded.selectedSessionId, sessionId)
         XCTAssertEqual(reloaded.selectedRightPane, .diff)
         XCTAssertTrue(reloaded.showingReviewPane)
-        XCTAssertEqual(reloaded.density, .compact)
         XCTAssertEqual(reloaded.workspaceWidth, 1216)
         XCTAssertEqual(reloaded.sidebarWidth, 300)
         XCTAssertEqual(reloaded.storedReviewWidth, 420)
@@ -80,7 +77,7 @@ final class WorkbenchStateTests: XCTestCase {
         XCTAssertEqual(state.storedReviewWidth, WorkbenchState.minReviewWidth)
     }
 
-    func test_legacySnapshotMissingDensityMigratesToBalanced() throws {
+    func test_legacySnapshotMissingFieldsMigratesToDefaults() throws {
         let sessionId = UUID()
         let raw = """
         {
@@ -96,18 +93,16 @@ final class WorkbenchStateTests: XCTestCase {
 
         XCTAssertEqual(state.selectedSessionId, sessionId)
         XCTAssertEqual(state.selectedRightPane, .plan)
-        XCTAssertEqual(state.density, .balanced)
         XCTAssertTrue(state.showingReviewPane)
         XCTAssertEqual(state.workspaceWidth, 1111)
     }
 
-    func test_unknownDensityAndPaneFallbacksAreLenient() throws {
+    func test_unknownPaneFallbackIsLenient() throws {
         let raw = """
         {
           "schemaVersion": 1,
           "snapshot": {
             "selectedRightPane": "FuturePane",
-            "density": "microscopic",
             "workspaceWidth": 1400
           }
         }
@@ -117,7 +112,6 @@ final class WorkbenchStateTests: XCTestCase {
         let state = WorkbenchState(store: WorkbenchStateStore(storeURL: storeURL))
 
         XCTAssertEqual(state.selectedRightPane, .plan)
-        XCTAssertEqual(state.density, .balanced)
         // v0.30: snapshot decode default matches the init default — see
         // WorkbenchStateSnapshot.init(from:) decodeIfPresent fallback.
         XCTAssertFalse(state.showingReviewPane)
@@ -260,16 +254,6 @@ final class WorkbenchStateTests: XCTestCase {
             state.setReviewPaneVisible(visible)
         } verify: { visible in
             XCTAssertEqual(state.showingReviewPane, visible)
-        }
-
-        assertCodeTabFeedbackLatency(
-            name: "transcript density selection",
-            cases: TranscriptDensity.allCases,
-            iterations: 20
-        ) { density in
-            state.setDensity(density)
-        } verify: { density in
-            XCTAssertEqual(state.density, density)
         }
 
         assertCodeTabFeedbackLatency(

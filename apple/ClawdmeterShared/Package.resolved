@@ -1,5 +1,5 @@
 {
-  "originHash" : "f22b93834be915b5594450774e353614f2693b641438cbc5e87f53f479f2cd16",
+  "originHash" : "181008e4124ed1c2197e739cf12e53ec7419c25cf1c7019d630a796c5e5c0c0d",
   "pins" : [
     {
       "identity" : "posthog-ios",
@@ -22,7 +22,7 @@
     {
       "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-argument-parser",
+      "location" : "https://github.com/apple/swift-argument-parser.git",
       "state" : {
         "revision" : "c8ed701b513cf5177118a175d85fbbbcd707ab41",
         "version" : "1.3.0"

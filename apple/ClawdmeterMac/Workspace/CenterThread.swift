@@ -9,10 +9,14 @@ struct CenterThread: View {
     let catalog: ModelCatalog
     @ObservedObject var workbenchState: WorkbenchState
     @ObservedObject var presentationStore: SessionPresentationStore
-    let density: TranscriptDensity
-    let onDensityChange: (TranscriptDensity) -> Void
     let onModeSwitch: (SessionMode) -> Void
     let onPreviewRequested: () -> Void
+
+    /// Transcript verbosity for the chat thread. The picker moved out of the
+    /// chat header into Settings → Visual ("Code and diff themes"), so this is
+    /// now a global read from the shared presentation store rather than a
+    /// per-window WorkbenchState value.
+    private var density: TranscriptDensity { presentationStore.snapshot.transcriptDensity }
 
     /// Sourced from `SessionsModel.composerStore(for:)` (a per-session cache)
     /// rather than a locally-constructed `@StateObject`. This is what lets the
@@ -63,8 +67,6 @@ struct CenterThread: View {
         catalog: ModelCatalog,
         workbenchState: WorkbenchState,
         presentationStore: SessionPresentationStore,
-        density: TranscriptDensity,
-        onDensityChange: @escaping (TranscriptDensity) -> Void,
         onModeSwitch: @escaping (SessionMode) -> Void,
         onPreviewRequested: @escaping () -> Void = {}
     ) {
@@ -74,8 +76,6 @@ struct CenterThread: View {
         self.catalog = catalog
         self.workbenchState = workbenchState
         self.presentationStore = presentationStore
-        self.density = density
-        self.onDensityChange = onDensityChange
         self.onModeSwitch = onModeSwitch
         self.onPreviewRequested = onPreviewRequested
         _composerStore = ObservedObject(wrappedValue: model.composerStore(for: session, catalog: catalog))
@@ -266,58 +266,20 @@ struct CenterThread: View {
             // user is about to type, which is the better mental model.
             // Read-only transcripts already disable composer actions, so a
             // second header badge would duplicate the same state.
-            if isReadOnly {
-                EmptyView()
-            } else {
-                Menu {
-                    ForEach(TranscriptDensity.allCases, id: \.self) { option in
-                        Button(action: ContinuumAnalytics.wrapButton(
-                                "set_transcript_density",
-                                {
-                            onDensityChange(option)
-                        
-                                }
-                            )) {
-                            if option == density {
-                                Label(densityLabel(option), systemImage: "checkmark")
-                            } else {
-                                Text(densityLabel(option))
-                            }
-                        }
-                        .accessibilityIdentifier("code.header.density.\(option.rawValue)")
-                    }
-                } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                        .font(.system(size: 14))
-                        .frame(width: 30, height: 30)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .frame(width: 30)
-                .help("Transcript density")
-                .accessibilityLabel("Transcript density")
-                .accessibilityIdentifier("code.header.density")
-                .accessibilityValue(density.rawValue)
-                .overlay(alignment: .topLeading) {
-                    Text(density.rawValue)
-                        .font(.system(size: 1))
-                        .frame(width: 1, height: 1)
-                        .opacity(0.001)
-                        .accessibilityLabel("Selected density \(densityLabel(density))")
-                        .accessibilityIdentifier("code.header.density.selected.\(density.rawValue)")
-                }
-            }
+            //
+            // v0.38: the transcript-density Menu that lived here moved to
+            // Settings → Visual ("Code and diff themes"). Density is a global
+            // visual default, not a per-session header toggle — it now reads
+            // from `SessionPresentationStore.transcriptDensity`.
         }
         .padding(.horizontal, 22)
         .padding(.top, 14)
         .padding(.bottom, 10)
-        // Containment is required here: a bare container identifier
-        // propagates onto every child AX element and overwrote
-        // `code.header.density` (and its selected-state markers), breaking
-        // AX addressability for the header controls. Same bug class as the
-        // WorkspaceReviewPane
-        // `code.review.pane` fix. The session/provider/model value
-        // assertions ride the dedicated `code.center.header.state`
+        // Containment is required here: a bare container identifier propagates
+        // onto every child AX element and would overwrite the header controls'
+        // own identifiers, breaking AX addressability. Same bug class as the
+        // WorkspaceReviewPane `code.review.pane` fix. The session/provider/model
+        // value assertions ride the dedicated `code.center.header.state`
         // overlay marker below.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("code.center.header")
@@ -374,14 +336,6 @@ struct CenterThread: View {
             mode: session.mode,
             planMode: false
         )
-    }
-
-    private func densityLabel(_ density: TranscriptDensity) -> String {
-        switch density {
-        case .compact: return "Compact"
-        case .balanced: return "Balanced"
-        case .detailed: return "Detailed"
-        }
     }
 
     /// v0.5.4 header-label helper. User-set `customName` wins over the
