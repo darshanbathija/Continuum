@@ -207,11 +207,21 @@ public final class AgentSessionRegistry: ObservableObject {
                 merged.append(liveSession)
             }
 
-            self.sessions = merged
+            // Same retired-tmux revival the JSON loader applies — a legacy Claude
+            // session reconstructed only from the event log must also shed its
+            // dead pane metadata so it routes to `.claudePty`.
+            let retiredClaudePaneCount = merged.filter {
+                $0.agent == .claude && ($0.tmuxPaneId != nil || $0.tmuxWindowId != nil)
+            }.count
+            self.sessions = migratingRetiredClaudePanes(merged)
             self.nextEventSeqBySession.removeAll(keepingCapacity: true)
             for session in merged {
                 self.nextEventSeqBySession[session.id] = session.lastEventSeq + 1
             }
+            // Persist the one-time strip (parity with load()) so an event-log-only
+            // revived session isn't re-stripped + re-stamped (lastEventAt) every
+            // launch, which would re-float it to the top of the activity sort.
+            if retiredClaudePaneCount > 0 { save() }
             registryLogger.info("Seeded \(replayed.count) replayed sessions into \(merged.count) live sessions")
         }
     }
@@ -1167,6 +1177,25 @@ public final class AgentSessionRegistry: ObservableObject {
         }
     }
 
+    /// v0.31.6 removed the tmux runtime, but Claude sessions persisted before
+    /// that upgrade still carry `tmuxPaneId`/`tmuxWindowId`. Those dead fields
+    /// make every write path (send, interrupt, permission/mode/model swap,
+    /// autopilot, terminals) resolve the session to `.legacyRetired` and surface
+    /// the "legacy_session_retired" toast. A Claude session is fully revivable,
+    /// though: strip the stale pane metadata so it resolves to `.claudePty` and
+    /// the next interaction transparently resume-or-spawns it via
+    /// `claude --resume <claudeSessionId>` — no user action, no relaunch dance.
+    /// Non-Claude legacy sessions have no cross-runtime resume path (the tmux →
+    /// harness boundary), so they keep their pane metadata and stay retired.
+    private func migratingRetiredClaudePanes(_ loaded: [AgentSession]) -> [AgentSession] {
+        loaded.map { session in
+            guard session.agent == .claude,
+                  session.tmuxPaneId != nil || session.tmuxWindowId != nil
+            else { return session }
+            return with(session, tmuxWindowId: .some(nil), tmuxPaneId: .some(nil))
+        }
+    }
+
     private static func executionHostMetadata(
         executionHostId: UUID?,
         executionHostLabel: String?
@@ -1425,10 +1454,24 @@ public final class AgentSessionRegistry: ObservableObject {
             if deduped.count != loaded.count {
                 registryLogger.warning("Collapsed \(loaded.count - deduped.count) duplicate-id session(s) on load")
             }
-            self.sessions = backfillExecutionHostMetadata(deduped)
+            // v0.31.6 removed tmux: revive Claude sessions persisted before that
+            // upgrade by stripping their dead pane metadata (see
+            // migratingRetiredClaudePanes). Strip BEFORE the host-metadata
+            // backfill so the result carries both migrations.
+            let retiredClaudePaneCount = deduped.filter {
+                $0.agent == .claude && ($0.tmuxPaneId != nil || $0.tmuxWindowId != nil)
+            }.count
+            let migratedPanes = migratingRetiredClaudePanes(deduped)
+            self.sessions = backfillExecutionHostMetadata(migratedPanes)
             // Restore per-session seq counters from the loaded data.
             for session in self.sessions {
                 nextEventSeqBySession[session.id] = session.lastEventSeq + 1
+            }
+            // Persist the one-time strip so it doesn't re-run (and re-stamp
+            // lastEventAt) on every launch.
+            if retiredClaudePaneCount > 0 {
+                registryLogger.info("Revived \(retiredClaudePaneCount) retired-tmux Claude session(s) as direct PTY")
+                save()
             }
             registryLogger.info("Loaded \(self.sessions.count) sessions from \(self.storeURL.path, privacy: .public)")
         } catch {
