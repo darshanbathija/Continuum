@@ -75,6 +75,13 @@ struct SidebarWorkspaceSection: Identifiable, Hashable {
     /// workspace now, just not Clawdmeter-managed.
     let recentSessions: [RecentSession]
     let latestActivity: Date
+    /// Earliest Clawdmeter session `createdAt` in this repo — a stable
+    /// "first use" anchor that, unlike `latestActivity`, does NOT move when a
+    /// new session is created. Drives the default oldest-first project order
+    /// so a fresh session never floats its repo to the top. Empty managed
+    /// sections (just-added repo, no session yet) get `.distantFuture` so they
+    /// land at the bottom.
+    let firstActivity: Date
 
     var id: String { "\(workspaceKey.repoKey)|\(workspaceKey.workspacePath)" }
 }
@@ -410,7 +417,8 @@ enum SidebarProjectionBuilder {
                 workspacePath: repoKey,
                 sessions: sessions,
                 recentSessions: repo.recentSessions,
-                latestActivity: latest
+                latestActivity: latest,
+                firstActivity: sessions.map(\.createdAt).min() ?? .distantFuture
             )
         }
 
@@ -440,12 +448,19 @@ enum SidebarProjectionBuilder {
                 workspacePath: canonicalKey,
                 sessions: [],
                 recentSessions: recents,
-                latestActivity: latest
+                latestActivity: latest,
+                // Just-added repo with no Clawdmeter session yet → bottom.
+                firstActivity: .distantFuture
             ))
         }
 
+        // Oldest-first by first use: the repo you've used longest stays on
+        // top, a brand-new repo appends to the bottom, and creating a session
+        // never reorders the list (firstActivity is immutable per repo). The
+        // user's persisted manual order, when present, is layered on top of
+        // this in the view (`orderedWorkspaceSections`).
         return sections.sorted {
-            if $0.latestActivity != $1.latestActivity { return $0.latestActivity > $1.latestActivity }
+            if $0.firstActivity != $1.firstActivity { return $0.firstActivity < $1.firstActivity }
             return $0.id < $1.id
         }
     }

@@ -1340,6 +1340,38 @@ never persisted or paired to iOS.
 - Deferred follow-ups live in `TODOS.md` under the spawn-mode review
   deferrals entry.
 
+## Managed-only Code sidebar + stable project order (2026-06-13)
+
+Continuum is an **IDE for agentic coding**: the Mac Code sidebar shows **only
+managed (Clawdmeter-spawned) sessions**. The discovered-sessions surface
+("Active outside Clawdmeter", "History", and the "Discover parallel sessions"
+opt-in CTA) was pivoted away from and removed from the sidebar UI. The removal is
+rendering-only — `SidebarProjectionBuilder` still computes the
+`activeExternalSections` / `historySections` fields (and their tests stay green);
+`SidebarPane` simply no longer renders them, and `discoverParallelSessions` /
+`historyExpanded` lost their UI. Fully deleting the builder paths is a deferred
+follow-up. Do not re-add those surfaces.
+
+Project (repo) sections now hold a **stable order** instead of sorting by most-
+recent activity (which made a new session jump its repo to the top):
+
+- **Default = oldest-first by first use.** `buildWorkspaceSections` sorts by a
+  new immutable `SidebarWorkspaceSection.firstActivity`
+  (`min(session.createdAt)`, `.distantFuture` for a just-added empty repo), so a
+  brand-new repo lands at the bottom and creating a session never reorders the
+  list. Within-repo session order stays recency-based.
+- **Drag-to-reorder.** A `⠿` grip appears on a managed repo header on hover
+  (`repoHeader(reorderKey:)`); `.draggable` + `.dropDestination` move a project,
+  with a "Move up / Move down" context-menu fallback. The order persists in
+  `SessionPresentationStore.repoOrder` (`[String]` of repo keys, back-compat
+  `decodeIfPresent`), applied post-cache in the view via
+  `SidebarPane.orderedWorkspaceSections` — known keys first in saved order, new
+  repos appended by the builder's oldest-first order. No projection-cache key
+  change needed.
+- Tests: `SidebarProjectionCacheTests.test_workspaceSectionsOrderByFirstUseAndDoNotReorderOnNewActivity`
+  and `UIPrimitivesTests.testSessionPresentationStorePersistsRepoOrder` (+
+  legacy-decode default).
+
 ## Style + voice
 
 - Code comments lead with **what + why**, not implementation play-by-play.

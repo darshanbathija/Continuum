@@ -74,6 +74,23 @@ final class UIPrimitivesTests: XCTestCase {
         XCTAssertEqual(reloaded.snapshot.promptHistory, ["fix the tests"])
     }
 
+    func testSessionPresentationStorePersistsRepoOrder() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = dir.appendingPathComponent("presentation.json")
+
+        let store = SessionPresentationStore(storeURL: url)
+        XCTAssertEqual(store.snapshot.repoOrder, [], "Defaults empty until the user drags a project.")
+        try store.setRepoOrder(["/repo/clawdmeter", "/repo/mac-tv-remote"])
+
+        let reloaded = SessionPresentationStore(storeURL: url)
+        XCTAssertEqual(reloaded.snapshot.repoOrder, ["/repo/clawdmeter", "/repo/mac-tv-remote"])
+
+        try reloaded.setRepoOrder(["/repo/mac-tv-remote", "/repo/clawdmeter"])
+        let reordered = SessionPresentationStore(storeURL: url)
+        XCTAssertEqual(reordered.snapshot.repoOrder, ["/repo/mac-tv-remote", "/repo/clawdmeter"])
+    }
+
     func testSessionPresentationStorePersistsRemainingClientLocalState() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -139,6 +156,7 @@ final class UIPrimitivesTests: XCTestCase {
 
         XCTAssertEqual(decoded.commandRecents, ["global.palette"])
         XCTAssertEqual(decoded.promptHistory, ["hello"])
+        XCTAssertEqual(decoded.repoOrder, [], "Old snapshots with no repoOrder key default to empty.")
         XCTAssertEqual(decoded.savedPrompts, [])
         XCTAssertEqual(decoded.recentPathActions, [])
         XCTAssertNil(decoded.externalEditorIdentifier)

@@ -23,19 +23,6 @@ struct SidebarPane: View {
     @AppStorage("clawdmeter.sidebar.sorting")  private var sortingRaw: String  = SessionSorting.recency.rawValue
     @AppStorage("clawdmeter.sidebar.status")   private var statusRaw: String   = SessionStatusFilter.all.rawValue
 
-    /// History section is collapsed by default — older external sessions
-    /// clutter the sidebar and most of the time the user wants the active
-    /// repos at the top. Tapping the History row expands the list.
-    @AppStorage("clawdmeter.sidebar.historyExpanded") private var historyExpanded: Bool = false
-
-    /// v0.29.33: opt-in to filesystem session discovery. Default false → the
-    /// sidebar shows only Managed (explicitly-added) repos and RepoIndex does
-    /// NO ~/.claude / ~/.codex / folder scan, so opening Code triggers no
-    /// folder/cross-app permission prompt. The "Discover parallel sessions"
-    /// button flips this shared key (RepoIndex reads the same UserDefaults
-    /// key via ProviderEnablement) and refreshes → status-quo discovery.
-    @AppStorage("clawdmeter.code.discoverParallelSessions") private var discoverParallelSessions: Bool = false
-
     /// v0.5.4: rename sheet state. v0.5.9: split into a dedicated bool
     /// + data target — the `Binding(get:set:)` pattern for `isPresented:`
     /// didn't reliably trigger alert presentation; the canonical pattern
@@ -69,6 +56,11 @@ struct SidebarPane: View {
     @State private var hoveredSessionId: UUID?
     @State private var hoveredWorktreePath: String?
     @State private var hoveredRecentPath: String?
+    /// Drag-to-reorder state for the managed Projects list. `hoveredRepoHeaderKey`
+    /// reveals the grip handle on hover; `dropTargetRepoKey` paints the
+    /// insertion highlight while a project is dragged over a header.
+    @State private var hoveredRepoHeaderKey: String?
+    @State private var dropTargetRepoKey: String?
     @State private var colorTagTarget: AgentSession?
     @State private var colorTagInput: String = ""
     @State private var showingColorTagAlert = false
@@ -772,17 +764,15 @@ struct SidebarPane: View {
             let projection = currentProjection
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    if projection.hasPriorityContent {
+                    // Managed-only IDE: the sidebar shows only Clawdmeter-spawned
+                    // project sessions. The discovered-sessions surface ("Active
+                    // outside Clawdmeter" / "History" / "Discover parallel
+                    // sessions") was removed when we pivoted to an agentic-coding
+                    // IDE — see CLAUDE.md.
+                    if !projection.workspaceSections.isEmpty {
                         prioritySidebarContent(projection)
                     } else {
                         filteredEmptyState
-                    }
-                    // Sits under the Managed repos (or the empty state). Off by
-                    // default; tapping opts in to full filesystem discovery for
-                    // this and future launches. Until then nothing reads
-                    // ~/.claude / ~/.codex or scans user folders.
-                    if !discoverParallelSessions {
-                        discoverSessionsButton
                     }
                 }
                 .padding(.vertical, 6)
@@ -913,131 +903,55 @@ struct SidebarPane: View {
 
     @ViewBuilder
     private func prioritySidebarContent(_ projection: SidebarProjection) -> some View {
-        if !projection.workspaceSections.isEmpty {
-            ForEach(projection.workspaceSections) { section in
-                workspaceSection(section)
-            }
-        }
-        if !projection.activeExternalSections.isEmpty {
-            priorityLabel("Active outside Clawdmeter")
-            ForEach(projection.activeExternalSections) { section in
-                externalRepoSection(section)
-            }
-        }
-        if !projection.historySections.isEmpty {
-            historyDivider
-            historyToggle(repoCount: projection.historySections.count)
-            if historyExpanded {
-                ForEach(projection.historySections) { section in
-                    historyRepoSection(section)
-                }
-            }
+        // Managed projects only. `orderedWorkspaceSections` layers the user's
+        // persisted drag order over the builder's oldest-first default.
+        let sections = orderedWorkspaceSections(projection.workspaceSections)
+        ForEach(sections) { section in
+            workspaceSection(section)
         }
     }
 
-    /// v0.29.33: opt-in CTA shown under "Managed" when discovery is off.
-    /// Tapping flips the shared `clawdmeter.code.discoverParallelSessions`
-    /// key (RepoIndex reads it via ProviderEnablement) and refreshes, so the
-    /// "Active outside Clawdmeter" / "History" sections populate from
-    /// ~/.claude + ~/.codex exactly like the prior behavior. The folder /
-    /// cross-app prompts then fire with clear user intent, not on launch.
-    private var discoverSessionsButton: some View {
-        Button(action: ContinuumAnalytics.wrapButton(
-                "sidebar_discover_parallel_sessions",
-                {
-
-            discoverParallelSessions = true   // @AppStorage writes the shared key
-            Task { await model.refresh() }
-        
-                }
-            )) {
-            HStack(spacing: 8) {
-                TahoeIcon("search", size: 11)
-                    .foregroundStyle(t.accent)
-                    .frame(width: 12)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Discover parallel sessions")
-                        .font(TahoeFont.body(11.5, weight: .semibold))
-                        .foregroundStyle(t.fg)
-                    Text("Find Claude & Codex sessions outside your added repos")
-                        .font(TahoeFont.body(9.5))
-                        .foregroundStyle(t.fg3)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, SidebarLayout.edgeInset)
-            .padding(.top, 8)
-            .padding(.bottom, 6)
-        }
-        .buttonStyle(PressableButtonStyle())
-        .help("Scan ~/.claude and ~/.codex for recent sessions. Folder/data access is requested only when you tap this.")
+    /// Apply the user's persisted manual project order (set by dragging a repo
+    /// header) over the builder's oldest-first default. Repos the user has
+    /// explicitly ordered come first, in that order; any repo not yet in the
+    /// list keeps the builder's order and is appended after — so a newly-added
+    /// repo always lands at the bottom. Stale keys (removed repos) are dropped.
+    private func orderedWorkspaceSections(_ sections: [SidebarWorkspaceSection]) -> [SidebarWorkspaceSection] {
+        let order = presentationStore.snapshot.repoOrder
+        guard !order.isEmpty else { return sections }
+        let known = order.compactMap { key in sections.first { $0.repo.key == key } }
+        let knownKeys = Set(known.map { $0.repo.key })
+        let rest = sections.filter { !knownKeys.contains($0.repo.key) }
+        return known + rest
     }
 
-    /// Collapsed-by-default "History" row. Looks like a sidebar item so
-    /// it sits cleanly at the bottom of the list; tapping toggles the
-    /// `historyExpanded` AppStorage which conditionally renders the
-    /// historyRepoSection list above this row.
-    private func historyToggle(repoCount: Int) -> some View {
-        Button(action: ContinuumAnalytics.wrapButton(
-                "sidebar_toggle_history",
-                {
-
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
-                historyExpanded.toggle()
-            }
-        
-                }
-            )) {
-            HStack(spacing: 8) {
-                TahoeIcon(historyExpanded ? "chevD" : "chevR", size: 10)
-                    .foregroundStyle(t.fg3)
-                    .frame(width: 10)
-                Text("History")
-                    .font(.system(size: 10, weight: .bold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                if !historyExpanded && repoCount > 0 {
-                    Text("\(repoCount)")
-                        .font(TahoeFont.body(10.5, weight: .semibold))
-                        .foregroundStyle(t.fg3)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(t.hair2, in: Capsule())
-                }
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, SidebarLayout.edgeInset)
-            .padding(.top, 8)
-            .padding(.bottom, 3)
-        }
-        .buttonStyle(PressableButtonStyle())
-        .help(historyExpanded ? "Hide older external sessions" : "Show older external sessions")
+    /// Current visible managed-project keys in display order. The persisted
+    /// order is rewritten against this full list on every reorder so undragged
+    /// repos keep their slots and new repos stay at the bottom.
+    private var orderedRepoKeys: [String] {
+        orderedWorkspaceSections(currentProjection.workspaceSections).map(\.repo.key)
     }
 
-    private func priorityLabel(_ title: String) -> some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 10, weight: .bold))
-                .textCase(.uppercase)
-                .foregroundStyle(.tertiary)
-            Spacer()
-        }
-        .padding(.horizontal, SidebarLayout.edgeInset)
-        .padding(.top, 8)
-        .padding(.bottom, 3)
+    /// Drop `draggedKey` immediately above `targetKey` and persist the new order.
+    private func handleRepoDrop(draggedKey: String, onto targetKey: String) {
+        guard draggedKey != targetKey else { return }
+        var keys = orderedRepoKeys
+        guard let from = keys.firstIndex(of: draggedKey) else { return }
+        keys.remove(at: from)
+        guard let to = keys.firstIndex(of: targetKey) else { return }
+        keys.insert(draggedKey, at: to)
+        try? presentationStore.setRepoOrder(keys)
     }
 
-    private var historyDivider: some View {
-        Rectangle()
-            .fill(t.hairline)
-            .frame(height: 1)
-            .padding(.horizontal, SidebarLayout.edgeInset)
-            .padding(.top, 10)
-            .padding(.bottom, 2)
+    /// Context-menu fallback for drag: nudge a project up or down by one slot.
+    private func moveRepo(_ key: String, by offset: Int) {
+        var keys = orderedRepoKeys
+        guard let i = keys.firstIndex(of: key), !keys.isEmpty else { return }
+        let target = min(max(i + offset, 0), keys.count - 1)
+        guard target != i else { return }
+        keys.remove(at: i)
+        keys.insert(key, at: target)
+        try? presentationStore.setRepoOrder(keys)
     }
 
     private var filteredEmptyState: some View {
@@ -1082,6 +996,7 @@ struct SidebarPane: View {
                     collapsedPrioritySectionIDs.remove(sectionID)
                     model.quickSpawnInRepo(section.repo.key)
                 },
+                reorderKey: section.repo.key,
                 onToggle: { togglePrioritySection(sectionID) }
             )
             .contextMenu { workspaceMenuItems(section) }
@@ -1453,6 +1368,27 @@ struct SidebarPane: View {
             Label("New session here", systemImage: "plus")
         }
         .accessibilityIdentifier("code.repo.settings.new-session")
+        // Drag-handle fallback: nudge this project up/down in the list.
+        let repoKeys = orderedRepoKeys
+        if repoKeys.count > 1, let idx = repoKeys.firstIndex(of: section.repo.key) {
+            Divider()
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "sidebar_repo_move_up",
+                    { moveRepo(section.repo.key, by: -1) }
+                )) {
+                Label("Move up", systemImage: "arrow.up")
+            }
+            .disabled(idx == 0)
+            .accessibilityIdentifier("code.repo.settings.move-up")
+            Button(action: ContinuumAnalytics.wrapButton(
+                    "sidebar_repo_move_down",
+                    { moveRepo(section.repo.key, by: 1) }
+                )) {
+                Label("Move down", systemImage: "arrow.down")
+            }
+            .disabled(idx == repoKeys.count - 1)
+            .accessibilityIdentifier("code.repo.settings.move-down")
+        }
         if !section.sessions.isEmpty {
             Button(action: ContinuumAnalytics.wrapButton(
                     "sidebar_archive_all_sessions",
@@ -1529,71 +1465,6 @@ struct SidebarPane: View {
         .fixedSize()
         .help("Workspace settings — archive, env variables, remove")
         .accessibilityIdentifier("code.repo.settings")
-    }
-
-    private func externalRepoSection(_ section: SidebarExternalRepoSection) -> some View {
-        let sectionID = "external:\(section.repo.key)"
-        let isExpanded = isPrioritySectionExpanded(sectionID)
-        return VStack(alignment: .leading, spacing: 0) {
-            repoHeader(
-                section.repo,
-                isExpanded: isExpanded,
-                sessionCount: section.recents.count,
-                subtitle: "Active in the last 5 min",
-                onToggle: { togglePrioritySection(sectionID) }
-            )
-            if isExpanded {
-                ForEach(section.recents) { recent in
-                    externalRecentButton(recent, repo: section.repo)
-                }
-            }
-        }
-    }
-
-    private func historyRepoSection(_ section: SidebarHistoryRepoSection) -> some View {
-        let sectionID = "history:\(section.repo.key)"
-        let isExpanded = isPrioritySectionExpanded(sectionID)
-        let count = section.dateGroups.reduce(0) { $0 + $1.recents.count }
-        return VStack(alignment: .leading, spacing: 0) {
-            repoHeader(
-                section.repo,
-                isExpanded: isExpanded,
-                sessionCount: count,
-                subtitle: "Older external sessions",
-                onToggle: { togglePrioritySection(sectionID) }
-            )
-            if isExpanded {
-                ForEach(section.dateGroups) { dateGroup in
-                    Text(dateGroup.title)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .padding(.leading, 28)
-                        .padding(.top, 5)
-                    ForEach(dateGroup.recents) { recent in
-                        externalRecentButton(recent, repo: section.repo)
-                    }
-                }
-            }
-        }
-    }
-
-    private func externalRecentButton(_ recent: RecentSession, repo: AgentRepo) -> some View {
-        Button(action: ContinuumAnalytics.wrapButton(
-                "sidebar_open_external_recent",
-                {
-
-            model.openOutsideSession(
-                recent: recent,
-                repoKey: repo.key,
-                repoDisplayName: repo.displayName
-            )
-        
-                }
-            )) {
-            recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path, repo: repo)
-        }
-        .buttonStyle(PressableButtonStyle())
     }
 
     private func isPrioritySectionExpanded(_ id: String) -> Bool {
@@ -2048,9 +1919,31 @@ struct SidebarPane: View {
         subtitle: String? = nil,
         gearMenu: AnyView? = nil,
         onAdd: (() -> Void)? = nil,
+        reorderKey: String? = nil,
         onToggle: @escaping () -> Void
     ) -> some View {
-        HStack(spacing: 8) {
+        let row = HStack(spacing: 8) {
+            // Drag handle — revealed on hover so it never competes with the
+            // chevron tap. Drag from here to reorder projects; the grip slot is
+            // always reserved (opacity, not layout) so the header doesn't jitter.
+            if let reorderKey {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                    .frame(width: 11)
+                    .opacity(hoveredRepoHeaderKey == reorderKey ? 0.65 : 0.0)
+                    .contentShape(Rectangle())
+                    .draggable(reorderKey) {
+                        Text(repo.displayName)
+                            .font(TahoeFont.body(12, weight: .semibold))
+                            .foregroundStyle(t.fg)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                    .help("Drag to reorder project")
+                    .accessibilityIdentifier("code.repo.reorder-grip")
+            }
             Button(action: ContinuumAnalytics.wrapButton("sidebar_toggle_repo", onToggle)) {
                 HStack(spacing: 8) {
                     TahoeIcon(isExpanded ? "chevD" : "chevR", size: 10)
@@ -2104,7 +1997,7 @@ struct SidebarPane: View {
                     {
 
                 handleRepoNewSessionClick(repoKey: repo.key, onAdd: onAdd)
-            
+
                     }
                 )) {
                 TahoeIcon("plus", size: 11, weight: .bold)
@@ -2118,6 +2011,31 @@ struct SidebarPane: View {
         }
         .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.vertical, subtitle == nil ? 6 : 5)
+
+        return row
+            .overlay(alignment: .top) {
+                if let reorderKey, dropTargetRepoKey == reorderKey {
+                    Rectangle()
+                        .fill(t.accent)
+                        .frame(height: 2)
+                        .padding(.horizontal, SidebarLayout.edgeInset)
+                }
+            }
+            .onHover { inside in
+                guard let reorderKey else { return }
+                if inside { hoveredRepoHeaderKey = reorderKey }
+                else if hoveredRepoHeaderKey == reorderKey { hoveredRepoHeaderKey = nil }
+            }
+            .dropDestination(for: String.self) { items, _ in
+                guard let reorderKey, let dragged = items.first else { return false }
+                handleRepoDrop(draggedKey: dragged, onto: reorderKey)
+                dropTargetRepoKey = nil
+                return true
+            } isTargeted: { targeted in
+                guard let reorderKey else { return }
+                if targeted { dropTargetRepoKey = reorderKey }
+                else if dropTargetRepoKey == reorderKey { dropTargetRepoKey = nil }
+            }
     }
 
     private func repoHeader(_ repo: AgentRepo, isExpanded: Bool, sessionCount: Int) -> some View {
