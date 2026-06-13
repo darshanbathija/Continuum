@@ -433,11 +433,11 @@ final class WorkspaceTabsTests: XCTestCase {
         model.provisioningSessionIds.insert(session.id)
         let store = model.composerStore(for: session, catalog: .bundled)
         store.agent = .claude
-        store.modelId = "claude-fable-5-1m"
+        store.modelId = "claude-opus-4-8-1m"
         store.effort = .high
 
         XCTAssertEqual(model.displayAgent(for: session), .claude)
-        XCTAssertEqual(model.displayModelId(for: session), "claude-fable-5-1m")
+        XCTAssertEqual(model.displayModelId(for: session), "claude-opus-4-8-1m")
         XCTAssertEqual(model.workspaceTabSubtitle(for: session), "claude - tucson")
         XCTAssertEqual(session.agent, .codex, "Registry row stays on spawn defaults until adopt")
     }
@@ -472,7 +472,7 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertTrue(model.configureProvisionalLaunch(
             sessionId: session.id,
             agent: .claude,
-            modelId: "claude-fable-5-1m",
+            modelId: "claude-opus-4-8-1m",
             effort: .high
         ))
         XCTAssertEqual(model.displayAgent(for: session), .claude)
