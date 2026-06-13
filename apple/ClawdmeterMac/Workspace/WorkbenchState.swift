@@ -17,11 +17,13 @@ enum WorkbenchPaneTab: String, Codable, CaseIterable, Identifiable, Sendable {
 
     /// Right-pane tabs excluding deprecated surfaces.
     static var visibleReviewPaneTabs: [WorkbenchPaneTab] {
-        [.plan, .diff, .sources, .browser, .terminal]
+        [.plan, .diff, .browser, .terminal]
     }
 
     static func normalizedReviewPaneTab(_ tab: WorkbenchPaneTab) -> WorkbenchPaneTab {
-        tab == .pr ? .plan : tab
+        // .pr and .sources are no longer shown in the review pane; fold a
+        // persisted selection back to .plan so it doesn't strand on a hidden tab.
+        (tab == .pr || tab == .sources) ? .plan : tab
     }
 
     init(from decoder: Decoder) throws {

@@ -46,10 +46,6 @@ struct SessionWorkspaceView: View {
     /// min) + resize handles + chrome.
     private static let reviewPaneThreshold: CGFloat = 1000
 
-    /// Minimum width required to render even the right-edge gutter CTA.
-    /// Below this, the workspace is just sidebar + chat — the user can
-    /// resize to summon the gutter back.
-    private static let gutterThreshold: CGFloat = 900
     private static let reviewPaneToggleAnimation = Animation.easeOut(duration: 0.22)
 
     /// Spawn grids own the full center width — the review pane (and its
@@ -65,13 +61,6 @@ struct SessionWorkspaceView: View {
             && workbenchState.workspaceWidth >= Self.reviewPaneThreshold
     }
 
-    private var effectiveShowGutter: Bool {
-        !isImmersiveBrowserActive
-            && !isSpawnGridActive
-            && !effectiveShowReviewPane
-            && workbenchState.workspaceWidth >= Self.gutterThreshold
-    }
-
     private var canHostReviewPaneColumn: Bool {
         !isImmersiveBrowserActive
             && !isSpawnGridActive
@@ -82,7 +71,7 @@ struct SessionWorkspaceView: View {
     /// Session backing the review pane. When the foreground tab is a draft
     /// (openSessionId cleared) we still resolve a sibling session from the
     /// active workspace, or synthesize a workspace anchor when only drafts
-    /// remain, so the right gutter (Plan/Diff/Sources/…) stays visible.
+    /// remain, so the expanded review pane (Plan/Diff/Sources/…) stays bound.
     private var resolvedReviewPaneSession: AgentSession? {
         model.reviewPaneSession()
     }
@@ -236,22 +225,7 @@ struct SessionWorkspaceView: View {
                             }
                         }
                         .frame(maxWidth: .infinity)
-                        if effectiveShowGutter, model.activeWorkspaceKey != nil {
-                            TahoeHairline(vertical: true)
-                                .transition(.opacity)
-                            ReviewPaneGutter(
-                                selectedTab: selectedRightPaneBinding,
-                                onExpand: { tab in
-                                    workbenchState.selectRightPane(tab)
-                                    animateWorkspaceChange(Self.reviewPaneToggleAnimation) {
-                                        workbenchState.setReviewPaneVisible(true)
-                                    }
-                                }
-                            )
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                        }
                     }
-                    .animation(reduceMotion ? nil : Self.reviewPaneToggleAnimation, value: effectiveShowGutter)
                 }
                 .frame(minWidth: WorkbenchState.minCenterWidth, maxWidth: .infinity)
 
