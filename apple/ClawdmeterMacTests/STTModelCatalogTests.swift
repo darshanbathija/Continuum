@@ -1,10 +1,40 @@
+import ClawdmeterShared
 import XCTest
 @testable import Clawdmeter
 
 final class STTModelCatalogTests: XCTestCase {
-    func testCatalogContainsExpectedModelsInSizeOrder() {
-        let ids = STTModelCatalog.models.map(\.id)
-        XCTAssertEqual(ids, ["tiny", "base", "small", "medium"])
+    func testCatalogIncludesWhisperAndParakeetEngines() {
+        let whisperIDs = STTModelCatalog.models(for: .whisperKit).map(\.id)
+        // The original four plus the larger / distilled variants.
+        XCTAssertTrue(whisperIDs.starts(with: ["tiny", "base", "small", "medium"]))
+        XCTAssertTrue(whisperIDs.contains("large-v3-turbo"))
+        XCTAssertTrue(whisperIDs.contains("large-v3"))
+        XCTAssertTrue(whisperIDs.contains("distil-large-v3"))
+
+        let parakeetIDs = STTModelCatalog.models(for: .parakeet).map(\.id)
+        XCTAssertEqual(parakeetIDs, ["parakeet-v3", "parakeet-v2"])
+    }
+
+    func testEveryModelDeclaresItsEngine() {
+        for model in STTModelCatalog.models {
+            if model.engine == .parakeet {
+                XCTAssertNotNil(model.parakeetVersionKey)
+                XCTAssertTrue(model.whisperModelName.isEmpty)
+                XCTAssertTrue(model.requiresAppleSilicon)
+            } else {
+                XCTAssertEqual(model.engine, .whisperKit)
+                XCTAssertFalse(model.whisperModelName.isEmpty)
+                XCTAssertNil(model.parakeetVersionKey)
+            }
+        }
+    }
+
+    func testTradeoffRatingsAreInRange() {
+        for model in STTModelCatalog.models {
+            XCTAssertTrue((1...5).contains(model.quality), "\(model.id) quality out of range")
+            XCTAssertTrue((1...5).contains(model.speed), "\(model.id) speed out of range")
+            XCTAssertFalse(model.tagline.isEmpty, "\(model.id) missing tagline")
+        }
     }
 
     func testModelLookupReturnsDescriptor() {
@@ -12,6 +42,7 @@ final class STTModelCatalogTests: XCTestCase {
         XCTAssertEqual(base?.displayName, "Base")
         XCTAssertEqual(base?.whisperModelName, "base")
         XCTAssertEqual(base?.sizeLabel, "~74 MB")
+        XCTAssertEqual(base?.engine, .whisperKit)
     }
 
     func testModelLookupReturnsNilForUnknownID() {

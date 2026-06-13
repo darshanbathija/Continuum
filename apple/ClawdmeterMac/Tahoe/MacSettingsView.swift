@@ -588,23 +588,25 @@ public struct MacSettingsView: View {
                 Picker("", selection: sttEngineBinding) {
                     Text("Apple Speech").tag(STTEngine.appleSpeech)
                     Text("WhisperKit (local)").tag(STTEngine.whisperKit)
+                    Text("Parakeet (local)").tag(STTEngine.parakeet)
                 }
                 .labelsHidden()
                 .frame(width: 180)
             }
-            if presentationStore.snapshot.voicePresentationPreferences.sttEngine == .whisperKit {
+            if presentationStore.snapshot.voicePresentationPreferences.sttEngine != .appleSpeech {
                 TahoeHair().padding(.vertical, 14)
                 if let manager = runtime?.sttModelDownloadManager {
-                    VoiceWhisperModelPicker(
+                    VoiceLocalModelPicker(
+                        engine: presentationStore.snapshot.voicePresentationPreferences.sttEngine,
                         downloadManager: manager,
                         selectedModelID: presentationStore.snapshot.voicePresentationPreferences.whisperModelID,
-                        onSelect: selectWhisperModel
+                        onSelect: selectModel
                     )
                     if manager.installedModelsApproximateByteCount > 0 {
                         TahoeHair().padding(.vertical, 14)
                         SettingsRow(
                             label: "Disk usage",
-                            hint: "Approximate size of downloaded Whisper models on this Mac."
+                            hint: "Approximate size of downloaded local models on this Mac."
                         ) {
                             Text(voiceInstalledModelsDiskUsageLabel(for: manager))
                                 .font(TahoeFont.body(11))
@@ -650,14 +652,16 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var voiceWhisperModelRows: some View {
-        ForEach(STTModelCatalog.models) { model in
+        let engine = presentationStore.snapshot.voicePresentationPreferences.sttEngine
+        let engineModels = STTModelCatalog.models(for: engine)
+        ForEach(engineModels) { model in
             SettingsRow(
                 label: model.displayName,
-                hint: "\(model.sizeLabel) · on-device Whisper model"
+                hint: "\(model.sizeLabel) · \(model.tagline)"
             ) {
                 voiceWhisperModelActions(for: model)
             }
-            if model.id != STTModelCatalog.models.last?.id {
+            if model.id != engineModels.last?.id {
                 TahoeHair().padding(.vertical, 10)
             }
         }
@@ -676,7 +680,7 @@ public struct MacSettingsView: View {
                     .foregroundStyle(.green)
             } else if isInstalled {
                 Button("Use") {
-                    selectWhisperModel(model.id)
+                    selectModel(model.id)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -693,7 +697,7 @@ public struct MacSettingsView: View {
                 .controlSize(.small)
             } else {
                 Button("Download") {
-                    downloadAndSelectWhisperModel(model.id, manager: manager)
+                    downloadAndSelectModel(model.id, manager: manager)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -701,13 +705,13 @@ public struct MacSettingsView: View {
         }
     }
 
-    private func downloadAndSelectWhisperModel(_ modelID: String, manager: STTModelDownloadManager?) {
+    private func downloadAndSelectModel(_ modelID: String, manager: STTModelDownloadManager?) {
         guard let manager else { return }
         Task { @MainActor in
             do {
                 try await manager.download(modelID: modelID)
                 guard manager.isModelInstalled(modelID) else { return }
-                selectWhisperModel(modelID)
+                selectModel(modelID)
             } catch {
                 // STTModelDownloadManager publishes failed/cancelled state for the row UI.
             }
@@ -720,6 +724,8 @@ public struct MacSettingsView: View {
             return "Speak into the Code or Chat composer. Uses Apple Speech when available on-device."
         case .whisperKit:
             return "Speak into the Code or Chat composer. Uses your downloaded WhisperKit model when installed."
+        case .parakeet:
+            return "Speak into the Code or Chat composer. Uses your downloaded Parakeet model when installed."
         }
     }
 
@@ -752,11 +758,13 @@ public struct MacSettingsView: View {
             return "Override the locale passed to Apple Speech. Default follows macOS."
         case .whisperKit:
             return "Optional language hint for WhisperKit. Default follows macOS."
+        case .parakeet:
+            return "Parakeet auto-detects language; the hint is ignored."
         }
     }
 
     private var voiceRecognitionSubtitle: String {
-        "Choose Apple Speech or a downloadable local Whisper model."
+        "Choose Apple Speech or a downloadable local model. Each model trades speed against accuracy and language reach."
     }
 
     private var voiceEngineHint: String {
@@ -764,7 +772,9 @@ public struct MacSettingsView: View {
         case .appleSpeech:
             return "Uses macOS system speech recognition — no download required."
         case .whisperKit:
-            return "Runs entirely on your Mac after you download a model below."
+            return "Whisper models run entirely on your Mac after you download one below."
+        case .parakeet:
+            return "Parakeet TDT on the Apple Neural Engine — fastest local engine. Apple Silicon only."
         }
     }
 
@@ -791,9 +801,13 @@ public struct MacSettingsView: View {
         )
     }
 
-    private func selectWhisperModel(_ modelID: String) {
+    private func selectModel(_ modelID: String) {
         var preferences = presentationStore.snapshot.voicePresentationPreferences
-        preferences.sttEngine = .whisperKit
+        // The model id is the source of truth for the engine — picking a
+        // Parakeet model flips the engine to Parakeet, a Whisper model to WhisperKit.
+        if let descriptor = STTModelCatalog.model(forID: modelID) {
+            preferences.sttEngine = descriptor.engine
+        }
         preferences.whisperModelID = modelID
         try? presentationStore.setVoicePresentationPreferences(preferences)
     }
@@ -895,6 +909,13 @@ public struct MacSettingsView: View {
                 return "Local WhisperKit"
             }
             return "WhisperKit (model not installed — using Apple Speech fallback)"
+        case .parakeet:
+            if runtime?.sttModelDownloadManager.isModelInstalled(
+                presentationStore.snapshot.voicePresentationPreferences.whisperModelID
+            ) == true {
+                return "Local Parakeet · Neural Engine"
+            }
+            return "Parakeet (model not installed — using Apple Speech fallback)"
         case .appleSpeech:
             let recognizer = SFSpeechRecognizer(locale: voiceRecognitionLocale)
             if recognizer?.supportsOnDeviceRecognition == true {
@@ -908,6 +929,8 @@ public struct MacSettingsView: View {
         switch presentationStore.snapshot.voicePresentationPreferences.sttEngine {
         case .whisperKit:
             return "Local models run entirely on your Mac. Falls back to Apple Speech if the selected model is missing."
+        case .parakeet:
+            return "Runs on the Apple Neural Engine, fully on-device. Falls back to Apple Speech if the model is missing or unsupported."
         case .appleSpeech:
             if SFSpeechRecognizer(locale: voiceRecognitionLocale)?.supportsOnDeviceRecognition == true {
                 return "Audio stays on this Mac when macOS supports on-device recognition for your locale."
@@ -3555,23 +3578,37 @@ private struct FullDiskAccessBanner: View {
     }
 }
 
-private struct VoiceWhisperModelPicker: View {
+/// Per-engine model list rendered as tradeoff cards (name + tagline +
+/// Quality/Speed rail-meters + language tag + download/use action). Greyscale
+/// per DESIGN.md — the comparison meters carry no provider/state color; only
+/// the Active border uses the `live` green state signal.
+private struct VoiceLocalModelPicker: View {
+    let engine: STTEngine
     @ObservedObject var downloadManager: STTModelDownloadManager
     let selectedModelID: String
     let onSelect: (String) -> Void
 
     @State private var pendingLargeDownload: STTModelDescriptor?
 
+    private var engineModels: [STTModelDescriptor] {
+        STTModelCatalog.models(for: engine)
+    }
+
     var body: some View {
-        ForEach(STTModelCatalog.models) { model in
-            SettingsRow(
-                label: model.displayName,
-                hint: modelRowHint(for: model)
-            ) {
-                modelRowActions(for: model)
-            }
-            if model.id != STTModelCatalog.models.last?.id {
-                TahoeHair().padding(.vertical, 10)
+        VStack(spacing: 10) {
+            ForEach(engineModels) { model in
+                VoiceModelCard(
+                    model: model,
+                    isSelected: selectedModelID == model.id,
+                    isInstalled: downloadManager.isModelInstalled(model.id),
+                    isSupported: STTModelCatalog.isSupportedOnThisDevice(model),
+                    downloadState: downloadManager.downloadState,
+                    canResume: downloadManager.canResumeDownload(for: model.id),
+                    onUse: { onSelect(model.id) },
+                    onDownload: { requestDownload(for: model) },
+                    onDelete: { try? downloadManager.delete(modelID: model.id) },
+                    onCancel: { downloadManager.cancelDownload() }
+                )
             }
         }
         .alert(item: $pendingLargeDownload) { model in
@@ -3605,57 +3642,168 @@ private struct VoiceWhisperModelPicker: View {
             }
         }
     }
+}
 
-    private func modelRowHint(for model: STTModelDescriptor) -> String {
-        var hint = "\(model.sizeLabel) · on-device Whisper model"
-        if case .failed(let modelID, let message) = downloadManager.downloadState, modelID == model.id {
-            hint += " · download failed: \(message)"
-        } else if case .cancelled(let modelID) = downloadManager.downloadState, modelID == model.id {
-            hint += " · download cancelled — tap Resume to continue"
+private struct VoiceModelCard: View {
+    let model: STTModelDescriptor
+    let isSelected: Bool
+    let isInstalled: Bool
+    let isSupported: Bool
+    let downloadState: STTModelDownloadManager.DownloadState
+    let canResume: Bool
+    let onUse: () -> Void
+    let onDownload: () -> Void
+    let onDelete: () -> Void
+    let onCancel: () -> Void
+
+    private var isActive: Bool { isSelected && isInstalled }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(model.displayName)
+                    .font(TahoeFont.body(13, weight: .semibold))
+                if model.recommended {
+                    Text("Recommended")
+                        .font(TahoeFont.mono(9.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule().fill(Color.primary.opacity(0.06))
+                        )
+                }
+                Spacer()
+                actions
+            }
+
+            Text(model.tagline)
+                .font(TahoeFont.body(11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 18) {
+                TradeoffMeter(label: "QUALITY", value: model.quality)
+                TradeoffMeter(label: "SPEED", value: model.speed)
+            }
+
+            HStack(spacing: 12) {
+                Label(model.languageCoverage.tagLabel, systemImage: "globe")
+                    .font(TahoeFont.mono(10.5))
+                    .foregroundStyle(.secondary)
+                if model.supportsTranslation {
+                    Label("Translate to English", systemImage: "character.bubble")
+                        .font(TahoeFont.mono(10.5))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !isInstalled {
+                    Label(model.sizeLabel, systemImage: "arrow.down.circle")
+                        .font(TahoeFont.mono(10.5))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let detail = statusDetail {
+                Text(detail)
+                    .font(TahoeFont.mono(10))
+                    .foregroundStyle(.secondary)
+            }
         }
-        return hint
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(0.03))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(
+                    isActive ? Color.green.opacity(0.55) : Color.primary.opacity(0.08),
+                    lineWidth: isActive ? 1 : 0.5
+                )
+        )
+        .opacity(isSupported ? 1 : 0.55)
     }
 
     @ViewBuilder
-    private func modelRowActions(for model: STTModelDescriptor) -> some View {
-        let isSelected = selectedModelID == model.id
-        let isInstalled = downloadManager.isModelInstalled(model.id)
-
-        HStack(spacing: 8) {
-            if isSelected && isInstalled {
+    private var actions: some View {
+        if !isSupported {
+            Text("Apple Silicon only")
+                .font(TahoeFont.mono(10.5))
+                .foregroundStyle(.secondary)
+        } else if case .downloading(let id, let progress) = downloadState, id == model.id {
+            HStack(spacing: 8) {
+                if model.engine == .parakeet {
+                    ProgressView().controlSize(.small)
+                } else {
+                    ProgressView(value: progress).frame(width: 70)
+                }
+                Button("Cancel", action: onCancel)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        } else if isActive {
+            HStack(spacing: 8) {
                 Text("Active")
                     .font(TahoeFont.body(11, weight: .semibold))
                     .foregroundStyle(.green)
-            } else if isInstalled {
-                Button("Use") {
-                    onSelect(model.id)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                Button("Delete", action: onDelete)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
             }
-
-            if case .downloading(let modelID, let progress) = downloadManager.downloadState, modelID == model.id {
-                ProgressView(value: progress)
-                    .frame(width: 80)
-                Button("Cancel") {
-                    downloadManager.cancelDownload()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            } else if isInstalled {
-                Button("Delete") {
-                    try? downloadManager.delete(modelID: model.id)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            } else {
-                Button(downloadManager.canResumeDownload(for: model.id) ? "Resume" : "Download") {
-                    requestDownload(for: model)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+        } else if isInstalled {
+            HStack(spacing: 8) {
+                Button("Use", action: onUse)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                Button("Delete", action: onDelete)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
             }
+        } else {
+            Button(canResume ? "Resume" : "Download", action: onDownload)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
         }
+    }
+
+    private var statusDetail: String? {
+        if case .failed(let id, let message) = downloadState, id == model.id {
+            return "Download failed: \(message)"
+        }
+        if case .cancelled(let id) = downloadState, id == model.id {
+            return "Download cancelled — tap Resume to continue."
+        }
+        return nil
+    }
+}
+
+/// Coarse 1–5 comparison meter — an etched label over a neutral rail.
+/// Greyscale on purpose: quality/speed are not provider or state, so color
+/// would violate the design system's color rationing.
+private struct TradeoffMeter: View {
+    let label: String
+    let value: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(TahoeFont.mono(9.5, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 48, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.08))
+                    Capsule()
+                        .fill(Color.primary.opacity(0.55))
+                        .frame(width: geo.size.width * CGFloat(max(1, min(5, value))) / 5)
+                }
+            }
+            .frame(width: 64, height: 4)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label.capitalized) \(value) of 5")
     }
 }
 

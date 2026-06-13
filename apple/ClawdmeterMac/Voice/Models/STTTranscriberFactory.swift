@@ -1,4 +1,5 @@
 import ClawdmeterShared
+import FluidAudio
 import Foundation
 
 @MainActor
@@ -13,7 +14,8 @@ public enum STTTranscriberFactory {
         case .appleSpeech:
             return AppleSpeechTranscriber(locale: locale)
         case .whisperKit:
-            guard STTModelCatalog.model(forID: preferences.whisperModelID) != nil else {
+            guard let descriptor = STTModelCatalog.model(forID: preferences.whisperModelID),
+                  descriptor.engine == .whisperKit else {
                 return AppleSpeechTranscriber(locale: locale)
             }
             let modelDirectory = STTModelCatalog.modelDirectory(
@@ -27,6 +29,24 @@ public enum STTTranscriberFactory {
                 modelID: preferences.whisperModelID,
                 appSupportDirectory: appSupportDirectory,
                 languageCode: whisperLanguageCode(from: preferences)
+            )
+        case .parakeet:
+            guard let descriptor = STTModelCatalog.model(forID: preferences.whisperModelID),
+                  descriptor.engine == .parakeet,
+                  STTModelCatalog.isSupportedOnThisDevice(descriptor) else {
+                return AppleSpeechTranscriber(locale: locale)
+            }
+            let version = STTModelDownloadManager.parakeetVersion(forKey: descriptor.parakeetVersionKey)
+            let modelDirectory = STTModelCatalog.modelDirectory(
+                appSupportDirectory: appSupportDirectory,
+                modelID: preferences.whisperModelID
+            )
+            guard AsrModels.modelsExist(at: modelDirectory, version: version) else {
+                return AppleSpeechTranscriber(locale: locale)
+            }
+            return ParakeetTranscriber(
+                modelID: preferences.whisperModelID,
+                appSupportDirectory: appSupportDirectory
             )
         }
     }
