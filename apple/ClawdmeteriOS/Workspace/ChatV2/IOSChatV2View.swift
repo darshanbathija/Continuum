@@ -1278,6 +1278,8 @@ private struct Composer: View {
                 return true
             }
             return entry.available
+        case .opencodePartner(let partnerId):
+            return client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled })
         }
     }
 
@@ -1293,6 +1295,12 @@ private struct Composer: View {
             guard isChoiceAvailable(choice) else {
                 return providerMatrix?.customProviders.first(where: { $0.id == providerId && !$0.available })?.reason
                     ?? "\(label) is unavailable."
+            }
+            return nil
+        case .opencodePartner(let partnerId):
+            let label = choice.displayName(in: client.modelCatalog)
+            guard client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled }) else {
+                return "Connect \(label) in Continuum → OpenCode providers on your Mac."
             }
             return nil
         }
@@ -1784,6 +1792,8 @@ private struct IOSChatModelSelectorSheet: View {
                 return true
             }
             return entry.available
+        case .opencodePartner(let partnerId):
+            return client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled })
         }
     }
 
@@ -1799,6 +1809,12 @@ private struct IOSChatModelSelectorSheet: View {
             guard isChoiceAvailable(choice) else {
                 return providerMatrix?.customProviders.first(where: { $0.id == providerId && !$0.available })?.reason
                     ?? "\(label) is unavailable"
+            }
+            return nil
+        case .opencodePartner(let partnerId):
+            let label = choice.displayName(in: client.modelCatalog)
+            guard client.modelCatalog.opencodePartners.contains(where: { $0.id == partnerId && $0.enabled }) else {
+                return "Connect \(label) in Continuum → OpenCode providers on your Mac."
             }
             return nil
         }
