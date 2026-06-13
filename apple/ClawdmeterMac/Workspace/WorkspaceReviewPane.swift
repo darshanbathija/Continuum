@@ -115,7 +115,7 @@ struct WorkspaceReviewPane: View {
     }
 
     private func tabLabel(_ tab: WorkbenchPaneTab) -> String {
-        tab == .terminal ? "Term" : tab.rawValue
+        tab.rawValue
     }
 
     @ViewBuilder

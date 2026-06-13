@@ -29,7 +29,7 @@ enum SessionWorkbenchTab: String, CaseIterable, Identifiable {
         case .sources: return "Sources"
         case .browser: return "Run"
         case .pr: return "PR"
-        case .terminal: return "Term"
+        case .terminal: return "Terminal"
         case .artifacts: return "Files"
         }
     }
