@@ -442,6 +442,53 @@ public struct ModelCatalog: Codable, Sendable {
         filtered(toEnabledProviderIDs: ProviderEnablement.enabledProviderIDs(for: capability))
     }
 
+    /// Splices the statically-bundled models for `provider` into this catalog
+    /// (only when the catalog currently has none for it) and marks the
+    /// provider enabled. Lets a just-connected bundled-model provider —
+    /// Claude, Codex, Antigravity/Gemini, Cursor, Grok — render its model
+    /// picker instantly instead of waiting on the live Cursor/OpenCode/
+    /// OpenRouter probe refresh (several seconds). The daemon's `/models`
+    /// response strips disabled providers' arrays, so the row that appears the
+    /// instant you connect would otherwise have an empty dropdown until the
+    /// next slow refresh lands. `.opencode`/`.unknown` are left untouched —
+    /// their model lists only exist after a live probe.
+    public func ensuringBundledModels(for provider: AgentKind) -> ModelCatalog {
+        let bundled = ModelCatalog.bundled
+        var claude = self.claude
+        var codex = self.codex
+        var gemini = self.gemini
+        var cursor = self.cursor
+        var grok = self.grok
+        switch provider {
+        case .claude: if claude.isEmpty { claude = bundled.claude }
+        case .codex:  if codex.isEmpty  { codex  = bundled.codex }
+        case .gemini: if gemini.isEmpty { gemini = bundled.gemini }
+        case .cursor: if cursor.isEmpty { cursor = bundled.cursor }
+        case .grok:   if grok.isEmpty   { grok   = bundled.grok }
+        case .opencode, .unknown:
+            return self
+        }
+        // Only extend an existing filter; don't introduce one where the
+        // catalog was unfiltered (enabledProviderIDs == nil shows everything).
+        var ids = enabledProviderIDs
+        if ids != nil, !ids!.contains(provider.rawValue) {
+            ids!.append(provider.rawValue)
+        }
+        return ModelCatalog(
+            claude: claude,
+            codex: codex,
+            gemini: gemini,
+            opencode: opencode,
+            openrouter: openrouter,
+            cursor: cursor,
+            grok: grok,
+            enabledProviderIDs: ids,
+            customProviders: customProviders,
+            opencodePartners: opencodePartners,
+            updatedAt: updatedAt
+        )
+    }
+
     public func filtered(toEnabledProviderIDs enabledIDs: [String]) -> ModelCatalog {
         let enabled = Set(enabledIDs.map { ProviderRegistry.rootProviderID(for: $0) })
         func allowed(_ provider: AgentKind) -> Bool {
