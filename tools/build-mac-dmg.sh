@@ -306,6 +306,18 @@ if [[ -n "$SIGN_ID" ]]; then
   if [[ -f "$V/fff/fff-mcp" ]]; then
     codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" "$TS_FLAG" "$V/fff/fff-mcp" 2>&1 | sed 's/^/    /'
   fi
+  # The opencode-fff plugin bundles native node addons (.node) plus a dylib
+  # deep inside its npm node_modules (@ff-labs/fff-bin, @yuuang/ffi-rs,
+  # @msgpackr-extract, …). Each Mach-O must be Developer-ID signed with a
+  # secure timestamp or notarization rejects the whole archive. Sign every
+  # nested native binary inside-out, before the outer app is sealed.
+  if [[ -d "$V/opencode-fff" ]]; then
+    echo "▸ Re-signing opencode-fff native binaries…"
+    while IFS= read -r MACHO; do
+      [[ -n "$MACHO" ]] || continue
+      codesign --force --sign "$SIGN_ID" "${RUNTIME[@]}" "$TS_FLAG" "$MACHO" 2>&1 | sed 's/^/    /' || echo "    ⚠ failed: $MACHO"
+    done < <(find "$V/opencode-fff" -type f \( -name '*.node' -o -name '*.dylib' -o -name '*.so' \) 2>/dev/null)
+  fi
   # Sparkle's nested helpers arrive ad-hoc signed from SwiftPM. Notarization
   # requires each Mach-O to be signed by our Developer ID identity with a
   # secure timestamp before the framework and outer app are sealed.
