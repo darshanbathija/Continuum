@@ -210,11 +210,18 @@ public final class AgentSessionRegistry: ObservableObject {
             // Same retired-tmux revival the JSON loader applies — a legacy Claude
             // session reconstructed only from the event log must also shed its
             // dead pane metadata so it routes to `.claudePty`.
+            let retiredClaudePaneCount = merged.filter {
+                $0.agent == .claude && ($0.tmuxPaneId != nil || $0.tmuxWindowId != nil)
+            }.count
             self.sessions = migratingRetiredClaudePanes(merged)
             self.nextEventSeqBySession.removeAll(keepingCapacity: true)
             for session in merged {
                 self.nextEventSeqBySession[session.id] = session.lastEventSeq + 1
             }
+            // Persist the one-time strip (parity with load()) so an event-log-only
+            // revived session isn't re-stripped + re-stamped (lastEventAt) every
+            // launch, which would re-float it to the top of the activity sort.
+            if retiredClaudePaneCount > 0 { save() }
             registryLogger.info("Seeded \(replayed.count) replayed sessions into \(merged.count) live sessions")
         }
     }

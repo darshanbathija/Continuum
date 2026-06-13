@@ -242,6 +242,7 @@
 		72260296B9313DC5232938D6 /* ExecutionHostSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A819CCE9758F3F6768354B82 /* ExecutionHostSettingsView.swift */; };
 		72E7AC4665316C7AEDDD59D0 /* OpencodeAuthFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCD88BB66371C0075AB50554 /* OpencodeAuthFile.swift */; };
 		7338DDD72403E26DF8AF281A /* SessionLauncherModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82E485D80575BAE609E437A3 /* SessionLauncherModelTests.swift */; };
+		735CE759968C419F3D940D8F /* LegacyClaudePaneMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1492F07DAE1AD43ACD1CA896 /* LegacyClaudePaneMigrationTests.swift */; };
 		736329DA1C7064B6D245547E /* SDKChatTranscriptMirror.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEF810863428B317C5B3A91D /* SDKChatTranscriptMirror.swift */; };
 		74006BC1748D725BE7C5CF2D /* AppleSpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = C65442739A653391F37D71AC /* AppleSpeechTranscriber.swift */; };
 		741209CFF5D32C74514BAC0A /* SessionChatStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 154FAAB82985A5CA50923DC2 /* SessionChatStore.swift */; };
@@ -648,6 +649,7 @@
 		13951B634E1A812CE5D605E3 /* RelayPairingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayPairingServiceTests.swift; sourceTree = "<group>"; };
 		140C97848E0B933AD18F9DBF /* TerminalPtyHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalPtyHost.swift; sourceTree = "<group>"; };
 		147082FC165068DD00F8A062 /* WorkspaceReviewPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceReviewPane.swift; sourceTree = "<group>"; };
+		1492F07DAE1AD43ACD1CA896 /* LegacyClaudePaneMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyClaudePaneMigrationTests.swift; sourceTree = "<group>"; };
 		154FAAB82985A5CA50923DC2 /* SessionChatStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChatStore.swift; sourceTree = "<group>"; };
 		15C6C853320E8369882903E2 /* ChatItemRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatItemRowView.swift; sourceTree = "<group>"; };
 		15FF6A0F233219A913A22AE2 /* LiveDriveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveDriveTests.swift; sourceTree = "<group>"; };
@@ -1590,6 +1592,7 @@
 				F73B6460D4F0D48BA96F9D7A /* GrokUsageSourceTests.swift */,
 				B402D2971401AAA603A1AC75 /* HarnessProcessReaperTests.swift */,
 				30A02397E6ED803BAB94A505 /* IdleSessionSweeperTests.swift */,
+				1492F07DAE1AD43ACD1CA896 /* LegacyClaudePaneMigrationTests.swift */,
 				15FF6A0F233219A913A22AE2 /* LiveDriveTests.swift */,
 				7F6EC129DE2AF0B025B33FB4 /* MacComposerSenderTests.swift */,
 				AFA447574373EE185264E612 /* MacRelayClientHandshakeTests.swift */,
@@ -2467,6 +2470,7 @@
 				051A2A5E84A93C863922A702 /* GrokUsageSourceTests.swift in Sources */,
 				07107E18CE3DA43EC7619E2F /* HarnessProcessReaperTests.swift in Sources */,
 				DABFFEDA21FC590B20240593 /* IdleSessionSweeperTests.swift in Sources */,
+				735CE759968C419F3D940D8F /* LegacyClaudePaneMigrationTests.swift in Sources */,
 				3D32963A880A312FDFEFDCAE /* LiveDriveTests.swift in Sources */,
 				3A11FE8349E82A63A3C552B8 /* MacComposerSenderTests.swift in Sources */,
 				E6DF50FB52A08418A01E53F8 /* MacRelayClientHandshakeTests.swift in Sources */,
