@@ -831,6 +831,12 @@ public actor WorktreeManager {
             )
             let moveResult = try await runGit(args: ["worktree", "move", oldPath, newPath], cwd: repoRoot)
             guard moveResult.exitStatus == 0 else {
+                // Roll back the branch rename so a failed move doesn't leave the
+                // branch on the new name while the folder/marker still hold the
+                // old one (two-sources-of-truth drift with no recovery).
+                if let currentBranch, let newBranchName, newBranchName != currentBranch {
+                    _ = try? await runGit(args: ["branch", "-m", currentBranch], cwd: oldPath)
+                }
                 throw WorktreeError.gitFailed(operation: "worktree move", stderr: moveResult.stderrString)
             }
         }
