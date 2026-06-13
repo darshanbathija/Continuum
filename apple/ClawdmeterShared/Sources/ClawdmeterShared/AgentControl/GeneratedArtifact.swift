@@ -27,7 +27,10 @@ public struct GeneratedArtifact: Identifiable, Hashable, Sendable, Codable {
     }
 
     public var opensInDocumentTab: Bool {
-        TranscriptArtifactClassifier.opensInDocumentTab(forPath: path)
+        if kind == .markdownDocument {
+            return true
+        }
+        return TranscriptArtifactClassifier.opensInDocumentTab(forPath: path)
     }
 
     public var systemImageName: String {

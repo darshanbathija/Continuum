@@ -423,7 +423,7 @@ public final class WorkspaceStore: ObservableObject {
 
     /// v1 (Code V2 deferred follow-ups ship, 2026-05-23): initial schema.
     /// One `CodeWorkspaceRecord` per canonical repo root.
-    private static let currentSchemaVersion = 1
+    nonisolated private static let currentSchemaVersion = 1
 
     private func load() {
         guard FileManager.default.fileExists(atPath: storeURL.path) else { return }
@@ -445,7 +445,7 @@ public final class WorkspaceStore: ObservableObject {
     private func scheduleDeferredSave() {
         deferredSaveTask?.cancel()
         deferredSaveTask = Task { @MainActor in
-            try? await Task.yield()
+            await Task.yield()
             guard !Task.isCancelled else { return }
             let snapshot = workspaces
             let url = storeURL

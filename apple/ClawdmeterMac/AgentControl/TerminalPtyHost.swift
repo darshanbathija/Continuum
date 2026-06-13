@@ -255,7 +255,11 @@ actor TerminalPtyHost {
     }
 
     private func appendOutput(_ bytes: [UInt8]) {
-        let data = Data(bytes)
+        appendOutput(Data(bytes))
+    }
+
+    private func appendOutput(_ data: Data) {
+        guard !data.isEmpty else { return }
         ring.append(data)
         if ring.count > ringCapacity {
             ring.removeFirst(ring.count - ringCapacity)
@@ -270,11 +274,9 @@ actor TerminalPtyHost {
         _ = fcntl(masterFD, F_SETFL, flags | O_NONBLOCK)
         let src = DispatchSource.makeReadSource(fileDescriptor: masterFD, queue: .global())
         src.setEventHandler { [weak self] in
-            var buf = [UInt8](repeating: 0, count: 8192)
-            let n = read(masterFD, &buf, buf.count)
-            guard n > 0 else { return }
-            let chunk = Array(buf[0..<n])
-            Task { await self?.appendOutput(chunk) }
+            let data = Self.readAvailable(fd: masterFD)
+            guard !data.isEmpty else { return }
+            Task { await self?.appendOutput(data) }
         }
         src.setCancelHandler { close(masterFD) }
         src.resume()
@@ -297,9 +299,13 @@ actor TerminalPtyHost {
     private func handleChildExit(status: Int32) {
         guard isRunning else { return }
         let exitedPid = childPid
+        let fdToDrain = masterFD
         isRunning = false
         masterFD = -1
         childPid = 0
+        if fdToDrain >= 0 {
+            appendOutput(Self.readAvailable(fd: fdToDrain))
+        }
         exitSource?.cancel()
         exitSource = nil
         if exitedPid > 0 {
@@ -317,6 +323,27 @@ actor TerminalPtyHost {
         subscribers.removeAll()
         terminalPtyLogger.info("TerminalPtyHost exited status=\(status) id=\(self.id.uuidString, privacy: .public)")
         onExit?(id.uuidString)
+    }
+
+    private static func readAvailable(fd: Int32) -> Data {
+        var output = Data()
+        var buf = [UInt8](repeating: 0, count: 8192)
+        while true {
+            let n = buf.withUnsafeMutableBytes { raw -> Int in
+                guard let base = raw.baseAddress else { return -1 }
+                return read(fd, base, raw.count)
+            }
+            if n > 0 {
+                output.append(contentsOf: buf.prefix(n))
+                continue
+            }
+            if n == 0 { break }
+            let e = errno
+            if e == EINTR { continue }
+            if e == EAGAIN || e == EWOULDBLOCK { break }
+            break
+        }
+        return output
     }
 
     private static func writeAll(fd: Int32, data: Data) -> Bool {

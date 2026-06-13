@@ -44,6 +44,14 @@ dist/
 # tools/download-bundled-opencode.sh; gitignored to keep the repo lean.
 apple/ClawdmeterMac/Resources/Vendor/opencode/opencode
 
+# Bundled FFF assets for Code-tab search + agent MCP. Downloaded on demand by
+# tools/download-bundled-fff.sh; gitignored to keep the repo lean.
+apple/ClawdmeterMac/Resources/Vendor/fff/
+
+# Bundled opencode-fff-search plugin config + node_modules. Staged on demand by
+# tools/stage-opencode-fff-plugin.sh; gitignored to keep the repo lean.
+apple/ClawdmeterMac/Resources/Vendor/opencode-fff/
+
 # Continue Plan spawn artifacts — PlanRunner writes a prompt + bash
 # wrapper per spawn into <worktree>/.continue-plan/. These are spawn
 # scratch and must never land in a PR.

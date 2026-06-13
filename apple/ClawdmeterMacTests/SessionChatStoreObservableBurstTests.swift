@@ -52,12 +52,14 @@ import ClawdmeterShared
 /// `pendingMessage` observers).
 @MainActor
 final class SessionChatStoreObservableBurstTests: XCTestCase {
+    private var counterLease: UUID?
 
     /// Token-tick count for the simulated snapshot-burst.
     private let burstTickCount = 100
 
     override func setUp() async throws {
         try await super.setUp()
+        counterLease = await BodyInvalidationCounter.acquireTestLease()
         BodyInvalidationCounter.resetAll()
         BodyInvalidationCounter.enabled = true
     }
@@ -65,6 +67,10 @@ final class SessionChatStoreObservableBurstTests: XCTestCase {
     override func tearDown() async throws {
         BodyInvalidationCounter.enabled = false
         BodyInvalidationCounter.resetAll()
+        if let counterLease {
+            BodyInvalidationCounter.releaseTestLease(counterLease)
+            self.counterLease = nil
+        }
         try await super.tearDown()
     }
 
@@ -139,6 +145,10 @@ final class SessionChatStoreObservableBurstTests: XCTestCase {
 
     private func flush() async {
         await Task.yield()
+        spinMainRunLoop()
+    }
+
+    private func spinMainRunLoop() {
         RunLoop.main.run(until: Date().addingTimeInterval(0.005))
     }
 }

@@ -627,20 +627,6 @@ final class AppRuntime: ObservableObject {
                 }
             }
             RunLoop.main.add(chatIdleTimer, forMode: .common)
-            // Phase 10: APNS Live Activity push trigger.
-            // Subscribe to registry deltas; whenever a session status,
-            // planText, or active-set changes, hand a fresh wire-shape
-            // content state to MacAPNSPusher. The pusher no-ops when no
-            // APNS credentials are configured or no tokens are
-            // registered, so this is safe to wire unconditionally.
-            self.agentSessionRegistry.$sessions
-                .removeDuplicates { [weak self] old, new in
-                    self?.liveActivityFingerprint(old) == self?.liveActivityFingerprint(new)
-                }
-                .sink { [weak self] sessions in
-                    self?.pushLiveActivityUpdate(sessions: sessions)
-                }
-                .store(in: &cancellables)
             runtimeLogger.info("Sessions daemon started on port \(self.agentControlServer.boundPort ?? 0)")
         } else {
             runtimeLogger.info("Sessions feature disabled via UserDefaults — daemon not started")
@@ -673,6 +659,7 @@ final class AppRuntime: ObservableObject {
                         )
                     }
                 }
+                self.objectWillChange.send()
             }
         } else {
             Task { @MainActor [self] in
@@ -874,6 +861,7 @@ final class AppRuntime: ObservableObject {
             }
         }
         Task(priority: .utility) { @MainActor in
+            FffAgentSearchProvisioning.ensureProvisioned()
             OpencodeProcessManager.shared.prepareRuntimeHost()
         }
         Task(priority: .utility) { @MainActor in
@@ -942,8 +930,20 @@ final class AppRuntime: ObservableObject {
     @MainActor
     func setProviderEnabled(_ id: String, _ enabled: Bool) {
         ProviderEnablement.setEnabled(id, enabled)
-        if let kind = AgentKind(rawValue: id), let model = appModel(for: kind) {
-            if enabled { model.start() } else { model.stop() }
+        if let kind = AgentKind(rawValue: id) {
+            if enabled {
+                if !Self.deferProviderSideEffectsForTesting {
+                    for (wireId, model) in modelsByInstanceWireId {
+                        guard ProviderInstanceId.parseWireId(wireId)?.kind == id else { continue }
+                        model.forcePoll()
+                    }
+                }
+            } else {
+                for (wireId, model) in modelsByInstanceWireId {
+                    guard ProviderInstanceId.parseWireId(wireId)?.kind == id else { continue }
+                    model.stop()
+                }
+            }
         }
         UserDefaults.standard.set(enabled, forKey: "clawdmeter.\(id).menuBarShown")
         Task {
@@ -986,14 +986,6 @@ final class AppRuntime: ObservableObject {
         if modelsByInstanceWireId[instance.wireId] != nil { return false }
         guard await providerInstanceRegistry.upsert(instance) != nil else { return false }
         let model = makeInstanceAwareModel(config: config, instance: instance)
-        // Secondary pollers follow the same opt-in + testing gates as the
-        // primaries (init): an instance of a disabled provider registers
-        // (so pickers can list it) but doesn't poll until the kind is
-        // enabled.
-        if !Self.deferProviderSideEffectsForTesting,
-           ProviderEnablement.isEnabled(instance.kind.rawValue) {
-            model.start()
-        }
         modelsByInstanceWireId[instance.wireId] = model
         if persist {
             providerInstanceStore.upsert(ProviderInstanceRecord(instance: instance))
@@ -1001,6 +993,10 @@ final class AppRuntime: ObservableObject {
             // the loader's root closures read the list per refresh.
             usageHistoryStore.forceRefresh()
         }
+        // Secondary pollers follow the same opt-in + testing gates as the
+        // primaries (init): an instance of a disabled provider registers
+        // (so pickers can list it) but doesn't poll until the kind is
+        // enabled. forcePoll() also start()s the model when needed.
         if !Self.deferProviderSideEffectsForTesting,
            ProviderEnablement.isEnabled(instance.kind.rawValue) {
             model.forcePoll()
@@ -1012,6 +1008,7 @@ final class AppRuntime: ObservableObject {
         runtimeLogger.info(
             "AppRuntime.addInstance wireId=\(instance.wireId, privacy: .public) configRoot=\(redactedRoot, privacy: .public) persist=\(persist)"
         )
+        objectWillChange.send()
         return true
     }
 
@@ -1041,6 +1038,7 @@ final class AppRuntime: ObservableObject {
         runtimeLogger.info(
             "AppRuntime.removeInstance wireId=\(instance.wireId, privacy: .public) deleteConfigRoot=\(deleteConfigRoot)"
         )
+        objectWillChange.send()
         return true
     }
 
@@ -1133,54 +1131,6 @@ final class AppRuntime: ObservableObject {
         case .opencode: return .opencode
         case .grok, .unknown: return nil
         }
-    }
-
-    /// Compute a fingerprint over only the fields that affect the
-    /// aggregate Live Activity content state. Without this, every
-    /// registry mutation (lastEventSeq bumps for chat messages, token
-    /// totals, etc.) would trigger an APNS push.
-    private func liveActivityFingerprint(_ sessions: [AgentSession]) -> String {
-        let active = sessions
-            .filter { $0.archivedAt == nil && $0.status != .done }
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-        return active
-            .map { "\($0.id.uuidString):\($0.status.rawValue):\($0.planText == nil ? "0" : "1")" }
-            .joined(separator: "|")
-    }
-
-    private func pushLiveActivityUpdate(sessions: [AgentSession]) {
-        let active = sessions.filter { $0.archivedAt == nil && $0.status != .done }
-        let mostRecent = active.max(by: { $0.lastEventAt < $1.lastEventAt }) ?? active.first
-        let payload: APNSContentStatePayload
-        if let mostRecent {
-            let city = CityPool.cityName(for: mostRecent.id)
-            let needsAttention = active.contains { $0.planText != nil && $0.status == .planning }
-            payload = APNSContentStatePayload(
-                event: "update",
-                content: WireSessionLiveActivityContentState(
-                    activeSessionCount: active.count,
-                    latestCity: city,
-                    latestAgentKind: mostRecent.agent,
-                    latestState: mostRecent.status.rawValue,
-                    needsAttention: needsAttention
-                )
-            )
-        } else {
-            // Empty active set — end the activity. APNS treats event=end
-            // as a signal to dismiss; iOS-side LiveActivityCoordinator
-            // also handles the in-process end path.
-            payload = APNSContentStatePayload(
-                event: "end",
-                content: WireSessionLiveActivityContentState(
-                    activeSessionCount: 0,
-                    latestCity: "",
-                    latestAgentKind: .claude,
-                    latestState: "done",
-                    needsAttention: false
-                )
-            )
-        }
-        Task { await MacAPNSPusher.shared.push(contentState: payload) }
     }
 
     deinit {

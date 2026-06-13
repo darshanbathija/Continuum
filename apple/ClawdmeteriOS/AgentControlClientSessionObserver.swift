@@ -4,14 +4,13 @@ import ClawdmeterShared
 /// iOS-app-side bridge that listens for
 /// `Notification.Name.agentControlSessionsRefreshed` from `AgentControlClient`
 /// (now in Shared) and forwards the new `[AgentSession]` to the iOS-only
-/// `LiveActivityCoordinator` + `WatchPlanBridgeIOS` singletons.
+/// `WatchPlanBridgeIOS` singleton.
 ///
 /// Why this exists: `AgentControlClient` moved into `ClawdmeterShared` in
-/// PR #24a so the Mac loopback client could reuse it. The two iOS-only
-/// bridging singletons (Live Activity + watch context) live in the iOS app
-/// target and can't be linked from Shared. So instead of importing those
-/// types into the shared client, the client posts a notification and this
-/// tiny observer dispatches to the singletons.
+/// PR #24a so the Mac loopback client could reuse it. The iOS-only watch
+/// bridging singleton lives in the iOS app target and can't be linked from
+/// Shared. So instead of importing that type into the shared client, the
+/// client posts a notification and this tiny observer dispatches to it.
 ///
 /// Configured by `ContentView.init` (or anywhere the app constructs the
 /// `AgentControlClient`). Holds a `NotificationCenter` token for the life
@@ -31,7 +30,6 @@ final class AgentControlClientSessionObserver {
         ) { note in
             guard let sessions = note.userInfo?["sessions"] as? [AgentSession] else { return }
             Task { @MainActor in
-                LiveActivityCoordinator.shared.refresh(from: sessions)
                 // Audit P1 fix: require non-empty `planText` for Codex too
                 // — the old filter marked every Codex session as waiting
                 // (even mid-generation ones with no plan yet), which

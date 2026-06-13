@@ -700,6 +700,7 @@ struct ChatThreadScroll: View {
             StreamingMessageView(payload: payload, actions: actions)
         } else {
             ChatItemRowView(payload: payload, actions: actions)
+                .equatable()
         }
     }
 

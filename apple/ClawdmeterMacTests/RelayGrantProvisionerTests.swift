@@ -50,7 +50,7 @@ final class RelayGrantProvisionerTests: XCTestCase {
         XCTAssertTrue(token.hasPrefix("\(installId)."))
         XCTAssertEqual(
             token,
-            "11111111-1111-4111-8111-111111111111.L8OeZbMU2WAZMleiolFa_abtU5LLI_bprHf-yLwRXfE"
+            "11111111-1111-4111-8111-111111111111.PkZznrFQilueJoF4NY9cnhZpbgYivxW1gJvW-OBpZMs"
         )
     }
 }

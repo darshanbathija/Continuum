@@ -335,6 +335,7 @@ public actor OpenRouterModelProbe {
 
     private var cache: CacheEntry?
     private var inflight: Task<OpenRouterModelProbeState, Never>?
+    private var stateOverride: OpenRouterModelProbeState?
     public static let cacheTTL: TimeInterval = 60
     private static let endpoint = URL(string: "https://openrouter.ai/api/v1/models?output_modalities=text")!
 
@@ -346,11 +347,39 @@ public actor OpenRouterModelProbe {
         inflight = nil
     }
 
+    public func setStateOverride(
+        authenticated: Bool,
+        discoverySucceeded: Bool,
+        reason: String?,
+        models: [ModelCatalogEntry] = ModelCatalog.bundled.openrouter
+    ) {
+        stateOverride = OpenRouterModelProbeState(
+            models: models,
+            authenticated: authenticated,
+            discoverySucceeded: discoverySucceeded,
+            reason: reason,
+            probedAt: Date()
+        )
+        cache = nil
+        inflight?.cancel()
+        inflight = nil
+    }
+
+    public func clearStateOverride() {
+        stateOverride = nil
+        cache = nil
+        inflight?.cancel()
+        inflight = nil
+    }
+
     public func currentModels() async -> [ModelCatalogEntry] {
         await currentState().models
     }
 
     public func currentState() async -> OpenRouterModelProbeState {
+        if let stateOverride {
+            return stateOverride
+        }
         if let cache,
            Date().timeIntervalSince(cache.computedAt) < Self.cacheTTL {
             return cache.state

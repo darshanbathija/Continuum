@@ -57,12 +57,12 @@ final class F1dWireChatParityTests: XCTestCase {
         var isAuthenticated: Bool { true }
         func refreshCredentialsIfNeeded() async throws -> Bool { false }
         func poll() async throws -> UsageData {
-            queueLock.lock()
-            defer { queueLock.unlock() }
-            guard !_queued.isEmpty else {
-                throw AISourceError.malformedResponse(detail: "queue empty")
+            try queueLock.withLock {
+                guard !_queued.isEmpty else {
+                    throw AISourceError.malformedResponse(detail: "queue empty")
+                }
+                return _queued.removeFirst()
             }
-            return _queued.removeFirst()
         }
     }
 
@@ -317,5 +317,61 @@ final class F1dWireChatParityTests: XCTestCase {
         // consumer never went through the Cursor bridge.
         XCTAssertEqual(captured?.sessionPct, 77)
         XCTAssertEqual(captured?.sessionEpoch, polled.sessionEpoch)
+    }
+
+    // MARK: - Multi-account secondary gauges
+
+    /// Secondary account columns call `forcePoll()` on appear; the model
+    /// may not have been `start()`-ed yet (provider was off at add time,
+    /// or boot replay registered the instance before the Usage tab opened).
+    /// forcePoll must still land a non-nil `.usage` with a real reset timer.
+    func test_forcePoll_withoutPriorStart_populatesUsage() async {
+        let stub = StubCursorSource()
+        stub.queued = [makeUsage(sessionPct: 33, sessionResetMins: 90)]
+        let model = AppModel(
+            config: .claude,
+            source: stub,
+            tokenProvider: StubTokenProvider()
+        )
+
+        var captured: UsageData?
+        let expectation = XCTestExpectation(description: "usage landed")
+        let token = model.$usage.compactMap { $0 }.sink { value in
+            captured = value
+            expectation.fulfill()
+        }
+        defer { token.cancel() }
+
+        model.forcePoll()
+        await fulfillment(of: [expectation], timeout: 5.0)
+        XCTAssertEqual(captured?.sessionPct, 33)
+        XCTAssertGreaterThan(captured?.sessionResetMins ?? 0, 0)
+        let row = AppRuntime.makeTahoeRow(model: model, provider: .claude)
+        XCTAssertNotEqual(row.sessionResetIn, "\u{2014}")
+    }
+
+    /// forcePoll consumes exactly once — the matching onEvent publish from
+    /// the same tick must not double-fire into `consume(_:)`.
+    func test_forcePoll_doesNotDoubleConsume() async {
+        let stub = StubCursorSource()
+        stub.queued = [makeUsage(sessionPct: 55, sessionResetMins: 120)]
+        let model = AppModel(
+            config: .claude,
+            source: stub,
+            tokenProvider: StubTokenProvider()
+        )
+
+        var captureCount = 0
+        let expectation = XCTestExpectation(description: "single usage emission")
+        let token = model.$usage.compactMap { $0 }.sink { _ in
+            captureCount += 1
+            if captureCount == 1 { expectation.fulfill() }
+        }
+        defer { token.cancel() }
+
+        model.forcePoll()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        await fulfillment(of: [expectation], timeout: 5.0)
+        XCTAssertEqual(captureCount, 1)
     }
 }

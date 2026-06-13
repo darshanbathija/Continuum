@@ -244,9 +244,10 @@ final class WorkbenchStateTests: XCTestCase {
         ) { tab in
             state.selectRightPane(tab)
         } verify: { tab in
-            XCTAssertEqual(state.selectedRightPane, tab)
-            XCTAssertEqual(state.snapshot.selectedRightPaneBySession[sessionA], tab)
-            if tab != .browser {
+            let normalized = WorkbenchPaneTab.normalizedReviewPaneTab(tab)
+            XCTAssertEqual(state.selectedRightPane, normalized)
+            XCTAssertEqual(state.snapshot.selectedRightPaneBySession[sessionA], normalized)
+            if normalized != .browser {
                 XCTAssertNil(state.immersiveBrowserSessionId)
             }
         }

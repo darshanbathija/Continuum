@@ -1,0 +1,5 @@
+# Only the committed package.json + package-lock.json are the source of
+# truth here. node_modules is installed (via `npm ci`) into the gitignored
+# Vendor/opencode-fff/config/ staging dir by tools/stage-opencode-fff-plugin.sh,
+# never committed from this directory.
+node_modules/

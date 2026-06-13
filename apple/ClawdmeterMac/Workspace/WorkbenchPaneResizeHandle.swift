@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ClawdmeterShared
 
 /// Draggable vertical divider between workspace panes. Click and drag to
 /// resize the adjacent pane; the hit target is wider than the visible

@@ -25,12 +25,15 @@ final class TerminalPtyHostTests: XCTestCase {
         let sawReady = await waitForOutput(host, contains: "READY")
         XCTAssertTrue(sawReady)
         await host.resize(cols: 100, rows: 30)
-        await host.writeBytes(Data("hello\r".utf8))
+        let wroteInput = await host.writeBytes(Data("hello\r".utf8))
+        XCTAssertTrue(wroteInput)
 
         let sawInput = await waitForOutput(host, contains: "GOT:hello")
-        XCTAssertTrue(sawInput)
+        let outputAfterInput = String(data: await host.snapshot(), encoding: .utf8) ?? ""
+        XCTAssertTrue(sawInput, outputAfterInput)
+        let sawResize = await waitForOutput(host, contains: "30 100")
         let output = String(data: await host.snapshot(), encoding: .utf8) ?? ""
-        XCTAssertTrue(output.contains("30 100"), output)
+        XCTAssertTrue(sawResize, output)
     }
 
     func test_terminalRegistryDropsHostAfterNaturalExit() async throws {

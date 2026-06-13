@@ -185,9 +185,9 @@ public struct IOSCodeView: View {
                         IOSRepoCard(
                             repo: repo,
                             onOpen: onOpenDetail,
-                            onContinueOnHost: { sessionId, hostId in
+                            onContinueOnHost: { sessionId, currentHostId in
                                 handoffSessionId = sessionId
-                                handoffCurrentHostId = hostId
+                                handoffCurrentHostId = currentHostId
                                 showHandoffSheet = true
                             },
                             agentClient: agentClient,
@@ -519,7 +519,9 @@ private struct IOSRepoCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var repo: TahoeCodeRepo
     var onOpen: (UUID) -> Void
-    var onContinueOnHost: ((UUID, UUID?) -> Void)?
+    /// Continue-on-host handoff trigger, owned by the parent IOSCodeView
+    /// (which holds the handoff sheet state). Nil hides the menu item.
+    var onContinueOnHost: ((UUID, UUID?) -> Void)? = nil
     /// PR #35: daemon client used by the recent-row tap handler to
     /// call `unarchiveSession(id:)`. Nil keeps the row read-only.
     var agentClient: AgentControlClient?
@@ -651,11 +653,11 @@ private struct IOSRepoCard: View {
                     .contextMenu {
                         Button("Open Session", systemImage: "arrow.right", action: ContinuumAnalytics.wrapButton("open_session", { onOpen(s.id) }))
                         if let client = agentClient,
+                           let onContinueOnHost,
                            client.supportsExecutionHosts,
                            s.status != .done {
                             Button("Continue on…", systemImage: "arrow.right.circle", action: ContinuumAnalytics.wrapButton("continue_on_host", {
-                                let hostId = client.sessions.first(where: { $0.id == s.id })?.executionHostId
-                                onContinueOnHost?(s.id, hostId)
+                                onContinueOnHost(s.id, client.sessions.first(where: { $0.id == s.id })?.executionHostId)
                             }))
                         }
                         Button(presentationStore.snapshot.pinnedSessionIds.contains(s.id) ? "Unpin" : "Pin", systemImage: "pin", action: ContinuumAnalytics.wrapButton("toggle_pin_session", { try? presentationStore.togglePin(s.id) }))

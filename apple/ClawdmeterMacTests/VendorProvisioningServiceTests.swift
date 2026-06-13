@@ -144,7 +144,7 @@ final class VendorProvisioningServiceTests: XCTestCase {
             makeVendor(id: "alpha", cliName: "alpha-cli", installCommand: "printf 'ALPHA_OK\\n'"),
             makeVendor(id: "beta", cliName: "beta-cli", installCommand: "printf 'BETA_OK\\n' && exit 2"),
         ]
-        var progress: [VendorInstallProgressUpdate] = []
+        let progress = LockedTestBox<[VendorInstallProgressUpdate]>([])
         let service = makeService(
             temp: temp,
             catalog: vendors,
@@ -172,16 +172,17 @@ final class VendorProvisioningServiceTests: XCTestCase {
                 VendorProvisioningStatus(vendorId: "beta", cliStatus: .notInstalled),
             ],
             onProgress: { update in
-                progress.append(update)
+                progress.update { $0.append(update) }
             }
         )
+        let progressUpdates = progress.snapshot
 
         XCTAssertEqual(result.succeededVendorIds, ["alpha"])
         XCTAssertEqual(Set(result.failedVendorIds.keys), Set(["beta"]))
-        XCTAssertTrue(progress.contains { $0.vendorId == "alpha" && $0.phase == .installing })
-        XCTAssertTrue(progress.contains { $0.vendorId == "alpha" && $0.phase == .succeeded })
-        XCTAssertTrue(progress.contains { $0.vendorId == "beta" && ifCaseFailed($0.phase) })
-        XCTAssertEqual(progress.last?.completedCount, 2)
+        XCTAssertTrue(progressUpdates.contains { $0.vendorId == "alpha" && $0.phase == .installing })
+        XCTAssertTrue(progressUpdates.contains { $0.vendorId == "alpha" && $0.phase == .succeeded })
+        XCTAssertTrue(progressUpdates.contains { $0.vendorId == "beta" && ifCaseFailed($0.phase) })
+        XCTAssertEqual(progressUpdates.last?.completedCount, 2)
     }
 
     func testVendorsNeedingInstallExcludesAuthenticatedAndInstalledStatuses() throws {
@@ -527,5 +528,26 @@ final class VendorProvisioningServiceTests: XCTestCase {
         }
         let output = String(data: await host.snapshot(), encoding: .utf8) ?? ""
         return output.contains(needle)
+    }
+}
+
+private final class LockedTestBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value
+
+    init(_ value: Value) {
+        self.value = value
+    }
+
+    var snapshot: Value {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func update(_ body: (inout Value) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        body(&value)
     }
 }

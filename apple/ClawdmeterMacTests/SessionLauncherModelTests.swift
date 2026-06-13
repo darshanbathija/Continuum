@@ -169,6 +169,7 @@ final class SessionLauncherModelTests: XCTestCase {
         let catalog = ModelCatalog.bundled
             .replacingOpenRouter([liveOpenRouter])
             .replacingCursor([liveCursor])
+            .filtered(toEnabledProviderIDs: ["openrouter", "cursor"])
         let launcher = SessionLauncherModel(
             modelCatalog: catalog,
             availability: SessionLauncherAvailability(opencodeReady: true, cursorReady: true)

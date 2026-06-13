@@ -89,26 +89,27 @@ final class RepoEnvVendorSecretsImporterTests: XCTestCase {
             return self.result(stdout: "", exitStatus: 1)
         }
 
-        var progressUpdates: [RepoEnvVendorImportProgress] = []
+        let progressUpdates = LockedTestBox<[RepoEnvVendorImportProgress]>([])
         let fetch = try await importer.fetchSecrets(
             source: .aws,
             options: RepoEnvVendorImportOptions(awsRegion: "us-east-1")
         ) { progress in
-            progressUpdates.append(progress)
+            progressUpdates.update { $0.append(progress) }
         }
+        let capturedProgress = progressUpdates.snapshot
 
         XCTAssertEqual(fetch.secretCount, 2)
         XCTAssertEqual(fetch.variableCount, 2)
         XCTAssertEqual(fetch.sourceLabel, "AWS Secrets Manager")
         XCTAssertTrue(fetch.envText.contains("PROD_API_KEY=token-value"))
         XCTAssertTrue(fetch.envText.contains("PROD_DB_URL=postgres://example"))
-        XCTAssertTrue(progressUpdates.contains(where: {
+        XCTAssertTrue(capturedProgress.contains(where: {
             if case .fetching(let current, let total, _) = $0.phase {
                 return current == 1 && total == 2
             }
             return false
         }))
-        XCTAssertFalse(progressUpdates.contains(where: {
+        XCTAssertFalse(capturedProgress.contains(where: {
             if case .complete = $0.phase { return true }
             return false
         }))
@@ -259,11 +260,11 @@ final class RepoEnvVendorSecretsImporterTests: XCTestCase {
         // gcloud secrets list --format=json returns every secret in one call. The importer
         // must NOT pass --limit/--page-token (no such resumable flag exists; --limit caps
         // the result). A >100-secret account must come back whole in one list call.
-        var listCalls = 0
+        let listCalls = LockedTestBox(0)
         let allSecrets = (1...150).map { #"{"name":"projects/demo/secrets/SECRET_\#($0)"}"# }.joined(separator: ",")
         let importer = makeImporter { _, arguments, _, _, _ in
             if arguments.contains("list") {
-                listCalls += 1
+                listCalls.update { $0 += 1 }
                 XCTAssertFalse(arguments.contains { $0.hasPrefix("--limit") })
                 XCTAssertFalse(arguments.contains("--page-token"))
                 XCTAssertTrue(arguments.contains("--project"))
@@ -282,7 +283,7 @@ final class RepoEnvVendorSecretsImporterTests: XCTestCase {
             options: RepoEnvVendorImportOptions(gcpProject: "demo")
         )
 
-        XCTAssertEqual(listCalls, 1)
+        XCTAssertEqual(listCalls.snapshot, 1)
         XCTAssertEqual(fetch.secretCount, 150)
         XCTAssertEqual(fetch.variableCount, 150)
     }
@@ -370,5 +371,26 @@ final class RepoEnvVendorSecretsImporterTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error \(error)")
         }
+    }
+}
+
+private final class LockedTestBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value
+
+    init(_ value: Value) {
+        self.value = value
+    }
+
+    var snapshot: Value {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func update(_ body: (inout Value) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        body(&value)
     }
 }

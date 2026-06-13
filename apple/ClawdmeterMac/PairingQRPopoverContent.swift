@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import ClawdmeterShared
 
 /// Compact pairing UI used by the dashboard toolbar's Pair with iPhone

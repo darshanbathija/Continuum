@@ -289,7 +289,7 @@ enum OpenCodeGoBrowserAuthImporter {
 
     private static func aes128CBCDecrypt(payload: Data, key: Data, iv: Data) -> Data? {
         guard key.count == kCCKeySizeAES128, iv.count == kCCBlockSizeAES128 else { return nil }
-        var outLength = payload.count + kCCBlockSizeAES128
+        let outLength = payload.count + kCCBlockSizeAES128
         var out = Data(count: outLength)
         var moved = 0
         let status = payload.withUnsafeBytes { payloadBytes in
