@@ -1,9 +1,0 @@
-{
-  "name": "clawdmeter-opencode-fff",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Committed lockfile source for the bundled opencode-fff-search plugin. tools/stage-opencode-fff-plugin.sh copies these two files into the gitignored staging dir and runs `npm ci` against this exact, integrity-locked dependency set. Bump the version here AND regenerate package-lock.json (npm install --package-lock-only) when changing opencode-fff-search.",
-  "dependencies": {
-    "opencode-fff-search": "0.7.0"
-  }
-}
