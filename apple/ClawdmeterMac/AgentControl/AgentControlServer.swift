@@ -1426,9 +1426,6 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/sessions/:id/attachments") { [weak self] req, conn, params in
             await self?.handleUploadAttachment(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
-        t.register(method: "POST", pattern: "/live-activities/push-token") { [weak self] req, conn, _ in
-            await self?.handleRegisterPushToken(request: req, connection: conn)
-        }
         // E6: remote-push device-token registration. iPhone posts here
         // when its `UIApplicationDelegate.didRegisterForRemoteNotificationsWithDeviceToken`
         // delivery callback fires. Distinct from the Live Activity push
@@ -1452,9 +1449,6 @@ public final class AgentControlServer {
         }
         t.register(method: "POST", pattern: "/devices/ack-notifications") { [weak self] req, conn, _ in
             await self?.handleAckNotifications(request: req, connection: conn)
-        }
-        t.register(method: "DELETE", pattern: "/live-activities/push-token") { [weak self] req, conn, _ in
-            await self?.handleUnregisterPushToken(request: req, connection: conn)
         }
 
         // --- PATCHes ---
@@ -4734,35 +4728,6 @@ public final class AgentControlServer {
             .ok(contentType: "application/json", body: Data(#"{"ok":true}"#.utf8)),
             on: connection
         )
-    }
-
-    // MARK: - Phase 10: ActivityKit push-token registration
-
-    private struct RegisterPushTokenBody: Codable {
-        let token: String
-        let bundleId: String
-    }
-
-    private struct UnregisterPushTokenBody: Codable {
-        let token: String
-    }
-
-    private func handleRegisterPushToken(request: HTTPRequest, connection: NWConnection) async {
-        guard let req = try? JSONDecoder().decode(RegisterPushTokenBody.self, from: request.body),
-              !req.token.isEmpty, !req.bundleId.isEmpty else {
-            sendResponse(.badRequest, on: connection); return
-        }
-        await MacAPNSPusher.shared.register(token: req.token, bundleId: req.bundleId)
-        sendJSON(["ok": true, "registered": true], on: connection)
-    }
-
-    private func handleUnregisterPushToken(request: HTTPRequest, connection: NWConnection) async {
-        guard let req = try? JSONDecoder().decode(UnregisterPushTokenBody.self, from: request.body),
-              !req.token.isEmpty else {
-            sendResponse(.badRequest, on: connection); return
-        }
-        await MacAPNSPusher.shared.unregister(token: req.token)
-        sendJSON(["ok": true], on: connection)
     }
 
     // MARK: - E6: remote-push (gateway) device token

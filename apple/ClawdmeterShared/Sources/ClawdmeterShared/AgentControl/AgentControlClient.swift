@@ -3456,9 +3456,8 @@ public extension Notification.Name {
     /// Posted by `AgentControlClient.refreshSessions()` after the
     /// `sessions` array is updated. `userInfo["sessions"]` holds the new
     /// `[AgentSession]`. The iOS app target observes this to drive
-    /// LiveActivityCoordinator + WatchPlanBridgeIOS (which live in the iOS
-    /// app target and can't be referenced from Shared). The Mac app
-    /// ignores the notification — Live Activities and watch bridging are
-    /// iPhone-only surfaces.
+    /// WatchPlanBridgeIOS (which lives in the iOS app target and can't be
+    /// referenced from Shared). The Mac app ignores the notification —
+    /// watch bridging is an iPhone-only surface.
     static let agentControlSessionsRefreshed = Notification.Name("clawdmeter.agentControl.sessionsRefreshed")
 }
