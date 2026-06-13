@@ -273,7 +273,11 @@ private struct OAuthUsageEnvelope: Decodable {
     }
 
     struct WindowReading: Decodable {
-        let utilization: Double?      // 0.0...1.0 or 0...100, depending on API shape
+        // Both fields are PERCENTAGE units (0...100). The live
+        // `/api/oauth/usage` reports e.g. `five_hour.utilization = 8.0` for
+        // 8% and `seven_day.utilization = 1.0` for 1% — never a 0...1
+        // fraction. (See the percent-scaling note in `window(...)`.)
+        let utilization: Double?      // 0...100
         let usedPercentage: Double?   // 0...100 (statusline-style)
         let resetsAt: AnyDate?
     }
@@ -338,27 +342,31 @@ private struct OAuthUsageEnvelope: Decodable {
     func window(for which: UsageData.BindingWindow,
                 fallbackBinding: Double?,
                 fallbackResetEpoch: Int?) -> (pct: Int, resetEpoch: Int)? {
+        // `utilization` and `used_percentage` are both percentages (0...100).
+        // A previous "value <= 1 ⇒ a 0...1 fraction, multiply by 100" heuristic
+        // mis-scaled genuine sub-1% usage: a weekly `utilization` of 1.0 (1%
+        // used) became 100%, pinning the gauge. Treat every reading as a
+        // percentage and only clamp/round.
         let reading: WindowReading? = (which == .fiveHour) ? fiveHourReading : sevenDayReading
         if let reading {
             let pct: Int
-            if let p = reading.usedPercentage { pct = Self.normalizedPercent(p, alreadyPercent: true) }
-            else if let u = reading.utilization { pct = Self.normalizedPercent(u, alreadyPercent: false) }
+            if let p = reading.usedPercentage { pct = Self.clampPercent(p) }
+            else if let u = reading.utilization { pct = Self.clampPercent(u) }
             else { return nil }
             let resetEpoch = reading.resetsAt.map { Int($0.date.timeIntervalSince1970) }
                 ?? Int(Date().addingTimeInterval(60).timeIntervalSince1970)
             return (pct, resetEpoch)
         }
         if let u = fallbackBinding {
-            let pct = Self.normalizedPercent(u, alreadyPercent: false)
+            let pct = Self.clampPercent(u)
             let resetEpoch = fallbackResetEpoch ?? Int(Date().addingTimeInterval(60).timeIntervalSince1970)
             return (pct, resetEpoch)
         }
         return nil
     }
 
-    private static func normalizedPercent(_ value: Double, alreadyPercent: Bool) -> Int {
-        let percent = alreadyPercent || abs(value) > 1 ? value : value * 100
-        return min(100, max(0, Int(percent.rounded())))
+    private static func clampPercent(_ value: Double) -> Int {
+        min(100, max(0, Int(value.rounded())))
     }
 }
 

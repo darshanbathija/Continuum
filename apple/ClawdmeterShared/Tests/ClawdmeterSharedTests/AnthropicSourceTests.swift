@@ -30,7 +30,7 @@ final class AnthropicSourceTests: XCTestCase {
         var observedBody: Data?
         var observedBeta: String?
         let usageBody = """
-        {"rate_limit_type":"five_hour","utilization":0.14,"resets_at":"2026-05-14T11:00:00Z","organization_uuid":"test-org"}
+        {"rate_limit_type":"five_hour","utilization":14,"resets_at":"2026-05-14T11:00:00Z","organization_uuid":"test-org"}
         """.data(using: .utf8)!
 
         MockURLProtocol.responder = { request in
@@ -61,7 +61,7 @@ final class AnthropicSourceTests: XCTestCase {
         let usageBody = """
         {
           "rate_limits": {
-            "five_hour": {"utilization": 0.31, "resets_at": "2026-05-14T11:00:00Z"},
+            "five_hour": {"utilization": 31, "resets_at": "2026-05-14T11:00:00Z"},
             "seven_day": {"used_percentage": 81, "resets_at": "2026-05-20T13:00:00Z"}
           }
         }
@@ -95,6 +95,30 @@ final class AnthropicSourceTests: XCTestCase {
         let usage = try await makeSource().poll()
         XCTAssertEqual(usage.sessionPct, 37)
         XCTAssertEqual(usage.weeklyPct, 68)
+        XCTAssertEqual(usage.status, .allowed)
+    }
+
+    /// Regression for the "Weekly 100%" gauge bug. The live
+    /// `/api/oauth/usage` reports `utilization` in PERCENTAGE units
+    /// (`five_hour: 8.0` = 8%, `seven_day: 1.0` = 1%). The old heuristic
+    /// treated values <= 1.0 as a 0...1 fraction and multiplied by 100, so a
+    /// genuine 1% weekly read rendered as 100%. Sub-1% usage must stay sub-1%.
+    func test_poll_utilizationIsPercentNotFraction_subOnePercentDoesNotPin() async throws {
+        let usageBody = """
+        {
+          "five_hour":  {"utilization": 8.0, "resets_at": "2026-06-13T06:29:59Z"},
+          "seven_day":  {"utilization": 1.0, "resets_at": "2026-06-17T00:59:59Z"},
+          "seven_day_sonnet": {"utilization": 0.0, "resets_at": "2026-06-17T01:00:00Z"}
+        }
+        """.data(using: .utf8)!
+
+        MockURLProtocol.responder = { _ in
+            (200, ["date": "Sat, 13 Jun 2026 02:23:06 GMT"], usageBody)
+        }
+
+        let usage = try await makeSource().poll()
+        XCTAssertEqual(usage.sessionPct, 8)
+        XCTAssertEqual(usage.weeklyPct, 1, "1.0% weekly utilization must read as 1%, not 100%")
         XCTAssertEqual(usage.status, .allowed)
     }
 
