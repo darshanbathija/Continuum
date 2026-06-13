@@ -91,6 +91,8 @@ struct ChatThreadScroll: View {
     // per-row membership.
     @State private var findMatchCache = SingleSlotProjectionCache<FindMatchKey, FindMatchResult>()
     @FocusState private var findFocused: Bool
+    @State private var authTerminal: SetupTerminalSession?
+    @State private var authTerminalProviderKey: String?
 
     var body: some View {
         // A9: tap the body-invalidation counter so the per-burst
@@ -323,6 +325,12 @@ struct ChatThreadScroll: View {
         // every body — pulling it through the environment lets the row
         // stay Equatable on its value payload.
         .environment(\.sessionPresentationStore, presentationStore)
+        .sheet(item: $authTerminal) { terminal in
+            SetupTerminalSheet(terminal: terminal) {
+                authTerminal = nil
+                Task { await finishAuthRecoveryTerminal() }
+            }
+        }
     }
 
     /// Stable sentinel id used by ScrollViewReader to scroll to the tail.
@@ -943,7 +951,8 @@ struct ChatThreadScroll: View {
             toolPairsOpen: pairsOpen,
             askSelections: askForRow,
             isStreamingTail: isStreamingTail,
-            modelFailureRetryPrompt: modelFailureRetryPrompt(for: item, isStreamingTail: isStreamingTail)
+            modelFailureRetryPrompt: modelFailureRetryPrompt(for: item, isStreamingTail: isStreamingTail),
+            authRecoveryAction: authRecoveryAction(for: item)
         )
     }
 
@@ -962,6 +971,36 @@ struct ChatThreadScroll: View {
             retryPrompt: retryPrompt
         ) else { return nil }
         return retryPrompt
+    }
+
+    private func authRecoveryAction(for item: ChatItem) -> ProviderAuthRecoveryAction? {
+        guard case .message(let message) = item else { return nil }
+        guard message.isError else { return nil }
+        let body = message.body.lowercased()
+        let looksLikeAuthFailure = body.contains("authentication required")
+            || body.contains("auth required")
+            || body.contains("oauth")
+            || body.contains("token-expired")
+            || body.contains("token_expired")
+            || body.contains("invalid_token")
+            || body.contains("invalid api key")
+            || body.contains("invalid_api_key")
+            || body.contains("not authenticated")
+            || body.contains("login")
+            || body.contains("log in")
+            || body.contains("sign in")
+        guard looksLikeAuthFailure else { return nil }
+
+        switch session.agent {
+        case .claude:
+            return .claude
+        case .codex:
+            return .codex
+        case .cursor:
+            return .cursor
+        case .gemini, .opencode, .grok, .unknown:
+            return nil
+        }
     }
 
     /// Closures the row fires for user interactions. We bind to the
@@ -1025,8 +1064,78 @@ struct ChatThreadScroll: View {
                 model.openWorkspaceDocumentTab(from: session, path: path)
             },
             onRetryFailedTurn: onRetryFailedTurn,
-            onRetryFailedTurnInNewChat: onRetryFailedTurnInNewChat
+            onRetryFailedTurnInNewChat: onRetryFailedTurnInNewChat,
+            onRecoverAuth: { action in
+                Task { await recoverProviderAuth(action) }
+            }
         )
+    }
+
+    @MainActor
+    private func recoverProviderAuth(_ action: ProviderAuthRecoveryAction) async {
+        switch action {
+        case .claude:
+            if await seedClaudeTokenFromClaudeCode() {
+                await ChatProviderAuthObserver.shared.clear(providerKey: "claude")
+                AppDelegate.runtime?.claudeModel.forcePoll()
+                return
+            }
+            await launchAuthTerminal(
+                title: "Log in to Claude",
+                command: "claude /login",
+                providerKey: "claude"
+            )
+        case .codex:
+            await launchAuthTerminal(
+                title: "Log in to Codex",
+                command: "codex login",
+                providerKey: "codex"
+            )
+        case .cursor:
+            await launchAuthTerminal(
+                title: "Log in to Cursor",
+                command: "cursor-agent login",
+                providerKey: "cursor"
+            )
+        }
+    }
+
+    @MainActor
+    private func launchAuthTerminal(title: String, command: String, providerKey: String) async {
+        do {
+            let terminal = try await SetupTerminalSession.launch(title: title, command: command)
+            authTerminalProviderKey = providerKey
+            authTerminal = terminal
+        } catch {
+            authTerminalProviderKey = nil
+            let escaped = command.replacingOccurrences(of: "\"", with: "\\\"")
+            let script = "tell application \"Terminal\" to do script \"\(escaped)\""
+            NSAppleScript(source: script)?.executeAndReturnError(nil)
+        }
+    }
+
+    @MainActor
+    private func finishAuthRecoveryTerminal() async {
+        let providerKey = authTerminalProviderKey
+        authTerminalProviderKey = nil
+        if providerKey == "claude", await seedClaudeTokenFromClaudeCode() {
+            AppDelegate.runtime?.claudeModel.forcePoll()
+        }
+        if let providerKey {
+            await ChatProviderAuthObserver.shared.clear(providerKey: providerKey)
+        }
+    }
+
+    private func seedClaudeTokenFromClaudeCode() async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            guard let token = KeychainTokenProvider(allowsUserInteraction: true).currentAccessToken,
+                  !token.isEmpty else { return false }
+            let ok = PastedAnthropicTokenProvider.shared().setToken(token)
+            if ok {
+                UserDefaults.standard.set(true, forKey: "clawdmeter.claude.autoImportFromClaudeCode")
+            }
+            return ok
+        }.value
     }
 
     /// Project the find-bar highlight state for a message to one of

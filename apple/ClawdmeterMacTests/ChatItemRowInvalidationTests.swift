@@ -310,7 +310,8 @@ final class ChatItemRowInvalidationTests: XCTestCase {
             toolPairsOpen: [:],
             askSelections: [:],
             isStreamingTail: isStreamingTail,
-            modelFailureRetryPrompt: nil
+            modelFailureRetryPrompt: nil,
+            authRecoveryAction: nil
         )
     }
 
@@ -325,7 +326,8 @@ final class ChatItemRowInvalidationTests: XCTestCase {
             onToggleBookmark: { _ in },
             onOpenMarkdownDocument: onOpenMarkdownDocument,
             onRetryFailedTurn: { _ in },
-            onRetryFailedTurnInNewChat: { _ in }
+            onRetryFailedTurnInNewChat: { _ in },
+            onRecoverAuth: { _ in }
         )
     }
 }
@@ -423,7 +425,8 @@ private struct ChatTranscriptBurstHarness: View {
         onToggleBookmark: { _ in },
         onOpenMarkdownDocument: { _ in },
         onRetryFailedTurn: { _ in },
-        onRetryFailedTurnInNewChat: { _ in }
+        onRetryFailedTurnInNewChat: { _ in },
+        onRecoverAuth: { _ in }
     )
 
     var body: some View {
@@ -474,7 +477,8 @@ private struct ChatTranscriptBurstHarness: View {
             toolPairsOpen: [:],
             askSelections: [:],
             isStreamingTail: isStreamingTail,
-            modelFailureRetryPrompt: nil
+            modelFailureRetryPrompt: nil,
+            authRecoveryAction: nil
         )
     }
 }

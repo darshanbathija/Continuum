@@ -40,6 +40,24 @@ import ClawdmeterShared
 
 // MARK: - Value-typed payload
 
+enum ProviderAuthRecoveryAction: Equatable, Hashable {
+    case claude
+    case codex
+    case cursor
+
+    var providerName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .cursor: return "Cursor"
+        }
+    }
+
+    var buttonTitle: String {
+        "Log in to \(providerName)"
+    }
+}
+
 /// All inputs that affect the visual output of a single chat row, in a
 /// form `ChatItemRowView` can compare cheaply via `==`. Stored as one
 /// nested value so the row view's manual `Equatable` impl reads as a
@@ -97,6 +115,8 @@ struct ChatItemRowPayload: Equatable {
     /// When set, the assistant error row shows Retry / Retry in new chat
     /// affordances wired to the preceding user prompt body.
     let modelFailureRetryPrompt: String?
+    /// When set, the assistant error row shows an inline provider login CTA.
+    let authRecoveryAction: ProviderAuthRecoveryAction?
 
     /// Markdown find-bar highlight projection. Three discrete states
     /// so the row's `Equatable` doesn't have to compare the full match
@@ -141,6 +161,8 @@ struct ChatItemRowActions {
     let onRetryFailedTurn: (_ promptBody: String) -> Void
     /// Spawn a sibling chat tab and re-send the failed prompt there.
     let onRetryFailedTurnInNewChat: (_ promptBody: String) -> Void
+    /// Start the provider-specific login/import flow from an auth error row.
+    let onRecoverAuth: (_ action: ProviderAuthRecoveryAction) -> Void
 }
 
 // MARK: - Equatable row view (historical rows)
@@ -449,6 +471,9 @@ struct ChatItemRowContent: View {
             VStack(alignment: .leading, spacing: 4) {
                 if msg.isError {
                     errorAssistantBubble(msg)
+                    if let authAction = payload.authRecoveryAction {
+                        authRecoveryActionRow(authAction)
+                    }
                     if let retryPrompt = payload.modelFailureRetryPrompt {
                         modelFailureActionRow(retryPrompt: retryPrompt)
                     }
@@ -553,6 +578,20 @@ struct ChatItemRowContent: View {
                 }
             }
         }
+        .padding(.top, 2)
+    }
+
+    private func authRecoveryActionRow(_ action: ProviderAuthRecoveryAction) -> some View {
+        Button(action: ContinuumAnalytics.wrapButton("chat_auth_recovery_login", {
+            actions.onRecoverAuth(action)
+        })) {
+            Label(action.buttonTitle, systemImage: "key.fill")
+                .font(TahoeFont.body(10.5, weight: .semibold))
+        }
+        .buttonStyle(PressableButtonStyle())
+        .foregroundStyle(t.accent)
+        .help("Open \(action.providerName) login from this chat")
+        .accessibilityIdentifier("chat-auth-recovery-\(action.providerName.lowercased())")
         .padding(.top, 2)
     }
 
