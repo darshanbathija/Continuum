@@ -3,6 +3,9 @@ import Foundation
 public enum STTEngine: String, Codable, Hashable, Sendable, CaseIterable {
     case appleSpeech
     case whisperKit
+    /// NVIDIA Parakeet TDT via FluidAudio CoreML (Apple Neural Engine). Local,
+    /// multilingual / English-only depending on the chosen model.
+    case parakeet
 }
 
 public enum FnGestureMode: String, Codable, Hashable, Sendable, CaseIterable {

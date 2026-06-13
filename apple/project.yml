@@ -47,6 +47,12 @@ packages:
   WhisperKit:
     url: https://github.com/argmaxinc/WhisperKit.git
     exactVersion: "0.9.0"
+  # Parakeet TDT (NVIDIA) ASR via CoreML on the Apple Neural Engine — the
+  # multilingual + English-only local engines surfaced alongside WhisperKit
+  # in Voice settings. Whisper-family-only WhisperKit can't host Parakeet.
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio.git
+    from: "0.15.3"
 
 targets:
   # ───────────────────────────────────────────────────────────────
@@ -121,6 +127,8 @@ targets:
         product: PostHog
       - package: WhisperKit
         product: WhisperKit
+      - package: FluidAudio
+        product: FluidAudio
       - target: ClawdmeterMacWidgets
         embed: true
     preBuildScripts:

@@ -63,6 +63,7 @@
 		1B54103BF6D1D6FED456229B /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = 7B11A2D9FF78A7B7AA8B0A88 /* ClawdmeterShared */; };
 		1B8462EC849A8650EF81C300 /* ClawdmeteriOSWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 8D2932E5B049F7DE99D05C44 /* ClawdmeteriOSWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		1BFC9D566B6B84F74ABB455B /* AgentSessionRegistryPlanProgressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 552C22F8E32AB6F8370B23A7 /* AgentSessionRegistryPlanProgressTests.swift */; };
+		1C56EAB68C49289515D848C8 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = F21FAE91A4CB70CD70FFA024 /* FluidAudio */; };
 		1C9136F95CF63E2BE1E08C39 /* PlanRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4880349C77CC6B6DDE3CE084 /* PlanRunner.swift */; };
 		1CA992F8A55CC45D95AD55A8 /* SessionChatStoreObservableBurstTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEB657BE66566C22CE3923BC /* SessionChatStoreObservableBurstTests.swift */; };
 		1F1F054E07CACD67D5A7579D /* IOSQuickStartSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE974641D2A7140BA003A9E8 /* IOSQuickStartSheet.swift */; };
@@ -404,6 +405,7 @@
 		C47A0CEDB0503D25F775CB53 /* MenuBarGaugeViewCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DE1CE873A7036C2A2D196B5 /* MenuBarGaugeViewCacheTests.swift */; };
 		C4B93AD5F77D956396E2E99A /* AgentControlServerRelayIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A85BF84E12DA02025E9E3C09 /* AgentControlServerRelayIntegrationTests.swift */; };
 		C5201CFD2F7B612392EB3A17 /* ClaudeLogo.svg in Resources */ = {isa = PBXBuildFile; fileRef = 2C335B8CD4CB81A48217F617 /* ClaudeLogo.svg */; };
+		C5B9D749DDDABD1F8C0DB457 /* ParakeetTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EEA1E5973899FEC26604E0C /* ParakeetTranscriber.swift */; };
 		C607EE2525C880581434D54E /* iOSNotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DC8BB0C1C1A62C078E0C226 /* iOSNotificationManager.swift */; };
 		C68868609D0C38964A8120CE /* WatchPlanBridgeIOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3EF56B06A437691BE9EB4EC /* WatchPlanBridgeIOS.swift */; };
 		C93B250096C0AF735D0FEB56 /* AppearanceMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AC85897BEF981BD4BAEB79F /* AppearanceMode.swift */; };
@@ -920,6 +922,7 @@
 		9DE1CE873A7036C2A2D196B5 /* MenuBarGaugeViewCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarGaugeViewCacheTests.swift; sourceTree = "<group>"; };
 		9E060671BC14646C0E01CDD7 /* TahoeReviewPlanPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TahoeReviewPlanPane.swift; sourceTree = "<group>"; };
 		9E8D2F3E2A7E9F9BECB6A62D /* HandoffAutoSuggestService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffAutoSuggestService.swift; sourceTree = "<group>"; };
+		9EEA1E5973899FEC26604E0C /* ParakeetTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParakeetTranscriber.swift; sourceTree = "<group>"; };
 		9F486A19ECD4582BD0CBA9C7 /* WorkbenchPaneResizeHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchPaneResizeHandle.swift; sourceTree = "<group>"; };
 		9FDFA404866AB80A1FFE7C25 /* IOSHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSHomeView.swift; sourceTree = "<group>"; };
 		A018EFF80C58EE52D976365C /* CGSessionLivenessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CGSessionLivenessTests.swift; sourceTree = "<group>"; };
@@ -1121,6 +1124,7 @@
 				18C4FE86D1BF35A5D58AEF99 /* Sparkle in Frameworks */,
 				29B0207DE0D84A65C452AF09 /* PostHog in Frameworks */,
 				5FC76B2A81D4333DFD1A3C95 /* WhisperKit in Frameworks */,
+				1C56EAB68C49289515D848C8 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1914,6 +1918,7 @@
 		EA6A3598E44F15B96E2E6988 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				9EEA1E5973899FEC26604E0C /* ParakeetTranscriber.swift */,
 				D41FCA235A0FDD5563075877 /* STTModelCatalog.swift */,
 				695BC087E2CD440A90686096 /* STTModelDownloadManager.swift */,
 				7A7E599EFC26F437F7BB8752 /* STTTranscriberFactory.swift */,
@@ -2141,6 +2146,7 @@
 				DE6BEDE0A35F7DD92C64E87F /* Sparkle */,
 				C44BFAA06CFCBA102C3DAE35 /* PostHog */,
 				E1C5F76406DB509B0EC22570 /* WhisperKit */,
+				F21FAE91A4CB70CD70FFA024 /* FluidAudio */,
 			);
 			productName = ClawdmeterMac;
 			productReference = 063A99FE19DBEB6CBE38A400 /* ClawdmeterMac.app */;
@@ -2245,6 +2251,7 @@
 			mainGroup = 8355AE2A6C5D497C97998BEB;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				9291EA6283A78C33092282D1 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				4EB617360DC63BEC96CDA516 /* XCRemoteSwiftPackageReference "posthog-ios" */,
 				3EFEBF6C6944639E064525FB /* XCRemoteSwiftPackageReference "Sparkle" */,
 				F5E1A507D97EBE82D7AB889E /* XCRemoteSwiftPackageReference "SwiftTerm" */,
@@ -2692,6 +2699,7 @@
 				7BCB0D471FC2F297B29ED5CC /* PairingQRPopoverContent.swift in Sources */,
 				A9C33C7309E3C6A8B289CEB1 /* PairingSettingsView.swift in Sources */,
 				A570A995C1EE313DE7FA7EC7 /* PairingTokenStore.swift in Sources */,
+				C5B9D749DDDABD1F8C0DB457 /* ParakeetTranscriber.swift in Sources */,
 				D0FA4EF3B888EFA7C45DBC11 /* PathAllowList.swift in Sources */,
 				906808FD1730A88D3E1E065A /* PermissionModeChip.swift in Sources */,
 				CCB83D01841DFB63E28F43C6 /* PermissionModeStore.swift in Sources */,
@@ -3637,6 +3645,14 @@
 				version = 0.9.0;
 			};
 		};
+		9291EA6283A78C33092282D1 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.15.3;
+			};
+		};
 		F5E1A507D97EBE82D7AB889E /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
@@ -3709,6 +3725,11 @@
 		E5841B9F5A902887629FD6BF /* ClawdmeterShared */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ClawdmeterShared;
+		};
+		F21FAE91A4CB70CD70FFA024 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9291EA6283A78C33092282D1 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

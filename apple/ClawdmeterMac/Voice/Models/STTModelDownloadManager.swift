@@ -1,4 +1,5 @@
 import Combine
+import FluidAudio
 import Foundation
 import WhisperKit
 
@@ -43,16 +44,14 @@ public final class STTModelDownloadManager: ObservableObject {
     public func refreshInstalledModels() {
         installedModelIDs = Set(
             STTModelCatalog.models
+                .filter { isModelInstalledOnDisk($0.id) }
                 .map(\.id)
-                .filter { modelID in
-                    STTModelCatalog.isModelInstalled(
-                        at: STTModelCatalog.modelDirectory(
-                            appSupportDirectory: appSupportDirectory,
-                            modelID: modelID
-                        )
-                    )
-                }
         )
+    }
+
+    /// FluidAudio version for a Parakeet descriptor ("v3" default, "v2" English).
+    static func parakeetVersion(forKey key: String?) -> AsrModelVersion {
+        key == "v2" ? .v2 : .v3
     }
 
     public func download(modelID: String) async throws {
@@ -132,22 +131,14 @@ public final class STTModelDownloadManager: ObservableObject {
 
         do {
             try Task.checkCancellation()
-            let downloadedDirectory = try await WhisperKit.download(
-                variant: descriptor.whisperModelName,
-                downloadBase: destination,
-                progressCallback: { [weak self] progress in
-                    Task { @MainActor in
-                        guard self?.activeDownloadModelID == modelID else { return }
-                        self?.downloadState = .downloading(
-                            modelID: modelID,
-                            progress: progress.fractionCompleted
-                        )
-                    }
-                }
-            )
+            switch descriptor.engine {
+            case .parakeet:
+                try await downloadParakeet(descriptor: descriptor, destination: destination, modelID: modelID)
+            default:
+                try await downloadWhisper(descriptor: descriptor, destination: destination, modelID: modelID)
+            }
             try Task.checkCancellation()
-            guard STTModelCatalog.resolvedModelDirectory(in: downloadedDirectory) != nil
-                || STTModelCatalog.resolvedModelDirectory(in: destination) != nil else {
+            guard isModelInstalledOnDisk(modelID) else {
                 throw STTModelDownloadError.installationIncomplete(modelID)
             }
             refreshInstalledModels()
@@ -160,6 +151,44 @@ public final class STTModelDownloadManager: ObservableObject {
             markDownloadFailed(modelID: modelID, message: error.localizedDescription)
             throw error
         }
+    }
+
+    private func downloadWhisper(descriptor: STTModelDescriptor, destination: URL, modelID: String) async throws {
+        let downloadedDirectory = try await WhisperKit.download(
+            variant: descriptor.whisperModelName,
+            downloadBase: destination,
+            progressCallback: { [weak self] progress in
+                Task { @MainActor in
+                    guard self?.activeDownloadModelID == modelID else { return }
+                    self?.downloadState = .downloading(
+                        modelID: modelID,
+                        progress: progress.fractionCompleted
+                    )
+                }
+            }
+        )
+        try Task.checkCancellation()
+        guard STTModelCatalog.resolvedModelDirectory(in: downloadedDirectory) != nil
+            || STTModelCatalog.resolvedModelDirectory(in: destination) != nil else {
+            throw STTModelDownloadError.installationIncomplete(modelID)
+        }
+    }
+
+    private func downloadParakeet(descriptor: STTModelDescriptor, destination: URL, modelID: String) async throws {
+        let version = Self.parakeetVersion(forKey: descriptor.parakeetVersionKey)
+        _ = try await AsrModels.download(
+            to: destination,
+            version: version,
+            progressHandler: { [weak self] progress in
+                Task { @MainActor in
+                    guard self?.activeDownloadModelID == modelID else { return }
+                    self?.downloadState = .downloading(
+                        modelID: modelID,
+                        progress: progress.fractionCompleted
+                    )
+                }
+            }
+        )
     }
 
     private func markDownloadInterrupted(modelID: String) {
@@ -181,12 +210,20 @@ public final class STTModelDownloadManager: ObservableObject {
     }
 
     private func isModelInstalledOnDisk(_ modelID: String) -> Bool {
-        STTModelCatalog.isModelInstalled(
-            at: STTModelCatalog.modelDirectory(
-                appSupportDirectory: appSupportDirectory,
-                modelID: modelID
-            )
+        guard let descriptor = STTModelCatalog.model(forID: modelID) else { return false }
+        let directory = STTModelCatalog.modelDirectory(
+            appSupportDirectory: appSupportDirectory,
+            modelID: modelID
         )
+        switch descriptor.engine {
+        case .parakeet:
+            return AsrModels.modelsExist(
+                at: directory,
+                version: Self.parakeetVersion(forKey: descriptor.parakeetVersionKey)
+            )
+        default:
+            return STTModelCatalog.isModelInstalled(at: directory)
+        }
     }
 }
 
@@ -201,11 +238,11 @@ public enum STTModelDownloadError: LocalizedError {
         case .downloadInProgress:
             return "A model download is already in progress."
         case .unknownModel(let modelID):
-            return "Unknown Whisper model \"\(modelID)\"."
+            return "Unknown speech model \"\(modelID)\"."
         case .cancelled:
             return "Model download cancelled."
         case .installationIncomplete(let modelID):
-            return "Whisper model \"\(modelID)\" downloaded but required model files were not found."
+            return "Model \"\(modelID)\" downloaded but required model files were not found."
         }
     }
 }

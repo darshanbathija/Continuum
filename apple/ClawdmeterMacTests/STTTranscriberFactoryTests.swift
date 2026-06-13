@@ -36,6 +36,30 @@ final class STTTranscriberFactoryTests: XCTestCase {
         XCTAssertTrue(transcriber is AppleSpeechTranscriber)
     }
 
+    func testFallsBackToAppleSpeechWhenParakeetModelMissing() {
+        var preferences = VoicePresentationPreferences()
+        preferences.sttEngine = .parakeet
+        preferences.whisperModelID = "parakeet-v3"
+
+        let transcriber = STTTranscriberFactory.makeTranscriber(
+            preferences: preferences,
+            appSupportDirectory: temporaryAppSupportDirectory()
+        )
+        XCTAssertTrue(transcriber is AppleSpeechTranscriber)
+    }
+
+    func testFallsBackToAppleSpeechWhenParakeetIDPointsAtWhisperModel() {
+        var preferences = VoicePresentationPreferences()
+        preferences.sttEngine = .parakeet
+        preferences.whisperModelID = "base" // a Whisper model under the Parakeet engine
+
+        let transcriber = STTTranscriberFactory.makeTranscriber(
+            preferences: preferences,
+            appSupportDirectory: temporaryAppSupportDirectory()
+        )
+        XCTAssertTrue(transcriber is AppleSpeechTranscriber)
+    }
+
     private func temporaryAppSupportDirectory() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("ContinuumVoiceTests-\(UUID().uuidString)", isDirectory: true)
