@@ -126,9 +126,8 @@ public final class UsagePoller: @unchecked Sendable {
                 // same-provider pollers don't collide on the shared rate-limited
                 // endpoint every cycle (see `intervalJitterSeconds`).
                 let base = max(self.configuration.foregroundInterval, self.currentBackoffSeconds)
-                let jitterCap = max(0, self.configuration.intervalJitterSeconds)
-                let jitter = jitterCap > 0 ? Double.random(in: 0...jitterCap) : 0
-                try? await Task.sleep(nanoseconds: UInt64((base + jitter) * 1_000_000_000))
+                let delay = Self.nextDelay(base: base, jitterCap: self.configuration.intervalJitterSeconds)
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
         }
     }
@@ -136,6 +135,17 @@ public final class UsagePoller: @unchecked Sendable {
     public func stop() {
         task?.cancel()
         task = nil
+    }
+
+    /// Inter-poll delay: `base` plus a random jitter in `0...jitterCap`.
+    /// A negative cap clamps to 0; a 0 cap returns exactly `base`
+    /// (deterministic — the seam tests rely on this). Jitter desyncs
+    /// multiple same-provider pollers off the shared rate-limited endpoint
+    /// (see `Configuration.intervalJitterSeconds`).
+    static func nextDelay(base: TimeInterval, jitterCap: TimeInterval) -> TimeInterval {
+        let cap = max(0, jitterCap)
+        let jitter = cap > 0 ? Double.random(in: 0...cap) : 0
+        return base + jitter
     }
 
     /// Single poll cycle. Public so apps can also `forcePoll()` on foreground.

@@ -12,6 +12,37 @@
 > placements with both Keychain keys — no scheme produced plausible
 > plaintext). Deferred items below.
 
+## Multi-account usage poll cadence — follow-ups (2026-06-13)
+
+### Stagger foreground forcePoll fan-out across accounts
+- **What**: The analytics-percent-bug branch added UsagePoller interval
+  jitter + a 4s boot-replay stagger so a primary + secondary Claude account
+  stop polling `/api/oauth/usage` (aggressively per-IP rate limited) in
+  lockstep. That fixes the steady-state background loop and app launch, but
+  foreground `forcePoll()` fan-outs still fire all accounts at once:
+  popover open (`AppDelegate` status-item refresh), Usage tab appear
+  (`SecondaryProviderColumn.onAppear`), and `MacRootView` refresh.
+- **Why deferred**: post first-successful background poll this is harmless —
+  a 429'd forcePoll keeps the last-good `usage` (it never blanks the gauge),
+  and the jittered background loop already populated it. Coordinating a
+  shared cross-account poll scheduler is a broader change than the gauge bug
+  fix warranted.
+- **Expected shape**: a process-wide poll scheduler (or a shared token-bucket
+  per provider host) that serializes/staggers same-provider forcePolls, so
+  opening the UI with N Claude accounts can't recreate the per-IP 429
+  collision. Flagged by Codex adversarial review (#3) on the ship.
+
+### Gate poll jitter to the rate-limited (HTTP) sources only
+- **What**: `UsagePoller.Configuration.intervalJitterSeconds` (default 8s)
+  is applied to every provider, including file-reading sources (Codex,
+  Gemini, Cursor, Grok, OpenCode) that don't hit a rate-limited HTTP
+  endpoint. Those gauges now refresh up to 8s later for no benefit.
+- **Why deferred**: 8s on a 60s background poll is imperceptible; the jitter
+  is only load-bearing for the Anthropic HTTP source.
+- **Expected shape**: pass a per-source jitter (0 for file-backed sources) or
+  gate jitter on a source capability flag. Flagged by Claude adversarial
+  review (F3) on the ship.
+
 ## Conductor parity — setup scripts (2026-05-26)
 
 ### Optional setup/run scripts for prepared worktrees

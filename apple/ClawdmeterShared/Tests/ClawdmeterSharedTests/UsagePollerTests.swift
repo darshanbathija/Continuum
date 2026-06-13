@@ -5,6 +5,31 @@ import XCTest
 /// rate-limit backoff, and predictor wiring.
 final class UsagePollerTests: XCTestCase {
 
+    // MARK: - Inter-poll jitter (multi-account desync)
+
+    func test_nextDelay_zeroJitterIsDeterministic() {
+        // jitter=0 must return exactly base — the documented test seam.
+        XCTAssertEqual(UsagePoller.nextDelay(base: 60, jitterCap: 0), 60, accuracy: 0.0)
+    }
+
+    func test_nextDelay_negativeJitterCapClampsToBase() {
+        XCTAssertEqual(UsagePoller.nextDelay(base: 60, jitterCap: -5), 60, accuracy: 0.0)
+    }
+
+    func test_nextDelay_staysWithinBaseAndCap() {
+        // Sample many times — every draw must land in [base, base+cap].
+        for _ in 0..<500 {
+            let d = UsagePoller.nextDelay(base: 60, jitterCap: 8)
+            XCTAssertGreaterThanOrEqual(d, 60)
+            XCTAssertLessThanOrEqual(d, 68)
+        }
+    }
+
+    func test_defaultConfiguration_hasNonZeroJitter() {
+        // Production default must desync concurrent same-provider pollers.
+        XCTAssertGreaterThan(UsagePoller.Configuration().intervalJitterSeconds, 0)
+    }
+
     func test_singleSuccessfulPoll_emitsUsageEvent() async {
         let source = ScriptedSource(steps: [.succeed(makeUsage(session: 50, epoch: 1000))])
         let poller = UsagePoller(source: source)
