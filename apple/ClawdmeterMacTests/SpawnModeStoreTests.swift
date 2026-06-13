@@ -109,6 +109,65 @@ final class SpawnModeStoreTests: XCTestCase {
         await drainTeardown(store)
     }
 
+    func testCreateGroupRecordsCapacityFromLaunchedTiles() async {
+        let store = makeStore()
+        let result = await store.createGroup(allocations: [
+            SpawnAgentAllocation(agent: .claude, count: 3),
+        ])
+        guard let group = result.group else { return XCTFail("expected a group") }
+        XCTAssertEqual(group.capacity, 3, "capacity is the count that actually launched")
+        store.closeGroup(id: group.id)
+        await drainTeardown(store)
+    }
+
+    func testAddTileRefillsClosedSlotWithContinuedNumbering() async {
+        let store = makeStore()
+        let result = await store.createGroup(allocations: [
+            SpawnAgentAllocation(agent: .claude, count: 2),
+        ])
+        guard let group = result.group, group.tiles.count == 2 else {
+            return XCTFail("expected two tiles")
+        }
+        XCTAssertEqual(group.capacity, 2)
+
+        // Close the FIRST tile so a naive count-based name ("Claude 2") would
+        // collide with the still-live "Claude 2".
+        store.closeTile(groupId: group.id, tileId: group.tiles[0].id)
+        XCTAssertEqual(store.group(id: group.id)?.tiles.count, 1)
+
+        let added = await store.addTile(groupId: group.id, agent: .claude)
+        XCTAssertTrue(added)
+        let refilled = store.group(id: group.id)
+        XCTAssertEqual(refilled?.tiles.count, 2, "the empty cell is refilled")
+        XCTAssertEqual(refilled?.capacity, 2, "capacity is fixed at creation")
+        XCTAssertEqual(refilled?.tiles.last?.title, "Claude 3",
+                       "numbering continues past the highest live index")
+        XCTAssertEqual(store.selectedTileByGroup[group.id], refilled?.tiles.last?.id,
+                       "the refilled tile becomes the typing target")
+        store.closeGroup(id: group.id)
+        await drainTeardown(store)
+    }
+
+    func testAddTileRefusesWhenGroupAlreadyAtCapacity() async {
+        let store = makeStore()
+        let result = await store.createGroup(allocations: [
+            SpawnAgentAllocation(agent: .claude, count: 1),
+        ])
+        guard let group = result.group else { return XCTFail("expected a group") }
+        let added = await store.addTile(groupId: group.id, agent: .claude)
+        XCTAssertFalse(added, "a full group has no empty cell to refill")
+        XCTAssertEqual(store.group(id: group.id)?.tiles.count, 1)
+        store.closeGroup(id: group.id)
+        await drainTeardown(store)
+    }
+
+    func testAddTileToMissingGroupReturnsFalse() async {
+        let store = makeStore()
+        let added = await store.addTile(groupId: UUID(), agent: .claude)
+        XCTAssertFalse(added)
+        await drainTeardown(store)
+    }
+
     func testCloseGroupClearsPerGroupState() async {
         let store = makeStore()
         let result = await store.createGroup(allocations: [
