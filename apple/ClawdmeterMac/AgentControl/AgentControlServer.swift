@@ -1750,10 +1750,6 @@ public final class AgentControlServer {
         defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
             if let key { await outbox.releaseInFlight(key) }
         } }
-        guard SessionConfigChanger.isClaudePty(session) else {
-            sendResponse(.legacySessionRetired, on: connection)
-            return
-        }
         let liveCatalog = await providerEnabledModelCatalog()
         guard !req.model.isEmpty,
               let modelEntry = liveCatalog.entry(forId: req.model, customProviderId: session.customProviderId) else {
@@ -1777,18 +1773,27 @@ public final class AgentControlServer {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
         let oldModel = session.model
-        let changer = SessionConfigChanger(
-            registry: registry,
-            repoEnvResolver: repoEnvResolver,
-            customProviderStore: customProviderStore
-        )
-        let result = await changer.swap(
-            sessionId: uuid,
-            newModel: req.model,
-            newEffort: req.effort == nil ? nil : .some(req.effort)
-        )
-        guard sendSwapFailureIfNeeded(result, on: connection) else {
-            return
+        let newEffort: ReasoningEffort?? = req.effort == nil ? nil : .some(req.effort)
+        // Claude PTY → kill+respawn via SessionConfigChanger. Managed harness
+        // (Grok/Codex/Cursor/Gemini) → in-place bridge respawn with the new
+        // model, transcript carried (matches the Mac in-process path). Anything
+        // else (non-code / unknown) stays retired.
+        if SessionConfigChanger.isClaudePty(session) {
+            let changer = SessionConfigChanger(
+                registry: registry,
+                repoEnvResolver: repoEnvResolver,
+                customProviderStore: customProviderStore
+            )
+            let result = await changer.swap(sessionId: uuid, newModel: req.model, newEffort: newEffort)
+            guard sendSwapFailureIfNeeded(result, on: connection) else { return }
+        } else if session.isReconfigurableHarnessCodeSession {
+            guard await reconfigureHarnessCodeSession(
+                sessionId: uuid, newModel: modelEntry.cliAlias ?? req.model, newEffort: newEffort
+            ) else {
+                sendResponse(.harnessReconfigureFailed, on: connection); return
+            }
+        } else {
+            sendResponse(.legacySessionRetired, on: connection); return
         }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordSwap(
@@ -1819,14 +1824,22 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        let changer = SessionConfigChanger(
-            registry: registry,
-            repoEnvResolver: repoEnvResolver,
-            customProviderStore: customProviderStore
-        )
-        let result = await changer.swap(sessionId: uuid, newEffort: .some(req.effort))
-        guard sendSwapFailureIfNeeded(result, on: connection) else {
-            return
+        // Claude PTY → SessionConfigChanger respawn; managed harness → in-place
+        // bridge respawn with the new effort (matches the Mac path).
+        if SessionConfigChanger.isClaudePty(session) {
+            let changer = SessionConfigChanger(
+                registry: registry,
+                repoEnvResolver: repoEnvResolver,
+                customProviderStore: customProviderStore
+            )
+            let result = await changer.swap(sessionId: uuid, newEffort: .some(req.effort))
+            guard sendSwapFailureIfNeeded(result, on: connection) else { return }
+        } else if session.isReconfigurableHarnessCodeSession {
+            guard await reconfigureHarnessCodeSession(sessionId: uuid, newEffort: .some(req.effort)) else {
+                sendResponse(.harnessReconfigureFailed, on: connection); return
+            }
+        } else {
+            sendResponse(.legacySessionRetired, on: connection); return
         }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordEffortChange(
@@ -2712,6 +2725,15 @@ public final class AgentControlServer {
             sessionId: uuid, sourcePeer: peer,
             enabled: req.enabled, repoKey: repoKey
         )
+        // Managed harness: apply the new approval policy to the RUNNING bridge by
+        // respawning it in place (transcript carried), so iOS toggling Bypass
+        // skips approvals THIS turn — parity with the Mac permission chip. Claude
+        // PTY honors the flag at its next respawn (unchanged). Best-effort: the
+        // flag is already persisted above, so a respawn miss still records the
+        // toggle (the session just goes degraded until revived).
+        if session.isReconfigurableHarnessCodeSession {
+            await reconfigureHarnessCodeSession(sessionId: uuid, newAlwaysApprove: req.enabled)
+        }
         await respondWithSession(
             uuid: uuid,
             idempotencyKey: req.idempotencyKey,
@@ -4476,6 +4498,235 @@ public final class AgentControlServer {
         }
     }
 
+    // MARK: - Live harness reconfigure (model / effort / approval)
+
+    /// The launch inputs for one harness agent: stdio binary + argv (nil/[] for
+    /// transport-owning gRPC/headless drivers) and the bridge factory. Built
+    /// from a *session record* so a live session can be respawned with new
+    /// config — the spawn-time analogue lives inline in the per-agent branches
+    /// of the create handler (the `if let support = acpSupport…` block); keep
+    /// the two in sync.
+    private struct HarnessLaunchSpec {
+        let binary: String?
+        let arguments: [String]
+        let makeBridge: (UUID, SessionChatStore) -> AcpHarnessBridge
+    }
+
+    /// Reconstruct a harness session's launch inputs from its record, applying a
+    /// model override + the resolved approval policy. Returns nil when the
+    /// agent's CLI can't be located (so the caller fails the reconfigure cleanly
+    /// instead of spawning a dead bridge) or the agent isn't a managed harness.
+    private func harnessLaunchSpec(
+        for session: AgentSession,
+        model: String?,
+        cwd: String,
+        alwaysApprove: Bool
+    ) -> HarnessLaunchSpec? {
+        let display = providerDisplayName(session.agent)
+        // Cursor (ACP stdio). fs capability stays trust-gated exactly as spawn.
+        if let support = Self.acpSupport(for: session.agent) {
+            let trustGate = AutopilotState.shared.isRepoTrusted(session.repoKey ?? "")
+                ? RepoTrustGate(repoRoot: session.repoKey ?? cwd, sessionCwd: cwd)
+                : nil
+            return HarnessLaunchSpec(
+                binary: AgentSpawner.cursorBinaryPath() ?? support.binaryName,
+                arguments: support.spawnArgv(model: nil, effort: nil, alwaysApprove: alwaysApprove),
+                makeBridge: { sid, store in
+                    .acp(sessionId: sid, support: support, store: store,
+                         model: model, agentDisplayName: display,
+                         trustGate: trustGate, onFileAccess: nil,
+                         cursorUsageSurface: .code, cursorUsageRepo: cwd)
+                })
+        }
+        switch session.agent {
+        case .grok:
+            guard let grokPath = ShellRunner.locateBinary("grok") else { return nil }
+            return HarnessLaunchSpec(
+                binary: nil, arguments: [],
+                makeBridge: { sid, store in
+                    .transportOwning(sessionId: sid, store: store, model: model,
+                                     agentDisplayName: display,
+                                     driver: GrokHeadlessDriver(binaryPath: grokPath),
+                                     usageProvider: .grok, usageRepo: cwd)
+                })
+        case .codex:
+            return HarnessLaunchSpec(
+                binary: ShellRunner.locateBinary("codex") ?? "codex",
+                arguments: ["app-server"],
+                makeBridge: { sid, store in
+                    .codexAppServer(sessionId: sid, store: store,
+                                    model: model, agentDisplayName: display)
+                })
+        case .gemini:
+            guard let agyPath = ShellRunner.locateBinary("agy") else { return nil }
+            return HarnessLaunchSpec(
+                binary: nil, arguments: [],
+                makeBridge: { sid, store in
+                    .transportOwning(sessionId: sid, store: store, model: model,
+                                     agentDisplayName: display,
+                                     driver: AntigravityHeadlessDriver(binaryPath: agyPath))
+                })
+        default:
+            return nil
+        }
+    }
+
+    /// Per-agent effort string for `bridge.start(effort:)`. Codex overrides via
+    /// TOML (`codexConfigValue`); Grok takes `--reasoning-effort <raw>`; Cursor
+    /// sets effort via ACP config, not launch, and Gemini's headless driver
+    /// ignores it — both get nil.
+    private static func harnessEffortString(_ effort: ReasoningEffort?, agent: AgentKind) -> String? {
+        guard let effort else { return nil }
+        switch agent {
+        case .codex: return effort.codexConfigValue
+        case .grok:  return effort.rawValue
+        default:     return nil
+        }
+    }
+
+    /// Resolve the child environment for a harness (re)launch — repo env +
+    /// custom-provider overrides + the per-account instance env. Mirrors the
+    /// spawn handler's env block (without its connection-coupled worktree
+    /// cleanup, which only applies to first-spawn provisioning). Throws on a
+    /// repo-env conflict; returns nil when the pinned account is gone.
+    private func resolveHarnessChildEnv(for session: AgentSession, cwd: String) async throws -> [String: String]? {
+        let resolvedEnv = try resolveRepoEnv(repoRoot: session.repoKey ?? cwd, cwd: cwd)
+        let spawnPlan = try resolveCustomSpawnPlan(customProviderId: session.customProviderId, agent: session.agent)
+        var childEnv = ProcessInfo.processInfo.environment
+        for (k, v) in (resolvedEnv?.environment ?? [:]) { childEnv[k] = v }
+        for (k, v) in spawnPlan?.envOverrides ?? [:] { childEnv[k] = v }
+        guard let instanceEnv = await InstanceSpawnEnv.harnessEnv(
+            base: childEnv, wireId: session.providerInstanceId, agent: session.agent
+        ) else {
+            return nil
+        }
+        childEnv = instanceEnv
+        if session.agent == .codex {
+            FffAgentSearchProvisioning.ensureCodexMCPConfig(in: childEnv)
+        }
+        return childEnv
+    }
+
+    /// Reconfigure a *live harness Code session* in place: tear down the running
+    /// bridge and respawn it with new model / effort / approval policy, then
+    /// re-hand the prior transcript to the fresh provider thread as context.
+    ///
+    /// Why this exists: harness providers (Grok / Codex / Cursor / Gemini) take
+    /// their model + approval policy only at bridge-launch time, so there's no
+    /// "tweak the running agent" — a config change is a kill + respawn. This is
+    /// the managed-transport analogue of `SessionConfigChanger.swap` (which only
+    /// handles Claude PTY). The `SessionChatStore` is deliberately kept across
+    /// the respawn so the on-screen transcript never blinks; the provider gets
+    /// its memory back via the priming prompt in step 6.
+    ///
+    /// `newEffort` is double-optional: outer nil = keep current; inner nil =
+    /// explicitly clear. `newAlwaysApprove` nil = resolve from the chip
+    /// (`currentMode != .ask`). Returns false on any failure (session marked
+    /// `.degraded`) so the caller can surface a real toast.
+    @discardableResult
+    func reconfigureHarnessCodeSession(
+        sessionId: UUID,
+        newModel: String? = nil,
+        newEffort: ReasoningEffort?? = nil,
+        newAlwaysApprove: Bool? = nil,
+        carryTranscript: Bool = true
+    ) async -> Bool {
+        guard let session = registry.session(id: sessionId) else { return false }
+        // Managed-harness Code sessions only — Claude PTY keeps
+        // SessionConfigChanger; OpenCode/chat/legacy-pane sessions are excluded.
+        guard session.isReconfigurableHarnessCodeSession else { return false }
+        let cwd = session.effectiveCwd
+
+        // 1. Snapshot the transcript BEFORE teardown (the store is kept, but we
+        //    capture now so a late projector write can't race the rebuild).
+        let priorMessages = chatStoreRegistry.snapshotStore(for: session)?.snapshot.messages ?? []
+
+        // 2. Apply config to the registry so the chip + next launch agree.
+        //    `newEffort ?? session.effort` flattens the double-optional: outer
+        //    nil ("keep") falls back to the current effort.
+        if let newModel { try? await registry.setModel(id: sessionId, model: newModel, effort: newEffort ?? session.effort) }
+        if case .some(let e?) = newEffort { try? await registry.setEffort(id: sessionId, effort: e) }
+        guard let updated = registry.session(id: sessionId) else { return false }
+
+        let resolvedAlwaysApprove = newAlwaysApprove
+            ?? (PermissionModeStore.shared.currentMode(for: updated) != .ask)
+        let resolvedModel = newModel ?? updated.model
+        let resolvedEffort: ReasoningEffort? = {
+            if case .some(let e) = newEffort { return e }
+            return updated.effort
+        }()
+
+        // 3. Build the new launch inputs + env up front; bail before touching the
+        //    running bridge if either fails (so a missing binary leaves the live
+        //    session running rather than killing it for nothing).
+        guard let spec = harnessLaunchSpec(for: updated, model: resolvedModel, cwd: cwd, alwaysApprove: resolvedAlwaysApprove) else {
+            serverLogger.error("harness reconfigure: no launch spec for \(updated.agent.rawValue, privacy: .public) (\(sessionId.uuidString, privacy: .public))")
+            return false
+        }
+        let childEnv: [String: String]
+        do {
+            guard let env = try await resolveHarnessChildEnv(for: updated, cwd: cwd) else {
+                try? await registry.updateStatus(id: sessionId, status: .degraded)
+                return false
+            }
+            childEnv = env
+        } catch {
+            serverLogger.error("harness reconfigure env resolve failed: \(error.localizedDescription, privacy: .public)")
+            try? await registry.updateStatus(id: sessionId, status: .degraded)
+            return false
+        }
+
+        // 4. Tear down the live bridge but KEEP the chat store pinned (the store
+        //    holds the transcript the UI is rendering — releasing it would blink
+        //    the thread and could let the idle sweep evict it mid-rebuild).
+        //    `harnessRegistry.remove` tears down the bridge WITHOUT releasing the
+        //    store pin (teardownHarnessSession releases separately), so a live
+        //    bridge's existing `acquire` pin transfers to the new bridge.
+        let hadLiveBridge = harnessRegistry.contains(sessionId)
+        await harnessRegistry.remove(sessionId)
+        AgentEventStream.recordEvent(sessionId: sessionId, kind: .statusChanged,
+                                     payload: ["status": "paused", "reason": "config-reconfigure-harness"])
+
+        // 5. Rebuild + start. Reuse the still-pinned store (snapshotStore — no new
+        //    pin) when a bridge was live; acquire a fresh pin when reconfiguring an
+        //    idle/evicted session so the new long-lived bridge isn't idle-swept.
+        let store = hadLiveBridge
+            ? chatStoreRegistry.snapshotStore(for: updated)
+            : chatStoreRegistry.acquire(for: updated)
+        guard let store else {
+            try? await registry.updateStatus(id: sessionId, status: .degraded)
+            return false
+        }
+        let bridge = spec.makeBridge(sessionId, store)
+        do {
+            try await bridge.start(
+                binary: spec.binary,
+                arguments: spec.arguments,
+                cwd: cwd,
+                env: childEnv,
+                effort: Self.harnessEffortString(resolvedEffort, agent: updated.agent),
+                alwaysApprove: resolvedAlwaysApprove
+            )
+        } catch {
+            serverLogger.error("harness reconfigure bridge.start failed: \(error.localizedDescription, privacy: .public)")
+            await bridge.teardown()
+            try? await registry.updateStatus(id: sessionId, status: .degraded)
+            return false
+        }
+        harnessRegistry.register(bridge, for: sessionId)
+        try? await registry.updateStatus(id: sessionId, status: .running)
+        AgentEventStream.recordEvent(sessionId: sessionId, kind: .statusChanged,
+                                     payload: ["status": "running", "reason": "config-reconfigure-harness-complete"])
+
+        // 6. Re-hand the transcript so the fresh provider thread has context.
+        //    Non-echoing (origin isn't a user-composer turn) so no duplicate
+        //    "You" bubble — the prior transcript is already on screen.
+        if carryTranscript, let preamble = HarnessTranscriptContext.preamble(from: priorMessages) {
+            _ = await bridge.prompt(preamble, origin: .userRecoveryAutoSend, allowLiveProviderSpend: Self.allowLiveProviderSpend)
+        }
+        return true
+    }
+
     /// Generic harness spawn (Grok/Cursor over ACP, Codex over app-server,
     /// Antigravity over gRPC). Mirrors `handleSpawnOpencodeSession`: the daemon
     /// drives an `AgentDriver` via `AcpHarnessBridge` (built by
@@ -4646,8 +4897,16 @@ public final class AgentControlServer {
         // to a follow-up (Grok takes them launch-time, Cursor via
         // set_config_option) — v1 spawns with the agent's defaults until we map
         // `initialize.availableModels`; the bundled catalog ids are placeholders,
-        // not real CLI models. alwaysApprove=false so the agent raises
-        // permission prompts we surface (a harness, not a blind auto-runner).
+        // not real CLI models.
+        //
+        // Approval policy: harness CODE sessions DEFAULT to skip approvals
+        // (Bypass). This is `handleSpawnHarnessSession`'s only caller path —
+        // chat-harness sessions spawn read-only via createHarnessChatSessionCore
+        // and stay false. The permission chip can flip this off live (→ Ask
+        // raises real prompts) by routing through `reconfigureHarnessCodeSession`.
+        // (Reversal of the prior "a harness, not a blind auto-runner" default,
+        // per product decision: managed Code sessions skip approvals by default.)
+        let harnessSkipsApprovals = session.kind == .code
         let bridge = makeBridge(session.id, store)
         do {
             try await bridge.start(
@@ -4656,7 +4915,7 @@ public final class AgentControlServer {
                 cwd: cwd,
                 env: childEnv,
                 effort: nil,
-                alwaysApprove: false
+                alwaysApprove: harnessSkipsApprovals
             )
         } catch {
             serverLogger.error("acp bridge.start failed: \(error.localizedDescription, privacy: .public)")
@@ -4678,6 +4937,13 @@ public final class AgentControlServer {
         // Step 4: register the live bridge, record the workspace + event, and
         // return the session JSON (same shape as every other spawn path).
         harnessRegistry.register(bridge, for: session.id)
+        // Record the spawn-time skip-approvals decision into the permission
+        // store so the chip truthfully shows Bypass (not a stale "Ask") and a
+        // later model/effort reconfigure resolves `alwaysApprove` from the real
+        // mode instead of falling back to .ask and silently re-enabling prompts.
+        if harnessSkipsApprovals {
+            await MainActor.run { AutopilotState.shared.setEnabled(true, sessionId: session.id) }
+        }
         recordWorkspaceSession(repoRoot: req.repoKey, sessionId: session.id)
         AgentEventStream.recordEvent(
             sessionId: session.id, kind: .sessionCreated,
@@ -6136,10 +6402,13 @@ public final class AgentControlServer {
             let auditFs: (@Sendable (String, String, Bool) async -> Void)? = trustGate == nil ? nil : { @Sendable op, path, allowed in
                 serverLogger.info("acp fs \(op, privacy: .public) allowed=\(allowed, privacy: .public) path=\(MobileCommandPayloadHasher.hex(Data(path.utf8)), privacy: .public)")
             }
+            // Code-harness default: skip approvals (Bypass) — baked into the ACP
+            // argv here AND passed to bridge.start in handleSpawnHarnessSession.
+            // The chip flips it off live via reconfigureHarnessCodeSession.
             await handleSpawnHarnessSession(
                 req: req, displayName: display,
                 binary: (AgentSpawner.cursorBinaryPath() ?? support.binaryName),
-                arguments: support.spawnArgv(model: nil, effort: nil, alwaysApprove: false),
+                arguments: support.spawnArgv(model: nil, effort: nil, alwaysApprove: true),
                 cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
                 provisionalSessionId: provisionalSessionId, connection: connection,
                 makeBridge: { sid, store in
@@ -8988,6 +9257,15 @@ public final class AgentControlServer {
             status: 410, reason: "Gone",
             contentType: "application/json",
             body: Data(#"{"error":"legacy_session_retired","cta":"Start a new session from this repo or worktree."}"#.utf8)
+        )
+        /// 503 when a managed-harness in-place reconfigure (model/effort/approval
+        /// bridge respawn) couldn't relaunch the agent — distinct from the 410
+        /// "retired" case so the client knows the session is recoverable (retry /
+        /// reopen), not dead.
+        static let harnessReconfigureFailed = HTTPResponse(
+            status: 503, reason: "Service Unavailable",
+            contentType: "application/json",
+            body: Data(#"{"error":"reconfigure_failed","cta":"The agent couldn't restart with the new settings. Try again."}"#.utf8)
         )
         /// 403 Forbidden with a JSON body for policy denials (e.g. autopilot
         /// enable on an untrusted repo — review §3 finding 2026-05-18).
