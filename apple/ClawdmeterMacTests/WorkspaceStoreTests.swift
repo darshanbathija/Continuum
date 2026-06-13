@@ -592,6 +592,44 @@ final class WorkspaceStoreTests: XCTestCase {
         )
     }
 
+    func test_renameWorktreeFolderOnlyKeepsBranch() async throws {
+        let repo = try makeGitRepo(name: "rename-folder-only-repo")
+        try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
+        try git(["add", "tracked.txt"], cwd: repo)
+        try git(["commit", "-m", "initial"], cwd: repo)
+
+        let manager = WorktreeManager(workspaceStorageRoot: workspaceStorageRoot.path)
+        let provisioned = try await manager.provision(
+            repoRoot: repo.path,
+            slug: "kampala",
+            branchName: "user/kampala",
+            filesToCopy: WorkspaceFilesToCopySettings(enabled: false)
+        )
+
+        let renamed = try await manager.renameWorktree(
+            repoRoot: repo.path,
+            worktreePath: provisioned.path,
+            newDisplayName: "Berlin",
+            renameBranch: false
+        )
+
+        // Folder moves; branch keeps its identity (open PR / pushed branch safe).
+        XCTAssertEqual(renamed.oldBranchName, "user/kampala")
+        XCTAssertEqual(renamed.newBranchName, "user/kampala")
+        XCTAssertTrue(renamed.newPath.hasSuffix("/berlin"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: provisioned.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: renamed.newPath))
+
+        let branch = try gitOutput(["branch", "--show-current"], cwd: URL(fileURLWithPath: renamed.newPath))
+        XCTAssertEqual(branch, "user/kampala")
+
+        _ = try await manager.cleanupProvisionedWorktree(
+            repoRoot: repo.path,
+            worktreePath: renamed.newPath,
+            expectedMarkerId: provisioned.metadata.ownershipMarkerId
+        )
+    }
+
     func test_worktreeProvisionCreatesBranchAliasWhenBranchDiffersFromCity() async throws {
         let repo = try makeGitRepo(name: "alias-repo")
         try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
