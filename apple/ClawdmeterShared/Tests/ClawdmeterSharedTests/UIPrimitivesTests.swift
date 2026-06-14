@@ -91,6 +91,39 @@ final class UIPrimitivesTests: XCTestCase {
         XCTAssertEqual(reordered.snapshot.repoOrder, ["/repo/mac-tv-remote", "/repo/clawdmeter"])
     }
 
+    func testSessionPresentationStorePersistsRepoIconOverrides() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = dir.appendingPathComponent("presentation.json")
+
+        let store = SessionPresentationStore(storeURL: url)
+        XCTAssertEqual(store.snapshot.repoIconOverrides, [:], "Defaults empty until the user assigns an icon.")
+
+        try store.setRepoIconEmoji(repoKey: "/repo/clawdmeter", emoji: "🚀")
+        try store.setRepoIconImagePath(repoKey: "/repo/mac-tv-remote", path: "/tmp/icons/abc.png")
+
+        let reloaded = SessionPresentationStore(storeURL: url)
+        XCTAssertEqual(reloaded.snapshot.repoIconOverrides["/repo/clawdmeter"]?.emoji, "🚀")
+        XCTAssertNil(reloaded.snapshot.repoIconOverrides["/repo/clawdmeter"]?.imagePath)
+        XCTAssertEqual(reloaded.snapshot.repoIconOverrides["/repo/mac-tv-remote"]?.imagePath, "/tmp/icons/abc.png")
+        XCTAssertNil(reloaded.snapshot.repoIconOverrides["/repo/mac-tv-remote"]?.emoji)
+
+        // Emoji and image are mutually exclusive: re-assigning one clears the other.
+        try reloaded.setRepoIconImagePath(repoKey: "/repo/clawdmeter", path: "/tmp/icons/def.png")
+        let swapped = SessionPresentationStore(storeURL: url)
+        XCTAssertEqual(swapped.snapshot.repoIconOverrides["/repo/clawdmeter"]?.imagePath, "/tmp/icons/def.png")
+        XCTAssertNil(swapped.snapshot.repoIconOverrides["/repo/clawdmeter"]?.emoji)
+
+        // Clearing restores the monogram (override removed entirely).
+        try swapped.clearRepoIcon(repoKey: "/repo/clawdmeter")
+        let cleared = SessionPresentationStore(storeURL: url)
+        XCTAssertNil(cleared.snapshot.repoIconOverrides["/repo/clawdmeter"])
+        // Empty emoji is treated as a clear, not an empty entry.
+        try cleared.setRepoIconEmoji(repoKey: "/repo/mac-tv-remote", emoji: "   ")
+        let emptied = SessionPresentationStore(storeURL: url)
+        XCTAssertNil(emptied.snapshot.repoIconOverrides["/repo/mac-tv-remote"])
+    }
+
     func testSessionPresentationStorePersistsRemainingClientLocalState() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -163,6 +196,7 @@ final class UIPrimitivesTests: XCTestCase {
         XCTAssertEqual(decoded.recentPathActions, [])
         XCTAssertNil(decoded.externalEditorIdentifier)
         XCTAssertEqual(decoded.repoIdentityBadges, [:])
+        XCTAssertEqual(decoded.repoIconOverrides, [:], "Old snapshots with no repoIconOverrides key default to empty.")
         XCTAssertEqual(decoded.syntaxTheme, .tahoe)
         XCTAssertEqual(decoded.diffDisplayMode, .unified)
         XCTAssertEqual(decoded.transcriptDensity, .balanced, "Old snapshots with no transcriptDensity key default to balanced.")
