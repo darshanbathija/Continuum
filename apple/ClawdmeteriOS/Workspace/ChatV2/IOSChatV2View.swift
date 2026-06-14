@@ -733,8 +733,6 @@ private struct TranscriptScroll: View {
                 disclosureLabel(turn, icon: isOpen ? "chevron.down" : "chevron.right")
             }
             .buttonStyle(.plain)
-        } else {
-            disclosureLabel(turn, icon: "clock")
         }
     }
 
