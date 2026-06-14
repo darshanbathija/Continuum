@@ -22,8 +22,18 @@ struct SpawnTerminalView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> TerminalView {
-        let view = TerminalView()
+        let view = SizeSyncingTerminalView()
         view.terminalDelegate = context.coordinator
+        // Force the PTY winsize to track SwiftTerm's *actual* laid-out grid on
+        // every frame change. SwiftTerm's `sizeChanged` delegate only fires on a
+        // col/row CHANGE, but the spawn grid sizes a tile's terminal to its final
+        // dimensions in one shot — so the emulator model is born at the tile size,
+        // `processSizeChange` sees "no change", the delegate never fires, and the
+        // PTY is stranded at its 120×40 open size. The agent then renders for 120
+        // cols inside a ~49-col view, clamping its right-aligned UI off-screen.
+        view.onSizeSync = { [weak coordinator = context.coordinator] cols, rows in
+            coordinator?.syncSize(cols: cols, rows: rows)
+        }
         context.coordinator.terminalView = view
         context.coordinator.lastFocusToken = focusToken
         context.coordinator.connect()
@@ -162,6 +172,15 @@ struct SpawnTerminalView: NSViewRepresentable {
             Task { [host] in await host.resize(cols: newCols, rows: newRows) }
         }
 
+        /// Push the emulator's post-layout grid to the PTY. Backstops the
+        /// change-gated `sizeChanged` delegate, which never fires when a tile's
+        /// terminal is born at its final size (see `makeNSView`). Idempotent —
+        /// re-asserting the same winsize is a no-op for the child.
+        func syncSize(cols: Int, rows: Int) {
+            guard cols > 0, rows > 0 else { return }
+            Task { [host] in await host.resize(cols: cols, rows: rows) }
+        }
+
         func setTerminalTitle(source: TerminalView, title: String) {}
         func scrolled(source: TerminalView, position: Double) {}
         func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
@@ -187,5 +206,26 @@ struct SpawnTerminalView: NSViewRepresentable {
         }
 
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+    }
+}
+
+/// SwiftTerm view that reports its emulator's settled (cols, rows) on every
+/// frame change, so the spawn tile can keep the PTY winsize in lockstep with
+/// what's actually rendered — see `SpawnTerminalView.makeNSView` for why the
+/// stock `sizeChanged` delegate isn't enough in the grid.
+final class SizeSyncingTerminalView: TerminalView {
+    var onSizeSync: ((Int, Int) -> Void)?
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        // Defer one tick: `super.setFrameSize` is the layout pass that resizes
+        // the emulator model, and deferring also dodges any init-time call
+        // before the terminal is set up. By now `getTerminal()` reflects the
+        // tile's real grid.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let terminal = self.getTerminal()
+            self.onSizeSync?(terminal.cols, terminal.rows)
+        }
     }
 }
