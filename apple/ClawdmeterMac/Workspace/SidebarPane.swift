@@ -22,6 +22,11 @@ struct SidebarPane: View {
     @AppStorage("clawdmeter.sidebar.grouping") private var groupingRaw: String = SessionGrouping.status.rawValue
     @AppStorage("clawdmeter.sidebar.sorting")  private var sortingRaw: String  = SessionSorting.recency.rawValue
     @AppStorage("clawdmeter.sidebar.status")   private var statusRaw: String   = SessionStatusFilter.all.rawValue
+    /// Settings → Spawn: whether the Spawn button shows here. Open spawn
+    /// groups still render below regardless, so hiding never orphans one.
+    @AppStorage(SpawnSettings.showButtonKey) private var spawnShowButton: Bool = SpawnSettings.showButtonDefault
+    /// Drives the hover-revealed gear that deep-links to Settings → Spawn.
+    @State private var spawnButtonHovering: Bool = false
 
     /// v0.5.4: rename sheet state. v0.5.9: split into a dedicated bool
     /// + data target — the `Binding(get:set:)` pattern for `isPresented:`
@@ -99,7 +104,9 @@ struct SidebarPane: View {
     var body: some View {
         VStack(spacing: 0) {
             searchField
-            spawnButton
+            if spawnShowButton {
+                spawnButton
+            }
             if !spawnStore.groups.isEmpty {
                 spawnGroupList
             }
@@ -607,9 +614,12 @@ struct SidebarPane: View {
                     .font(TahoeFont.body(12, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer()
+                // The "+" yields to a settings gear (overlay below) while
+                // hovering, so the gear lands where the eye already is.
                 Image(systemName: "plus")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(t.fg3)
+                    .opacity(spawnButtonHovering ? 0 : 1)
             }
             .padding(.horizontal, 10)
             .frame(height: 30)
@@ -624,8 +634,34 @@ struct SidebarPane: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(HoverableButtonStyle(cornerRadius: 10))
+        // Sibling overlay (not nested in the label) so the gear's tap is
+        // hit-tested above the main button and opens Settings → Spawn
+        // instead of the spawn config sheet.
+        .overlay(alignment: .trailing) {
+            if spawnButtonHovering {
+                Button {
+                    NotificationCenter.default.post(
+                        name: .clawdmeterOpenSettingsSection,
+                        object: nil,
+                        userInfo: ["section": "spawn"]
+                    )
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(t.fg2)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 5)
+                .help("Spawn settings")
+                .accessibilityLabel("Open Spawn settings")
+                .accessibilityIdentifier("code.sidebar.spawn.settings")
+            }
+        }
         .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.bottom, 8)
+        .onHover { spawnButtonHovering = $0 }
         .help("Open a grid of agent terminal sessions in your home directory")
         .accessibilityIdentifier("code.sidebar.spawn")
         .sheet(isPresented: $showingSpawnSheet) {
