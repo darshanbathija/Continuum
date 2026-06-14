@@ -321,4 +321,20 @@ final class SpawnModeStoreTests: XCTestCase {
         XCTAssertFalse(store.exitedTileIds.contains(tile.id))
         await drainTeardown(store)
     }
+
+    // MARK: - opencode binary resolution (TUI, not the bundled serve helper)
+
+    /// Spawn launches an interactive TUI; the app-bundled `Vendor/opencode`
+    /// binary is a Bun `opencode serve` helper that renders nothing and exits
+    /// as a TUI (the "OpenCode Go … exited" bug). The candidate list must lead
+    /// with the official-installer path and never name a bundled/Vendor path.
+    func testOpencodeRealInstallCandidatesPreferUserInstallNotBundle() {
+        let candidates = SpawnModeStore.opencodeRealInstallCandidates(home: "/Users/test")
+        XCTAssertEqual(candidates.first, "/Users/test/.opencode/bin/opencode")
+        XCTAssertTrue(candidates.contains("/opt/homebrew/bin/opencode"))
+        XCTAssertFalse(
+            candidates.contains { $0.localizedCaseInsensitiveContains("Vendor") },
+            "spawn TUI must never resolve to the app-bundled opencode serve helper"
+        )
+    }
 }
