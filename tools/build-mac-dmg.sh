@@ -362,9 +362,14 @@ if [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 && "${CLAWDMETER_NOT
   echo "▸ Notarizing the app bundle (so the ticket can be stapled to it)…"
   APP_ZIP="$BUILD_DIR/${APP_NAME}-app.zip"
   /usr/bin/ditto -c -k --keepParent "$APP_PATH" "$APP_ZIP"
-  if xcrun notarytool submit "$APP_ZIP" \
+  # Run notarytool to completion into the log, THEN check the result. Piping
+  # `--wait` straight into `grep -q` lets grep close the pipe on first match,
+  # SIGPIPE-killing notarytool; under `set -o pipefail` that fails the pipeline
+  # and reports a false "not Accepted" even when the submission succeeded.
+  xcrun notarytool submit "$APP_ZIP" \
        --key "$ASC_KEY_FILE" --key-id "$CLAWDMETER_ASC_KEY_ID" \
-       --issuer "$CLAWDMETER_ASC_ISSUER_ID" --wait 2>&1 | tee "$BUILD_DIR/notarize-app.log" | grep -q "status: Accepted"; then
+       --issuer "$CLAWDMETER_ASC_ISSUER_ID" --wait > "$BUILD_DIR/notarize-app.log" 2>&1 || true
+  if grep -qE '^[[:space:]]*status: Accepted[[:space:]]*$' "$BUILD_DIR/notarize-app.log"; then
     xcrun stapler staple "$APP_PATH" 2>&1 | sed 's/^/    /'
   else
     echo "✗ app notarization not Accepted — see $BUILD_DIR/notarize-app.log" >&2
