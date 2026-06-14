@@ -36,9 +36,9 @@ struct TerminalTabContainer: View {
 
     private var tabStrip: some View {
         HStack(spacing: 2) {
-            tabButton(id: nil, title: primaryTabTitle, isPrimary: true)
-            ForEach(secondaryPanes) { ref in
-                tabButton(id: ref.id, title: ref.title, isPrimary: ref.isPrimary, paneRef: ref)
+            tabButton(id: nil, title: tabLabel(forSecondaryIndex: nil), isPrimary: true)
+            ForEach(Array(secondaryPanes.enumerated()), id: \.element.id) { index, ref in
+                tabButton(id: ref.id, title: tabLabel(forSecondaryIndex: index), isPrimary: ref.isPrimary, paneRef: ref)
             }
             Button(action: ContinuumAnalytics.wrapButton(
                     "terminal_add_pane",
@@ -68,8 +68,13 @@ struct TerminalTabContainer: View {
         .background(t.surfaceSolid2.opacity(0.45))
     }
 
-    private var primaryTabTitle: String {
-        "\(session.agent.rawValue.capitalized)"
+    /// Tabs are numbered positionally — T1 is the agent's primary pane, then
+    /// T2, T3, … for extra shells. We don't label by `session.agent` because
+    /// the recorded agent can disagree with the CLI actually running in the
+    /// pane (e.g. a Claude Code session showing up as "Codex").
+    private func tabLabel(forSecondaryIndex index: Int?) -> String {
+        guard let index else { return "T1" }
+        return "T\(index + 2)"
     }
 
     private func tabButton(
@@ -217,8 +222,11 @@ struct TerminalTabContainer: View {
     }
 
     private var activePaneTitle: String {
-        guard let pane = selectedSecondaryPane else { return primaryTabTitle }
-        return pane.title
+        guard let pane = selectedSecondaryPane,
+              let index = secondaryPanes.firstIndex(where: { $0.id == pane.id }) else {
+            return tabLabel(forSecondaryIndex: nil)
+        }
+        return tabLabel(forSecondaryIndex: index)
     }
 
     private var secondaryPanes: [TerminalPaneRef] {
