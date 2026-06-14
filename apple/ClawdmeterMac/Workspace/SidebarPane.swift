@@ -1959,12 +1959,18 @@ struct SidebarPane: View {
         reorderKey: String? = nil,
         onToggle: @escaping () -> Void
     ) -> some View {
+        // Disclosure chevron is hover-only (Finder-sidebar style): the 10pt
+        // frame stays reserved so revealing it never shifts the glyph/title.
+        let hoverKey = reorderKey ?? repo.key
+        let isHeaderHovered = hoveredRepoHeaderKey == hoverKey
         let row = HStack(spacing: 8) {
             Button(action: ContinuumAnalytics.wrapButton("sidebar_toggle_repo", onToggle)) {
                 HStack(spacing: 8) {
                     TahoeIcon(isExpanded ? "chevD" : "chevR", size: 10)
                         .foregroundStyle(t.fg3)
                         .frame(width: 10)
+                        .opacity(isHeaderHovered ? 1 : 0)
+                        .animation(.easeOut(duration: 0.12), value: isHeaderHovered)
                     projectGlyph(repo)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(repo.displayName)
@@ -2039,8 +2045,8 @@ struct SidebarPane: View {
         // hover wash is independent of the palm-cursor drag affordance below:
         // `hoveredRepoHeaderKey` paints the highlight, `pressedRepoHeaderKey`
         // (a @GestureState) drives the closed-palm cursor — they coexist.
-        let hoverKey = reorderKey ?? repo.key
-        let isHeaderHovered = hoveredRepoHeaderKey == hoverKey
+        // (`hoverKey` / `isHeaderHovered` are computed at the top of this fn so
+        // the disclosure chevron can also gate its opacity on the same hover.)
         let decorated = row
             // Inset the wash inside the row frame rather than padding the row
             // itself, so the highlight gets a small side margin without nudging
