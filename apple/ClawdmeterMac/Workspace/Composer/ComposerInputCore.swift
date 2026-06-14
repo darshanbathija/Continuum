@@ -340,6 +340,33 @@ struct ComposerInputCore: View {
     }
 
     private var composerVisualStack: some View {
+        VStack(spacing: 6) {
+            queuedSendsPanel
+            composerInputSurface
+        }
+    }
+
+    @ViewBuilder
+    private var queuedSendsPanel: some View {
+        if !queuedSends.isEmpty,
+           let onQueuedSendUpdate,
+           let onQueuedSendDelete,
+           let onQueuedSendSteer {
+            QueuedSendsStrip(
+                drafts: queuedSends,
+                sessionIsRunning: sessionIsRunning,
+                isDispatching: isDispatchingQueuedSend,
+                onUpdateText: onQueuedSendUpdate,
+                onDelete: onQueuedSendDelete,
+                onSteer: onQueuedSendSteer
+            )
+            .padding(.horizontal, 16)
+            .padding(.bottom, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var composerInputSurface: some View {
         // Claude-Code-style stack: input box on top, attachments chip strip,
         // then a single compact bottom bar with all controls + the icon-only
         // send/stop action pinned to the right. The palette / mention popovers
@@ -364,19 +391,6 @@ struct ComposerInputCore: View {
                 }
                 if !store.browserComments.isEmpty {
                     browserCommentChipsRow
-                }
-                if !queuedSends.isEmpty,
-                   let onQueuedSendUpdate,
-                   let onQueuedSendDelete,
-                   let onQueuedSendSteer {
-                    QueuedSendsStrip(
-                        drafts: queuedSends,
-                        sessionIsRunning: sessionIsRunning,
-                        isDispatching: isDispatchingQueuedSend,
-                        onUpdateText: onQueuedSendUpdate,
-                        onDelete: onQueuedSendDelete,
-                        onSteer: onQueuedSendSteer
-                    )
                 }
                 inputRow
                     .opacity(planApprovalMode ? 0.56 : 1)
