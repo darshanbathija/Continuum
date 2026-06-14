@@ -58,6 +58,7 @@ struct TerminalTabContainer: View {
                     .background(t.surfaceSolid2.opacity(0.65), in: RoundedRectangle(cornerRadius: 7))
             }
             .buttonStyle(PressableButtonStyle())
+            .pointerStyle(.link)
             .help("New terminal pane")
             .accessibilityIdentifier("code.terminal.new-pane")
             Spacer()
@@ -107,6 +108,7 @@ struct TerminalTabContainer: View {
                 )
             }
             .buttonStyle(PressableButtonStyle())
+            .pointerStyle(.link)
             .accessibilityIdentifier(isPrimary ? "code.terminal.tab.primary" : "code.terminal.tab.secondary")
             if let paneRef, !paneRef.isPrimary {
                 Button(action: ContinuumAnalytics.wrapButton(
@@ -118,16 +120,23 @@ struct TerminalTabContainer: View {
                             selectedSecondaryId = nil
                         }
                     }
-                
+
                         }
                     )) {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(t.fg4)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(PressableButtonStyle())
-                .help("Close pane")
-                .accessibilityIdentifier("code.terminal.tab.close")
+                .foregroundStyle(t.fg4)
+                .codeHoverChrome(
+                    cornerRadius: 5,
+                    help: "Close pane",
+                    accessibilityLabel: "Close pane",
+                    accessibilityIdentifier: "code.terminal.tab.close"
+                )
+                .pointerStyle(.link)
             }
         }
     }
