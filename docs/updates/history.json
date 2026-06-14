@@ -1,5 +1,12 @@
 [
   {
+    "version": "0.41.0",
+    "build": "246",
+    "title": "Continuum 0.41.0",
+    "publishedAt": "2026-06-14T05:11:42Z",
+    "notesURL": "https://darshanbathija.github.io/Continuum/updates/release-notes/Continuum-0.41.0-arm64.md"
+  },
+  {
     "version": "0.40.0",
     "build": "244",
     "title": "Continuum 0.40.0",
