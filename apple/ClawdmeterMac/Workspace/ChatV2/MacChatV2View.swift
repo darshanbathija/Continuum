@@ -1647,36 +1647,21 @@ private struct TranscriptScroll: View {
     }
 }
 
-/// Animated three-dot "thinking" indicator shown in the send→first-token gap.
-/// Styled as a left-aligned assistant bubble; dots pulse in a wave using the
-/// heritage terra-cotta accent. Provider-agnostic — every model shows it.
+/// Working indicator shown in the send→first-token gap. Styled as a
+/// left-aligned assistant bubble hosting the shared `SteadyTenthsStream`
+/// (data-packet stream + live `m, ss.s` elapsed readout). The packets take
+/// the session's provider tint — this is the focused thread, so it earns the
+/// one color event; the readout digits stay near-foreground.
 @available(macOS 14, *)
 private struct ThinkingDotsRow: View {
     @Environment(\.tahoe) private var t
-    @State private var animating = false
 
     var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { i in
-                Circle()
-                    .fill(t.accent)
-                    .frame(width: 6, height: 6)
-                    .opacity(animating ? 1.0 : 0.3)
-                    .scaleEffect(animating ? 1.0 : 0.65)
-                    .animation(
-                        .easeInOut(duration: 0.55)
-                            .repeatForever(autoreverses: true)
-                            .delay(Double(i) * 0.18),
-                        value: animating
-                    )
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.hairline, lineWidth: 0.5))
-        .onAppear { animating = true }
-        .accessibilityLabel("Waiting for a response")
+        SteadyTenthsStream(color: t.accent, digitColor: t.fg)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.hairline, lineWidth: 0.5))
     }
 }
 

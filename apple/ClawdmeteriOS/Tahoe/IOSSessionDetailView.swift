@@ -846,6 +846,18 @@ public struct IOSSessionDetailView: View {
                                 )
                             }
                         }
+                        if let session, !data.isDemo {
+                            // Working indicator — the shared SteadyTenthsStream
+                            // (packets + live elapsed readout). Self-hides when
+                            // the session falls outside the activity window.
+                            HStack {
+                                LiveSessionActivityIndicator(
+                                    agent: session.agent,
+                                    lastEventAt: chatStore.snapshot.lastEventAt
+                                )
+                                Spacer()
+                            }
+                        }
                         Color.clear.frame(height: 1).id("ios-session-detail-bottom")
                     }
                     .padding(.horizontal, 16).padding(.vertical, 4)
