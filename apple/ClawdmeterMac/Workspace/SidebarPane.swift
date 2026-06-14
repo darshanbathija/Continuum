@@ -25,8 +25,14 @@ struct SidebarPane: View {
     /// Settings → Spawn: whether the Spawn button shows here. Open spawn
     /// groups still render below regardless, so hiding never orphans one.
     @AppStorage(SpawnSettings.showButtonKey) private var spawnShowButton: Bool = SpawnSettings.showButtonDefault
+    /// Settings → Spawn default agent, used to seed the one-click default spawn
+    /// (clicking the Spawn row body) the same way `SpawnConfigSheet` seeds it.
+    @AppStorage(SpawnSettings.defaultAgentKey) private var spawnDefaultAgentRaw: String = SpawnSettings.defaultAgentDefault
     /// Drives the hover-revealed gear that deep-links to Settings → Spawn.
     @State private var spawnButtonHovering: Bool = false
+    /// Re-entrancy guard so a double-click on the Spawn row body can't fire
+    /// two default-spawn batches before the first group lands.
+    @State private var isSpawningDefault: Bool = false
 
     /// v0.5.4: rename sheet state. v0.5.9: split into a dedicated bool
     /// + data target — the `Binding(get:set:)` pattern for `isPresented:`
@@ -618,7 +624,9 @@ struct SidebarPane: View {
     /// Projects header; the resulting spawn groups list above all projects
     /// because they're home-directory agent batches, not repo sessions.
     private var spawnButton: some View {
-        Button(action: { showingSpawnSheet = true }) {
+        // The row BODY one-click-spawns the default grid; the trailing "+"
+        // (and the hover gear) are sibling overlay buttons hit-tested above it.
+        Button(action: { spawnDefaultGroup() }) {
             HStack(spacing: 7) {
                 Image(systemName: "square.grid.2x2")
                     .font(.system(size: 11.5, weight: .semibold))
@@ -627,11 +635,9 @@ struct SidebarPane: View {
                     .font(TahoeFont.body(12, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer()
-                // The "+" stays put; on hover a settings gear (overlay below)
-                // slides in just to its left, so the gear never covers the "+".
-                Image(systemName: "plus")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(t.fg3)
+                // Reserve the trailing lane the overlay buttons occupy so the
+                // label never tucks under the "+"/gear.
+                Color.clear.frame(width: 24, height: 1)
             }
             .padding(.horizontal, 10)
             .frame(height: 30)
@@ -646,40 +652,107 @@ struct SidebarPane: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(HoverableButtonStyle(cornerRadius: 10))
-        // Sibling overlay (not nested in the label) so the gear's tap is
-        // hit-tested above the main button and opens Settings → Spawn
-        // instead of the spawn config sheet.
+        // Sibling overlay (not nested in the label) so each tap is hit-tested
+        // ABOVE the main button: the gear opens Settings → Spawn, the "+"
+        // opens the config tray. The row body falls through to default-spawn.
         .overlay(alignment: .trailing) {
-            if spawnButtonHovering {
-                Button {
-                    NotificationCenter.default.post(
-                        name: .clawdmeterOpenSettingsSection,
-                        object: nil,
-                        userInfo: ["section": "spawn"]
-                    )
-                } label: {
-                    Image(systemName: "gearshape.fill")
+            HStack(spacing: 2) {
+                if spawnButtonHovering {
+                    Button {
+                        NotificationCenter.default.post(
+                            name: .clawdmeterOpenSettingsSection,
+                            object: nil,
+                            userInfo: ["section": "spawn"]
+                        )
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(t.fg2)
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Spawn settings")
+                    .accessibilityLabel("Open Spawn settings")
+                    .accessibilityIdentifier("code.sidebar.spawn.settings")
+                }
+                // Persistent "+" opens the config tray (pick count + agent mix).
+                Button { showingSpawnSheet = true } label: {
+                    Image(systemName: "plus")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(t.fg2)
+                        .foregroundStyle(spawnButtonHovering ? t.fg2 : t.fg3)
                         .frame(width: 22, height: 22)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                // Sit to the LEFT of the persistent "+" (which ends ~10pt from
-                // the trailing edge and is ~10pt wide) so the two don't overlap.
-                .padding(.trailing, 24)
-                .help("Spawn settings")
-                .accessibilityLabel("Open Spawn settings")
-                .accessibilityIdentifier("code.sidebar.spawn.settings")
+                .help("Configure a new spawn — pick count and agent mix")
+                .accessibilityLabel("Configure a new spawn")
+                .accessibilityIdentifier("code.sidebar.spawn.configure")
             }
+            .padding(.trailing, 6)
         }
         .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.bottom, 8)
         .onHover { spawnButtonHovering = $0 }
-        .help("Open a grid of agent terminal sessions in your home directory")
+        .help("Spawn the default grid of agent terminals in your home directory — click + to configure")
         .accessibilityIdentifier("code.sidebar.spawn")
         .sheet(isPresented: $showingSpawnSheet) {
             SpawnConfigSheet(store: spawnStore, onSpawned: clearModelSelectionForSpawn)
+        }
+    }
+
+    /// One-click default spawn from the Spawn row body. Seeds the allocation
+    /// exactly like `SpawnConfigSheet` (Settings → Spawn default count + agent,
+    /// falling back to the first spawnable agent) so the row body and the "+"
+    /// tray agree on what "default" means. Falls back to opening the tray when
+    /// nothing is runnable, so the user sees the install/enable options instead
+    /// of a silent no-op.
+    private func spawnDefaultGroup() {
+        guard !isSpawningDefault else { return }
+        let availableAgents = SpawnPlan.selectableAgents.filter {
+            SpawnModeStore.agentAvailability($0).isSpawnable
+        }
+        let sessionCount = SpawnSettings.sanitizedSessionCount(
+            UserDefaults.standard.object(forKey: SpawnSettings.defaultSessionCountKey) as? Int
+                ?? SpawnSettings.defaultSessionCountDefault
+        )
+        let preferred = SpawnSettings.sanitizedAgent(spawnDefaultAgentRaw)
+        let counts: [AgentKind: Int]
+        if sessionCount > 0, availableAgents.contains(preferred) {
+            counts = [preferred: sessionCount]
+        } else {
+            counts = SpawnPlan.seededAllocation(total: sessionCount, availableAgents: availableAgents)
+        }
+        let allocations: [SpawnAgentAllocation] = SpawnPlan.selectableAgents.compactMap { agent in
+            guard let count = counts[agent], count > 0 else { return nil }
+            return SpawnAgentAllocation(agent: agent, count: count)
+        }
+        guard !allocations.isEmpty else {
+            showingSpawnSheet = true
+            return
+        }
+        isSpawningDefault = true
+        Task { @MainActor in
+            let result = await spawnStore.createGroup(allocations: allocations)
+            isSpawningDefault = false
+            guard let group = result.group else {
+                // Couldn't start anything — surface the tray so the user sees why.
+                showingSpawnSheet = true
+                return
+            }
+            if !result.failedSlotTitles.isEmpty {
+                NotificationCenter.default.post(
+                    name: .clawdmeterShowTransientToast,
+                    object: nil,
+                    userInfo: ["toast": TransientToast(
+                        title: "Spawned \(group.tiles.count) of \(group.tiles.count + result.failedSlotTitles.count) sessions — \(result.failedSlotTitles.joined(separator: ", ")) failed to start",
+                        severity: .failure
+                    )]
+                )
+            }
+            // createGroup already selects the new group; clear the center pane
+            // so the spawn grid takes it (same as the tray's onSpawned).
+            clearModelSelectionForSpawn()
         }
     }
 
