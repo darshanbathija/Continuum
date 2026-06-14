@@ -307,10 +307,10 @@ struct WorkspaceTabStrip: View {
     }
 
     /// Leading mark for a tab. `.provider` is the Chrome-tab favicon: a
-    /// monochrome provider glyph tile with a 6px status dot (live-green while
-    /// running, provider color otherwise — the only place color appears in the
-    /// strip). `EmptyView` for `.none` adds no spacing, matching the prior
-    /// text-only draft tab.
+    /// monochrome provider glyph tile (running/active state is conveyed by the
+    /// active-tab accent underline, not a status dot — the green live dot was
+    /// removed per user request). `EmptyView` for `.none` adds no spacing,
+    /// matching the prior text-only draft tab.
     @ViewBuilder
     private func leadingMark(_ leading: TabLeading, isActive: Bool) -> some View {
         switch leading {
@@ -320,14 +320,10 @@ struct WorkspaceTabStrip: View {
             Image(systemName: name)
                 .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(isActive ? t.accent : t.fg3)
-        case .provider(let provider, let live):
-            ZStack(alignment: .bottomTrailing) {
-                TahoeProviderGlyph(provider: provider, size: 16)
-                ProviderDot(provider, size: 6, live: live)
-                    .offset(x: 1.5, y: 1.5)
-            }
-            .frame(width: 16, height: 16)
-            .opacity(isActive ? 1 : 0.85)
+        case .provider(let provider, _):
+            TahoeProviderGlyph(provider: provider, size: 16)
+                .frame(width: 16, height: 16)
+                .opacity(isActive ? 1 : 0.85)
         }
     }
 
