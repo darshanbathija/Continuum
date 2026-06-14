@@ -58,6 +58,13 @@ public struct MacMenubarPopover: View {
 
     @State private var enabledProviderIDs = ProviderEnablement.enabledProviderIDs(for: .menuBar)
 
+    /// Which provider tab the pointer is currently over. Drives the
+    /// barely-there hover fill on non-active tabs (active tabs already
+    /// carry the selected capsule). A single `@State` on the parent —
+    /// rather than per-tab state — keeps `providerTab` a plain builder
+    /// (matches the `OpenCodeProviderPickerSheet` hover pattern).
+    @State private var hoveredProvider: TahoeProvider? = nil
+
     private let allProviders = TahoeProvider.allCases.filter {
         ProviderRegistry.descriptor(id: $0.rawValue)?.capabilities.contains(.menuBar) ?? false
     }
@@ -300,6 +307,9 @@ public struct MacMenubarPopover: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
+                // TahoeGhostButton already paints a hover fill; add the
+                // pointing-hand cursor so the footer reads as clickable too.
+                .pointerStyle(.link)
 
                 TahoeGhostButton(size: .s, action: onSyncIPhone) {
                     HStack(spacing: 4) {
@@ -308,6 +318,7 @@ public struct MacMenubarPopover: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
+                .pointerStyle(.link)
             }
         }
         .padding(14)
@@ -318,6 +329,11 @@ public struct MacMenubarPopover: View {
         // self-owned driver never bumps `epoch`, so the preview / legacy
         // paths keep seed-once behavior.
         .onChange(of: selectionDriver.epoch) { _, _ in
+            // The NSPopover + NSHostingController is reused across opens, so a
+            // hover left set at close time would paint a phantom wash on a tab
+            // the pointer isn't over until the user moves the mouse. The
+            // controller bumps `epoch` on every open, so clear it here.
+            hoveredProvider = nil
             let requested = enabledProviders.contains(selectionDriver.requested)
                 ? selectionDriver.requested
                 : (enabledProviders.first ?? selectionDriver.requested)
@@ -326,10 +342,20 @@ public struct MacMenubarPopover: View {
             tx.disablesAnimations = true
             withTransaction(tx) { selected = requested }
         }
+        // Belt-and-suspenders for the seed-once / self-owned-driver paths that
+        // never bump `epoch`: clear the hover when the popover detaches so it
+        // can't survive into the next open.
+        .onDisappear { hoveredProvider = nil }
         .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
             enabledProviderIDs = ProviderEnablement.enabledProviderIDs(for: .menuBar)
             if !enabledProviders.contains(selected), let first = enabledProviders.first {
                 selected = first
+            }
+            // A hovered tab may have just been removed from the segmented
+            // control; onHover(false) won't fire for a view that's gone, so
+            // drop a now-stale hover to avoid a phantom wash if it re-enables.
+            if let h = hoveredProvider, !enabledProviders.contains(h) {
+                hoveredProvider = nil
             }
         }
     }
@@ -350,6 +376,7 @@ public struct MacMenubarPopover: View {
     @ViewBuilder
     private func providerTab(_ p: TahoeProvider) -> some View {
         let active = p == selectedProvider
+        let hovered = hoveredProvider == p
         Button(action: ContinuumAnalytics.wrapButton(
                 "menubar_select_provider",
                 {
@@ -378,11 +405,23 @@ public struct MacMenubarPopover: View {
                     Capsule(style: .continuous)
                         .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.10) : .white)
                         .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0, y: 1)
+                } else if hovered {
+                    // Barely-there wash on the tab the pointer is over, so an
+                    // unselected provider reads as clickable. DESIGN.md hover
+                    // transition is 120–160ms ease; the active capsule swap stays
+                    // instant (animation(nil, value: selectedProvider) below).
+                    Capsule(style: .continuous).fill(t.hover)
                 }
             }
             .animation(nil, value: selectedProvider)
+            .animation(.easeOut(duration: 0.12), value: hovered)
         }
         .buttonStyle(.plain)
+        // Pointing-hand cursor + hover tracking so the tab reads as interactive.
+        .pointerStyle(.link)
+        .onHover { inside in
+            hoveredProvider = inside ? p : (hoveredProvider == p ? nil : hoveredProvider)
+        }
     }
 }
 
