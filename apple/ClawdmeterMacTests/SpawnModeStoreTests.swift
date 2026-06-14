@@ -207,6 +207,97 @@ final class SpawnModeStoreTests: XCTestCase {
         await drainTeardown(store)
     }
 
+    // MARK: - Resize (grid header size toggle)
+
+    func testResizeLargerGrowsCurrentGroupInPlace() async {
+        let store = makeStore()
+        let result = await store.createGroup(allocations: [
+            SpawnAgentAllocation(agent: .claude, count: 2),
+        ])
+        guard let group = result.group else { return XCTFail("expected a group") }
+        XCTAssertEqual(group.capacity, 2)
+
+        let ok = await store.resizeGroup(groupId: group.id, to: 4)
+        XCTAssertTrue(ok)
+        XCTAssertEqual(store.groups.count, 1, "growing reuses the same spawn group")
+        let grown = store.group(id: group.id)
+        XCTAssertEqual(grown?.tiles.count, 4)
+        XCTAssertEqual(grown?.capacity, 4, "capacity bumps so the grid reshapes to 4 cells")
+        XCTAssertEqual(grown?.tiles.map(\.agent), [.claude, .claude, .claude, .claude],
+                       "new tiles refill into the dominant agent")
+        XCTAssertEqual(grown?.tiles.map(\.title),
+                       ["Claude 1", "Claude 2", "Claude 3", "Claude 4"],
+                       "numbering continues past the existing tiles")
+        XCTAssertEqual(store.selectedGroupId, group.id, "selection stays on the grown spawn")
+        store.closeGroup(id: group.id)
+        await drainTeardown(store)
+    }
+
+    func testResizeSmallerOpensNewSpawnAndLeavesOriginal() async {
+        let store = makeStore()
+        let first = await store.createGroup(allocations: [
+            SpawnAgentAllocation(agent: .claude, count: 4),
+        ])
+        guard let original = first.group else { return XCTFail("expected a group") }
+
+        let ok = await store.resizeGroup(groupId: original.id, to: 2)
+        XCTAssertTrue(ok)
+        XCTAssertEqual(store.groups.count, 2, "a smaller target opens a new spawn")
+        XCTAssertEqual(store.group(id: original.id)?.tiles.count, 4,
+                       "the original spawn's live agents are untouched")
+        guard let newGroup = store.groups.first(where: { $0.id != original.id }) else {
+            return XCTFail("expected a second group")
+        }
+        XCTAssertEqual(newGroup.name, "Spawn 2")
+        XCTAssertEqual(newGroup.tiles.count, 2)
+        XCTAssertEqual(store.selectedGroupId, newGroup.id, "selection follows the new spawn")
+        store.closeGroup(id: original.id)
+        store.closeGroup(id: newGroup.id)
+        await drainTeardown(store)
+    }
+
+    func testResizeEqualIsNoOp() async {
+        let store = makeStore()
+        let result = await store.createGroup(allocations: [
+            SpawnAgentAllocation(agent: .claude, count: 2),
+        ])
+        guard let group = result.group else { return XCTFail("expected a group") }
+        let ok = await store.resizeGroup(groupId: group.id, to: 2)
+        XCTAssertTrue(ok)
+        XCTAssertEqual(store.groups.count, 1)
+        XCTAssertEqual(store.group(id: group.id)?.tiles.count, 2)
+        store.closeGroup(id: group.id)
+        await drainTeardown(store)
+    }
+
+    func testResizeSmallerPreservesDominantAgentMix() async {
+        let store = makeStore()
+        let first = await store.createGroup(allocations: [
+            SpawnAgentAllocation(agent: .claude, count: 2),
+            SpawnAgentAllocation(agent: .codex, count: 2),
+        ])
+        guard let original = first.group else { return XCTFail("expected a group") }
+
+        // Shrink 2 Claude · 2 Codex → 2: rebalanced trims from the bottom of
+        // display order (codex after claude), so the new spawn keeps Claude.
+        let ok = await store.resizeGroup(groupId: original.id, to: 2)
+        XCTAssertTrue(ok)
+        guard let newGroup = store.groups.first(where: { $0.id != original.id }) else {
+            return XCTFail("expected a second group")
+        }
+        XCTAssertEqual(newGroup.tiles.map(\.agent), [.claude, .claude])
+        store.closeGroup(id: original.id)
+        store.closeGroup(id: newGroup.id)
+        await drainTeardown(store)
+    }
+
+    func testResizeMissingGroupReturnsFalse() async {
+        let store = makeStore()
+        let ok = await store.resizeGroup(groupId: UUID(), to: 4)
+        XCTAssertFalse(ok)
+        await drainTeardown(store)
+    }
+
     func testStaleExitDoesNotReinsertAfterClose() async {
         let store = makeStore()
         let result = await store.createGroup(allocations: [

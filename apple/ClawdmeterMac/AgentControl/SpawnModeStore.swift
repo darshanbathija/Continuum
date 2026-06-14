@@ -30,8 +30,9 @@ struct SpawnGroup: Identifiable {
     /// Grid cell count the spawn opened at (= tiles that actually launched).
     /// Closing a tile leaves an empty cell that hosts a "Start New Session"
     /// button rather than reflowing the grid, so a 6-spawn keeps presenting
-    /// 6 cells and can be refilled to its original size.
-    let capacity: Int
+    /// 6 cells and can be refilled to its original size. Mutable so the grid
+    /// header's size toggle can grow a spawn in place (4 → 6 → 8).
+    var capacity: Int
     var tiles: [SpawnTile]
 
     /// "4 Claude · 2 Codex" — sidebar subtitle, most-to-least like the grid.
@@ -258,6 +259,59 @@ final class SpawnModeStore: ObservableObject {
                 || groups.contains(where: { $0.tiles.contains(where: { $0.id == tileId }) })
         else { return }
         exitedTileIds.insert(tileId)
+    }
+
+    // MARK: - Resize (grid header size toggle)
+
+    /// Toggle a spawn's size from the grid header. A LARGER target grows the
+    /// current group in place — capacity is bumped and the new cells refill
+    /// with the dominant (first-seen, i.e. largest-kind) agent. A SMALLER
+    /// target opens a NEW spawn group at that size preserving the agent mix,
+    /// per product: clicking a lower number starts a fresh spawn rather than
+    /// killing live agents, so no confirmation is needed. Equal is a no-op.
+    /// Returns false if any tile failed to spawn so the caller can toast.
+    @discardableResult
+    func resizeGroup(groupId: UUID, to targetTotal: Int) async -> Bool {
+        guard targetTotal > 0, let current = group(id: groupId) else { return false }
+        let have = current.tiles.count
+        if targetTotal == have { return true }
+
+        if targetTotal > have {
+            // Grow in place: bump capacity so addTile accepts the new cells,
+            // then refill into the dominant agent. tile[0] is that agent —
+            // slots spawn most-to-least, so the first tile is the largest kind.
+            if let index = groups.firstIndex(where: { $0.id == groupId }) {
+                groups[index].capacity = targetTotal
+            }
+            let agent = current.tiles.first?.agent ?? .claude
+            var allOK = true
+            for _ in 0..<(targetTotal - have) {
+                let added = await addTile(groupId: groupId, agent: agent)
+                allOK = allOK && added
+            }
+            return allOK
+        }
+
+        // Smaller target → new spawn group preserving the current mix scaled
+        // down to the new total (trimmed from the bottom of display order).
+        let result = await createGroup(allocations: shrunkAllocations(of: current, to: targetTotal))
+        return result.group != nil && result.failedSlotTitles.isEmpty
+    }
+
+    /// The current group's agent mix rebalanced down to `total`, as ordered
+    /// allocations for a new (smaller) spawn group.
+    private func shrunkAllocations(of group: SpawnGroup, to total: Int) -> [SpawnAgentAllocation] {
+        var counts: [AgentKind: Int] = [:]
+        var order: [AgentKind] = []
+        for tile in group.tiles {
+            if counts[tile.agent] == nil { order.append(tile.agent) }
+            counts[tile.agent, default: 0] += 1
+        }
+        let rebalanced = SpawnPlan.rebalancedAllocation(counts, total: total, availableAgents: order)
+        return order.compactMap { agent in
+            let count = rebalanced[agent] ?? 0
+            return count > 0 ? SpawnAgentAllocation(agent: agent, count: count) : nil
+        }
     }
 
     // MARK: - Lifecycle
