@@ -78,6 +78,9 @@ public struct STTModelDescriptor: Identifiable, Hashable, Sendable {
 public enum STTModelCatalog {
     public static let voiceModelsDirectoryName = "VoiceModels"
     public static let defaultModelID = "base"
+    /// Stable id for the built-in Apple Speech engine. It carries no download,
+    /// so it never appears under `VoiceModels/` on disk.
+    public static let appleSpeechModelID = "apple-speech"
     public static let largeDownloadWarningBytes: Int64 = 500_000_000
     private static let requiredModelNames = [
         "AudioEncoder",
@@ -85,7 +88,31 @@ public enum STTModelCatalog {
         "TextDecoder",
     ]
 
-    public static let models: [STTModelDescriptor] = [
+    /// The built-in Apple Speech option. It is always available (no download),
+    /// always supported, and heads the unified model list so it reads as the
+    /// default the moment Voice settings open.
+    public static let appleSpeech = STTModelDescriptor(
+        id: appleSpeechModelID,
+        engine: .appleSpeech,
+        displayName: "Apple Speech",
+        sizeLabel: "Built in",
+        approximateBytes: 0,
+        tagline: "macOS system speech recognition. No download required.",
+        quality: 3,
+        speed: 4,
+        languageCoverage: .multilingual
+    )
+
+    /// Every selectable engine/model in display order — Apple Speech first,
+    /// then the downloadable local models. The picker abstracts the engine
+    /// away: choosing any row routes to that model's engine automatically.
+    public static var models: [STTModelDescriptor] {
+        [appleSpeech] + downloadableModels
+    }
+
+    /// Downloadable local models (WhisperKit + Parakeet). Apple Speech is the
+    /// non-downloadable built-in and lives outside this list.
+    public static let downloadableModels: [STTModelDescriptor] = [
         // ── WhisperKit (Whisper-family, multilingual) ──────────────────
         STTModelDescriptor(
             id: "tiny",
@@ -209,6 +236,14 @@ public enum STTModelCatalog {
     /// Models for a given engine, in catalog (display) order.
     public static func models(for engine: STTEngine) -> [STTModelDescriptor] {
         models.filter { $0.engine == engine }
+    }
+
+    /// The model id currently active for the given preferences. Apple Speech
+    /// ignores `whisperModelID` (it has no download), so the active id is the
+    /// engine when Apple Speech is selected and the stored model otherwise.
+    /// This is what the unified picker highlights.
+    public static func activeModelID(for preferences: VoicePresentationPreferences) -> String {
+        preferences.sttEngine == .appleSpeech ? appleSpeechModelID : preferences.whisperModelID
     }
 
     /// Whether the host hardware can run a given model (Parakeet needs the ANE).
