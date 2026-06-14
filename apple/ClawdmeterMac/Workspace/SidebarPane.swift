@@ -306,8 +306,8 @@ struct SidebarPane: View {
             guard model.repos.contains(where: { !$0.recentSessions.isEmpty }) else { return }
             externalActivityNow = now
         }
-        .task(id: visibleWorktreePaths) {
-            worktreeDiffs.scheduleRefresh(paths: visibleWorktreePaths)
+        .onChange(of: visibleWorktreePaths) { _, paths in
+            worktreeDiffs.scheduleRefresh(paths: paths)
         }
     }
 
