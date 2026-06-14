@@ -1,11 +1,17 @@
 import Foundation
 
-/// Line deltas for a worktree branch relative to the repo's default branch.
+/// Line deltas for a worktree branch relative to the repo's default branch,
+/// plus any current staged/unstaged edits on top of HEAD.
 struct WorktreeDiffStat: Equatable, Sendable {
     var additions: Int
     var deletions: Int
 
     var isEmpty: Bool { additions == 0 && deletions == 0 }
+
+    mutating func add(_ other: WorktreeDiffStat) {
+        additions += other.additions
+        deletions += other.deletions
+    }
 }
 
 enum WorktreeDiffFormatting {
@@ -25,7 +31,7 @@ enum WorktreeDiffFormatting {
     }
 }
 
-/// Polls `git diff --numstat <base>...HEAD` for visible sidebar worktrees.
+/// Polls git numstats for visible sidebar worktrees.
 @MainActor
 final class WorktreeDiffTracker: ObservableObject {
     @Published private(set) var stats: [String: WorktreeDiffStat] = [:]
@@ -33,6 +39,8 @@ final class WorktreeDiffTracker: ObservableObject {
     private let runner: ShellRunning
     private let gitLocator: @Sendable () -> String?
     private var refreshTask: Task<Void, Never>?
+    private var isRefreshing = false
+    private var pendingRefreshPaths: [String]?
 
     init(
         runner: ShellRunning = ShellRunner.shared,
@@ -60,11 +68,16 @@ final class WorktreeDiffTracker: ObservableObject {
     func refresh(paths: [String]) async {
         guard let git = gitLocator() else { return }
         let unique = Array(Set(paths))
+        if isRefreshing {
+            pendingRefreshPaths = unique
+            return
+        }
         guard !unique.isEmpty else {
             stats = [:]
             return
         }
 
+        isRefreshing = true
         var next: [String: WorktreeDiffStat] = [:]
         next.reserveCapacity(unique.count)
         await withTaskGroup(of: (String, WorktreeDiffStat?).self) { group in
@@ -80,7 +93,14 @@ final class WorktreeDiffTracker: ObservableObject {
                 }
             }
         }
-        stats = next
+        isRefreshing = false
+        if stats != next {
+            stats = next
+        }
+        if let pendingRefreshPaths {
+            self.pendingRefreshPaths = nil
+            scheduleRefresh(paths: pendingRefreshPaths)
+        }
     }
 
     nonisolated private static func loadStat(
@@ -91,6 +111,8 @@ final class WorktreeDiffTracker: ObservableObject {
         guard await refExists(git: git, cwd: cwd, ref: "HEAD", runner: runner) else {
             return nil
         }
+        var total = WorktreeDiffStat(additions: 0, deletions: 0)
+        var foundBase = false
         for base in ["main", "master", "origin/main", "origin/master"] {
             guard await refExists(git: git, cwd: cwd, ref: base, runner: runner) else { continue }
             if let stat = await numstatTotal(
@@ -99,15 +121,44 @@ final class WorktreeDiffTracker: ObservableObject {
                 arguments: ["-C", cwd, "diff", "--numstat", "\(base)...HEAD"],
                 runner: runner
             ) {
-                return stat
+                total.add(stat)
+                foundBase = true
+                break
             }
         }
-        return await numstatTotal(
+        if foundBase {
+            // Supplement the committed branch delta with any uncommitted edits
+            // on top of HEAD. `--cached` (index vs HEAD) and the plain numstat
+            // (working tree vs index) are disjoint, so summing them yields the
+            // full working-tree-vs-HEAD delta without overlap.
+            if let staged = await numstatTotal(
+                git: git,
+                cwd: cwd,
+                arguments: ["-C", cwd, "diff", "--cached", "--numstat"],
+                runner: runner
+            ) {
+                total.add(staged)
+            }
+            if let unstaged = await numstatTotal(
+                git: git,
+                cwd: cwd,
+                arguments: ["-C", cwd, "diff", "--numstat"],
+                runner: runner
+            ) {
+                total.add(unstaged)
+            }
+        } else if let headStat = await numstatTotal(
             git: git,
             cwd: cwd,
+            // No default branch to diff against; `git diff HEAD` already covers
+            // both staged and unstaged edits, so it is the complete total on its
+            // own. Adding `--cached`/`--numstat` here would double-count.
             arguments: ["-C", cwd, "diff", "--numstat", "HEAD"],
             runner: runner
-        )
+        ) {
+            total.add(headStat)
+        }
+        return total
     }
 
     nonisolated private static func refExists(

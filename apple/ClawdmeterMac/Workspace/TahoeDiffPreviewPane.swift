@@ -15,6 +15,9 @@ struct TahoeDiffPreviewPane: View {
     // lookups instead of re-scanning the whole `lines` array per file/row.
     @State private var index = DiffIndex()
     @State private var isLoading = false
+    @State private var isRefreshing = false
+    @State private var refreshQueued = false
+    @State private var autoRefreshTask: Task<Void, Never>?
     @State private var focusedPath: String?
     @State private var hoveredPath: String?
 
@@ -50,9 +53,14 @@ struct TahoeDiffPreviewPane: View {
             .background(t.dark ? Color.black.opacity(0.18) : Color.black.opacity(0.03))
         }
         .onAppear {
-            Task { await load() }
+            startAutoRefresh()
         }
-        .task(id: repoCwd) { await load() }
+        .onDisappear {
+            autoRefreshTask?.cancel()
+            autoRefreshTask = nil
+            refreshQueued = false
+        }
+        .task(id: repoCwd) { await load(showLoading: true) }
     }
 
     struct ActionDescriptor: Equatable {
@@ -564,8 +572,15 @@ struct TahoeDiffPreviewPane: View {
     }
 
     @MainActor
-    private func load() async {
-        isLoading = true
+    private func load(showLoading: Bool) async {
+        if isRefreshing {
+            refreshQueued = true
+            return
+        }
+        isRefreshing = true
+        if showLoading {
+            isLoading = true
+        }
         let cwd = repoCwd
         let (loaded, builtIndex) = await Task.detached(priority: .utility) { () -> ([DiffLine], DiffIndex) in
             let lines = Self.loadGitDiff(cwd: cwd)
@@ -576,7 +591,25 @@ struct TahoeDiffPreviewPane: View {
         }.value
         lines = loaded
         index = builtIndex
-        isLoading = false
+        if showLoading {
+            isLoading = false
+        }
+        isRefreshing = false
+        if refreshQueued {
+            refreshQueued = false
+            await load(showLoading: false)
+        }
+    }
+
+    private func startAutoRefresh() {
+        autoRefreshTask?.cancel()
+        autoRefreshTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { break }
+                await load(showLoading: false)
+            }
+        }
     }
 
     nonisolated private static func loadGitDiff(cwd: String) -> [DiffLine] {

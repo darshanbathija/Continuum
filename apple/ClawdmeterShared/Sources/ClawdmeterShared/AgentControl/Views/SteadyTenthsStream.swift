@@ -17,11 +17,9 @@ import SwiftUI
 ///      odometer roll). The *stream* carries the sense of motion, not the
 ///      digits.
 ///
-/// Color encodes **focus**, not activity (matching the worktree/branch-tab
-/// rule elsewhere in Continuum): a background session's packets are white
-/// (`monochrome: true`); the focused session's packets take the provider tint
-/// (`monochrome: false`). The readout digits are always the foreground color
-/// in both states.
+/// The packets use the passed working accent. Do not swap this to neutral gray:
+/// the canonical active-working stream is the terra-cotta/orange treatment from
+/// the design prototype. The readout digits are always the foreground color.
 ///
 /// Reduced motion: the packet animation freezes in its seeded positions while
 /// the readout keeps ticking — liveness is still conveyed by the changing
@@ -29,10 +27,8 @@ import SwiftUI
 ///
 /// Canonical spec: "Steady Tenths Stream — Loading / Active-Session Indicator".
 public struct SteadyTenthsStream: View {
-    /// Provider tint for the packets when focused (e.g. Claude `#D97757`).
+    /// Working accent for the packets (canonical value: `#D97757`).
     public let color: Color
-    /// Background (unfocused) session → white packets; focused → `color`.
-    public let monochrome: Bool
     /// When the agent started this work. `nil` → count from first render
     /// (the indicator only mounts while working, so first render ≈ work start).
     public let startedAt: Date?
@@ -59,7 +55,6 @@ public struct SteadyTenthsStream: View {
 
     public init(
         color: Color,
-        monochrome: Bool = false,
         startedAt: Date? = nil,
         digitColor: Color = .primary,
         streamWidth: CGFloat = 46,
@@ -70,7 +65,6 @@ public struct SteadyTenthsStream: View {
         seed: UInt64 = 9
     ) {
         self.color = color
-        self.monochrome = monochrome
         self.startedAt = startedAt
         self.digitColor = digitColor
         self.streamWidth = streamWidth
@@ -86,9 +80,9 @@ public struct SteadyTenthsStream: View {
     public var body: some View {
         HStack(alignment: .center, spacing: gap) {
             DataBus(
-                color: monochrome ? .white : color,
+                color: color,
                 railColor: digitColor.opacity(0.075),
-                minOpacity: monochrome ? 0.42 : 0.50,
+                minOpacity: 0.50,
                 maxOpacity: 1.0,
                 width: streamWidth,
                 height: streamHeight,

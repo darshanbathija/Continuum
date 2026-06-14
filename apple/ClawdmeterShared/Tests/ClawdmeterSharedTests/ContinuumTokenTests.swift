@@ -51,6 +51,11 @@ final class ContinuumTokenTests: XCTestCase {
         XCTAssertEqual(Set(dots).count, dots.count)
     }
 
+    func test_liveSessionActivityIndicator_usesOrangeWorkingStream() {
+        XCTAssertEqual(LiveSessionActivityIndicator.packetColor, ContinuumTokens.hex(0xD97757))
+        XCTAssertNotEqual(LiveSessionActivityIndicator.packetColor, TahoeProvider.codex.dot)
+    }
+
     func test_meterFill_T2Gradients_matchDesignSpec() {
         XCTAssertEqual(TahoeProvider.claude.meterFill, [ContinuumTokens.hex(0xE68A66), ContinuumTokens.hex(0xC9603F)])
         XCTAssertEqual(TahoeProvider.codex.meterFill,  [ContinuumTokens.hex(0x9AA3AD), ContinuumTokens.hex(0x6E7681)])

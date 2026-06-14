@@ -208,6 +208,26 @@ struct PRCacheStateSnapshot: Codable, Equatable, Sendable {
         self.checksConclusion = checksConclusion
         self.updatedAt = updatedAt
     }
+
+    init(sessionId: UUID, mirrorState: PRMirror.PRState) {
+        self.init(
+            sessionId: sessionId,
+            prURL: mirrorState.url.absoluteString,
+            state: mirrorState.state.uppercased(),
+            checksConclusion: nil,
+            updatedAt: mirrorState.lastChecked
+        )
+    }
+
+    init(sessionId: UUID, coordinatorSnapshot: PRCoordinator.Snapshot) {
+        self.init(
+            sessionId: sessionId,
+            prURL: coordinatorSnapshot.url.absoluteString,
+            state: coordinatorSnapshot.state.uppercased(),
+            checksConclusion: coordinatorSnapshot.checksRollup,
+            updatedAt: coordinatorSnapshot.lastChecked
+        )
+    }
 }
 
 struct CheckpointStateSnapshot: Codable, Equatable, Identifiable, Sendable {

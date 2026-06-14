@@ -43,25 +43,6 @@ public enum TranscriptEditedFileChipStripModel {
             deletions: hidden.reduce(0) { $0 + $1.deletions }
         )
     }
-
-    public static func systemImage(for path: String) -> String {
-        switch (path as NSString).pathExtension.lowercased() {
-        case "swift": return "swift"
-        case "md", "markdown": return "doc.richtext"
-        case "json", "yml", "yaml", "toml": return "curlybraces"
-        case "png", "jpg", "jpeg", "gif", "webp", "svg": return "photo"
-        case "html", "htm": return "safari"
-        case "sh", "bash", "zsh": return "terminal"
-        default: return "doc.text"
-        }
-    }
-
-    public static func iconTint(for path: String) -> Color {
-        switch (path as NSString).pathExtension.lowercased() {
-        case "swift": return Color.orange
-        default: return Color.secondary
-        }
-    }
 }
 
 /// End-of-turn chip strip for edited files. Shows the first few files with
@@ -153,9 +134,7 @@ public struct TranscriptEditedFileChipStripView: View {
 
     private func fileChip(_ file: TranscriptEditedFile) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: TranscriptEditedFileChipStripModel.systemImage(for: file.filePath))
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(TranscriptEditedFileChipStripModel.iconTint(for: file.filePath))
+            TechStackIconView(path: file.filePath, size: 12)
             Text(file.basename)
                 .font(TahoeFont.body(11, weight: .semibold))
                 .foregroundStyle(.primary)

@@ -140,6 +140,59 @@ final class WorkbenchStateTests: XCTestCase {
         XCTAssertEqual(reloaded.snapshot.checkpoints[sessionId]?.first?.turnId, "turn-1")
     }
 
+    func test_prCacheSnapshotFromMirrorStateNormalizesState() throws {
+        let sessionId = UUID()
+        let checkedAt = Date(timeIntervalSince1970: 123)
+        let mirrorState = PRMirror.PRState(
+            url: try XCTUnwrap(URL(string: "https://github.com/example/repo/pull/12")),
+            number: 12,
+            title: "Open branch status",
+            state: "open",
+            author: "octo",
+            additions: 4,
+            deletions: 1,
+            body: "",
+            reviewState: nil,
+            lastChecked: checkedAt
+        )
+
+        let cache = PRCacheStateSnapshot(sessionId: sessionId, mirrorState: mirrorState)
+
+        XCTAssertEqual(cache.sessionId, sessionId)
+        XCTAssertEqual(cache.prURL, "https://github.com/example/repo/pull/12")
+        XCTAssertEqual(cache.state, "OPEN")
+        XCTAssertNil(cache.checksConclusion)
+        XCTAssertEqual(cache.updatedAt, checkedAt)
+    }
+
+    func test_prCacheSnapshotFromCoordinatorSnapshotCarriesChecks() throws {
+        let sessionId = UUID()
+        let checkedAt = Date(timeIntervalSince1970: 456)
+        let snapshot = PRCoordinator.Snapshot(
+            url: try XCTUnwrap(URL(string: "https://github.com/example/repo/pull/13")),
+            number: 13,
+            title: "Merge branch status",
+            state: "merged",
+            author: "octo",
+            additions: 2,
+            deletions: 2,
+            body: "",
+            reviewState: "APPROVED",
+            checksRollup: "success",
+            checks: [],
+            lastChecked: checkedAt,
+            source: .daemon
+        )
+
+        let cache = PRCacheStateSnapshot(sessionId: sessionId, coordinatorSnapshot: snapshot)
+
+        XCTAssertEqual(cache.sessionId, sessionId)
+        XCTAssertEqual(cache.prURL, "https://github.com/example/repo/pull/13")
+        XCTAssertEqual(cache.state, "MERGED")
+        XCTAssertEqual(cache.checksConclusion, "success")
+        XCTAssertEqual(cache.updatedAt, checkedAt)
+    }
+
     func test_latestCheckpointIgnoresSafetyRestoreSnapshots() {
         let sessionId = UUID()
         let state = WorkbenchState(store: WorkbenchStateStore(storeURL: storeURL))

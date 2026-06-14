@@ -404,6 +404,56 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.workspaceDraftTabs(in: key).map(\.id), [first.id, second.id])
     }
 
+    func test_consumingWorkspaceDraftForegroundsSpawnedSessionInsteadOfSurvivingDraft() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceDraftFirstSendSelection")
+        addTeardownBlock {
+            await registry.closeEventStoreForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let source = try await registry.create(
+            repoKey: "/repo",
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "source",
+            worktreePath: "/repo/.claude/worktrees/kolkata",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+        let key = try XCTUnwrap(WorkspaceKey.of(source))
+        let survivingDraft = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .claude, modelId: "claude-sonnet-4-6", effort: .high, mode: .worktree, planMode: false)
+        ))
+        let consumedDraft = try XCTUnwrap(model.openDraftWorkspaceTab(
+            from: source,
+            defaults: ComposerStore.ChipDefaults(agent: .codex, modelId: "gpt-5.5", effort: .max, mode: .worktree, planMode: false)
+        ))
+        let spawned = try await registry.create(
+            repoKey: "/repo",
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "remove the % number",
+            worktreePath: "/repo/.claude/worktrees/kolkata",
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: .worktree
+        )
+
+        model.consumeDraftWorkspaceTab(consumedDraft, opening: spawned)
+
+        XCTAssertEqual(model.workspaceDraftTabs(in: key).map(\.id), [survivingDraft.id])
+        XCTAssertNil(model.selectedWorkspaceDraftTabId)
+        XCTAssertNil(model.draftWorkspaceTab)
+        XCTAssertEqual(model.openSessionId, spawned.id)
+        XCTAssertNil(model.selectedWorkspaceTerminalTabId)
+        XCTAssertNil(model.selectedWorkspaceDocumentTabId)
+    }
+
     func test_workspaceTabChromeReflectsComposerModelToggleBeforeRegistryAdopt() async throws {
         let registryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("WorkspaceTabsDisplayAgent-\(UUID().uuidString).json")

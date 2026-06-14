@@ -539,9 +539,34 @@ public final class SessionChatStore {
             .filter { $0.kind == .userText }
             .prefix(4)
             .map { $0.body.trimmingCharacters(in: .whitespacesAndNewlines) }
-        if recentUserBodies.contains(pending.body) {
+        if recentUserBodies.contains(where: { Self.pendingBodyMatches(pending, userBody: $0) }) {
             pendingMessage = nil
         }
+    }
+
+    private static func pendingBodyMatches(_ pending: PendingMessage, userBody: String) -> Bool {
+        let trimmedUserBody = userBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedUserBody == pending.body { return true }
+        guard !pending.attachmentRefs.isEmpty else { return false }
+        let attachmentCount = pending.attachmentRefs.count
+        let pendingPrompt = bodyWithoutLeadingAttachmentRefs(pending.body, attachmentCount: attachmentCount)
+        if trimmedUserBody == pendingPrompt { return true }
+        return pendingPrompt == bodyWithoutLeadingAttachmentRefs(trimmedUserBody, attachmentCount: attachmentCount)
+    }
+
+    private static func bodyWithoutLeadingAttachmentRefs(_ body: String, attachmentCount: Int) -> String {
+        guard attachmentCount > 0 else {
+            return body.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var lines = body.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var stripped = 0
+        while stripped < attachmentCount,
+              let first = lines.first,
+              first.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("@/") {
+            lines.removeFirst()
+            stripped += 1
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// v0.7.4: ingest Codex SDK stream events into the same staging pipeline

@@ -104,6 +104,39 @@ final class WorkspaceKeyTests: XCTestCase {
         )
     }
 
+    func test_workspaceSessionTabLabelUsesAssistantSummaryFallback() {
+        let session = makeSession(
+            repo: "/Users/dev/conductor/repos/Clawdmeter",
+            repoDisplayName: "Clawdmeter",
+            cwd: "/Users/dev/conductor/workspaces/Clawdmeter/kigali"
+        )
+
+        XCTAssertEqual(
+            WorkspaceSessionTabLabel.labels(
+                for: session,
+                assistantSummary: "Restored active session stream animation behind branch names"
+            ),
+            WorkspaceSessionTabLabel.Labels(
+                title: "Restored active session stream animation…",
+                subtitle: "kigali"
+            )
+        )
+    }
+
+    func test_workspaceSessionShortSummaryCapsAtFiveWords() {
+        let session = makeSession(
+            repo: "/Users/dev/conductor/repos/Clawdmeter",
+            repoDisplayName: "Clawdmeter",
+            cwd: "/Users/dev/conductor/workspaces/Clawdmeter/kigali",
+            customName: "Fix active session tab naming and data stream"
+        )
+
+        XCTAssertEqual(
+            WorkspaceSessionTabLabel.shortSummary(for: session),
+            "Fix active session tab naming…"
+        )
+    }
+
     private func makeSession(
         repo: String,
         repoDisplayName: String = "repo",

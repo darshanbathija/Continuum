@@ -64,6 +64,8 @@ final class GitDiffStore: ObservableObject {
     private var watcher: DispatchSourceFileSystemObject?
     private var watchedFD: Int32 = -1
     private var refreshTask: Task<Void, Never>?
+    private var autoRefreshTask: Task<Void, Never>?
+    private var refreshQueued = false
 
     init(
         repoCwd: String,
@@ -87,6 +89,7 @@ final class GitDiffStore: ObservableObject {
     func start() {
         refresh()
         installIndexWatch()
+        startAutoRefresh()
     }
 
     func stop() {
@@ -95,12 +98,19 @@ final class GitDiffStore: ObservableObject {
         watchedFD = -1
         refreshTask?.cancel()
         refreshTask = nil
+        autoRefreshTask?.cancel()
+        autoRefreshTask = nil
+        refreshQueued = false
     }
 
     /// Re-run staged, unstaged, and untracked diff scans. Coalesces overlapping refreshes (vnode events
     /// can come in bursts — multiple edits within the same 100ms window
     /// shouldn't re-spawn git N times).
     func refresh() {
+        if isLoading {
+            refreshQueued = true
+            return
+        }
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             guard let self else { return }
@@ -111,6 +121,7 @@ final class GitDiffStore: ObservableObject {
 
     func reloadNowForTesting() async {
         refreshTask?.cancel()
+        refreshQueued = false
         await runDiff()
     }
 
@@ -119,8 +130,18 @@ final class GitDiffStore: ObservableObject {
             lastError = "git not found"
             return
         }
+        if isLoading {
+            refreshQueued = true
+            return
+        }
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            if refreshQueued {
+                refreshQueued = false
+                refresh()
+            }
+        }
         // T14 signpost: git-diff shell + parse cycle.
         let signpostID = OSSignpostID(log: chatPerfLog)
         os_signpost(.begin, log: chatPerfLog, name: "git-diff-run",
@@ -193,12 +214,36 @@ final class GitDiffStore: ObservableObject {
             let untracked = untrackedPaths.compactMap {
                 Self.syntheticUntrackedPatch(path: $0, repoCwd: repoCwd)
             }
-            self.files = parsed + untracked
+            let nextFiles = parsed + untracked
+            if !Self.hasSameContent(files, nextFiles) {
+                self.files = nextFiles
+            }
             self.lastError = nil
             self.lastRefresh = Date()
         } catch {
             lastError = (error as? ShellRunner.ShellError).map(humanize) ?? "\(error)"
             files = []
+        }
+    }
+
+    private func startAutoRefresh() {
+        autoRefreshTask?.cancel()
+        autoRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { break }
+                guard let self else { break }
+                self.refresh()
+            }
+        }
+    }
+
+    nonisolated private static func hasSameContent(_ lhs: [GitDiffFile], _ rhs: [GitDiffFile]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        return zip(lhs, rhs).allSatisfy { current, next in
+            current.path == next.path
+                && current.changeState == next.changeState
+                && current.rawPatch == next.rawPatch
         }
     }
 

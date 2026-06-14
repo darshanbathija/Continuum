@@ -19,13 +19,13 @@ public enum WorkspaceSessionTabLabel {
 
     public static let summaryWordLimit = 5
 
-    public static func labels(for session: AgentSession) -> Labels {
+    public static func labels(for session: AgentSession, assistantSummary: String? = nil) -> Labels {
         let repo = session.repoDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let branch = session.workspaceBranchLabel.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let summary = sessionSummary(for: session) {
+        if let summary = shortSummary(for: session, assistantSummary: assistantSummary) {
             return Labels(
-                title: ClawdmeterTextUtilities.firstWords(summary, summaryWordLimit),
+                title: summary,
                 subtitle: branch
             )
         }
@@ -44,7 +44,14 @@ public enum WorkspaceSessionTabLabel {
         return "\(repo) - \(branch)"
     }
 
-    private static func sessionSummary(for session: AgentSession) -> String? {
+    public static func shortSummary(for session: AgentSession, assistantSummary: String? = nil) -> String? {
+        guard let summary = sessionSummary(for: session, assistantSummary: assistantSummary) else {
+            return nil
+        }
+        return ClawdmeterTextUtilities.firstWords(summary, summaryWordLimit)
+    }
+
+    private static func sessionSummary(for session: AgentSession, assistantSummary: String?) -> String? {
         if let custom = session.customName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !custom.isEmpty {
             return custom
@@ -52,6 +59,10 @@ public enum WorkspaceSessionTabLabel {
         if let goal = session.goal?.trimmingCharacters(in: .whitespacesAndNewlines),
            !goal.isEmpty {
             return goal
+        }
+        if let assistantSummary = assistantSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assistantSummary.isEmpty {
+            return assistantSummary
         }
         return nil
     }

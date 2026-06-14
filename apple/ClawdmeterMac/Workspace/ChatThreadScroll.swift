@@ -268,31 +268,36 @@ struct ChatThreadScroll: View {
                 // scrolled away from the bottom (a new turn lands while
                 // they're reading history). Click → scroll-to-last-item.
                 if !userPinnedToBottom, !projection.turns.isEmpty {
-                    Button(action: ContinuumAnalytics.wrapButton(
-                            "jump_to_bottom",
-                            {
-                        autoScrollTask?.cancel()
-                        autoScrollTask = Task { @MainActor in
-                            await jumpToBottom(proxy, animated: true)
-                        }
-                    
+                    HStack(spacing: 0) {
+                        Button(action: ContinuumAnalytics.wrapButton(
+                                "jump_to_bottom",
+                                {
+                            autoScrollTask?.cancel()
+                            autoScrollTask = Task { @MainActor in
+                                await jumpToBottom(proxy, animated: true)
                             }
-                        )) {
-                        Label(
-                            unreadWhileReading > 0 ? "Jump to latest (\(unreadWhileReading))" : "Jump to latest",
-                            systemImage: "arrow.down.circle.fill"
-                        )
-                            .font(.system(size: 11, weight: .semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(ContinuumTokens.surface2, in: Capsule())
-                            .overlay(Capsule().stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+
+                                }
+                            )) {
+                            Label(
+                                unreadWhileReading > 0 ? "Jump to latest (\(unreadWhileReading))" : "Jump to latest",
+                                systemImage: "arrow.down.circle.fill"
+                            )
+                                .font(.system(size: 11, weight: .semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(ContinuumTokens.surface2, in: Capsule())
+                                .overlay(Capsule().stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .keyboardShortcut(.downArrow, modifiers: [.command])
+                        .help("Jump to latest message (⌘↓)")
+
+                        Spacer(minLength: 0)
                     }
-                    .buttonStyle(PressableButtonStyle())
-                    .keyboardShortcut(.downArrow, modifiers: [.command])
-                    .help("Jump to latest message (⌘↓)")
-                    .padding(.trailing, 16)
+                    .padding(.leading, 16)
                     .padding(.bottom, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
                 // v0.7.16: thinking-indicator overlay removed. It's now

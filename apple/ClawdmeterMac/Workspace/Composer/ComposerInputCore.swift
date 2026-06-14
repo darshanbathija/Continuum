@@ -148,14 +148,6 @@ struct ComposerInputCore: View {
         )
     }
 
-    static func shouldShowQueueFollowUpButton(
-        isReadOnly: Bool,
-        sessionIsRunning: Bool,
-        hasQueueHandler: Bool
-    ) -> Bool {
-        !isReadOnly && sessionIsRunning && hasQueueHandler
-    }
-
     static func pendingActionDescriptors(
         for state: OptimisticPendingMessage.State
     ) -> [PendingActionDescriptor] {
@@ -340,6 +332,33 @@ struct ComposerInputCore: View {
     }
 
     private var composerVisualStack: some View {
+        VStack(spacing: 6) {
+            queuedSendsPanel
+            composerInputSurface
+        }
+    }
+
+    @ViewBuilder
+    private var queuedSendsPanel: some View {
+        if !queuedSends.isEmpty,
+           let onQueuedSendUpdate,
+           let onQueuedSendDelete,
+           let onQueuedSendSteer {
+            QueuedSendsStrip(
+                drafts: queuedSends,
+                sessionIsRunning: sessionIsRunning,
+                isDispatching: isDispatchingQueuedSend,
+                onUpdateText: onQueuedSendUpdate,
+                onDelete: onQueuedSendDelete,
+                onSteer: onQueuedSendSteer
+            )
+            .padding(.horizontal, 16)
+            .padding(.bottom, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var composerInputSurface: some View {
         // Claude-Code-style stack: input box on top, attachments chip strip,
         // then a single compact bottom bar with all controls + the icon-only
         // send/stop action pinned to the right. The palette / mention popovers
@@ -364,19 +383,6 @@ struct ComposerInputCore: View {
                 }
                 if !store.browserComments.isEmpty {
                     browserCommentChipsRow
-                }
-                if !queuedSends.isEmpty,
-                   let onQueuedSendUpdate,
-                   let onQueuedSendDelete,
-                   let onQueuedSendSteer {
-                    QueuedSendsStrip(
-                        drafts: queuedSends,
-                        sessionIsRunning: sessionIsRunning,
-                        isDispatching: isDispatchingQueuedSend,
-                        onUpdateText: onQueuedSendUpdate,
-                        onDelete: onQueuedSendDelete,
-                        onSteer: onQueuedSendSteer
-                    )
                 }
                 inputRow
                     .opacity(planApprovalMode ? 0.56 : 1)
@@ -726,7 +732,6 @@ struct ComposerInputCore: View {
                 .layoutPriority(1)
             }
             providerAccountChip
-            queueFollowUpButton
 
             switch store.modeKind {
             case .bound:
@@ -1210,29 +1215,6 @@ struct ComposerInputCore: View {
             .help(planApprovalMode ? "Approve or refine the plan above" : "Send (↩ · ⇧↩ for newline)")
             .accessibilityLabel(action.accessibilityLabel)
             .accessibilityIdentifier(action.accessibilityIdentifier)
-        }
-    }
-
-    @ViewBuilder
-    private var queueFollowUpButton: some View {
-        if Self.shouldShowQueueFollowUpButton(
-            isReadOnly: isReadOnly,
-            sessionIsRunning: sessionIsRunning,
-            hasQueueHandler: onQueue != nil
-        ) {
-            Button(action: ContinuumAnalytics.wrapButton("queue_follow_up", queueCurrentDraft)) {
-                Image(systemName: store.isSending ? "tray.and.arrow.down" : "tray.and.arrow.down.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(store.canSend && !store.isSending ? t.accent : t.fg3)
-                    .frame(width: 28, height: 28)
-                    .background(t.hair2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-            .buttonStyle(PressableButtonStyle())
-            .keyboardShortcut(.return, modifiers: [.option])
-            .disabled(!store.canSend || store.isSending)
-            .help("Queue follow-up (⌥↩)")
-            .accessibilityLabel("Queue follow-up")
-            .accessibilityIdentifier("code.composer.queue-follow-up")
         }
     }
 

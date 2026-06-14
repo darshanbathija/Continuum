@@ -733,8 +733,6 @@ private struct TranscriptScroll: View {
                 disclosureLabel(turn, icon: isOpen ? "chevron.down" : "chevron.right")
             }
             .buttonStyle(.plain)
-        } else {
-            disclosureLabel(turn, icon: "clock")
         }
     }
 
@@ -801,9 +799,8 @@ private struct TranscriptScroll: View {
 
 /// Working indicator shown in the send→first-token gap. Styled as a
 /// left-aligned assistant bubble hosting the shared `SteadyTenthsStream`
-/// (data-packet stream + live `m, ss.s` elapsed readout). The packets take
-/// the session's provider tint — this is the focused thread, so it earns the
-/// one color event; the readout digits stay near-foreground.
+/// (data-packet stream + live `m, ss.s` elapsed readout). The packets use the
+/// canonical orange working accent; the readout digits stay near-foreground.
 @available(iOS 17, *)
 private struct ThinkingDotsRow: View {
     @Environment(\.tahoe) private var t
