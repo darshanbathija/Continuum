@@ -4,6 +4,28 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.42.1 build 248] - 2026-06-14 - Spawn + composer + update fixes, simpler voice picker, device onboarding
+
+A focused fix round across spawn mode, the composer, and updates, plus a flat
+voice-model picker and second-device onboarding.
+
+### Added
+
+- **Flat voice-model picker** (one list, engine auto-selected) in Settings → Voice. (#491)
+- **Second-device (execution host) onboarding** in Settings → Devices. (#492)
+- **⌘V paste of clipboard images** into the chat composer as attachments. (#489)
+
+### Fixed
+
+- **Spawn launches the real `opencode` TUI**, not the bundled serve helper. (#495)
+- **Stranded spawn-tile opening frame** cleared after reflow. (#494)
+- **Cancel update download** reverts the popover instantly. (#490)
+
+### Changed
+
+- Cleaner spawn header + whole-row-clickable sidebar spawn rows. (#493)
+- Repo header rows match worktree/session row height. (#488)
+
 ## [0.42.0 build 247] - 2026-06-14 - Per-project icons, live working indicators, Code-sidebar polish
 
 Per-project emoji/icon picker, steady data-stream working indicators, an
