@@ -1498,6 +1498,9 @@ struct SidebarPane: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        // The repo header carries .grabIdle (drag-to-reorder palm). Override it
+        // here so the gear reads as clickable, matching the title toggle's cursor.
+        .pointerStyle(.link)
         .help("Workspace settings — archive, env variables, remove")
         .accessibilityIdentifier("code.repo.settings")
     }
@@ -2038,6 +2041,8 @@ struct SidebarPane: View {
                     .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             .buttonStyle(HoverableButtonStyle(cornerRadius: 6))
+            // Override the header's .grabIdle palm so this reads as clickable.
+            .pointerStyle(.link)
             .help("New workspace — Codex · GPT-5.5 · extra-high effort · plan mode (option-click to customize)")
             .accessibilityIdentifier("code.repo.new-session")
         }
