@@ -51,9 +51,9 @@ extension View {
 // MARK: - Message hover copy
 
 enum MessageHoverCopyStyle {
-    /// User bubble — copy glyph in the top-right corner on hover.
+    /// User bubble — copy glyph just outside the bubble's leading edge on hover.
     case userBubble
-    /// Assistant body — compact relative time + copy glyph along the bottom edge.
+    /// Assistant body — compact relative time + copy glyph in the row gutter.
     case assistantMessage
 }
 
@@ -70,6 +70,8 @@ enum MessageHoverCopyFormatting {
 }
 
 struct MessageCopyHoverButton: View {
+    @Environment(\.tahoe) private var t
+
     let text: String
     let onCopy: (String) -> Void
 
@@ -83,8 +85,15 @@ struct MessageCopyHoverButton: View {
             )) {
             Image(systemName: "doc.on.doc")
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 22, height: 22)
+                .foregroundStyle(t.fg2)
+                .frame(width: 24, height: 24)
+                .background(t.surfaceSolid2.opacity(t.dark ? 0.98 : 1.0),
+                            in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(t.hairline.opacity(t.dark ? 0.95 : 1.0), lineWidth: 0.5)
+                )
+                .shadow(color: Color.black.opacity(t.dark ? 0.28 : 0.10), radius: 5, y: 2)
                 .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
@@ -122,8 +131,17 @@ private struct MessageHoverCopyOverlay: ViewModifier {
 
     private var overlayAlignment: Alignment {
         switch style {
-        case .userBubble: return .topTrailing
-        case .assistantMessage: return .bottomLeading
+        case .userBubble: return .topLeading
+        case .assistantMessage: return .bottomTrailing
+        }
+    }
+
+    private var overlayOffset: CGSize {
+        switch style {
+        case .userBubble:
+            return CGSize(width: -30, height: 0)
+        case .assistantMessage:
+            return .zero
         }
     }
 
@@ -132,6 +150,7 @@ private struct MessageHoverCopyOverlay: ViewModifier {
         switch style {
         case .userBubble:
             MessageCopyHoverButton(text: text, onCopy: onCopy)
+                .offset(overlayOffset)
                 .padding(6)
         case .assistantMessage:
             HStack(spacing: 8) {
@@ -142,6 +161,7 @@ private struct MessageHoverCopyOverlay: ViewModifier {
                 }
                 MessageCopyHoverButton(text: text, onCopy: onCopy)
             }
+            .offset(overlayOffset)
             .padding(.horizontal, 2)
             .padding(.vertical, 1)
         }
