@@ -3,6 +3,16 @@
     <channel>
         <title>Continuum</title>
         <item>
+            <title>0.42.0</title>
+            <pubDate>Sun, 14 Jun 2026 14:42:26 +0700</pubDate>
+            <sparkle:version>247</sparkle:version>
+            <sparkle:shortVersionString>0.42.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <sparkle:releaseNotesLink>https://darshanbathija.github.io/Continuum/updates/release-notes/Continuum-0.42.0-arm64.md</sparkle:releaseNotesLink>
+            <enclosure url="https://github.com/darshanbathija/Continuum/releases/download/mac-updates/Continuum-0.42.0-arm64.zip" length="180507243" type="application/octet-stream" sparkle:edSignature="LIX+WLjJUfTjoGoAsXyVydxvpPalkhxrtluYLixObDkMD7rf6UrAr6sIO796VqI06XUWmSqvlmmuOqUu51XkBg=="/>
+        </item>
+        <item>
             <title>0.41.0</title>
             <pubDate>Sun, 14 Jun 2026 12:10:33 +0700</pubDate>
             <sparkle:version>246</sparkle:version>
