@@ -289,6 +289,16 @@ struct ComposerInputCore: View {
     /// oscillates the rim opacity; held false (static rim) under Reduce Motion.
     @State private var rimPulse: Bool = false
     @State private var accountChoices: [ProviderInstanceId] = []
+    /// Tracks focus on the text field so the Cmd+V image-paste monitor is only
+    /// armed for the composer the user is actually typing in (multiple composer
+    /// instances coexist — Chat/Code tabs + broadcast columns). Only one field
+    /// can be first responder at a time, so only one monitor is ever live.
+    @FocusState private var composerFieldFocused: Bool
+    /// Local keyDown monitor that intercepts Cmd+V to attach clipboard images.
+    /// SwiftUI's TextField paste only ingests text, so a screenshot in the
+    /// clipboard is silently dropped; this monitor catches it before the Edit
+    /// menu's Paste key-equivalent fires.
+    @State private var imagePasteMonitor: Any?
     @ObservedObject private var insertionInbox = ComposerInsertionInbox.shared
     /// Optional repo root for FFF-backed `@` file mentions in the Code tab.
     var repoRoot: String? = nil
@@ -1104,7 +1114,12 @@ struct ComposerInputCore: View {
             .frame(maxWidth: .infinity, minHeight: 52, alignment: .topLeading)
             .lineLimit(2...18)
             .accessibilityIdentifier("code.composer.input")
+            .focused($composerFieldFocused)
             .onKeyPress(.return, phases: .down) { handleReturnKey($0) }
+            .onChange(of: composerFieldFocused) { _, focused in
+                if focused { installImagePasteMonitor() } else { removeImagePasteMonitor() }
+            }
+            .onDisappear { removeImagePasteMonitor() }
     }
 
     /// Enter sends; Shift+Return inserts a newline. Fall through (.ignored) when
@@ -1474,17 +1489,84 @@ struct ComposerInputCore: View {
         }
     }
 
-    private func attachImage(_ image: NSImage, suggestedName: String) {
-        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) else { return }
+    /// Arms a Cmd+V keyDown monitor while the field is focused. A local monitor
+    /// (not `.onKeyPress`) is required because Cmd+V is the Edit menu's Paste
+    /// key-equivalent — it's dispatched before the responder chain ever sees a
+    /// keyDown, so onKeyPress never fires for it. The monitor runs inside
+    /// `sendEvent`, ahead of menu key-equivalent resolution, so we can claim it.
+    private func installImagePasteMonitor() {
+        guard imagePasteMonitor == nil else { return }
+        imagePasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Exactly ⌘V — never ⇧⌘V (paste & match style) or ⌥⌘V. Match on the
+            // command-vs-(shift/option/control) modifiers only: a toggled CapsLock
+            // (or numericPad/function flag) lands in deviceIndependentFlagsMask too,
+            // so an `== .command` test would spuriously fail with CapsLock on and
+            // silently route the image paste back to plain-text paste.
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard flags.contains(.command),
+                  flags.isDisjoint(with: [.shift, .option, .control]),
+                  event.charactersIgnoringModifiers?.lowercased() == "v"
+            else { return event }
+            // Don't hijack paste while a completion popover owns the keystroke.
+            guard !showingPalette, !showingMentions else { return event }
+            // Swallow the event only when we actually consumed an image; text
+            // (and image+text) clipboards fall through to the normal text paste.
+            return tryAttachClipboardImage() ? nil : event
+        }
+    }
+
+    private func removeImagePasteMonitor() {
+        guard let imagePasteMonitor else { return }
+        NSEvent.removeMonitor(imagePasteMonitor)
+        self.imagePasteMonitor = nil
+    }
+
+    /// Attaches an image from the clipboard if one is present. Returns true when
+    /// an image was consumed (so the caller swallows the paste). Image files
+    /// (copied from Finder) win first; raw image data (a screenshot) is taken
+    /// only when there's no plain text — a clipboard carrying both is treated as
+    /// a text paste so we never hijack an ordinary ⌘V.
+    private func tryAttachClipboardImage() -> Bool {
+        let pb = NSPasteboard.general
+        if let urls = pb.readObjects(forClasses: [NSURL.self],
+                                     options: [.urlReadingFileURLsOnly: true]) as? [URL] {
+            let imageURLs = urls.filter { url in
+                guard let typeId = (try? url.resourceValues(forKeys: [.typeIdentifierKey]))?.typeIdentifier,
+                      let type = UTType(typeId) else { return false }
+                return type.conforms(to: .image)
+            }
+            if !imageURLs.isEmpty {
+                for url in imageURLs { attach(url: url) }
+                return true
+            }
+        }
+        let hasText = (pb.string(forType: .string)?.isEmpty == false)
+        if !hasText,
+           let image = pb.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage {
+            // Only swallow ⌘V when the image was actually staged; if PNG encoding
+            // fails we must let the keystroke fall through rather than eat it.
+            return attachImage(image, suggestedName: "pasted.png")
+        }
+        return false
+    }
+
+    /// Encodes `image` to PNG and stages it. Returns true when the image was
+    /// successfully written + attached so callers can decide whether to swallow
+    /// the originating paste.
+    @discardableResult
+    private func attachImage(_ image: NSImage, suggestedName: String) -> Bool {
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) else { return false }
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("clawdmeter-paste-\(UUID().uuidString).png")
         do {
             try png.write(to: tmp)
             do {
                 _ = try store.attach(url: tmp, displayName: suggestedName, byteSize: png.count, isImage: true)
+                return true
             } catch let err as ComposerStore.SendError {
                 store.endSend(error: err)
+                return false
             }
-        } catch {}
+        } catch { return false }
     }
 
     private var composerBg: Color {
