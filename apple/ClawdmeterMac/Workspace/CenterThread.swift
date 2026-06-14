@@ -114,9 +114,30 @@ struct CenterThread: View {
                     onCloseDocument: { model.closeWorkspaceDocumentTab($0) }
                 )
             }
-            header
-            Divider()
             chatPane
+        }
+        // The visible session-detail metadata strip is gone (the Code tab's
+        // favicon + label already identify the session). Bound sessions still
+        // publish a headless AX marker so UI tests can assert the
+        // session/provider/model state machine on tab switches. Zero-size and
+        // clear: no visual chrome, no layout cost. Containment keeps the bare
+        // `code.center.header` identifier off the child `.state` marker (same
+        // AX-addressability bug class as the WorkspaceReviewPane fix).
+        .overlay(alignment: .topLeading) {
+            ZStack {
+                Text(headerAccessibilityValue)
+                    .font(.system(size: 1))
+                    .foregroundStyle(.clear)
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(headerAccessibilityValue)
+                    .accessibilityIdentifier("code.center.header.state")
+                    .accessibilityValue(headerAccessibilityValue)
+            }
+            .frame(width: 1, height: 1)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("code.center.header")
+            .accessibilityValue(headerAccessibilityValue)
         }
         .onAppear {
             applyPendingFirstSendRecovery()
@@ -206,101 +227,19 @@ struct CenterThread: View {
         model.registry.session(id: session.id) ?? session
     }
 
-    // Chrome-literal header: the provider logo + session title now live in the
-    // Code tab itself (favicon + label on `WorkspaceTabStrip`), so this row no
-    // longer re-states the tab. It collapses to a single dim mono run line —
-    // model · effort · host · runtime · branch — the machine strings the tab
-    // can't carry. Body opens straight onto the thread.
-    private var header: some View {
-        HStack(spacing: 6) {
-            Text(headerConfigurationSummary)
-                .font(TahoeFont.mono(11))
-                .foregroundStyle(t.fg3)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .accessibilityIdentifier("code.center.header.configuration")
-            if let executionHostRunLine {
-                Text("· \(executionHostRunLine)")
-                    .font(TahoeFont.mono(11))
-                    .foregroundStyle(t.fg3)
-                    .lineLimit(1)
-                    .accessibilityIdentifier("code.center.header.execution-host")
-            }
-            if let checkpointStatusText {
-                Text("· \(checkpointStatusText)")
-                    .font(TahoeFont.mono(11))
-                    .foregroundStyle(t.fg4)
-                    .lineLimit(1)
-                    .accessibilityIdentifier("code.header.checkpoint-status")
-            }
-            if let branch = branchLabel {
-                Text("·")
-                    .font(TahoeFont.mono(11))
-                    .foregroundStyle(t.fg4)
-                HStack(spacing: 4) {
-                    GitHubBranchStatusIcon(prBranchIconKind, size: 10)
-                    Text(branch)
-                        .font(TahoeFont.mono(11))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .foregroundStyle(prBranchColor)
-                .help(branchTooltip)
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("code.center.header.branch")
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 22)
-        .padding(.top, 9)
-        .padding(.bottom, 8)
-        // Containment is required here: a bare container identifier propagates
-        // onto every child AX element and would overwrite the header controls'
-        // own identifiers, breaking AX addressability. Same bug class as the
-        // WorkspaceReviewPane `code.review.pane` fix. The session/provider/model
-        // value assertions ride the dedicated `code.center.header.state`
-        // overlay marker below.
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("code.center.header")
-        .accessibilityValue(headerAccessibilityValue)
-        .overlay(alignment: .topLeading) {
-            Text(headerAccessibilityValue)
-                .font(.system(size: 1))
-                .foregroundStyle(.clear)
-                .frame(width: 1, height: 1)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(headerAccessibilityValue)
-                .accessibilityIdentifier("code.center.header.state")
-                .accessibilityValue(headerAccessibilityValue)
-        }
-    }
-
-    // v0.29.25: `permissionModeLabel` + `headerPermissionModes` deleted
-    // alongside the redundant header pill. Composer's `PermissionModeChip`
-    // owns mode-selection now.
-
+    // The visible session-detail metadata strip (model · effort · host ·
+    // runtime · branch) was removed — the Code tab (favicon + label on
+    // `WorkspaceTabStrip`) already identifies the session, so the body opens
+    // straight onto the thread. Only the headless AX value survives, so the
+    // bound-session state machine (id · title · provider · model) stays
+    // assertable on tab switches without re-stating the tab visually.
     private var headerAccessibilityValue: String {
-        var parts = [
+        [
             liveSession.id.uuidString,
             headerLabel(for: liveSession),
             model.displayAgent(for: liveSession, catalog: catalog).rawValue,
-            model.displayModelId(for: liveSession, catalog: catalog) ?? "",
-            headerConfigurationSummary
-        ]
-        if let executionHostRunLine {
-            parts.append(executionHostRunLine)
-        }
-        return parts.joined(separator: " ")
-    }
-
-    /// R1 1E: "Running on VPS · 42 min" in session detail header.
-    private var executionHostRunLine: String? {
-        guard let label = liveSession.executionHostLabel else { return nil }
-        if let minutes = HostRunMinuteStore.shared.billableMinutes(forSession: liveSession.id),
-           minutes > 0 {
-            return "Running on \(label) · \(minutes) min"
-        }
-        return "Running on \(label)"
+            model.displayModelId(for: liveSession, catalog: catalog) ?? ""
+        ].joined(separator: " ")
     }
 
     private var workspaceDraftDefaults: ComposerStore.ChipDefaults {
@@ -1264,32 +1203,6 @@ struct CenterThread: View {
         Self.effectiveEffort(for: liveSession, modelId: modelId, catalog: catalog)
     }
 
-    private var headerConfigurationSummary: String {
-        let customProviderId = composerStore.customProviderId ?? liveSession.customProviderId
-        let modelId = composerStore.modelId.flatMap { id in
-            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        } ?? effectiveModelId
-        let agent: AgentKind
-        if let modelId,
-           let entry = catalog.entry(forId: modelId, customProviderId: customProviderId) {
-            agent = entry.provider
-        } else if model.isProvisioning(liveSession.id) {
-            agent = composerStore.agent
-        } else {
-            agent = liveSession.agent
-        }
-        let modelText: String
-        if let modelId {
-            modelText = catalog.entry(forId: modelId, customProviderId: customProviderId)?.displayName ?? modelId
-        } else {
-            modelText = "default model"
-        }
-        let effort = composerStore.effort ?? effectiveEffort(forModelId: modelId)
-        let effortText = effort.map(effortLabel) ?? "Default effort"
-        return "\(agent.tahoeProvider.displayName) · \(modelText) · \(effortText)"
-    }
-
     private func handleModelConfigurationSelection(
         choice: ProviderChoice,
         modelId: String,
@@ -1389,46 +1302,6 @@ struct CenterThread: View {
         // DESIGN.md Session Status: degraded → #ff5f57 (danger), not a muted gray.
         case .degraded: return Color(.sRGB, red: 1.0, green: 95.0 / 255.0, blue: 87.0 / 255.0, opacity: 1.0)
         }
-    }
-
-    /// Header branch chip label. Falls back to the worktree segment when
-    /// `session.mode == .worktree`; otherwise hidden.
-    private var branchLabel: String? {
-        if let wt = session.worktreePath {
-            return (wt as NSString).lastPathComponent
-        }
-        return nil
-    }
-
-    /// GitHub Octicon for the branch chip — matches sidebar worktree rows.
-    private var prBranchIconKind: GitHubBranchIconKind {
-        guard let state = prMirror.state?.state else {
-            return .branch
-        }
-        return GitHubBranchIconKind.from(prStateRaw: state)
-    }
-
-    /// Branch-chip tint follows GitHub Primer PR semantics; terra-cotta when
-    /// no PR is linked (plain worktree branch).
-    private var prBranchColor: Color {
-        guard prMirror.state?.state != nil else {
-            return terraCotta
-        }
-        return prBranchIconKind.color
-    }
-
-    private var branchTooltip: String {
-        var pieces: [String] = []
-        if let wt = session.worktreePath {
-            pieces.append("Worktree: \(wt)")
-        }
-        if let pr = prMirror.state {
-            pieces.append("PR #\(pr.number) · \(pr.state.lowercased())")
-            if !pr.title.isEmpty {
-                pieces.append(pr.title)
-            }
-        }
-        return pieces.joined(separator: "\n")
     }
 
     /// Whether the current model supports an effort dial. Uses the live
