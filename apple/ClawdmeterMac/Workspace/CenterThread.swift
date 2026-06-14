@@ -116,6 +116,29 @@ struct CenterThread: View {
             }
             chatPane
         }
+        // The visible session-detail metadata strip is gone (the Code tab's
+        // favicon + label already identify the session). Bound sessions still
+        // publish a headless AX marker so UI tests can assert the
+        // session/provider/model state machine on tab switches. Zero-size and
+        // clear: no visual chrome, no layout cost. Containment keeps the bare
+        // `code.center.header` identifier off the child `.state` marker (same
+        // AX-addressability bug class as the WorkspaceReviewPane fix).
+        .overlay(alignment: .topLeading) {
+            ZStack {
+                Text(headerAccessibilityValue)
+                    .font(.system(size: 1))
+                    .foregroundStyle(.clear)
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(headerAccessibilityValue)
+                    .accessibilityIdentifier("code.center.header.state")
+                    .accessibilityValue(headerAccessibilityValue)
+            }
+            .frame(width: 1, height: 1)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("code.center.header")
+            .accessibilityValue(headerAccessibilityValue)
+        }
         .onAppear {
             applyPendingFirstSendRecovery()
             // Seed the chip-handler session trackers to the mounted session so
@@ -204,10 +227,20 @@ struct CenterThread: View {
         model.registry.session(id: session.id) ?? session
     }
 
-    // The session detail metadata strip (model · effort · host · runtime ·
-    // branch) was removed — the Code tab (favicon + label on
+    // The visible session-detail metadata strip (model · effort · host ·
+    // runtime · branch) was removed — the Code tab (favicon + label on
     // `WorkspaceTabStrip`) already identifies the session, so the body opens
-    // straight onto the thread.
+    // straight onto the thread. Only the headless AX value survives, so the
+    // bound-session state machine (id · title · provider · model) stays
+    // assertable on tab switches without re-stating the tab visually.
+    private var headerAccessibilityValue: String {
+        [
+            liveSession.id.uuidString,
+            headerLabel(for: liveSession),
+            model.displayAgent(for: liveSession, catalog: catalog).rawValue,
+            model.displayModelId(for: liveSession, catalog: catalog) ?? ""
+        ].joined(separator: " ")
+    }
 
     private var workspaceDraftDefaults: ComposerStore.ChipDefaults {
         ComposerStore.ChipDefaults(
