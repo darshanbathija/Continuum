@@ -4,6 +4,40 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.40.0 build 244] - 2026-06-14 - Spawn settings + live resize, redesigned new-session box, Code-tab polish
+
+A Spawn section in Settings with a deep-linking gear, a 4/6/8 live-resize
+toggle on the spawn grid, a redesigned Codex-style new-session composer, a
+Code-tab provider favicon, and spawn-terminal/menu-bar fixes.
+
+### Added
+
+- **Settings → Spawn** section: default agent, default session count, and a
+  show/hide toggle for the spawn button, reachable via a new gear on the
+  spawn button. (#462)
+- **4 / 6 / 8 live-resize toggle** on the spawn-grid header — grow an open
+  spawn in place (refilling with the dominant agent) or shrink into a fresh
+  grid without killing live sessions. (#460)
+- **Redesigned new-session box**: single Codex-style composer with device and
+  account chips, replacing the bordered panel + inline repo picker. (#463)
+
+### Fixed
+
+- **Spawn-grid terminal misalignment** — the PTY width was stuck at 120
+  columns instead of matching the laid-out tile. (#464)
+
+### Changed
+
+- **Code tab** now shows the provider favicon in the tab and collapses a
+  redundant chat header for a tighter strip. (#461)
+- **Menu-bar popover controls** gained a hover fill and the pointing-hand
+  cursor. (#465)
+
+### Internal
+
+- Prune stale Xcode DerivedData after build/release runs to keep disk usage
+  bounded. (#466)
+
 ## [0.39.0 build 243] - 2026-06-13 - Parakeet local voice + Spawn-mode and Code-tab improvements
 
 On-device Parakeet speech-to-text alongside WhisperKit, several Spawn-mode
