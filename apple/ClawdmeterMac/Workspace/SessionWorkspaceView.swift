@@ -87,13 +87,14 @@ struct SessionWorkspaceView: View {
         effectiveShowReviewPane ? (dragReviewWidth ?? effectiveReviewPaneWidth) : 0
     }
 
-    /// User-resized width wins when set; otherwise fall back to the tab-aware
-    /// default (Diff bumps to ~58% of the workspace).
+    /// User-resized width wins when set; otherwise fall back to the
+    /// constant default. The review pane width is independent of which
+    /// tab (Chat / Plan / Diff / PR / Terminal) is selected.
     private var effectiveReviewPaneWidth: CGFloat {
         if let stored = workbenchState.storedReviewWidth {
             return stored
         }
-        return calculatedReviewPaneWidth
+        return WorkbenchState.defaultReviewWidth
     }
 
     private var isImmersiveBrowserActive: Bool {
@@ -106,19 +107,6 @@ struct SessionWorkspaceView: View {
         model.registry.sessions
             .map { BrowserWorkspaceControllerStore.identityKey(for: $0) }
             .sorted()
-    }
-
-    /// Diff needs space — bump the review pane to ~58% of the workspace
-    /// width when Diff is the selected tab. Other tabs stay at the
-    /// compact 380pt so the center chat keeps its breathing room.
-    private var calculatedReviewPaneWidth: CGFloat {
-        let workspace = CGFloat(workbenchState.workspaceWidth)
-        let isDiff = workbenchState.selectedRightPane == .diff
-        guard isDiff, workspace > 0 else { return WorkbenchState.defaultReviewWidth }
-        // Clamp so even on a narrow window Diff stays usable, and on a
-        // huge window it doesn't squeeze the center chat to nothing.
-        let target = workspace * 0.58
-        return max(560, min(target, workspace - 520))
     }
 
     var body: some View {
@@ -287,23 +275,15 @@ struct SessionWorkspaceView: View {
                             .id(session.id)
                         }
                     }
-                    // Diff is the one pane that's useless at the default
-                    // 380pt width — readers need to see ±50 cols at once.
-                    // Bump it to ~58% of the workspace when Diff is the
-                    // selected tab; the other tabs (Plan / Sources / PR /
-                    // Terminal) stay compact so the center chat keeps its
-                    // breathing room.
+                    // Review pane width is constant across tabs — selecting
+                    // Diff no longer widens it. Only the open/close toggle and
+                    // user resize change the width.
                     .frame(width: animatedReviewPaneWidth)
                     .clipped()
                     .opacity(effectiveShowReviewPane ? 1 : 0)
                     .allowsHitTesting(effectiveShowReviewPane)
-                    // P7: animate the Diff width morph (~58% expand) on tab
-                    // switch. Keyed on the selected pane — NOT workspaceWidth —
-                    // so window resizes still track the cursor instantly.
                     .animation(reduceMotion ? nil : Self.reviewPaneToggleAnimation,
                                value: effectiveShowReviewPane)
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.2),
-                               value: workbenchState.selectedRightPane)
                 }
             }
             .animation(reduceMotion ? nil : Self.reviewPaneToggleAnimation, value: effectiveShowReviewPane)
