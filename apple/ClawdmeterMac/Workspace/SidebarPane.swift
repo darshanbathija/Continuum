@@ -1168,7 +1168,7 @@ struct SidebarPane: View {
         let provisioning = wt.sessions.contains { model.isProvisioning($0.id) }
         let showsArchiveAction = isHovered
         let diffStat = worktreeDiffs.stat(for: wt.path)
-        let showsDiff = !isHovered && diffStat.map { !$0.isEmpty } == true
+        let showsDiff = diffStat.map { !$0.isEmpty } == true
         let showsSessionCount = !isHovered && wt.sessions.count > 1
         // Candidate set for the data-stream cable: sessions the registry
         // considers active. The cable itself only lights while one is *actually
