@@ -18,6 +18,7 @@ struct WorkspaceReviewPane: View {
     @Environment(\.tahoe) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var tabPill
+    @State private var hoveredTab: WorkbenchPaneTab?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -75,10 +76,11 @@ struct WorkspaceReviewPane: View {
 
     private func tabChip(_ tab: WorkbenchPaneTab) -> some View {
         let isSelected = (selectedTab == tab)
+        let isHovered = (hoveredTab == tab)
         return Button(action: ContinuumAnalytics.wrapButton(
                 "workspacereviewpane_l70",
                 {
- selectedTab = tab 
+ selectedTab = tab
                 }
             )) {
             HStack(spacing: 3) {
@@ -91,7 +93,7 @@ struct WorkspaceReviewPane: View {
             }
             .frame(height: 30)
             .frame(maxWidth: .infinity)
-            .foregroundStyle(isSelected ? t.fg : t.fg3)
+            .foregroundStyle(isSelected ? t.fg : (isHovered ? t.fg : t.fg3))
             // P5: the active-tab pill is a single matched-geometry view that
             // SLIDES to the tapped segment rather than hard-cutting on/off.
             .background {
@@ -104,6 +106,11 @@ struct WorkspaceReviewPane: View {
                                 .stroke(t.hairline, lineWidth: 0.5)
                         )
                         .matchedGeometryEffect(id: "reviewTabPill", in: tabPill)
+                } else if isHovered {
+                    // Match the Code-tab hover affordance (see SidebarPane rows):
+                    // a subtle fill so unselected tabs read as clickable.
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(t.hair2.opacity(colorScheme == .dark ? 1.0 : 1.35))
                 }
             }
             .contentShape(Rectangle())
@@ -111,6 +118,18 @@ struct WorkspaceReviewPane: View {
             .accessibilityIdentifier("code.review.tab.\(tab.accessibilityKey)")
         }
         .buttonStyle(PressableButtonStyle())
+        .onHover { inside in
+            if inside {
+                hoveredTab = tab
+            } else if hoveredTab == tab {
+                hoveredTab = nil
+            }
+        }
+        // Pointing-hand cursor on hover, matching every other clickable
+        // surface in the Code tab.
+        #if os(macOS)
+        .pointerStyle(.link)
+        #endif
         .accessibilityIdentifier("code.review.tab.\(tab.accessibilityKey)")
     }
 
