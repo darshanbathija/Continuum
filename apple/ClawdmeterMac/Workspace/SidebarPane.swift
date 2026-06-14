@@ -2078,6 +2078,9 @@ struct SidebarPane: View {
         }
         .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.vertical, subtitle == nil ? 6 : 5)
+        // Match the worktree/session row's roomy 38pt min-height so the repo
+        // header doesn't read as a shorter/narrower row above its children.
+        .frame(minHeight: 38)
 
         // Hover the whole repo section, not just the title text. The title used
         // to be the only hover-reactive control; the user expects the entire row
