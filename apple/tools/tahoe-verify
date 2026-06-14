@@ -145,11 +145,11 @@ EOF
 }
 
 case "${1:-all}" in
-  build)      build_mac && build_ios; prune_derived ;;
+  build)      build_mac && build_ios && prune_derived ;;
   shoot-mac)  shoot_mac ;;
   shoot-ios)  shoot_ios ;;
   audit)      shift; audit "$@" ;;
   prune)      prune_derived ;;
-  all)        build_mac && build_ios && echo "[tahoe-verify] (Run shoot-mac and shoot-ios separately — they're interactive)"; prune_derived ;;
+  all)        build_mac && build_ios && echo "[tahoe-verify] (Run shoot-mac and shoot-ios separately — they're interactive)" && prune_derived ;;
   *)          echo "Usage: tahoe-verify [build|shoot-mac|shoot-ios|audit <surface>|prune|all]" >&2; exit 2 ;;
 esac
