@@ -156,7 +156,8 @@ struct ChatThreadScroll: View {
                                 // pill shows "how long has the model been
                                 // working on this task", not "how long
                                 // since I clicked into the session".
-                                activityStartedAt: liveStatusSlice.currentTurnStartedAt
+                                activityStartedAt: liveStatusSlice.currentTurnStartedAt,
+                                turnState: liveStatusSlice.currentTurnState
                             )
                             Spacer()
                         }
