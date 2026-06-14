@@ -413,10 +413,59 @@ final class SpawnModeStore: ObservableObject {
         case .codex:    return ShellRunner.locateBinary("codex")
         case .cursor:   return AgentSpawner.cursorBinaryPath()
         case .gemini:   return ShellRunner.locateBinary("gemini")
-        case .opencode: return ShellRunner.locateBinary("opencode")
+        case .opencode: return opencodeTUIBinaryPath()
         case .grok:     return ShellRunner.locateBinary("grok")
         case .unknown:  return nil
         }
+    }
+
+    /// Resolve the opencode binary for the interactive spawn TUI.
+    ///
+    /// **Why not `ShellRunner.locateBinary("opencode")`:** that returns the
+    /// app-bundled `Vendor/opencode` binary first (its bundled-vendor check),
+    /// which is a Bun-compiled `opencode serve` helper for the headless
+    /// chat/usage harness. Launched as an interactive TUI it renders nothing
+    /// and exits — the empty "OpenCode Go … exited" tile. The generic resolver
+    /// also never looks under `~/.opencode/bin` (the official installer's
+    /// location), so a real install wouldn't be found behind the bundled one.
+    ///
+    /// So the spawn TUI resolves the user's REAL opencode directly: official
+    /// installer dir, Homebrew, user-local, then the enriched login-shell PATH.
+    /// Returns nil when only the unusable bundled helper exists → the config
+    /// sheet shows "Install opencode" instead of spawning a dead tile.
+    nonisolated static func opencodeTUIBinaryPath() -> String? {
+        // Honor an explicit Settings → Diagnostics override (same key the
+        // generic resolver uses) so a user-pinned path always wins.
+        if let override = UserDefaults.standard.string(forKey: "clawdmeter.binaries.opencode"),
+           !override.isEmpty,
+           FileManager.default.isExecutableFile(atPath: override) {
+            return override
+        }
+        for path in opencodeRealInstallCandidates(home: ClawdmeterRealHome.path())
+        where FileManager.default.isExecutableFile(atPath: path) {
+            return path
+        }
+        // Enriched-PATH walk (login-shell PATH + Homebrew backstop) so mise /
+        // asdf / custom installs resolve under the launchd-thin GUI PATH.
+        for dir in SpawnPathResolver.enrichedPATH().split(separator: ":") where !dir.isEmpty {
+            let candidate = "\(dir)/opencode"
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    /// Ordered real-install candidates for opencode, deliberately EXCLUDING the
+    /// app-bundled `Vendor/opencode` serve helper. Pure (no IO) so the
+    /// "never the bundled binary" guarantee stays unit-testable.
+    nonisolated static func opencodeRealInstallCandidates(home: String) -> [String] {
+        [
+            "\(home)/.opencode/bin/opencode",  // official `opencode.ai/install`
+            "/opt/homebrew/bin/opencode",      // Apple Silicon Homebrew
+            "/usr/local/bin/opencode",         // Intel Homebrew / manual
+            "\(home)/.local/bin/opencode",     // user-local installs
+        ]
     }
 
     /// Claude needs the sanitized subscription-rail env (`claudePtyEnv`);
