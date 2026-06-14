@@ -159,6 +159,21 @@ final class GitDiffStoreTests: XCTestCase {
         XCTAssertEqual(WorktreeDiffFormatting.compactCount(1680), "1.7k")
     }
 
+    func test_worktreeDiffTrackerIncludesUncommittedTrackedChanges() async throws {
+        let git = try XCTUnwrap(git)
+        try "baseline\nlocal fix\n".write(
+            to: repoURL.appendingPathComponent("tracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let tracker = WorktreeDiffTracker(gitLocator: { git })
+
+        await tracker.refresh(paths: [repoURL.path])
+
+        let stat = try XCTUnwrap(tracker.stat(for: repoURL.path))
+        XCTAssertGreaterThan(stat.additions, 0)
+    }
+
     func test_gitDiffPaneActionDescriptorsExposeStableTargets() {
         let unstagedFile = GitDiffPane.fileActionDescriptors(for: .unstaged)
         XCTAssertEqual(GitDiffPane.FileActionDescriptors.rowAccessibilityIdentifier, "code.diff.git.file.row")

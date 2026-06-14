@@ -302,9 +302,12 @@ struct SidebarPane: View {
             // hidden-tab gating needs an active-tab flag from MacRootView;
             // see cross-file note.)
             guard controlActiveState != .inactive else { return }
-            worktreeDiffs.scheduleRefresh(paths: visibleWorktreePaths)
             guard model.repos.contains(where: { !$0.recentSessions.isEmpty }) else { return }
             externalActivityNow = now
+        }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            guard controlActiveState != .inactive else { return }
+            worktreeDiffs.scheduleRefresh(paths: visibleWorktreePaths)
         }
         .onChange(of: visibleWorktreePaths) { _, paths in
             worktreeDiffs.scheduleRefresh(paths: paths)
