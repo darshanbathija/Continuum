@@ -448,10 +448,17 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
     }
 
     func testWorktreeHoverArchiveRevealsActionAndMovesRowToArchivedFilter() throws {
+        try Self.runGit(["checkout", "-b", "sidebar-diff-hover"], cwd: testRepoRootDirectory)
+        try commitSeedRepoFile(
+            "initial checkpoint state\nsidebar hover diff stays visible\n",
+            message: "Seed sidebar hover diff"
+        )
         openCodeTab()
 
         let row = element("code.worktree.row")
         XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded worktree row should render before archiving.")
+        let diffBadge = element("code.worktree.diff")
+        XCTAssertTrue(diffBadge.waitForExistence(timeout: 10), "Dirty worktree row should show its diff badge before hover.")
         movePointer(to: row.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)))
 
         let archive = element("code.session.action.archive")
@@ -459,6 +466,7 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
             row.click()
         }
         XCTAssertTrue(archive.waitForExistence(timeout: 5), "Hovering or selecting the worktree row should reveal one archive action.")
+        XCTAssertTrue(diffBadge.waitForExistence(timeout: 2), "Hovering the worktree row should keep the diff badge visible to the left of Archive.")
         archive.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
         XCTAssertTrue(waitForSeedSessionArchived(timeout: 5), "Clicking the archive action should persist archivedAt for the seeded session.")
