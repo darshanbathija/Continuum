@@ -152,6 +152,9 @@ struct SessionHoverActions: View {
             accessibilityLabel: "Archive",
             accessibilityIdentifier: "code.session.action.archive"
         )
+        // Clickable-hand cursor on the glyph; the row's open button already
+        // sets `.link`, but this sibling button would otherwise revert to arrow.
+        .pointerStyle(.link)
     }
 }
 
