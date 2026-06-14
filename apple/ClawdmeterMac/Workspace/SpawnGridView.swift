@@ -23,6 +23,13 @@ struct SpawnGridView: View {
     /// placeholder controls and shows a spinner so a double-click can't
     /// over-fill past the empty cell.
     @State private var isAddingTile = false
+    /// True while the header size toggle is resizing — disables every size
+    /// pill so a rapid second tap can't double-grow or double-spawn.
+    @State private var isResizing = false
+
+    /// Sizes offered by the header toggle. Clicking a larger size grows this
+    /// spawn; a smaller size opens a fresh spawn at that count.
+    private let sizeOptions = [4, 6, 8]
 
     private var selectedTileId: UUID? { store.selectedTileByGroup[group.id] }
     private var expandedTileId: UUID? {
@@ -91,6 +98,11 @@ struct SpawnGridView: View {
                     .truncationMode(.tail)
             }
             Spacer()
+            // Hidden while a tile is expanded — resizing the grid underneath a
+            // full-pane terminal would be disorienting.
+            if expandedTileId == nil {
+                sizeToggle
+            }
             if expandedTileId != nil {
                 Button {
                     withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
@@ -137,6 +149,74 @@ struct SpawnGridView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    // MARK: - Size toggle
+
+    /// Segmented 4 / 6 / 8 control. The pill matching the live terminal count
+    /// is highlighted and inert; tapping a larger count grows this spawn in
+    /// place, a smaller count opens a fresh spawn at that size.
+    private var sizeToggle: some View {
+        HStack(spacing: 1) {
+            ForEach(sizeOptions, id: \.self) { count in
+                let isCurrent = count == group.tiles.count
+                Button {
+                    requestResize(to: count)
+                } label: {
+                    Text("\(count)")
+                        .font(TahoeFont.body(11, weight: .semibold))
+                        .foregroundStyle(isCurrent ? t.fg : t.fg2)
+                        .frame(minWidth: 22)
+                        .padding(.vertical, 4)
+                        .background(
+                            isCurrent ? t.surface3 : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isResizing || isCurrent)
+                .help(resizeHelp(for: count))
+                .accessibilityIdentifier("code.spawn.header.size.\(count)")
+            }
+        }
+        .padding(2)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(t.hairline, lineWidth: 0.5)
+        )
+        .opacity(isResizing ? 0.6 : 1)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("code.spawn.header.size")
+    }
+
+    private func resizeHelp(for count: Int) -> String {
+        let have = group.tiles.count
+        if count == have { return "This spawn already has \(count) terminals" }
+        if count > have { return "Grow this spawn to \(count) terminals" }
+        return "Open a new spawn with \(count) terminals"
+    }
+
+    /// Grow this spawn (larger target) or open a fresh spawn (smaller target).
+    /// No confirmation — `resizeGroup` never kills live agents. Surfaces a
+    /// transient toast on spawn failure, mirroring the "Start New Session" path.
+    private func requestResize(to count: Int) {
+        guard !isResizing, count != group.tiles.count else { return }
+        isResizing = true
+        let groupId = group.id
+        Task { @MainActor in
+            let ok = await store.resizeGroup(groupId: groupId, to: count)
+            isResizing = false
+            guard !ok else { return }
+            NotificationCenter.default.post(
+                name: .clawdmeterShowTransientToast,
+                object: nil,
+                userInfo: ["toast": TransientToast(
+                    title: "Couldn't resize this spawn to \(count) terminals",
+                    severity: .failure
+                )]
+            )
+        }
     }
 
     // MARK: - Tiles
