@@ -1960,28 +1960,16 @@ struct SidebarPane: View {
         onToggle: @escaping () -> Void
     ) -> some View {
         let row = HStack(spacing: 8) {
+            // Chevron + title toggle the section; the glyph between them is its
+            // own button that opens the icon tray. Splitting the old single
+            // toggle button into chevron-button + glyph-button + title-button
+            // is what lets the user click the monogram to assign an emoji /
+            // image without also collapsing the project.
             Button(action: ContinuumAnalytics.wrapButton("sidebar_toggle_repo", onToggle)) {
-                HStack(spacing: 8) {
-                    TahoeIcon(isExpanded ? "chevD" : "chevR", size: 10)
-                        .foregroundStyle(t.fg3)
-                        .frame(width: 10)
-                    projectGlyph(repo)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(repo.displayName)
-                            .font(TahoeFont.body(13, weight: .semibold))
-                            .foregroundStyle(t.fg)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        if let subtitle, !subtitle.isEmpty {
-                            Text(subtitle)
-                                .font(TahoeFont.body(10))
-                                .foregroundStyle(t.fg3)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
-                }
-                .contentShape(Rectangle())
+                TahoeIcon(isExpanded ? "chevD" : "chevR", size: 10)
+                    .foregroundStyle(t.fg3)
+                    .frame(width: 10)
+                    .contentShape(Rectangle())
             }
             // Plain (not HoverableButtonStyle): the whole repo header row now
             // paints one uniform hover wash below, so a per-button fill here
@@ -1990,6 +1978,28 @@ struct SidebarPane: View {
             .buttonStyle(.plain)
             .pointerStyle(.link)
             .accessibilityIdentifier("code.repo.toggle")
+
+            RepoGlyphButton(presentationStore: presentationStore, repo: repo)
+
+            Button(action: ContinuumAnalytics.wrapButton("sidebar_toggle_repo", onToggle)) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(repo.displayName)
+                        .font(TahoeFont.body(13, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(TahoeFont.body(10))
+                            .foregroundStyle(t.fg3)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerStyle(.link)
 
             Spacer()
 
@@ -2111,21 +2121,6 @@ struct SidebarPane: View {
                 else { model.expandedRepoKeys.insert(repo.key) }
             }
         )
-    }
-
-    private func projectGlyph(_ repo: AgentRepo) -> some View {
-        let hueSeed = repo.key.unicodeScalars.reduce(UInt32(5381)) { ($0 &* 33) &+ $1.value }
-        let hue = Double(hueSeed % 360) / 360.0
-        let tint = Color(hue: hue, saturation: 0.52, brightness: colorScheme == .dark ? 0.86 : 0.78)
-        let initial = repo.displayName.trimmingCharacters(in: .whitespacesAndNewlines).first.map(String.init)?.uppercased() ?? "*"
-        return RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(tint.opacity(colorScheme == .dark ? 0.28 : 0.20))
-            .overlay(
-                Text(initial)
-                    .font(TahoeFont.body(10, weight: .bold))
-                    .foregroundStyle(tint)
-            )
-            .frame(width: 22, height: 22)
     }
 
     private func sessionRow(_ session: AgentSession, isOpen: Bool, depth: Int = 0) -> some View {
@@ -2371,10 +2366,21 @@ struct SidebarPane: View {
 
     private func repoIdentityBadge(for session: AgentSession) -> RepoIdentityBadge {
         let key = repoIdentityKey(for: session)
-        if let cached = presentationStore.snapshot.repoIdentityBadges[key] {
-            return cached
+        var badge = presentationStore.snapshot.repoIdentityBadges[key]
+            ?? RepoIdentityResolver.badge(repoKey: key, displayName: session.repoDisplayName)
+        // A user-assigned project icon (set on the repo header) flows onto its
+        // session rows too, so a repo reads consistently. Image wins over emoji;
+        // emoji clears any auto-resolved remote avatar so it actually shows.
+        if let override = presentationStore.snapshot.repoIconOverrides[key] {
+            if let path = override.imagePath, !path.isEmpty {
+                badge.iconURL = URL(fileURLWithPath: path).absoluteString
+                badge.emoji = nil
+            } else if let emoji = override.emoji, !emoji.isEmpty {
+                badge.emoji = emoji
+                badge.iconURL = nil
+            }
         }
-        return RepoIdentityResolver.badge(repoKey: key, displayName: session.repoDisplayName)
+        return badge
     }
 
     private func repoIdentityKey(for session: AgentSession) -> String {
