@@ -261,6 +261,75 @@ final class UpdateCoordinatorTests: XCTestCase {
         XCTAssertEqual(driver.cancelInstalls, 1)
     }
 
+    func testCancelInstallRevertsToUpdateAvailableSynchronously() {
+        let (coordinator, driver) = makeCoordinator()
+        let update = SparkleUpdateInfo(version: "156", displayVersion: "0.29.17")
+        driver.emitFound(update)
+        driver.emitInstalling(update)
+        driver.emitProgress(UpdateInstallProgress(phase: .downloading, fraction: 0.5))
+        XCTAssertTrue(coordinator.canCancelInstall)
+
+        coordinator.cancelInstall()
+        // Popover snaps back to the pre-download state immediately — no waiting
+        // on Sparkle's async abort callback.
+        XCTAssertEqual(coordinator.state, .updateAvailable(update))
+        XCTAssertNil(coordinator.installProgress)
+        XCTAssertFalse(coordinator.canCancelInstall)
+        XCTAssertEqual(driver.cancelInstalls, 1, "Driver still tears down the live download")
+    }
+
+    func testLateCancelCallbackDoesNotClobberRevertedState() {
+        let (coordinator, driver) = makeCoordinator()
+        let update = SparkleUpdateInfo(version: "156", displayVersion: "0.29.17")
+        driver.emitFound(update)
+        driver.emitInstalling(update)
+        coordinator.cancelInstall()
+        XCTAssertEqual(coordinator.state, .updateAvailable(update))
+
+        // A stale progress frame already queued from the aborted download must
+        // be ignored rather than flipping the popover back to `.installing`.
+        driver.emitProgress(UpdateInstallProgress(phase: .downloading, fraction: 0.9))
+        XCTAssertEqual(coordinator.state, .updateAvailable(update))
+        XCTAssertNil(coordinator.installProgress)
+
+        // Sparkle's delayed abort callback is then swallowed, not painted as a
+        // generic `.userCancelled` screen.
+        driver.emitCancelled(version: "0.29.17")
+        XCTAssertEqual(coordinator.state, .updateAvailable(update))
+        XCTAssertNil(coordinator.installProgress)
+    }
+
+    func testReDownloadAfterCancelStillFlowsProgress() {
+        let (coordinator, driver) = makeCoordinator()
+        let update = SparkleUpdateInfo(version: "156", displayVersion: "0.29.17")
+        driver.emitFound(update)
+        driver.emitInstalling(update)
+        coordinator.cancelInstall()
+
+        // User presses Update again: a fresh check clears the suppression and
+        // the new download's progress drives the popover normally...
+        coordinator.checkForUpdates()
+        driver.emitFound(update)
+        driver.emitInstalling(update)
+        driver.emitProgress(UpdateInstallProgress(phase: .downloading, fraction: 0.25))
+        XCTAssertEqual(coordinator.state, .installing(update))
+        XCTAssertEqual(coordinator.installProgress, UpdateInstallProgress(phase: .downloading, fraction: 0.25))
+
+        // ...even if the *first* download's abort callback only lands now, it is
+        // swallowed and the in-flight re-download is left untouched.
+        driver.emitCancelled(version: "0.29.17")
+        XCTAssertEqual(coordinator.state, .installing(update))
+    }
+
+    func testSparkleInitiatedCancelStillShowsUserCancelled() {
+        // A cancellation that did NOT come from our Cancel button (e.g. a
+        // superseded background download) keeps the explicit cancelled screen.
+        let (coordinator, driver) = makeCoordinator()
+        driver.emitInstalling(SparkleUpdateInfo(version: "156", displayVersion: "0.29.17"))
+        driver.emitCancelled(version: "0.29.17")
+        XCTAssertEqual(coordinator.state, .userCancelled(version: "0.29.17"))
+    }
+
     func testInvalidAppcastErrorClassification() {
         let error = NSError(domain: "SUSparkleErrorDomain", code: 100, userInfo: [
             NSLocalizedDescriptionKey: "The appcast signature is invalid"
