@@ -355,7 +355,10 @@ codesign --verify --deep --strict "$APP_PATH" 2>&1 | head -3
 #    while the DMG queue still completes normally.
 # ────────────────────────────────────────────────────────────────────────
 
-if [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 && "${CLAWDMETER_SKIP_BUILD_SCRIPT_NOTARIZATION:-0}" != "1" && "${CLAWDMETER_NOTARIZE_APP_BUNDLE:-0}" == "1" ]]; then
+# App-bundle notarization is independent of DMG notarization: SKIP_BUILD_SCRIPT_NOTARIZATION
+# defers only the *DMG* submission to release-mac.sh — it must NOT also suppress stapling
+# the bare .app, which the Sparkle delta feed requires. Gate solely on NOTARIZE_APP_BUNDLE.
+if [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 && "${CLAWDMETER_NOTARIZE_APP_BUNDLE:-0}" == "1" ]]; then
   echo "▸ Notarizing the app bundle (so the ticket can be stapled to it)…"
   APP_ZIP="$BUILD_DIR/${APP_NAME}-app.zip"
   /usr/bin/ditto -c -k --keepParent "$APP_PATH" "$APP_ZIP"
