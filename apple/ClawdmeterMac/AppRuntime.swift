@@ -592,6 +592,16 @@ final class AppRuntime: ObservableObject {
                 if !Self.isHeadlessAgentMode {
                     HandoffAutoSuggestService.shared.startMonitoring()
                 }
+                // The loopback client is seeded with the wire version at
+                // construction (MacLoopbackClient.make), so the multi-host
+                // gates work from first paint. This refresh additionally
+                // populates `serverVersion` and warms the execution-host list
+                // for every Mac surface — the Mac analogue of the iOS
+                // `refreshAll()` the loopback client otherwise never gets.
+                if let loopback = self.loopbackClient {
+                    await loopback.refreshHealth()
+                    await loopback.refreshExecutionHosts()
+                }
                 runtimeLogger.info("A7 deferred subsystems started (sessions refresh + scheduler)")
             }
             // v0.27.0: openDesignDaemon.ensureRunning() removed along with

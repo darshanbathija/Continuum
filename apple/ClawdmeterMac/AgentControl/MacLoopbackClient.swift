@@ -45,7 +45,12 @@ enum MacLoopbackClient {
             host: "127.0.0.1",
             httpPort: Int(httpPort),
             wsPort: Int(wsPort),
-            token: server.localLoopbackToken
+            token: server.localLoopbackToken,
+            // The in-process daemon is this binary — seed the wire version so
+            // Mac surfaces gating on `supportsExecutionHosts` (Settings →
+            // Devices, host pickers) work from first paint. The Mac never runs
+            // `refreshAll()` on this client the way iOS does.
+            assumeServerWireVersion: AgentControlWireVersion.current
         )
     }
 }
