@@ -174,7 +174,13 @@ struct EmptyStateCenteredComposer: View {
             deviceMenu
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 4)
+        // Align the first ghost chip's glyph under the composer box's text
+        // content above it. The box insets its content by 34pt (18pt outer
+        // padding + 16pt inner); the ghost chip carries its own 8pt lead, so
+        // 26pt here puts the folder icon flush under "What should we build…"'s
+        // placeholder — symmetrical with the box instead of poking out left.
+        .padding(.leading, 26)
+        .padding(.trailing, 4)
     }
 
     private var metaChipDivider: some View {
