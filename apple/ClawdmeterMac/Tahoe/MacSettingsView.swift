@@ -40,6 +40,13 @@ public struct MacSettingsView: View {
     @State private var settingsSearch: String = ""
     @State private var voicePermissionsRefreshToken = UUID()
 
+    // Spawn-mode preferences. Keys + defaults live in `SpawnSettings` so the
+    // Code sidebar (button visibility + gear) and `SpawnConfigSheet` (seed
+    // count + agent) read the exact same values.
+    @AppStorage(SpawnSettings.showButtonKey) private var spawnShowButton: Bool = SpawnSettings.showButtonDefault
+    @AppStorage(SpawnSettings.defaultSessionCountKey) private var spawnDefaultSessionCount: Int = SpawnSettings.defaultSessionCountDefault
+    @AppStorage(SpawnSettings.defaultAgentKey) private var spawnDefaultAgentRaw: String = SpawnSettings.defaultAgentDefault
+
     // v0.22.9: dropped to `internal` because the `runtime` parameter
     // exposes `AppRuntime`, which lives in the Mac target (not the
     // shared library) and is itself `internal`. The Settings page is
@@ -187,6 +194,8 @@ public struct MacSettingsView: View {
             providerSettings
         case .workspaces:
             workspaceSettings
+        case .spawn:
+            spawnSettings
         case .envVariables:
             envVariablesSettings
         case .advanced:
@@ -311,6 +320,53 @@ public struct MacSettingsView: View {
                      sub: "Effective ignored-file patterns copied into new worktrees.") {
             WorkspaceFilesToCopySettingsRows(store: runtime?.workspaceStore)
         }
+    }
+
+    @ViewBuilder
+    private var spawnSettings: some View {
+        SettingsCard(title: "Spawn",
+                     sub: "Defaults for the Code-sidebar Spawn button, which opens a grid of agent terminals in your home directory.") {
+            SettingsRow(label: "Show Spawn button",
+                        hint: "When off, the Spawn button is hidden from the Code sidebar. Any open spawns keep running.") {
+                TahoeToggleView(on: $spawnShowButton)
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Default agent",
+                        hint: "Pre-selected when you open a new spawn. Falls back to the first installed agent if this one isn't available.") {
+                Picker("Default agent", selection: spawnDefaultAgentBinding) {
+                    ForEach(SpawnPlan.selectableAgents, id: \.self) { agent in
+                        Text(AgentKindUI.displayName(for: agent)).tag(agent)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 180)
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Default sessions",
+                        hint: "How many terminals a new spawn starts with.") {
+                Picker("Default sessions", selection: spawnDefaultSessionCountBinding) {
+                    ForEach(SpawnPlan.sessionCountOptions, id: \.self) { count in
+                        Text("\(count)").tag(count)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 120)
+            }
+        }
+    }
+
+    private var spawnDefaultAgentBinding: Binding<AgentKind> {
+        Binding(
+            get: { SpawnSettings.sanitizedAgent(spawnDefaultAgentRaw) },
+            set: { spawnDefaultAgentRaw = $0.rawValue }
+        )
+    }
+
+    private var spawnDefaultSessionCountBinding: Binding<Int> {
+        Binding(
+            get: { SpawnSettings.sanitizedSessionCount(spawnDefaultSessionCount) },
+            set: { spawnDefaultSessionCount = $0 }
+        )
     }
 
     @ViewBuilder
@@ -1223,6 +1279,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case visual
     case providers
     case workspaces
+    case spawn
     case envVariables
     case advanced
     case devices
@@ -1238,6 +1295,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .visual: return "Visual"
         case .providers: return "Providers"
         case .workspaces: return "Workspaces"
+        case .spawn: return "Spawn"
         case .envVariables: return "Env Variables"
         case .advanced: return "Advanced"
         case .devices: return "Devices"
@@ -1256,6 +1314,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             return "Choose providers, default models, and manage skills."
         case .workspaces:
             return "Worktree setup, copied local files, and branch isolation."
+        case .spawn:
+            return "Show or hide the Spawn button and set its default agent and session count."
         case .envVariables:
             return "Named repo env sets, shared variables, and .env.local materialization."
         case .advanced:
@@ -1278,6 +1338,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .visual: return "sparkles"
         case .providers: return "terminal"
         case .workspaces: return "folder"
+        case .spawn: return "grid"
         case .envVariables: return "command"
         case .advanced: return "bolt"
         case .devices: return "link"

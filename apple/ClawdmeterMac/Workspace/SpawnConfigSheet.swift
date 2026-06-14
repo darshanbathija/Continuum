@@ -13,8 +13,17 @@ struct SpawnConfigSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.tahoe) private var t
 
-    @State private var sessionCount: Int = SpawnPlan.sessionCountOptions[0]
+    /// Seeded from the Settings → Spawn default so a fresh sheet opens on the
+    /// user's preferred count (initialized here, not in `onAppear`, so there's
+    /// no 1→N flash and `onChange` doesn't fire on first paint).
+    @State private var sessionCount: Int = SpawnSettings.sanitizedSessionCount(
+        UserDefaults.standard.object(forKey: SpawnSettings.defaultSessionCountKey) as? Int
+            ?? SpawnSettings.defaultSessionCountDefault
+    )
     @State private var counts: [AgentKind: Int] = [:]
+    /// Settings → Spawn default agent; preferred by `seedDefaultAllocation`
+    /// when it's actually spawnable.
+    @AppStorage(SpawnSettings.defaultAgentKey) private var defaultAgentRaw: String = SpawnSettings.defaultAgentDefault
     @State private var isSpawning = false
     @State private var spawnErrorMessage: String?
     /// Availability resolved ONCE on appear — `binaryPath` falls through to
@@ -374,7 +383,14 @@ struct SpawnConfigSheet: View {
 
     private func seedDefaultAllocation() {
         guard counts.isEmpty else { return }
-        counts = SpawnPlan.seededAllocation(total: sessionCount, availableAgents: spawnableAgents)
+        // Prefer the Settings → Spawn default agent when it's spawnable;
+        // otherwise fall back to the first spawnable agent.
+        let preferred = SpawnSettings.sanitizedAgent(defaultAgentRaw)
+        if sessionCount > 0, spawnableAgents.contains(preferred) {
+            counts = [preferred: sessionCount]
+        } else {
+            counts = SpawnPlan.seededAllocation(total: sessionCount, availableAgents: spawnableAgents)
+        }
     }
 
     private func spawn() {
