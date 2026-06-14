@@ -480,7 +480,6 @@ struct CenterThread: View {
                     .padding(.top, 10)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            Divider()
             composerArea
         }
     }
