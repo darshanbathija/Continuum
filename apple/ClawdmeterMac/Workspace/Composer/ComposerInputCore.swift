@@ -1497,8 +1497,14 @@ struct ComposerInputCore: View {
     private func installImagePasteMonitor() {
         guard imagePasteMonitor == nil else { return }
         imagePasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Exactly ⌘V — never ⇧⌘V (paste & match style) or ⌥⌘V.
-            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+            // Exactly ⌘V — never ⇧⌘V (paste & match style) or ⌥⌘V. Match on the
+            // command-vs-(shift/option/control) modifiers only: a toggled CapsLock
+            // (or numericPad/function flag) lands in deviceIndependentFlagsMask too,
+            // so an `== .command` test would spuriously fail with CapsLock on and
+            // silently route the image paste back to plain-text paste.
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard flags.contains(.command),
+                  flags.isDisjoint(with: [.shift, .option, .control]),
                   event.charactersIgnoringModifiers?.lowercased() == "v"
             else { return event }
             // Don't hijack paste while a completion popover owns the keystroke.
@@ -1537,23 +1543,30 @@ struct ComposerInputCore: View {
         let hasText = (pb.string(forType: .string)?.isEmpty == false)
         if !hasText,
            let image = pb.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage {
-            attachImage(image, suggestedName: "pasted.png")
-            return true
+            // Only swallow ⌘V when the image was actually staged; if PNG encoding
+            // fails we must let the keystroke fall through rather than eat it.
+            return attachImage(image, suggestedName: "pasted.png")
         }
         return false
     }
 
-    private func attachImage(_ image: NSImage, suggestedName: String) {
-        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) else { return }
+    /// Encodes `image` to PNG and stages it. Returns true when the image was
+    /// successfully written + attached so callers can decide whether to swallow
+    /// the originating paste.
+    @discardableResult
+    private func attachImage(_ image: NSImage, suggestedName: String) -> Bool {
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) else { return false }
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("clawdmeter-paste-\(UUID().uuidString).png")
         do {
             try png.write(to: tmp)
             do {
                 _ = try store.attach(url: tmp, displayName: suggestedName, byteSize: png.count, isImage: true)
+                return true
             } catch let err as ComposerStore.SendError {
                 store.endSend(error: err)
+                return false
             }
-        } catch {}
+        } catch { return false }
     }
 
     private var composerBg: Color {
