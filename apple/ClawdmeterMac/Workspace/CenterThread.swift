@@ -59,6 +59,10 @@ struct CenterThread: View {
     /// When the composer contains vendor env vars, hold the detection here
     /// and surface `ChatEnvImportSheet` before the prompt reaches the model.
     @State private var pendingChatEnvImport: PendingChatEnvImport?
+    /// A cross-vendor model pick made while a turn is mid-stream. The switch
+    /// kills the in-flight response + starts a new conversation, so we confirm
+    /// first; an idle pick switches immediately (no sheet).
+    @State private var pendingAgentSwitch: PendingAgentSwitch?
 
     init(
         session: AgentSession,
@@ -162,6 +166,9 @@ struct CenterThread: View {
         }
         .sheet(isPresented: $showingAutopilotConfirm) {
             autopilotConfirm
+        }
+        .sheet(item: $pendingAgentSwitch) { pending in
+            agentSwitchConfirm(pending)
         }
         .sheet(item: $pendingChatEnvImport) { pending in
             ChatEnvImportSheet(
@@ -399,6 +406,44 @@ struct CenterThread: View {
     private func autopilotConfirmCTA(willEnable: Bool, needsTrustGrant: Bool) -> String {
         if needsTrustGrant { return "Trust repo + enable bypass" }
         return "Enable + respawn"
+    }
+
+    /// Mid-turn cross-vendor switch confirm. Only shown while a turn is
+    /// streaming, because switching kills the in-flight response and starts a
+    /// new conversation on a different provider (and billing) stack.
+    private func agentSwitchConfirm(_ pending: PendingAgentSwitch) -> some View {
+        let fromAgent = AgentKindUI.displayName(for: liveSession.agent)
+        let toAgent = AgentKindUI.displayName(for: pending.entry.provider)
+        return VStack(alignment: .leading, spacing: 12) {
+            Label("Switch to \(pending.entry.displayName)?", systemImage: "arrow.triangle.2.circlepath")
+                .font(.system(size: 14, weight: .semibold))
+                .accessibilityIdentifier("code.agent-switch.title")
+            Text("This stops the current \(fromAgent) turn and starts a new \(toAgent) conversation. Your previous messages are carried over as context, and billing moves to \(toAgent).")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(width: 420, alignment: .leading)
+            HStack {
+                Spacer()
+                Button("Cancel", action: ContinuumAnalytics.wrapButton("cancel_agent_switch", {
+                    pendingAgentSwitch = nil
+                }))
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("code.agent-switch.cancel")
+                Button("Switch + restart", action: ContinuumAnalytics.wrapButton("confirm_agent_switch", {
+                    let entry = pending.entry
+                    let effort = pending.effort
+                    pendingAgentSwitch = nil
+                    Task { await model.switchModel(sessionId: liveSession.id, to: entry, effort: effort) }
+                }))
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .tint(terraCotta)
+                .accessibilityIdentifier("code.agent-switch.confirm")
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+        .accessibilityIdentifier("code.agent-switch-sheet")
     }
 
     private var chatPane: some View {
@@ -1223,14 +1268,18 @@ struct CenterThread: View {
               let entry = catalog.entry(forId: modelId, customProviderId: customProviderId)
         else { return }
         if entry.provider != liveSession.agent {
-            // Cross-provider picks update the composer chip in place. The
-            // running runtime keeps its original provider — never hand a
-            // foreign model id to SessionConfigChanger — but the tab, transcript,
-            // and header stay put so toggling model family feels like a dial flip.
-            composerStore.agent = selectedAgent
-            composerStore.modelId = modelId
-            composerStore.customProviderId = customProviderId
-            composerStore.effort = entry.supportsEffort ? effort : nil
+            // Cross-vendor: a REAL runtime switch (tear down the running agent +
+            // spawn the new vendor's, carrying the transcript) — not the old
+            // chip-only no-op that left Codex running while the chip said Opus.
+            // This must run even when the source is harness-driven (e.g.
+            // Codex → Opus), so it's handled BEFORE the `isHarnessDriven` gate.
+            // Confirm only when a turn is mid-stream (the switch kills the
+            // in-flight response); an idle pick switches immediately.
+            if turnIsStreaming {
+                pendingAgentSwitch = PendingAgentSwitch(entry: entry, effort: effort)
+            } else {
+                Task { await model.switchModel(sessionId: liveSession.id, to: entry, effort: effort) }
+            }
             return
         }
         guard !isHarnessDriven else { return }
@@ -1432,6 +1481,15 @@ private struct PendingChatEnvImport: Identifiable {
     let detection: ChatEnvPasteDetection
     let workspaceId: UUID
     let envSetIds: Set<UUID>
+}
+
+/// A cross-vendor model pick awaiting confirmation (raised only when a turn is
+/// mid-stream — the switch interrupts it). Carries the picked entry + effort so
+/// the confirm CTA can run the same `switchModel` an idle pick would.
+private struct PendingAgentSwitch: Identifiable {
+    let id = UUID()
+    let entry: ModelCatalogEntry
+    let effort: ReasoningEffort?
 }
 
 private struct BypassPermissionWarningText: NSViewRepresentable {
