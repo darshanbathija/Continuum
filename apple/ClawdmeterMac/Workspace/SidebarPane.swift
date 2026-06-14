@@ -54,6 +54,9 @@ struct SidebarPane: View {
     /// every agent in the group, so live groups confirm first.
     @State private var closeSpawnTarget: SpawnGroup?
     @State private var showingCloseSpawnConfirm: Bool = false
+    /// Hover target for spawn rows — drives the same lift treatment session
+    /// rows get so switching between spawns reads as clearly clickable.
+    @State private var hoveredSpawnId: UUID?
     @State private var collapsedStatusGroupIDs: Set<String> = []
     @State private var collapsedPrioritySectionIDs: Set<String> = []
     @State private var sidebarViewportHeight: CGFloat = 0
@@ -709,39 +712,56 @@ struct SidebarPane: View {
 
     private func spawnGroupRow(_ group: SpawnGroup) -> some View {
         let isSelected = spawnStore.selectedGroupId == group.id
+        let isHovered = hoveredSpawnId == group.id
         return Button(action: { selectSpawnGroup(group) }) {
             HStack(spacing: 8) {
                 Image(systemName: "square.grid.2x2")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(isSelected ? t.accent : t.fg3)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isSelected ? t.accent : (isHovered ? t.fg2 : t.fg3))
                     .frame(width: 16)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(group.name)
-                        .font(TahoeFont.body(12, weight: .semibold))
+                        .font(TahoeFont.body(13, weight: .semibold))
                         .foregroundStyle(t.fg)
                     Text(group.agentSummary)
                         .font(TahoeFont.mono(9.5))
-                        .foregroundStyle(t.fg3)
+                        .foregroundStyle(isSelected || isHovered ? t.fg2 : t.fg3)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
                 Spacer()
                 Text("\(group.tiles.count)")
                     .font(TahoeFont.body(10.5, weight: .semibold))
-                    .foregroundStyle(t.fg3)
+                    .foregroundStyle(isSelected ? t.accent : t.fg2)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 1)
-                    .background(t.hair2, in: Capsule())
+                    .background(isSelected ? t.accentAlpha(0.15) : t.hair2, in: Capsule())
             }
             .padding(.horizontal, SidebarLayout.edgeInset)
-            .padding(.vertical, 5)
+            .padding(.vertical, 7)
             .background(
-                isSelected ? t.selection : Color.clear,
-                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                isSelected
+                    ? t.accentAlpha(colorScheme == .dark ? 0.18 : 0.12)
+                    : (isHovered ? t.hair2 : Color.clear),
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(isSelected ? t.accentAlpha(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
             )
             .contentShape(Rectangle())
+            .onHover { inside in
+                if inside {
+                    hoveredSpawnId = group.id
+                } else if hoveredSpawnId == group.id {
+                    hoveredSpawnId = nil
+                }
+            }
         }
         .buttonStyle(PressableButtonStyle())
+        #if os(macOS)
+        .pointerStyle(.link)
+        #endif
         .padding(.horizontal, SidebarLayout.edgeInset)
         .contextMenu {
             Button(role: .destructive) {
