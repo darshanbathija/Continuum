@@ -97,6 +97,29 @@ public actor AuditLog {
         append(entry: entry, kind: "swaps")
     }
 
+    /// Cross-vendor agent switch — distinct from a same-vendor model swap
+    /// because it tears down one provider's runtime and spawns another's,
+    /// changing the billing stack. Worth its own discriminator so the audit
+    /// makes the provider/billing change auditable.
+    public func recordAgentSwap(
+        sessionId: UUID, sourcePeer: String,
+        fromAgent: String, toAgent: String,
+        fromModel: String?, toModel: String, effort: String?
+    ) {
+        let entry: [String: Any] = [
+            "at": ISO8601DateFormatter().string(from: Date()),
+            "kind": "swap-agent",
+            "sessionId": sessionId.uuidString,
+            "sourcePeer": sourcePeer,
+            "fromAgent": fromAgent,
+            "toAgent": toAgent,
+            "oldModel": fromModel ?? "(default)",
+            "newModel": toModel,
+            "effort": effort ?? "(unchanged)",
+        ]
+        append(entry: entry, kind: "swaps")
+    }
+
     public func recordEffortChange(
         sessionId: UUID, sourcePeer: String, model: String?, effort: String
     ) {

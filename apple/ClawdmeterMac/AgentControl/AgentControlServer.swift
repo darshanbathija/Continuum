@@ -1751,22 +1751,12 @@ public final class AgentControlServer {
             if let key { await outbox.releaseInFlight(key) }
         } }
         let liveCatalog = await providerEnabledModelCatalog()
+        // A cross-vendor pick names a model under the PICKED provider, not the
+        // session's current one — resolve against the requested custom provider
+        // (falling back to the session's) so the lookup doesn't miss.
+        let lookupCustomProviderId = req.customProviderId ?? session.customProviderId
         guard !req.model.isEmpty,
-              let modelEntry = liveCatalog.entry(forId: req.model, customProviderId: session.customProviderId) else {
-            sendResponse(.badRequest, on: connection); return
-        }
-        // Cross-provider model swaps strand a running session — it can't switch
-        // the underlying CLI to a different provider's runtime (the "Connecting
-        // to Claude…" strand, PR #291). The Mac picker avoids this by opening a
-        // sibling tab; enforce it wire-level so iOS (and any client whose picker
-        // isn't agent-scoped) is protected too, not just the Mac UI.
-        guard modelEntry.provider == session.agent else {
-            sendResponse(.badRequest, on: connection); return
-        }
-        guard modelEntry.customProviderId == session.customProviderId else {
-            sendResponse(.badRequest, on: connection); return
-        }
-        if let requestedCustom = req.customProviderId, requestedCustom != session.customProviderId {
+              let modelEntry = liveCatalog.entry(forId: req.model, customProviderId: lookupCustomProviderId) else {
             sendResponse(.badRequest, on: connection); return
         }
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
@@ -1774,6 +1764,47 @@ public final class AgentControlServer {
         }
         let oldModel = session.model
         let newEffort: ReasoningEffort?? = req.effort == nil ? nil : .some(req.effort)
+        // Cross-vendor (the picked model belongs to a different agent): tear down
+        // the running runtime and spawn the new vendor's, carrying the transcript.
+        // iOS shares this path so a cross-vendor pick isn't left as a misleading
+        // chip-only no-op (the v0.42 "[codex] PR while picker showed Opus" bug).
+        if modelEntry.provider != session.agent {
+            let peer = Self.endpointString(connection.endpoint)
+            switch await switchAgentInPlace(
+                sessionId: uuid,
+                newAgent: modelEntry.provider,
+                newModel: modelEntry.cliAlias ?? req.model,
+                newEffort: newEffort,
+                newCustomProviderId: .some(modelEntry.customProviderId),
+                sourcePeer: peer
+            ) {
+            case .switched:
+                break   // fall through to respondWithSession (returns the live session)
+            case .preflightFailed, .spawnFailed:
+                // 503 either way — the client re-reads session state on retry; a
+                // preflight failure left the OLD agent running, a spawn failure
+                // degraded it. Both are recoverable (retry / revive).
+                sendResponse(.harnessReconfigureFailed, on: connection); return
+            case .notApplicable:
+                sendResponse(.badRequest, on: connection); return
+            }
+            await respondWithSession(
+                uuid: uuid,
+                idempotencyKey: req.idempotencyKey,
+                kind: .changeModel,
+                payloadHash: payloadHash,
+                connection: connection
+            )
+            return
+        }
+        // Same-vendor: preserve the custom-provider match guards (a custom
+        // provider id mismatch within the same agent is still a client bug).
+        guard modelEntry.customProviderId == session.customProviderId else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        if let requestedCustom = req.customProviderId, requestedCustom != session.customProviderId {
+            sendResponse(.badRequest, on: connection); return
+        }
         // Claude PTY → kill+respawn via SessionConfigChanger. Managed harness
         // (Grok/Codex/Cursor/Gemini) → in-place bridge respawn with the new
         // model, transcript carried (matches the Mac in-process path). Anything
@@ -4725,6 +4756,216 @@ public final class AgentControlServer {
             _ = await bridge.prompt(preamble, origin: .userRecoveryAutoSend, allowLiveProviderSpend: Self.allowLiveProviderSpend)
         }
         return true
+    }
+
+    /// Cross-vendor in-place switch: the picked model belongs to a DIFFERENT
+    /// agent than the live session (e.g. a Codex session asked to run Opus).
+    /// Unlike a same-vendor model swap, this tears down one provider's runtime
+    /// and spawns another's — possibly a different runtime *type* (Claude PTY vs
+    /// managed-harness bridge) — and flips the billing stack. Cross-vendor means
+    /// a NEW conversation (no resume across vendors); the prior transcript is
+    /// re-handed to the new agent as a non-echoing context preamble so it reads
+    /// as continuous.
+    ///
+    /// This is the cross-vendor sibling of `SessionConfigChanger.swap` (same-
+    /// vendor Claude PTY) and `reconfigureHarnessCodeSession` (same-vendor
+    /// harness). It is shared by the Mac in-process path (`SessionsModel
+    /// .switchModel`) and the daemon `/sessions/:id/model` endpoint so iOS gets
+    /// the same real switch.
+    ///
+    /// `newModel` must be cliAlias-resolved by the caller. `newEffort` /
+    /// `newCustomProviderId` are double-optional: outer nil = keep; inner nil =
+    /// clear. Returns false (and leaves the session running on the OLD agent) on
+    /// a pre-teardown preflight failure; returns false (and leaves the session
+    /// `.degraded`) on a post-teardown spawn failure — the latter is inherent
+    /// because cross-vendor teardown is irreversible.
+    /// Outcome of a cross-vendor switch. The two failure modes are distinct so
+    /// callers message correctly: `preflightFailed` never touched the running
+    /// runtime (it's still live on the OLD agent — revert the chip, no "stopped"
+    /// copy), while `spawnFailed` already tore the old runtime down (the session
+    /// is `.degraded` on the new config — surface Revive).
+    enum AgentSwitchOutcome: Sendable {
+        case switched
+        case preflightFailed(reason: String)
+        case spawnFailed
+        case notApplicable
+    }
+
+    @discardableResult
+    func switchAgentInPlace(
+        sessionId: UUID,
+        newAgent: AgentKind,
+        newModel: String,
+        newEffort: ReasoningEffort?? = nil,
+        newCustomProviderId: String?? = nil,
+        carryTranscript: Bool = true,
+        sourcePeer: String = "mac-local"
+    ) async -> AgentSwitchOutcome {
+        guard let session = registry.session(id: sessionId) else { return .notApplicable }
+        // Managed Code sessions only; legacy pane-backed sessions are retired.
+        guard session.kind == .code,
+              session.tmuxPaneId == nil, session.tmuxWindowId == nil else { return .notApplicable }
+
+        let target = crossVendorSwitchTarget(from: session.agent, to: newAgent)
+        switch target {
+        case .notCrossVendor, .unsupported:
+            return .notApplicable   // caller routes same-vendor / surfaces the unsupported reason
+        case .claudePty, .harness:
+            break
+        }
+        let targetName = AgentKindUI.displayName(for: newAgent)
+        let unavailableReason = "\(targetName) couldn't start — check it's installed and signed in."
+
+        // 1. Snapshot the transcript BEFORE any teardown (so a late projector
+        //    write can't race the rebuild).
+        let priorMessages = chatStoreRegistry.snapshotStore(for: session)?.snapshot.messages ?? []
+
+        // 2. Capture old config for restore-on-preflight-failure (including the
+        //    resume ids we're about to clear — so a restore leaves the still-live
+        //    old runtime fully resumable).
+        let oldAgent = session.agent
+        let oldModel = session.model
+        let oldEffort = session.effort
+        let oldCustom = session.customProviderId
+        let oldClaudeSid = session.claudeSessionId
+        let oldCodexThread = session.codexChatThreadId
+
+        func restoreOldConfig() async {
+            try? await registry.setLaunchConfiguration(
+                id: sessionId, agent: oldAgent, model: oldModel,
+                effort: oldEffort, customProviderId: .some(oldCustom))
+            try? await registry.setClaudeSessionId(id: sessionId, value: oldClaudeSid)
+            if let oldCodexThread { try? await registry.setCodexChatThreadId(id: sessionId, threadId: oldCodexThread) }
+        }
+
+        // 3. Commit the new launch config + clear stale resume ids FIRST, so the
+        //    spec/argv/env builders (which all read the live record) build for the
+        //    new agent and a fresh conversation. setLaunchConfiguration rebuilds
+        //    runtimeBinding → the billing stack flips to the new vendor.
+        let effortToSet: ReasoningEffort? = newEffort ?? session.effort
+        try? await registry.setLaunchConfiguration(
+            id: sessionId, agent: newAgent, model: newModel,
+            effort: effortToSet, customProviderId: newCustomProviderId)
+        try? await registry.setClaudeSessionId(id: sessionId, value: nil)
+        try? await registry.clearCodexChatThreadId(id: sessionId)
+        guard let updated = registry.session(id: sessionId) else {
+            await restoreOldConfig(); return .preflightFailed(reason: "The session changed during the switch — nothing was stopped.")
+        }
+
+        let cwd = updated.effectiveCwd
+        let resolvedAlwaysApprove = PermissionModeStore.shared.currentMode(for: updated) != .ask
+
+        // 4. PREFLIGHT the new launch inputs BEFORE touching the running runtime,
+        //    so a missing binary / removed account leaves the OLD runtime alive
+        //    and snaps the chip back (.preflightFailed — not .spawnFailed).
+        var claudePlan: ClaudePtyRegistry.SpawnPlan?
+        var harnessSpec: HarnessLaunchSpec?
+        var harnessChildEnv: [String: String]?
+        switch target {
+        case .claudePty:
+            guard let plan = await claudeSpawnPlan(for: updated) else {
+                await restoreOldConfig(); return .preflightFailed(reason: unavailableReason)
+            }
+            claudePlan = plan
+        case .harness:
+            guard let spec = harnessLaunchSpec(for: updated, model: newModel, cwd: cwd, alwaysApprove: resolvedAlwaysApprove) else {
+                await restoreOldConfig(); return .preflightFailed(reason: unavailableReason)
+            }
+            let env: [String: String]?
+            do { env = try await resolveHarnessChildEnv(for: updated, cwd: cwd) }
+            catch { await restoreOldConfig(); return .preflightFailed(reason: error.localizedDescription) }
+            guard let env else { await restoreOldConfig(); return .preflightFailed(reason: unavailableReason) }
+            harnessSpec = spec
+            harnessChildEnv = env
+        case .notCrossVendor, .unsupported:
+            return .notApplicable
+        }
+
+        // 5. Tear down the OLD runtime, keeping the chat store pinned where the
+        //    new runtime can reuse it (mirrors reconfigureHarnessCodeSession).
+        //    Stop any stale Claude JSONL wiring — it tails the old agent's file.
+        sessionWiring[sessionId]?.stop()
+        sessionWiring[sessionId] = nil
+        let oldWasHarness = harnessRegistry.contains(sessionId)
+        switch target {
+        case .harness:
+            // harness target keeps the pin to transfer to the new bridge.
+            if oldWasHarness { await harnessRegistry.remove(sessionId) }
+            else { await claudePtyRegistry.suspend(sessionId) }
+        case .claudePty:
+            // Claude PTY doesn't hold a harness-style store pin; fully release
+            // the old harness pin so it isn't leaked until the idle sweep.
+            if oldWasHarness { await teardownHarnessSession(sessionId) }
+            else { await claudePtyRegistry.suspend(sessionId) }
+        case .notCrossVendor, .unsupported:
+            return .notApplicable
+        }
+        AgentEventStream.recordEvent(sessionId: sessionId, kind: .statusChanged,
+                                     payload: ["status": "paused", "reason": "agent-switch"])
+
+        // 6. Spawn the NEW runtime. A failure here is post-teardown → degrade.
+        switch target {
+        case .claudePty:
+            await ensureClaudePtyWiring()
+            let spawnPlan = claudePlan   // immutable snapshot for the @Sendable closure
+            let host: ClaudePtyHost
+            do {
+                host = try await claudePtyRegistry.resumeOrSpawn(id: sessionId, plan: { spawnPlan })
+            } catch {
+                serverLogger.error("agent-switch claude spawn failed for \(sessionId.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                try? await registry.updateStatus(id: sessionId, status: .degraded)
+                return .spawnFailed
+            }
+            attachClaudeWiring(for: updated, cwd: cwd)
+            try? await registry.updateRuntime(id: sessionId, worktreePath: updated.worktreePath,
+                                              runtimeCwd: .some(cwd), tmuxWindowId: nil, tmuxPaneId: nil,
+                                              mode: updated.mode)
+            try? await registry.updateStatus(id: sessionId, status: .running)
+            AgentEventStream.recordEvent(sessionId: sessionId, kind: .statusChanged,
+                                         payload: ["status": "running", "reason": "agent-switch-complete"])
+            if carryTranscript, let preamble = HarnessTranscriptContext.preamble(from: priorMessages) {
+                _ = await host.submitPrompt(preamble, isChat: false, origin: .userRecoveryAutoSend,
+                                            allowLiveProviderSpend: Self.allowLiveProviderSpend)
+            }
+        case .harness:
+            guard let harnessSpec, let harnessChildEnv else {
+                try? await registry.updateStatus(id: sessionId, status: .degraded); return .spawnFailed
+            }
+            let store = oldWasHarness
+                ? chatStoreRegistry.snapshotStore(for: updated)
+                : chatStoreRegistry.acquire(for: updated)
+            guard let store else {
+                try? await registry.updateStatus(id: sessionId, status: .degraded); return .spawnFailed
+            }
+            let bridge = harnessSpec.makeBridge(sessionId, store)
+            do {
+                try await bridge.start(
+                    binary: harnessSpec.binary, arguments: harnessSpec.arguments,
+                    cwd: cwd, env: harnessChildEnv,
+                    effort: Self.harnessEffortString(updated.effort, agent: updated.agent),
+                    alwaysApprove: resolvedAlwaysApprove)
+            } catch {
+                serverLogger.error("agent-switch harness spawn failed for \(sessionId.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                await bridge.teardown()
+                try? await registry.updateStatus(id: sessionId, status: .degraded)
+                return .spawnFailed
+            }
+            harnessRegistry.register(bridge, for: sessionId)
+            try? await registry.updateStatus(id: sessionId, status: .running)
+            AgentEventStream.recordEvent(sessionId: sessionId, kind: .statusChanged,
+                                         payload: ["status": "running", "reason": "agent-switch-complete"])
+            if carryTranscript, let preamble = HarnessTranscriptContext.preamble(from: priorMessages) {
+                _ = await bridge.prompt(preamble, origin: .userRecoveryAutoSend, allowLiveProviderSpend: Self.allowLiveProviderSpend)
+            }
+        case .notCrossVendor, .unsupported:
+            return .notApplicable
+        }
+
+        await AuditLog.shared.recordAgentSwap(
+            sessionId: sessionId, sourcePeer: sourcePeer,
+            fromAgent: oldAgent.rawValue, toAgent: newAgent.rawValue,
+            fromModel: oldModel, toModel: newModel, effort: updated.effort?.rawValue)
+        return .switched
     }
 
     /// Generic harness spawn (Grok/Cursor over ACP, Codex over app-server,
@@ -8865,6 +9106,12 @@ public final class AgentControlServer {
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard let self else { return }
+            // The session may have switched agents (cross-vendor switchAgentInPlace)
+            // during the 5s settle. Don't attach a Claude JSONL tail to a session
+            // that's now a harness agent — it would fire plan/done events from the
+            // old Claude project file. The switch-away nils sessionWiring, but this
+            // Task may not have assigned yet, so re-check the live agent here.
+            guard self.registry.session(id: session.id)?.agent == .claude else { return }
             if let url = self.newestClaudeJSONL(in: projectDir) {
                 let wiring = SessionEventWiring(
                     sessionId: session.id,

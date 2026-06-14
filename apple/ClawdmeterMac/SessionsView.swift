@@ -2861,14 +2861,53 @@ public final class SessionsModel: ObservableObject {
     }
 
     public func switchModel(sessionId: UUID, to entry: ModelCatalogEntry, effort: ReasoningEffort? = nil) async {
-        // Cross-provider guard: never hand another provider's model id to the
-        // session's own runtime respawn — update the chip in place instead.
+        // Cross-vendor: the picked model belongs to a different agent (e.g. a
+        // Codex session asked to run Opus). Tear down the running runtime and
+        // spawn the new vendor's in place, carrying the transcript — a real
+        // switch, not the old chip-only no-op that left Codex running while the
+        // chip said Opus (v0.42 "[codex] PR" bug). The chip is updated
+        // optimistically since switchAgentInPlace only touches registry/runtime.
         if let session = registry.session(id: sessionId), entry.provider != session.agent {
-            applyCrossProviderModelSelection(
+            let target = crossVendorSwitchTarget(from: session.agent, to: entry.provider)
+            if case .unsupported(let reason) = target {
+                WorkspaceFeedback.failure("Can't switch agent", detail: reason)
+                return
+            }
+            guard RateLimiter.shared.tryAcquireSwap(sessionId: sessionId) else {
+                WorkspaceFeedback.info("One sec — switching too fast")
+                return
+            }
+            guard let server = AppDelegate.runtime?.agentControlServer else {
+                WorkspaceFeedback.failure("Couldn't switch agent", detail: "Control plane unavailable.")
+                return
+            }
+            WorkspaceFeedback.info("Switching to \(entry.displayName)…")
+            // Mirror the pick into the composer chip ONLY once the runtime has
+            // actually committed to the new agent — switchAgentInPlace doesn't
+            // touch the ComposerStore the chip reads. On a preflight failure the
+            // old runtime is still live, so the chip must stay on the old model
+            // (don't resurface the misleading chip this whole change kills).
+            switch await server.switchAgentInPlace(
                 sessionId: sessionId,
-                entry: entry,
-                effort: effort
-            )
+                newAgent: entry.provider,
+                newModel: entry.cliAlias ?? entry.id,
+                newEffort: .some(entry.supportsEffort ? effort : nil),
+                newCustomProviderId: .some(entry.customProviderId)
+            ) {
+            case .switched:
+                applyCrossProviderModelSelection(sessionId: sessionId, entry: entry, effort: effort)
+                WorkspaceFeedback.success("Switched to \(entry.displayName)")
+            case .preflightFailed(let reason):
+                WorkspaceFeedback.failure("Couldn't switch to \(entry.displayName)", detail: reason)
+            case .spawnFailed:
+                // Old runtime was torn down; session is degraded on the new config.
+                applyCrossProviderModelSelection(sessionId: sessionId, entry: entry, effort: effort)
+                WorkspaceFeedback.failure(
+                    "Couldn't start \(entry.displayName)",
+                    detail: "The previous session was stopped. Use Revive to retry.")
+            case .notApplicable:
+                break
+            }
             return
         }
         // Visible feedback within the click (sub-250ms): the chip already
