@@ -42,6 +42,13 @@ build_ios() {
       -destination "platform=iOS Simulator,name=${SIM_NAME}" build 2>&1 | tail -8 )
 }
 
+# Reclaim stale per-worktree DerivedData so verify runs don't pile up ~1-2GB
+# each. Only removes dirs untouched for >24h, so this run's fresh build (and the
+# build→shoot-mac/shoot-ios handoff) is preserved. Never fails the run.
+prune_derived() {
+  "${APPLE_DIR}/../tools/prune-derived-data.sh" 2>/dev/null || true
+}
+
 shoot_mac() {
   local APP="${DERIVED}/Clawdmeter.app"
   if [ ! -d "${APP}" ]; then
@@ -138,10 +145,11 @@ EOF
 }
 
 case "${1:-all}" in
-  build)      build_mac && build_ios ;;
+  build)      build_mac && build_ios; prune_derived ;;
   shoot-mac)  shoot_mac ;;
   shoot-ios)  shoot_ios ;;
   audit)      shift; audit "$@" ;;
-  all)        build_mac && build_ios && echo "[tahoe-verify] (Run shoot-mac and shoot-ios separately — they're interactive)" ;;
-  *)          echo "Usage: tahoe-verify [build|shoot-mac|shoot-ios|audit <surface>|all]" >&2; exit 2 ;;
+  prune)      prune_derived ;;
+  all)        build_mac && build_ios && echo "[tahoe-verify] (Run shoot-mac and shoot-ios separately — they're interactive)"; prune_derived ;;
+  *)          echo "Usage: tahoe-verify [build|shoot-mac|shoot-ios|audit <surface>|prune|all]" >&2; exit 2 ;;
 esac

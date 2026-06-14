@@ -474,3 +474,8 @@ cat <<EOF
 If a bad feed is published, revert docs/${CLAWDMETER_APPCAST_PATH} on main and
 rerun this script after fixing the release notes or artifact.
 EOF
+
+# Reclaim stale per-worktree DerivedData left by build-mac-dmg.sh's archive and
+# sibling worktree builds. Only removes dirs untouched for >24h; never fails the
+# release (already succeeded above).
+"$REPO_ROOT/tools/prune-derived-data.sh" || true
