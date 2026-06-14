@@ -63,8 +63,6 @@ public struct LiveSessionActivityIndicator: View {
                 )
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
-                .background(ContinuumTokens.surface2, in: Capsule())
-                .overlay(Capsule().strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5))
                 .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.95)))
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: timelineVisible)
             }
