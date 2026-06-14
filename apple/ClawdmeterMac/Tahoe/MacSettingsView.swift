@@ -640,38 +640,28 @@ public struct MacSettingsView: View {
 
         SettingsCard(title: "Recognition",
                      sub: voiceRecognitionSubtitle) {
-            SettingsRow(label: "Engine", hint: voiceEngineHint) {
-                Picker("", selection: sttEngineBinding) {
-                    Text("Apple Speech").tag(STTEngine.appleSpeech)
-                    Text("WhisperKit (local)").tag(STTEngine.whisperKit)
-                    Text("Parakeet (local)").tag(STTEngine.parakeet)
-                }
-                .labelsHidden()
-                .frame(width: 180)
-            }
-            if presentationStore.snapshot.voicePresentationPreferences.sttEngine != .appleSpeech {
-                TahoeHair().padding(.vertical, 14)
-                if let manager = runtime?.sttModelDownloadManager {
-                    VoiceLocalModelPicker(
-                        engine: presentationStore.snapshot.voicePresentationPreferences.sttEngine,
-                        downloadManager: manager,
-                        selectedModelID: presentationStore.snapshot.voicePresentationPreferences.whisperModelID,
-                        onSelect: selectModel
-                    )
-                    if manager.installedModelsApproximateByteCount > 0 {
-                        TahoeHair().padding(.vertical, 14)
-                        SettingsRow(
-                            label: "Disk usage",
-                            hint: "Approximate size of downloaded local models on this Mac."
-                        ) {
-                            Text(voiceInstalledModelsDiskUsageLabel(for: manager))
-                                .font(TahoeFont.body(11))
-                                .foregroundStyle(.secondary)
-                        }
+            // One flat list of every model — Apple Speech first, then the
+            // downloadable locals. The engine is abstracted away: selecting a
+            // row routes to its engine automatically.
+            if let manager = runtime?.sttModelDownloadManager {
+                VoiceLocalModelPicker(
+                    preferences: presentationStore.snapshot.voicePresentationPreferences,
+                    downloadManager: manager,
+                    onSelect: selectModel
+                )
+                if manager.installedModelsApproximateByteCount > 0 {
+                    TahoeHair().padding(.vertical, 14)
+                    SettingsRow(
+                        label: "Disk usage",
+                        hint: "Approximate size of downloaded local models on this Mac."
+                    ) {
+                        Text(voiceInstalledModelsDiskUsageLabel(for: manager))
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(.secondary)
                     }
-                } else {
-                    voiceWhisperModelRows
                 }
+            } else {
+                voiceWhisperModelRows
             }
             TahoeHair().padding(.vertical, 14)
             SettingsRow(label: "Language", hint: voiceLanguageHint) {
@@ -708,69 +698,38 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var voiceWhisperModelRows: some View {
-        let engine = presentationStore.snapshot.voicePresentationPreferences.sttEngine
-        let engineModels = STTModelCatalog.models(for: engine)
-        ForEach(engineModels) { model in
+        // Manager-less fallback (runtime not yet attached): flat rows over the
+        // whole catalog. Apple Speech leads; install state isn't known here.
+        let allModels = STTModelCatalog.models
+        let activeID = STTModelCatalog.activeModelID(for: presentationStore.snapshot.voicePresentationPreferences)
+        ForEach(allModels) { model in
             SettingsRow(
                 label: model.displayName,
                 hint: "\(model.sizeLabel) · \(model.tagline)"
             ) {
-                voiceWhisperModelActions(for: model)
+                voiceWhisperModelActions(for: model, isActive: model.id == activeID)
             }
-            if model.id != engineModels.last?.id {
+            if model.id != allModels.last?.id {
                 TahoeHair().padding(.vertical, 10)
             }
         }
     }
 
     @ViewBuilder
-    private func voiceWhisperModelActions(for model: STTModelDescriptor) -> some View {
-        let manager = runtime?.sttModelDownloadManager
-        let isSelected = presentationStore.snapshot.voicePresentationPreferences.whisperModelID == model.id
-        let isInstalled = manager?.isModelInstalled(model.id) ?? false
-
-        HStack(spacing: 8) {
-            if isSelected && isInstalled {
-                Text("Active")
-                    .font(TahoeFont.body(11, weight: .semibold))
-                    .foregroundStyle(.green)
-            } else if isInstalled {
-                Button("Use") {
-                    selectModel(model.id)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+    private func voiceWhisperModelActions(for model: STTModelDescriptor, isActive: Bool) -> some View {
+        // Manager-less fallback: no install/download state available, so just
+        // surface Active vs. a Use affordance. Apple Speech always works here;
+        // a downloadable model gracefully falls back until a manager attaches.
+        if isActive {
+            Text("Active")
+                .font(TahoeFont.body(11, weight: .semibold))
+                .foregroundStyle(.green)
+        } else {
+            Button("Use") {
+                selectModel(model.id)
             }
-
-            if let manager, case .downloading(let modelID, let progress) = manager.downloadState, modelID == model.id {
-                ProgressView(value: progress)
-                    .frame(width: 80)
-            } else if isInstalled {
-                Button("Delete") {
-                    try? manager?.delete(modelID: model.id)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            } else {
-                Button("Download") {
-                    downloadAndSelectModel(model.id, manager: manager)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-    }
-
-    private func downloadAndSelectModel(_ modelID: String, manager: STTModelDownloadManager?) {
-        guard let manager else { return }
-        Task { @MainActor in
-            do {
-                try await manager.download(modelID: modelID)
-                guard manager.isModelInstalled(modelID) else { return }
-                selectModel(modelID)
-            } catch {
-                // STTModelDownloadManager publishes failed/cancelled state for the row UI.
-            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
     }
 
@@ -823,17 +782,6 @@ public struct MacSettingsView: View {
         "Choose Apple Speech or a downloadable local model. Each model trades speed against accuracy and language reach."
     }
 
-    private var voiceEngineHint: String {
-        switch presentationStore.snapshot.voicePresentationPreferences.sttEngine {
-        case .appleSpeech:
-            return "Uses macOS system speech recognition — no download required."
-        case .whisperKit:
-            return "Whisper models run entirely on your Mac after you download one below."
-        case .parakeet:
-            return "Parakeet TDT on the Apple Neural Engine — fastest local engine. Apple Silicon only."
-        }
-    }
-
     private var fnGestureModeBinding: Binding<FnGestureMode> {
         Binding(
             get: { presentationStore.snapshot.voicePresentationPreferences.fnGestureMode },
@@ -846,25 +794,18 @@ public struct MacSettingsView: View {
         )
     }
 
-    private var sttEngineBinding: Binding<STTEngine> {
-        Binding(
-            get: { presentationStore.snapshot.voicePresentationPreferences.sttEngine },
-            set: { newValue in
-                var preferences = presentationStore.snapshot.voicePresentationPreferences
-                preferences.sttEngine = newValue
-                try? presentationStore.setVoicePresentationPreferences(preferences)
-            }
-        )
-    }
-
     private func selectModel(_ modelID: String) {
         var preferences = presentationStore.snapshot.voicePresentationPreferences
+        guard let descriptor = STTModelCatalog.model(forID: modelID) else { return }
         // The model id is the source of truth for the engine — picking a
-        // Parakeet model flips the engine to Parakeet, a Whisper model to WhisperKit.
-        if let descriptor = STTModelCatalog.model(forID: modelID) {
-            preferences.sttEngine = descriptor.engine
+        // Parakeet model flips the engine to Parakeet, a Whisper model to
+        // WhisperKit, Apple Speech back to the system recognizer. Apple Speech
+        // carries no download, so leave whisperModelID pointing at the last
+        // local model the user picked.
+        preferences.sttEngine = descriptor.engine
+        if descriptor.engine != .appleSpeech {
+            preferences.whisperModelID = modelID
         }
-        preferences.whisperModelID = modelID
         try? presentationStore.setVoicePresentationPreferences(preferences)
     }
 
@@ -3644,24 +3585,31 @@ private struct FullDiskAccessBanner: View {
 /// per DESIGN.md — the comparison meters carry no provider/state color; only
 /// the Active border uses the `live` green state signal.
 private struct VoiceLocalModelPicker: View {
-    let engine: STTEngine
+    let preferences: VoicePresentationPreferences
     @ObservedObject var downloadManager: STTModelDownloadManager
-    let selectedModelID: String
     let onSelect: (String) -> Void
 
     @State private var pendingLargeDownload: STTModelDescriptor?
 
-    private var engineModels: [STTModelDescriptor] {
-        STTModelCatalog.models(for: engine)
+    /// Every model, Apple Speech first. The engine is abstracted away.
+    private var allModels: [STTModelDescriptor] {
+        STTModelCatalog.models
+    }
+
+    private var activeModelID: String {
+        STTModelCatalog.activeModelID(for: preferences)
     }
 
     var body: some View {
         VStack(spacing: 10) {
-            ForEach(engineModels) { model in
+            ForEach(allModels) { model in
+                let isBuiltIn = model.engine == .appleSpeech
                 VoiceModelCard(
                     model: model,
-                    isSelected: selectedModelID == model.id,
-                    isInstalled: downloadManager.isModelInstalled(model.id),
+                    isSelected: activeModelID == model.id,
+                    // Apple Speech is built in — always available, never on disk.
+                    isInstalled: isBuiltIn || downloadManager.isModelInstalled(model.id),
+                    isBuiltIn: isBuiltIn,
                     isSupported: STTModelCatalog.isSupportedOnThisDevice(model),
                     downloadState: downloadManager.downloadState,
                     canResume: downloadManager.canResumeDownload(for: model.id),
@@ -3709,6 +3657,8 @@ private struct VoiceModelCard: View {
     let model: STTModelDescriptor
     let isSelected: Bool
     let isInstalled: Bool
+    /// Apple Speech — built into macOS, so no download/delete/size affordances.
+    var isBuiltIn: Bool = false
     let isSupported: Bool
     let downloadState: STTModelDownloadManager.DownloadState
     let canResume: Bool
@@ -3758,7 +3708,11 @@ private struct VoiceModelCard: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if !isInstalled {
+                if isBuiltIn {
+                    Label(model.sizeLabel, systemImage: "checkmark.seal")
+                        .font(TahoeFont.mono(10.5))
+                        .foregroundStyle(.secondary)
+                } else if !isInstalled {
                     Label(model.sizeLabel, systemImage: "arrow.down.circle")
                         .font(TahoeFont.mono(10.5))
                         .foregroundStyle(.secondary)
@@ -3788,7 +3742,18 @@ private struct VoiceModelCard: View {
 
     @ViewBuilder
     private var actions: some View {
-        if !isSupported {
+        if isBuiltIn {
+            // Apple Speech is always available: just Active vs. Use.
+            if isActive {
+                Text("Active")
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(.green)
+            } else {
+                Button("Use", action: onUse)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        } else if !isSupported {
             Text("Apple Silicon only")
                 .font(TahoeFont.mono(10.5))
                 .foregroundStyle(.secondary)

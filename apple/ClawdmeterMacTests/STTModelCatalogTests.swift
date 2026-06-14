@@ -15,8 +15,31 @@ final class STTModelCatalogTests: XCTestCase {
         XCTAssertEqual(parakeetIDs, ["parakeet-v3", "parakeet-v2"])
     }
 
-    func testEveryModelDeclaresItsEngine() {
-        for model in STTModelCatalog.models {
+    func testAppleSpeechLeadsTheUnifiedModelList() {
+        // The picker abstracts the engine away: Apple Speech is the first
+        // selectable model so it reads as the default the moment settings open.
+        XCTAssertEqual(STTModelCatalog.models.first?.id, STTModelCatalog.appleSpeechModelID)
+        XCTAssertEqual(STTModelCatalog.appleSpeech.engine, .appleSpeech)
+        XCTAssertEqual(STTModelCatalog.model(forID: STTModelCatalog.appleSpeechModelID)?.engine, .appleSpeech)
+        // Apple Speech is the built-in; it must not appear in the downloadables.
+        XCTAssertFalse(STTModelCatalog.downloadableModels.contains { $0.engine == .appleSpeech })
+    }
+
+    func testActiveModelIDFollowsTheEngine() {
+        // Fresh defaults (engine = Apple Speech, whisperModelID = "base") must
+        // resolve to Apple Speech, not "base".
+        XCTAssertEqual(
+            STTModelCatalog.activeModelID(for: VoicePresentationPreferences()),
+            STTModelCatalog.appleSpeechModelID
+        )
+        var local = VoicePresentationPreferences()
+        local.sttEngine = .whisperKit
+        local.whisperModelID = "small"
+        XCTAssertEqual(STTModelCatalog.activeModelID(for: local), "small")
+    }
+
+    func testEveryDownloadableModelDeclaresItsEngine() {
+        for model in STTModelCatalog.downloadableModels {
             if model.engine == .parakeet {
                 XCTAssertNotNil(model.parakeetVersionKey)
                 XCTAssertTrue(model.whisperModelName.isEmpty)
