@@ -206,75 +206,54 @@ struct CenterThread: View {
         model.registry.session(id: session.id) ?? session
     }
 
+    // Chrome-literal header: the provider logo + session title now live in the
+    // Code tab itself (favicon + label on `WorkspaceTabStrip`), so this row no
+    // longer re-states the tab. It collapses to a single dim mono run line —
+    // model · effort · host · runtime · branch — the machine strings the tab
+    // can't carry. Body opens straight onto the thread.
     private var header: some View {
-        HStack(spacing: 12) {
-            TahoeProviderGlyph(provider: headerProvider, size: 26)
-            VStack(alignment: .leading, spacing: 1) {
-                // v0.5.4: user-supplied customName takes precedence
-                // over the session's goal in the chat header.
-                Text(headerLabel(for: liveSession))
-                    .font(TahoeFont.body(15, weight: .bold))
-                    .foregroundStyle(t.fg)
+        HStack(spacing: 6) {
+            Text(headerConfigurationSummary)
+                .font(TahoeFont.mono(11))
+                .foregroundStyle(t.fg3)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityIdentifier("code.center.header.configuration")
+            if let executionHostRunLine {
+                Text("· \(executionHostRunLine)")
+                    .font(TahoeFont.mono(11))
+                    .foregroundStyle(t.fg3)
                     .lineLimit(1)
-                    .accessibilityIdentifier("code.center.header.title")
-                HStack(spacing: 6) {
-                    Text(headerConfigurationSummary)
-                        .font(TahoeFont.body(11.5))
-                        .foregroundStyle(t.fg3)
-                        .lineLimit(1)
-                        .accessibilityIdentifier("code.center.header.configuration")
-                    if let checkpointStatusText {
-                        Text("· \(checkpointStatusText)")
-                            .font(TahoeFont.body(10.5))
-                            .foregroundStyle(t.fg3)
-                            .lineLimit(1)
-                            .accessibilityIdentifier("code.header.checkpoint-status")
-                    }
-                    if let executionHostRunLine {
-                        Text("· \(executionHostRunLine)")
-                            .font(TahoeFont.body(10.5))
-                            .foregroundStyle(t.fg3)
-                            .lineLimit(1)
-                            .accessibilityIdentifier("code.center.header.execution-host")
-                    }
-                }
+                    .accessibilityIdentifier("code.center.header.execution-host")
             }
-            Spacer()
+            if let checkpointStatusText {
+                Text("· \(checkpointStatusText)")
+                    .font(TahoeFont.mono(11))
+                    .foregroundStyle(t.fg4)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("code.header.checkpoint-status")
+            }
             if let branch = branchLabel {
-                TahoePill(tone: .chip) {
-                    HStack(spacing: 5) {
-                        GitHubBranchStatusIcon(prBranchIconKind, size: 10)
-                        Text(branch)
-                            .font(TahoeFont.mono(11))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .foregroundStyle(prBranchColor)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
+                Text("·")
+                    .font(TahoeFont.mono(11))
+                    .foregroundStyle(t.fg4)
+                HStack(spacing: 4) {
+                    GitHubBranchStatusIcon(prBranchIconKind, size: 10)
+                    Text(branch)
+                        .font(TahoeFont.mono(11))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                .frame(maxWidth: 190)
+                .foregroundStyle(prBranchColor)
                 .help(branchTooltip)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("code.center.header.branch")
             }
-            // v0.29.25: header `⚡ ask` permission-mode pill removed per
-            // user feedback. The composer's `PermissionModeChip` already
-            // sits to the right of the model+effort chip and exposes the
-            // same `ask / accept edits / plan / bypass` Menu plus the
-            // ⇧⌘1-4 shortcuts — so the header copy was just a duplicate
-            // floating to the right of the branch chip. Keeping the
-            // composer pill keeps mode-selection adjacent to where the
-            // user is about to type, which is the better mental model.
-            // Read-only transcripts already disable composer actions, so a
-            // second header badge would duplicate the same state.
-            //
-            // v0.38: the transcript-density Menu that lived here moved to
-            // Settings → Visual ("Code and diff themes"). Density is a global
-            // visual default, not a per-session header toggle — it now reads
-            // from `SessionPresentationStore.transcriptDensity`.
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 22)
-        .padding(.top, 14)
-        .padding(.bottom, 10)
+        .padding(.top, 9)
+        .padding(.bottom, 8)
         // Containment is required here: a bare container identifier propagates
         // onto every child AX element and would overwrite the header controls'
         // own identifiers, breaking AX addressability. Same bug class as the
@@ -1283,21 +1262,6 @@ struct CenterThread: View {
 
     private func effectiveEffort(forModelId modelId: String?) -> ReasoningEffort? {
         Self.effectiveEffort(for: liveSession, modelId: modelId, catalog: catalog)
-    }
-
-    private var headerProvider: TahoeProvider {
-        // Normalize an empty modelId to nil (matching headerConfigurationSummary)
-        // so the glyph and the summary text resolve the same provider.
-        let modelId = composerStore.modelId.flatMap { id in
-            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        } ?? effectiveModelId
-        return TahoeProvider.resolvedForModelEntry(
-            modelId: modelId,
-            customProviderId: composerStore.customProviderId ?? liveSession.customProviderId,
-            fallbackAgent: model.isProvisioning(liveSession.id) ? composerStore.agent : liveSession.agent,
-            catalog: catalog
-        )
     }
 
     private var headerConfigurationSummary: String {
