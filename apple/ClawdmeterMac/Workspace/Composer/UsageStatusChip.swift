@@ -198,12 +198,7 @@ struct ContextUsageChip: View {
  showingPopover.toggle() 
                 }
             )) {
-            HStack(spacing: 5) {
-                ring
-                Text(percentText)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
+            ring
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(Color.secondary.opacity(isHovered ? 0.16 : 0.10), in: Capsule())
