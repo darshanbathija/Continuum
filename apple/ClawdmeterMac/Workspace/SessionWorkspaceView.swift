@@ -393,6 +393,15 @@ struct SessionWorkspaceView: View {
         .onChange(of: workbenchState.previewIntent?.id) { _, _ in
             Task { await handlePreviewIntent() }
         }
+        // If the review pane stops being shown mid-drag (e.g. the window
+        // crosses below `reviewPaneThreshold` while the divider is held),
+        // the handle — and its `onCommit` — is removed before the drag ends,
+        // stranding a non-nil `dragReviewWidth`. Clear it so a stale,
+        // never-committed width can't win over the persisted value when the
+        // pane reappears.
+        .onChange(of: effectiveShowReviewPane) { _, shown in
+            if !shown { dragReviewWidth = nil }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .toggleCodeReviewPane)) { _ in
             animateWorkspaceChange(Self.reviewPaneToggleAnimation) {
                 let willExpand = !workbenchState.showingReviewPane
