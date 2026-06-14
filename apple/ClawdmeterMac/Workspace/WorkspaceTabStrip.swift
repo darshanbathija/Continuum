@@ -218,13 +218,19 @@ struct WorkspaceTabStrip: View {
         let isActive = activeTerminalTabId == nil
             && activeDocumentTabId == nil
             && session.id == activeSessionId
-        let labels = WorkspaceSessionTabLabel.labels(for: session)
+        let assistantSummary = WorkspaceSessionTabLabel.shortSummary(for: session) == nil
+            ? latestAssistantSummary(for: session)
+            : nil
+        let labels = WorkspaceSessionTabLabel.labels(for: session, assistantSummary: assistantSummary)
+        let streamSessions = (session.status == .running || session.status == .planning) ? [session] : []
         return tabRow(
             title: labels.title,
             subtitle: labels.subtitle,
             leading: .provider(session.tahoeProvider, live: session.status == .running),
             isActive: isActive,
             labelWidth: labelWidth,
+            streamSessions: streamSessions,
+            streamIsFocused: isActive,
             selectAction: { model.openSession(session) },
             closeAction: { Task { await model.endSession(id: session.id) } }
         )
@@ -335,6 +341,8 @@ struct WorkspaceTabStrip: View {
         leading: TabLeading,
         isActive: Bool,
         labelWidth: CGFloat,
+        streamSessions: [AgentSession] = [],
+        streamIsFocused: Bool = false,
         selectAction: @escaping () -> Void,
         closeAction: @escaping () -> Void
     ) -> some View {
@@ -379,6 +387,20 @@ struct WorkspaceTabStrip: View {
         .padding(.vertical, 5)
         .frame(height: 28)
         .background(
+            Group {
+                if !streamSessions.isEmpty {
+                    WorktreeStreamCable(
+                        activeSessions: streamSessions,
+                        isOpen: streamIsFocused,
+                        resolveStore: { model.chatStore(for: $0) }
+                    )
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 3)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+            }
+        )
+        .background(
             RoundedRectangle(cornerRadius: 7)
                 .fill(isActive ? t.surfaceSolid2.opacity(0.88) : Color.clear)
         )
@@ -404,5 +426,25 @@ struct WorkspaceTabStrip: View {
         let branch = session.workspaceBranchLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !branch.isEmpty else { return "Terminal" }
         return "Terminal - \(branch)"
+    }
+
+    private func latestAssistantSummary(for session: AgentSession) -> String? {
+        guard let store = model.chatStore(for: session) else { return nil }
+        for message in store.snapshot.messages.reversed() where message.kind == .assistantText {
+            if let summary = Self.cleanAssistantSummary(message.body) {
+                return summary
+            }
+        }
+        return nil
+    }
+
+    private static func cleanAssistantSummary(_ raw: String) -> String? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let citationRange = text.range(of: "<oai-mem-citation>") {
+            text.removeSubrange(citationRange.lowerBound..<text.endIndex)
+        }
+        text = ClawdmeterTextUtilities.collapsedWhitespacePreview(text, limit: 160)
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "`\"'")))
+        return text.isEmpty ? nil : text
     }
 }

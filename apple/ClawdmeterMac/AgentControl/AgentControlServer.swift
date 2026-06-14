@@ -8475,11 +8475,13 @@ public final class AgentControlServer {
         if (session.customName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
             let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
-                let cap = 40
-                let truncated = trimmed.count <= cap
-                    ? trimmed
-                    : String(trimmed[..<trimmed.index(trimmed.startIndex, offsetBy: cap - 1)]) + "…"
-                try? await registry.rename(id: session.id, name: truncated)
+                try? await registry.rename(
+                    id: session.id,
+                    name: ClawdmeterTextUtilities.firstWords(
+                        trimmed,
+                        WorkspaceSessionTabLabel.summaryWordLimit
+                    )
+                )
             }
         }
         // Echo the user prompt into the chat store so the UI clears

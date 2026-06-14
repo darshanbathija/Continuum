@@ -1172,6 +1172,7 @@ struct SidebarPane: View {
         // streaming a turn* (input → cache → thinking → output) — observed live
         // by `WorktreeStreamCable` below, not inferred from this coarse status.
         let activeSessions = wt.sessions.filter { $0.status == .running || $0.status == .planning }
+        let rowLabels = worktreeDisplayLabels(for: wt, activeSessions: activeSessions)
         let archiveAction = {
             let sessions = wt.sessions
             let ids = sessions.map(\.id)
@@ -1205,11 +1206,20 @@ struct SidebarPane: View {
                 HStack(spacing: 6) {
                     GitHubBranchStatusIcon(worktreeBranchIconKind(for: wt), size: 14)
                         .accessibilityIdentifier("code.worktree.branch-icon")
-                    Text(wt.branch)
-                        .font(TahoeFont.body(12.5, weight: .medium))
-                        .foregroundStyle(t.fg)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    VStack(alignment: .leading, spacing: rowLabels.subtitle.isEmpty ? 0 : 1) {
+                        Text(rowLabels.title)
+                            .font(TahoeFont.body(12.5, weight: .medium))
+                            .foregroundStyle(t.fg)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if !rowLabels.subtitle.isEmpty {
+                            Text(rowLabels.subtitle)
+                                .font(TahoeFont.body(9.5))
+                                .foregroundStyle(t.fg3)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
                     Spacer(minLength: 4)
                 }
                 .padding(.leading, 20)
@@ -1273,6 +1283,28 @@ struct SidebarPane: View {
             worktreeContextMenu(wt)
         }
         .padding(.horizontal, SidebarLayout.edgeInset)
+    }
+
+    private func worktreeDisplayLabels(
+        for wt: WorktreeGroup,
+        activeSessions: [AgentSession]
+    ) -> WorkspaceSessionTabLabel.Labels {
+        let branch = wt.branch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let primary = activeSessions.max(by: { $0.lastEventAt < $1.lastEventAt }) else {
+            return WorkspaceSessionTabLabel.Labels(title: branch, subtitle: "")
+        }
+        let title = WorkspaceSessionTabLabel.shortSummary(for: primary)
+            ?? WorkspaceSessionTabLabel.shortSummary(
+                for: primary,
+                assistantSummary: latestAssistantSummary(for: primary)
+            )
+        guard let title else {
+            return WorkspaceSessionTabLabel.Labels(title: branch, subtitle: "")
+        }
+        return WorkspaceSessionTabLabel.Labels(
+            title: title,
+            subtitle: title == branch ? "" : branch
+        )
     }
 
     @ViewBuilder
