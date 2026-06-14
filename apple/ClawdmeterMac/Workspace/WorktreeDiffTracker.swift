@@ -126,30 +126,37 @@ final class WorktreeDiffTracker: ObservableObject {
                 break
             }
         }
-        if !foundBase,
-           let headStat = await numstatTotal(
+        if foundBase {
+            // Supplement the committed branch delta with any uncommitted edits
+            // on top of HEAD. `--cached` (index vs HEAD) and the plain numstat
+            // (working tree vs index) are disjoint, so summing them yields the
+            // full working-tree-vs-HEAD delta without overlap.
+            if let staged = await numstatTotal(
+                git: git,
+                cwd: cwd,
+                arguments: ["-C", cwd, "diff", "--cached", "--numstat"],
+                runner: runner
+            ) {
+                total.add(staged)
+            }
+            if let unstaged = await numstatTotal(
+                git: git,
+                cwd: cwd,
+                arguments: ["-C", cwd, "diff", "--numstat"],
+                runner: runner
+            ) {
+                total.add(unstaged)
+            }
+        } else if let headStat = await numstatTotal(
             git: git,
             cwd: cwd,
+            // No default branch to diff against; `git diff HEAD` already covers
+            // both staged and unstaged edits, so it is the complete total on its
+            // own. Adding `--cached`/`--numstat` here would double-count.
             arguments: ["-C", cwd, "diff", "--numstat", "HEAD"],
             runner: runner
-           ) {
+        ) {
             total.add(headStat)
-        }
-        if let staged = await numstatTotal(
-            git: git,
-            cwd: cwd,
-            arguments: ["-C", cwd, "diff", "--cached", "--numstat"],
-            runner: runner
-        ) {
-            total.add(staged)
-        }
-        if let unstaged = await numstatTotal(
-            git: git,
-            cwd: cwd,
-            arguments: ["-C", cwd, "diff", "--numstat"],
-            runner: runner
-        ) {
-            total.add(unstaged)
         }
         return total
     }

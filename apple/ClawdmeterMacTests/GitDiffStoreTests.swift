@@ -171,7 +171,34 @@ final class GitDiffStoreTests: XCTestCase {
         await tracker.refresh(paths: [repoURL.path])
 
         let stat = try XCTUnwrap(tracker.stat(for: repoURL.path))
-        XCTAssertGreaterThan(stat.additions, 0)
+        // Exactly one added line on top of HEAD — staged and unstaged numstats
+        // must not double-count the same change.
+        XCTAssertEqual(stat.additions, 1)
+        XCTAssertEqual(stat.deletions, 0)
+    }
+
+    func test_worktreeDiffTrackerSumsStagedAndUnstagedWithoutOverlap() async throws {
+        let git = try XCTUnwrap(git)
+        // Stage one new line, then add a second uncommitted line on top.
+        try "baseline\nstaged line\n".write(
+            to: repoURL.appendingPathComponent("tracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await runGit(["add", "tracked.txt"])
+        try "baseline\nstaged line\nunstaged line\n".write(
+            to: repoURL.appendingPathComponent("tracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let tracker = WorktreeDiffTracker(gitLocator: { git })
+
+        await tracker.refresh(paths: [repoURL.path])
+
+        let stat = try XCTUnwrap(tracker.stat(for: repoURL.path))
+        // Two distinct added lines (one staged, one unstaged) — total 2, not 3+.
+        XCTAssertEqual(stat.additions, 2)
+        XCTAssertEqual(stat.deletions, 0)
     }
 
     func test_gitDiffPaneActionDescriptorsExposeStableTargets() {
