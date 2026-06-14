@@ -238,7 +238,7 @@ struct CodeWorkspaceDraftComposer: View {
                 }
             }
             store.endSend()
-            model.clearDraftWorkspaceTab(workspaceDraft)
+            model.consumeDraftWorkspaceTab(workspaceDraft, opening: session)
         } catch let err as MacComposerSender.Error {
             recoverDraftIfNeeded(
                 session: spawnedSession,

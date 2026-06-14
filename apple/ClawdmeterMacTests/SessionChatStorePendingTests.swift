@@ -186,6 +186,58 @@ final class SessionChatStorePendingTests: XCTestCase {
                      "auto-reconcile should clear the pending slot on body match")
     }
 
+    func test_reconcilePending_clearsAttachmentPromptWhenStagedPathDiffers() async throws {
+        let store = SessionChatStore(sessionId: UUID(), sdkOnly: true)
+        store.start()
+        defer { store.stop() }
+
+        store.injectPending(
+            text: "@/Users/me/Desktop/Screenshots/SCR-20260614-pkny.png\nremove the % number",
+            attachmentRefs: ["SCR-20260614-pkny.png"]
+        )
+        let userMsg = ChatMessage(
+            id: UUID().uuidString,
+            kind: .userText,
+            title: "You",
+            body: "@/repo/.clawdmeter-attachments/session/0A7AD7AC-2267-416F-B475-7FCB56D3DC7F.png\nremove the % number",
+            at: Date()
+        )
+
+        store.appendSDKMessages([userMsg])
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertNil(
+            store.pendingMessage,
+            "Attachment sends must reconcile after staging rewrites the absolute @path."
+        )
+    }
+
+    func test_reconcilePending_preservesUserMentionsWhenMatchingAttachmentPrompt() async throws {
+        let store = SessionChatStore(sessionId: UUID(), sdkOnly: true)
+        store.start()
+        defer { store.stop() }
+
+        store.injectPending(
+            text: "@/Users/me/Desktop/Screenshots/SCR-20260614-pkny.png\n@/repo/apple/ClawdmeterMac/SessionsView.swift\nfix this",
+            attachmentRefs: ["SCR-20260614-pkny.png"]
+        )
+        let userMsg = ChatMessage(
+            id: UUID().uuidString,
+            kind: .userText,
+            title: "You",
+            body: "@/repo/apple/ClawdmeterMac/SessionsView.swift\nfix this",
+            at: Date()
+        )
+
+        store.appendSDKMessages([userMsg])
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertNil(
+            store.pendingMessage,
+            "Only absolute attachment @/path lines should be stripped; user @mentions remain part of the match."
+        )
+    }
+
     /// /review P1: a retry that re-hits the offline path must NOT
     /// double-enqueue the same pending — otherwise drain replays the
     /// message twice. Dedupe is by `PendingMessage.id`.
