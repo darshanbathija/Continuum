@@ -2000,7 +2000,12 @@ struct SidebarPane: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(HoverableButtonStyle(cornerRadius: ContinuumTokens.Radius.button))
+            // Plain (not HoverableButtonStyle): the whole repo header row now
+            // paints one uniform hover wash below, so a per-button fill here
+            // would double up and make the title region read darker than the
+            // rest of the row. Keep the link cursor so it still feels clickable.
+            .buttonStyle(.plain)
+            .pointerStyle(.link)
             .accessibilityIdentifier("code.repo.toggle")
 
             Spacer()
@@ -2045,7 +2050,21 @@ struct SidebarPane: View {
         .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.vertical, subtitle == nil ? 6 : 5)
 
+        // Hover the whole repo section, not just the title text. The title used
+        // to be the only hover-reactive control; the user expects the entire row
+        // (chevron → title → count → gear → +) to light up as one target.
+        let hoverKey = reorderKey ?? repo.key
+        let isHeaderHovered = hoveredRepoHeaderKey == hoverKey
         return row
+            // Inset the wash inside the row frame rather than padding the row
+            // itself, so the highlight gets a small side margin without nudging
+            // the header content out of alignment with the child session rows.
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHeaderHovered ? t.hover : Color.clear)
+                    .padding(.horizontal, SidebarLayout.edgeInset)
+            }
+            .animation(.easeOut(duration: 0.12), value: isHeaderHovered)
             .overlay(alignment: .top) {
                 if let reorderKey, dropTargetRepoKey == reorderKey {
                     Rectangle()
@@ -2055,9 +2074,8 @@ struct SidebarPane: View {
                 }
             }
             .onHover { inside in
-                guard let reorderKey else { return }
-                if inside { hoveredRepoHeaderKey = reorderKey }
-                else if hoveredRepoHeaderKey == reorderKey { hoveredRepoHeaderKey = nil }
+                if inside { hoveredRepoHeaderKey = hoverKey }
+                else if hoveredRepoHeaderKey == hoverKey { hoveredRepoHeaderKey = nil }
             }
             .dropDestination(for: String.self) { items, _ in
                 guard let reorderKey, let dragged = items.first else { return false }
