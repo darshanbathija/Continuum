@@ -13,6 +13,10 @@ struct WorkbenchPaneResizeHandle: View {
     /// When `true`, dragging left widens the pane (handle sits on the pane's
     /// leading edge, e.g. the review column).
     var invertDrag: Bool = false
+    /// Fired once when the drag finishes. Lets the caller fold the live
+    /// drag-local width back into persisted state with a single write
+    /// (the per-tick `setWidth` path stays disk- and observable-free).
+    var onCommit: (() -> Void)? = nil
     var accessibilityIdentifier: String?
 
     @State private var widthAtDragStart: CGFloat?
@@ -53,6 +57,7 @@ struct WorkbenchPaneResizeHandle: View {
                     widthAtDragStart = nil
                     isDragging = false
                     NSCursor.pop()
+                    onCommit?()
                 }
         )
         .accessibilityIdentifier(accessibilityIdentifier ?? "code.workspace.resize-handle")

@@ -475,21 +475,33 @@ final class WorkbenchState: ObservableObject {
         snapshot.reviewWidth.map { CGFloat($0) }
     }
 
-    func setSidebarWidth(_ width: CGFloat) {
+    /// Pure clamp for the sidebar width. Shared by the persisting setter and
+    /// the live drag path so the in-flight width and the committed width agree
+    /// exactly — otherwise releasing the divider would snap (a visible jump).
+    func clampedSidebarWidth(_ width: CGFloat) -> CGFloat {
         let maxAllowed = max(
             Self.minSidebarWidth,
             workspaceWidth - Self.minCenterWidth - Self.minReviewWidth - 24
         )
-        let clamped = min(max(width, Self.minSidebarWidth), min(Self.maxSidebarWidth, maxAllowed))
-        update { $0.sidebarWidth = Double(clamped) }
+        return min(max(width, Self.minSidebarWidth), min(Self.maxSidebarWidth, maxAllowed))
     }
 
-    func setReviewWidth(_ width: CGFloat) {
+    /// Pure clamp for the review-pane width. See `clampedSidebarWidth`.
+    func clampedReviewWidth(_ width: CGFloat) -> CGFloat {
         let maxAllowed = max(
             Self.minReviewWidth,
             workspaceWidth - sidebarWidth - Self.minCenterWidth - 24
         )
-        let clamped = min(max(width, Self.minReviewWidth), min(Self.maxReviewWidth, maxAllowed))
+        return min(max(width, Self.minReviewWidth), min(Self.maxReviewWidth, maxAllowed))
+    }
+
+    func setSidebarWidth(_ width: CGFloat) {
+        let clamped = clampedSidebarWidth(width)
+        update { $0.sidebarWidth = Double(clamped) }
+    }
+
+    func setReviewWidth(_ width: CGFloat) {
+        let clamped = clampedReviewWidth(width)
         update { $0.reviewWidth = Double(clamped) }
     }
 

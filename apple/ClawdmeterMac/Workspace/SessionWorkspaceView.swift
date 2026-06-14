@@ -27,6 +27,12 @@ struct SessionWorkspaceView: View {
     @State private var showingModeSwitchOverlay: Bool = false
     @State private var modeSwitchLabel: String = ""
     @State private var showingWorkspaceSwitcher: Bool = false
+    /// Live pane widths during a divider drag. Held locally so each drag tick
+    /// re-runs only THIS view's body (the `.frame` width) — `workbenchState`
+    /// is untouched until drag-end, so child panes don't re-render and nothing
+    /// hits disk per tick. nil = not dragging; fall back to persisted width.
+    @State private var dragSidebarWidth: CGFloat?
+    @State private var dragReviewWidth: CGFloat?
     @StateObject private var launcher = SessionLauncherModel()
     @ObservedObject var workbenchState: WorkbenchState
     @StateObject private var browserControllers = BrowserWorkspaceControllerStore()
@@ -77,7 +83,8 @@ struct SessionWorkspaceView: View {
     }
 
     private var animatedReviewPaneWidth: CGFloat {
-        effectiveShowReviewPane ? effectiveReviewPaneWidth : 0
+        // Live drag width wins while the review divider is being dragged.
+        effectiveShowReviewPane ? (dragReviewWidth ?? effectiveReviewPaneWidth) : 0
     }
 
     /// User-resized width wins when set; otherwise fall back to the tab-aware
@@ -130,12 +137,16 @@ struct SessionWorkspaceView: View {
                         presentationStore: presentationStore
                     )
                 }
-                .frame(width: workbenchState.sidebarWidth)
+                .frame(width: dragSidebarWidth ?? workbenchState.sidebarWidth)
                 WorkbenchPaneResizeHandle(
-                    getWidth: { workbenchState.sidebarWidth },
-                    setWidth: { workbenchState.setSidebarWidth($0) },
+                    getWidth: { dragSidebarWidth ?? workbenchState.sidebarWidth },
+                    setWidth: { dragSidebarWidth = workbenchState.clampedSidebarWidth($0) },
                     minWidth: WorkbenchState.minSidebarWidth,
                     maxWidth: WorkbenchState.maxSidebarWidth,
+                    onCommit: {
+                        if let w = dragSidebarWidth { workbenchState.setSidebarWidth(w) }
+                        dragSidebarWidth = nil
+                    },
                     accessibilityIdentifier: "code.workspace.resize.sidebar"
                 )
 
@@ -231,11 +242,15 @@ struct SessionWorkspaceView: View {
 
                 if effectiveShowReviewPane {
                     WorkbenchPaneResizeHandle(
-                        getWidth: { effectiveReviewPaneWidth },
-                        setWidth: { workbenchState.setReviewWidth($0) },
+                        getWidth: { dragReviewWidth ?? effectiveReviewPaneWidth },
+                        setWidth: { dragReviewWidth = workbenchState.clampedReviewWidth($0) },
                         minWidth: WorkbenchState.minReviewWidth,
                         maxWidth: WorkbenchState.maxReviewWidth,
                         invertDrag: true,
+                        onCommit: {
+                            if let w = dragReviewWidth { workbenchState.setReviewWidth(w) }
+                            dragReviewWidth = nil
+                        },
                         accessibilityIdentifier: "code.workspace.resize.review"
                     )
                 }
@@ -377,6 +392,15 @@ struct SessionWorkspaceView: View {
         }
         .onChange(of: workbenchState.previewIntent?.id) { _, _ in
             Task { await handlePreviewIntent() }
+        }
+        // If the review pane stops being shown mid-drag (e.g. the window
+        // crosses below `reviewPaneThreshold` while the divider is held),
+        // the handle — and its `onCommit` — is removed before the drag ends,
+        // stranding a non-nil `dragReviewWidth`. Clear it so a stale,
+        // never-committed width can't win over the persisted value when the
+        // pane reappears.
+        .onChange(of: effectiveShowReviewPane) { _, shown in
+            if !shown { dragReviewWidth = nil }
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleCodeReviewPane)) { _ in
             animateWorkspaceChange(Self.reviewPaneToggleAnimation) {
