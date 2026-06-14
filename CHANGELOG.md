@@ -4,6 +4,30 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.42.0 build 247] - 2026-06-14 - Per-project icons, live working indicators, Code-sidebar polish
+
+Per-project emoji/icon picker, steady data-stream working indicators, an
+active-branch cable animation, and a round of Code-sidebar repo-header polish.
+
+### Added
+
+- **Per-project emoji/icon picker** in the Code sidebar (click the monogram). (#484)
+- **Steady Tenths Stream working indicator** with live elapsed readout for Chat
+  and Code tabs. (#486)
+- **Active-branch data-stream cable** animation on working-branch rows. (#487)
+
+### Changed
+
+- **Repo-header polish:** chevron reveals on hover, pointing-hand cursor on the
+  gear + "+", Spawn "+" stays visible with the gear sliding in beside it. (#479, #481, #482)
+- Removed the green live dot from the Code-tab workspace tab strip. (#480)
+- Added leading padding to the sidebar "Projects" header. (#485)
+
+### Fixed
+
+- **App-update status stays in the top-right popover** instead of a center
+  overlay (reworked onto a headless Sparkle user driver). (#483)
+
 ## [0.41.0 build 246] - 2026-06-14 - Smooth pane resize, numbered terminal tabs, Code-tab polish, delta updates
 
 Smooth Code-workspace divider dragging, positional terminal-tab labels, a
