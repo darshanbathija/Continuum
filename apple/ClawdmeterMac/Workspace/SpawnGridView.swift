@@ -87,16 +87,9 @@ struct SpawnGridView: View {
             Image(systemName: "square.grid.2x2")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(t.fg2)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(group.name)
-                    .font(TahoeFont.body(15, weight: .bold))
-                    .foregroundStyle(t.fg)
-                Text("\(group.tiles.count) \(group.tiles.count == 1 ? "terminal" : "terminals") · \(group.agentSummary) · in ~")
-                    .font(TahoeFont.mono(10.5))
-                    .foregroundStyle(t.fg3)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
+            Text(group.name)
+                .font(TahoeFont.body(15, weight: .bold))
+                .foregroundStyle(t.fg)
             Spacer()
             // Hidden while a tile is expanded — resizing the grid underneath a
             // full-pane terminal would be disorienting.
