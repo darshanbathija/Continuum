@@ -65,9 +65,11 @@ struct SidebarPane: View {
     /// header is the drag handle now (the grip dot-grid is gone): hovering shows
     /// an open palm, grabbing flips to a closed palm. `dropTargetRepoKey` paints
     /// the insertion highlight while a project is dragged over a header;
-    /// `pressedRepoHeaderKey` drives the closed-palm cursor while a header is held.
+    /// `pressedRepoHeaderKey` drives the closed-palm cursor while a header is held;
+    /// `hoveredRepoHeaderKey` lights up the whole header row on hover.
     @State private var dropTargetRepoKey: String?
     @GestureState private var pressedRepoHeaderKey: String?
+    @State private var hoveredRepoHeaderKey: String?
     @State private var colorTagTarget: AgentSession?
     @State private var colorTagInput: String = ""
     @State private var showingColorTagAlert = false
@@ -1981,7 +1983,12 @@ struct SidebarPane: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(HoverableButtonStyle(cornerRadius: ContinuumTokens.Radius.button))
+            // Plain (not HoverableButtonStyle): the whole repo header row now
+            // paints one uniform hover wash below, so a per-button fill here
+            // would double up and make the title region read darker than the
+            // rest of the row. Keep the link cursor so it still feels clickable.
+            .buttonStyle(.plain)
+            .pointerStyle(.link)
             .accessibilityIdentifier("code.repo.toggle")
 
             Spacer()
@@ -2026,7 +2033,24 @@ struct SidebarPane: View {
         .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.vertical, subtitle == nil ? 6 : 5)
 
+        // Hover the whole repo section, not just the title text. The title used
+        // to be the only hover-reactive control; the user expects the entire row
+        // (chevron → title → count → gear → +) to light up as one target. This
+        // hover wash is independent of the palm-cursor drag affordance below:
+        // `hoveredRepoHeaderKey` paints the highlight, `pressedRepoHeaderKey`
+        // (a @GestureState) drives the closed-palm cursor — they coexist.
+        let hoverKey = reorderKey ?? repo.key
+        let isHeaderHovered = hoveredRepoHeaderKey == hoverKey
         let decorated = row
+            // Inset the wash inside the row frame rather than padding the row
+            // itself, so the highlight gets a small side margin without nudging
+            // the header content out of alignment with the child session rows.
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHeaderHovered ? t.hover : Color.clear)
+                    .padding(.horizontal, SidebarLayout.edgeInset)
+            }
+            .animation(.easeOut(duration: 0.12), value: isHeaderHovered)
             .overlay(alignment: .top) {
                 if let reorderKey, dropTargetRepoKey == reorderKey {
                     Rectangle()
@@ -2034,6 +2058,10 @@ struct SidebarPane: View {
                         .frame(height: 2)
                         .padding(.horizontal, SidebarLayout.edgeInset)
                 }
+            }
+            .onHover { inside in
+                if inside { hoveredRepoHeaderKey = hoverKey }
+                else if hoveredRepoHeaderKey == hoverKey { hoveredRepoHeaderKey = nil }
             }
             .dropDestination(for: String.self) { items, _ in
                 guard let reorderKey, let dragged = items.first else { return false }
