@@ -3,6 +3,16 @@
     <channel>
         <title>Continuum</title>
         <item>
+            <title>0.42.2</title>
+            <pubDate>Sun, 14 Jun 2026 19:09:06 +0700</pubDate>
+            <sparkle:version>249</sparkle:version>
+            <sparkle:shortVersionString>0.42.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <sparkle:releaseNotesLink>https://darshanbathija.github.io/Continuum/updates/release-notes/Continuum-0.42.2-arm64.md</sparkle:releaseNotesLink>
+            <enclosure url="https://github.com/darshanbathija/Continuum/releases/download/mac-updates/Continuum-0.42.2-arm64.zip" length="180527486" type="application/octet-stream" sparkle:edSignature="/ps9k2M482v1lUBJQvSUCtlk8g05+NvL/4UtrGKS3aoa3Bjx5Gh+MtzRmOP6iYNsA2yZ98BKrWxxTh+wHgoYDA=="/>
+        </item>
+        <item>
             <title>0.42.1</title>
             <pubDate>Sun, 14 Jun 2026 17:51:02 +0700</pubDate>
             <sparkle:version>248</sparkle:version>
@@ -21,16 +31,6 @@
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <sparkle:releaseNotesLink>https://darshanbathija.github.io/Continuum/updates/release-notes/Continuum-0.42.0-arm64.md</sparkle:releaseNotesLink>
             <enclosure url="https://github.com/darshanbathija/Continuum/releases/download/mac-updates/Continuum-0.42.0-arm64.zip" length="180507243" type="application/octet-stream" sparkle:edSignature="LIX+WLjJUfTjoGoAsXyVydxvpPalkhxrtluYLixObDkMD7rf6UrAr6sIO796VqI06XUWmSqvlmmuOqUu51XkBg=="/>
-        </item>
-        <item>
-            <title>0.41.0</title>
-            <pubDate>Sun, 14 Jun 2026 12:10:33 +0700</pubDate>
-            <sparkle:version>246</sparkle:version>
-            <sparkle:shortVersionString>0.41.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <sparkle:releaseNotesLink>https://darshanbathija.github.io/Continuum/updates/release-notes/Continuum-0.41.0-arm64.md</sparkle:releaseNotesLink>
-            <enclosure url="https://github.com/darshanbathija/Continuum/releases/download/mac-updates/Continuum-0.41.0-arm64.zip" length="180450540" type="application/octet-stream" sparkle:edSignature="6zGaQvznsBVi+uUllX/wLOc/S4W/lWY/70AH3ULFIPiArYhX8Eu0B9B9y/t9DG77kGOLnCCqu37vDLAyifRGBA=="/>
         </item>
     </channel>
 </rss>
