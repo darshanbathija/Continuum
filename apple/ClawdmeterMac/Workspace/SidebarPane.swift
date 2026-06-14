@@ -27,6 +27,9 @@ struct SidebarPane: View {
     @AppStorage(SpawnSettings.showButtonKey) private var spawnShowButton: Bool = SpawnSettings.showButtonDefault
     /// Drives the hover-revealed gear that deep-links to Settings → Spawn.
     @State private var spawnButtonHovering: Bool = false
+    /// Hover state for the persistent "+" affordance inside the Spawn row, so
+    /// it lights up + gets a rounded-rect backing when the cursor lands on it.
+    @State private var spawnPlusHovering: Bool = false
 
     /// v0.5.4: rename sheet state. v0.5.9: split into a dedicated bool
     /// + data target — the `Binding(get:set:)` pattern for `isPresented:`
@@ -629,9 +632,19 @@ struct SidebarPane: View {
                 Spacer()
                 // The "+" stays put; on hover a settings gear (overlay below)
                 // slides in just to its left, so the gear never covers the "+".
+                // Hover lights the "+" with the app's neutral wash + a brighter
+                // glyph (luminance, not chroma — matches the PROJECTS header "+").
                 Image(systemName: "plus")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(t.fg3)
+                    .foregroundStyle(spawnPlusHovering ? t.fg2 : t.fg3)
+                    .frame(width: 18, height: 18)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(spawnPlusHovering ? t.hover : Color.clear)
+                    )
+                    .contentShape(Rectangle())
+                    .onHover { spawnPlusHovering = $0 }
+                    .animation(.easeOut(duration: 0.12), value: spawnPlusHovering)
             }
             .padding(.horizontal, 10)
             .frame(height: 30)
