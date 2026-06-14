@@ -195,6 +195,9 @@ struct UpdateAppControl: View {
         case .checking:
             return "Checking"
         case .installing:
+            if let fraction = coordinator.wrapped?.installProgress?.fraction {
+                return "\(Int((fraction * 100).rounded()))%"
+            }
             return "Installing"
         case .upToDate:
             return compact ? "Updated" : "Up to date"
@@ -256,8 +259,10 @@ struct UpdateAppControl: View {
 
     private var disabled: Bool {
         switch snapshot {
-        case .checking, .installing, .unavailable:
+        case .checking, .unavailable:
             return true
+        // .installing stays tappable so the popover (progress bar + Cancel)
+        // can be reopened while a download runs.
         default:
             return false
         }
@@ -375,6 +380,13 @@ struct UpdatePopoverContent: View {
                     }
                 }
             }
+        case .installing:
+            installingProgressView
+        case .installedRelaunchPending:
+            Text("The update is staged. Relaunch Continuum to finish installing it.")
+                .font(ContinuumFont.body(12))
+                .foregroundStyle(ContinuumTokens.fg2)
+                .fixedSize(horizontal: false, vertical: true)
         case .failed(let reason, _), .setupBlocked(let reason, _),
              .invalidAppcastSignature(let reason, _), .corruptedDownload(let reason, _):
             Text(reason)
@@ -440,15 +452,50 @@ struct UpdatePopoverContent: View {
         }
     }
 
+    /// Inline download / extraction / install progress. This is the popover's
+    /// answer to Sparkle's old center window — the bar lives here, never in a
+    /// separate panel.
+    @ViewBuilder
+    private var installingProgressView: some View {
+        let progress = coordinator.wrapped?.installProgress
+        VStack(alignment: .leading, spacing: 8) {
+            UpdateProgressBar(fraction: progress?.fraction)
+            HStack(spacing: 8) {
+                Text(progress?.label ?? "Installing update")
+                    .font(ContinuumFont.body(12))
+                    .foregroundStyle(ContinuumTokens.fg2)
+                Spacer(minLength: 8)
+                if let fraction = progress?.fraction {
+                    Text("\(Int((fraction * 100).rounded()))%")
+                        .font(ContinuumFont.mono(11))
+                        .monospacedDigit()
+                        .foregroundStyle(ContinuumTokens.fg3)
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private var actions: some View {
-        HStack(spacing: 8) {
-            TahoeAccentButton(size: .m, disabled: primaryActionDisabled, action: primaryAction) {
-                Text(primaryActionTitle)
+        if case .installing = coordinator.wrapped?.state {
+            // Non-interruptible phases (extracting / installing) show no buttons —
+            // the progress bar is the whole story. A live download can be cancelled.
+            if coordinator.wrapped?.canCancelInstall == true {
+                HStack(spacing: 8) {
+                    TahoeGhostButton(size: .m, action: { coordinator.wrapped?.cancelInstall() }) {
+                        Text("Cancel")
+                    }
+                }
             }
+        } else {
+            HStack(spacing: 8) {
+                TahoeAccentButton(size: .m, disabled: primaryActionDisabled, action: primaryAction) {
+                    Text(primaryActionTitle)
+                }
 
-            TahoeGhostButton(size: .m, action: secondaryAction) {
-                Text(secondaryActionTitle)
+                TahoeGhostButton(size: .m, action: secondaryAction) {
+                    Text(secondaryActionTitle)
+                }
             }
         }
     }
@@ -690,6 +737,49 @@ private struct UpdateSettingsRow<Control: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             control
+        }
+    }
+}
+
+/// Slim determinate/indeterminate progress bar for the updater popover.
+/// Neutral luminance fill on a `surface3` track — DESIGN.md rations the
+/// terra-cotta accent to the Claude dot, so update progress stays greyscale.
+private struct UpdateProgressBar: View {
+    /// nil → indeterminate (animated sweep); else a 0...1 determinate fill.
+    var fraction: Double?
+    @State private var sweep: CGFloat = -0.32
+
+    private var isIndeterminate: Bool { fraction == nil }
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(ContinuumTokens.surface3)
+                Capsule(style: .continuous)
+                    .fill(ContinuumTokens.fg.opacity(0.9))
+                    .frame(width: isIndeterminate
+                           ? width * 0.32
+                           : width * CGFloat(max(0, min(1, fraction ?? 0))))
+                    .offset(x: isIndeterminate ? sweep * width : 0)
+            }
+        }
+        .frame(height: 6)
+        .clipShape(Capsule(style: .continuous))
+        .overlay {
+            Capsule(style: .continuous)
+                .strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5)
+        }
+        .onAppear(perform: animateIfNeeded)
+        .onChange(of: isIndeterminate) { _, _ in animateIfNeeded() }
+    }
+
+    private func animateIfNeeded() {
+        guard isIndeterminate else { return }
+        sweep = -0.32
+        withAnimation(.easeInOut(duration: 1.15).repeatForever(autoreverses: false)) {
+            sweep = 1.0
         }
     }
 }
