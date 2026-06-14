@@ -744,25 +744,37 @@ private struct UpdateSettingsRow<Control: View>: View {
 /// Slim determinate/indeterminate progress bar for the updater popover.
 /// Neutral luminance fill on a `surface3` track — DESIGN.md rations the
 /// terra-cotta accent to the Claude dot, so update progress stays greyscale.
+///
+/// The determinate fill and the indeterminate pill are SEPARATE subviews so
+/// only one is ever mounted. The old single-view design shared one fill across
+/// both modes and ran a `repeatForever` sweep that was never torn down on the
+/// switch to determinate — that leaked animation corrupted the determinate
+/// fill (it rendered invisible, leaving the bar looking empty at e.g. 25%).
+/// The old sweep also travelled fully off both edges, so the pill vanished each
+/// cycle ("appears and disappears"). Keeping the two states in distinct views
+/// removes the leak; the indeterminate pill now bounces fully on-screen.
 private struct UpdateProgressBar: View {
-    /// nil → indeterminate (animated sweep); else a 0...1 determinate fill.
+    /// nil → indeterminate (animated pill); else a 0...1 determinate fill.
     var fraction: Double?
-    @State private var sweep: CGFloat = -0.32
-
-    private var isIndeterminate: Bool { fraction == nil }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geo in
-            let width = geo.size.width
+            let width = max(0, geo.size.width)
             ZStack(alignment: .leading) {
                 Capsule(style: .continuous)
                     .fill(ContinuumTokens.surface3)
-                Capsule(style: .continuous)
-                    .fill(ContinuumTokens.fg.opacity(0.9))
-                    .frame(width: isIndeterminate
-                           ? width * 0.32
-                           : width * CGFloat(max(0, min(1, fraction ?? 0))))
-                    .offset(x: isIndeterminate ? sweep * width : 0)
+                if let fraction {
+                    // Determinate: solid greyscale pill. Width settles like a
+                    // meter needle (DESIGN.md ~140ms) on each progress tick.
+                    Capsule(style: .continuous)
+                        .fill(ContinuumTokens.fg.opacity(0.9))
+                        .frame(width: width * CGFloat(min(1, max(0, fraction))))
+                        .animation(reduceMotion ? nil : .spring(response: 0.14, dampingFraction: 1),
+                                   value: fraction)
+                } else {
+                    UpdateIndeterminatePill(trackWidth: width, reduceMotion: reduceMotion)
+                }
             }
         }
         .frame(height: 6)
@@ -771,16 +783,31 @@ private struct UpdateProgressBar: View {
             Capsule(style: .continuous)
                 .strokeBorder(ContinuumTokens.hairline, lineWidth: 0.5)
         }
-        .onAppear(perform: animateIfNeeded)
-        .onChange(of: isIndeterminate) { _, _ in animateIfNeeded() }
     }
+}
 
-    private func animateIfNeeded() {
-        guard isIndeterminate else { return }
-        sweep = -0.32
-        withAnimation(.easeInOut(duration: 1.15).repeatForever(autoreverses: false)) {
-            sweep = 1.0
-        }
+/// Indeterminate phase pill (download start, extraction, install). Bounces
+/// within the track so it stays fully visible at both extremes — never slides
+/// off-screen. Honors reduced motion by parking a static centered pill.
+private struct UpdateIndeterminatePill: View {
+    let trackWidth: CGFloat
+    let reduceMotion: Bool
+    @State private var atEnd = false
+
+    private var pillWidth: CGFloat { trackWidth * 0.38 }
+    /// Max offset that still keeps the whole pill inside the track.
+    private var travel: CGFloat { max(0, trackWidth - pillWidth) }
+
+    var body: some View {
+        Capsule(style: .continuous)
+            .fill(ContinuumTokens.fg.opacity(0.9))
+            .frame(width: pillWidth)
+            .offset(x: reduceMotion ? travel / 2 : (atEnd ? travel : 0))
+            .animation(
+                reduceMotion ? nil : .easeInOut(duration: 1.1).repeatForever(autoreverses: true),
+                value: atEnd
+            )
+            .onAppear { if !reduceMotion { atEnd = true } }
     }
 }
 
