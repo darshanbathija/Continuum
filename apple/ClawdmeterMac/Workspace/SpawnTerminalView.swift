@@ -67,6 +67,18 @@ struct SpawnTerminalView: NSViewRepresentable {
         var lastFocusToken: Int = 0
         private var subscriptionTask: Task<Void, Never>?
         private var clickMonitor: Any?
+        /// PTY winsize last pushed to the child. Seeded to TerminalPtyHost's
+        /// 120×40 open default so the first laid-out tile size (always
+        /// narrower) registers as a change and triggers the reflow wipe below.
+        private var lastSyncedCols = 120
+        private var lastSyncedRows = 40
+        /// The agent's opening frame renders at the 120-col open size, is fed
+        /// into the emulator, then reflows into wrapped garbage when the tile
+        /// settles to its real width. The resize SIGWINCH makes the agent
+        /// repaint, but Ink-style TUIs erase only their own line count — not the
+        /// emulator's larger reflowed count — so the stale wide frame is
+        /// stranded above. Wipe the emulator once, on that first real resize.
+        private var didClearReflow = false
 
         init(host: TerminalPtyHost, onDidFocus: @escaping () -> Void) {
             self.host = host
@@ -169,16 +181,38 @@ struct SpawnTerminalView: NSViewRepresentable {
         }
 
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-            Task { [host] in await host.resize(cols: newCols, rows: newRows) }
+            syncSize(cols: newCols, rows: newRows)
         }
 
         /// Push the emulator's post-layout grid to the PTY. Backstops the
         /// change-gated `sizeChanged` delegate, which never fires when a tile's
-        /// terminal is born at its final size (see `makeNSView`). Idempotent —
-        /// re-asserting the same winsize is a no-op for the child.
+        /// terminal is born at its final size (see `makeNSView`). On the first
+        /// size that diverges from the PTY's open dimensions, wipe the reflowed
+        /// opening frame so only the agent's correctly-sized repaint shows.
         func syncSize(cols: Int, rows: Int) {
             guard cols > 0, rows > 0 else { return }
+            guard cols != lastSyncedCols || rows != lastSyncedRows else { return }
+            lastSyncedCols = cols
+            lastSyncedRows = rows
             Task { [host] in await host.resize(cols: cols, rows: rows) }
+            if !didClearReflow {
+                didClearReflow = true
+                clearReflowedOpeningFrame()
+            }
+        }
+
+        /// Erase scrollback + screen and home the cursor so the agent's
+        /// post-resize repaint lands on a clean grid. A screen/scrollback clear
+        /// (not a full RIS) preserves the modes the agent enabled at startup —
+        /// mouse reporting, bracketed paste, application cursor keys — which a
+        /// reset would silently drop. Fed in-band so it serializes after the
+        /// already-fed opening frame and before the SIGWINCH repaint.
+        private func clearReflowedOpeningFrame() {
+            // ESC[3J erase scrollback · ESC[2J erase screen · ESC[H cursor home
+            let clear: [UInt8] = [0x1b, 0x5b, 0x33, 0x4a,
+                                  0x1b, 0x5b, 0x32, 0x4a,
+                                  0x1b, 0x5b, 0x48]
+            terminalView?.feed(byteArray: ArraySlice(clear))
         }
 
         func setTerminalTitle(source: TerminalView, title: String) {}
