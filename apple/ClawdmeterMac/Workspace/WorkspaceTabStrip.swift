@@ -26,7 +26,11 @@ struct WorkspaceTabStrip: View {
     private static let stripHorizontalPadding: CGFloat = 20
     private static let tabSpacing: CGFloat = 6
     private static let newTabButtonWidth: CGFloat = 26
-    private static let chatTabChromeWidth: CGFloat = 49
+    // Chrome-literal tabs carry a 16px provider favicon before the label, so
+    // the per-tab non-label width grew ~23px (favicon + gap) over the old
+    // text-only tab. Reserve it here so the adaptive label width doesn't
+    // overflow the strip.
+    private static let chatTabChromeWidth: CGFloat = 72
     private static let idealLabelWidth: CGFloat = 118
     private static let expandedLabelWidth: CGFloat = 170
 
@@ -53,6 +57,16 @@ struct WorkspaceTabStrip: View {
             case .document(let tab): return tab.createdAt
             }
         }
+    }
+
+    /// The tab's leading mark. Session tabs render a provider favicon (the
+    /// Chrome-tab metaphor — logo lives in the tab, so the old chat-header
+    /// card is gone); terminal/document tabs keep their SF Symbol; drafts have
+    /// no provider yet.
+    private enum TabLeading {
+        case none
+        case system(String)
+        case provider(TahoeProvider, live: Bool)
     }
 
     private var sessions: [AgentSession] {
@@ -208,7 +222,7 @@ struct WorkspaceTabStrip: View {
         return tabRow(
             title: labels.title,
             subtitle: labels.subtitle,
-            systemImage: nil,
+            leading: .provider(session.tahoeProvider, live: session.status == .running),
             isActive: isActive,
             labelWidth: labelWidth,
             selectAction: { model.openSession(session) },
@@ -239,7 +253,7 @@ struct WorkspaceTabStrip: View {
         return tabRow(
             title: WorkspaceSessionTabLabel.repoBranchTitle(repo: "Untitled", branch: "Draft"),
             subtitle: "",
-            systemImage: nil,
+            leading: .none,
             isActive: isActive,
             labelWidth: labelWidth,
             selectAction: { model.selectDraftWorkspaceTab(draft) },
@@ -254,7 +268,7 @@ struct WorkspaceTabStrip: View {
         tabRow(
             title: terminalTitle(for: tab, session: session),
             subtitle: terminalSubtitle(for: session),
-            systemImage: "terminal.fill",
+            leading: .system("terminal.fill"),
             isActive: activeTerminalTabId == tab.id,
             labelWidth: labelWidth,
             selectAction: { onSelectTerminal(tab) },
@@ -273,7 +287,7 @@ struct WorkspaceTabStrip: View {
         tabRow(
             title: tab.title,
             subtitle: "Document",
-            systemImage: TranscriptArtifactClassifier.systemImageName(forPath: tab.path),
+            leading: .system(TranscriptArtifactClassifier.systemImageName(forPath: tab.path)),
             isActive: activeDocumentTabId == tab.id,
             labelWidth: labelWidth,
             selectAction: { onSelectDocument(tab) },
@@ -292,12 +306,37 @@ struct WorkspaceTabStrip: View {
         }
     }
 
+    /// Leading mark for a tab. `.provider` is the Chrome-tab favicon: a
+    /// monochrome provider glyph tile with a 6px status dot (live-green while
+    /// running, provider color otherwise — the only place color appears in the
+    /// strip). `EmptyView` for `.none` adds no spacing, matching the prior
+    /// text-only draft tab.
+    @ViewBuilder
+    private func leadingMark(_ leading: TabLeading, isActive: Bool) -> some View {
+        switch leading {
+        case .none:
+            EmptyView()
+        case .system(let name):
+            Image(systemName: name)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(isActive ? t.accent : t.fg3)
+        case .provider(let provider, let live):
+            ZStack(alignment: .bottomTrailing) {
+                TahoeProviderGlyph(provider: provider, size: 16)
+                ProviderDot(provider, size: 6, live: live)
+                    .offset(x: 1.5, y: 1.5)
+            }
+            .frame(width: 16, height: 16)
+            .opacity(isActive ? 1 : 0.85)
+        }
+    }
+
     /// Sibling select + close buttons (not nested) so clicking × never also
     /// selects or closes the wrong tab.
     private func tabRow(
         title: String,
         subtitle: String,
-        systemImage: String?,
+        leading: TabLeading,
         isActive: Bool,
         labelWidth: CGFloat,
         selectAction: @escaping () -> Void,
@@ -306,11 +345,7 @@ struct WorkspaceTabStrip: View {
         HStack(spacing: 7) {
             Button(action: ContinuumAnalytics.wrapButton("workspace_tab_select", selectAction)) {
                 HStack(spacing: 7) {
-                    if let systemImage {
-                        Image(systemName: systemImage)
-                            .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundStyle(isActive ? t.accent : t.fg3)
-                    }
+                    leadingMark(leading, isActive: isActive)
                     VStack(alignment: .leading, spacing: subtitle.isEmpty ? 0 : 1) {
                         Text(title)
                             .font(TahoeFont.body(12.5, weight: isActive ? .semibold : .medium))
