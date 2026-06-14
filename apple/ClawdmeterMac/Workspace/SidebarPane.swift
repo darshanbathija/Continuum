@@ -316,6 +316,9 @@ struct SidebarPane: View {
                 .textCase(.uppercase)
                 .foregroundStyle(t.fg3)
                 .lineLimit(1)
+                // edgeInset alone (2pt) lets the label hug the sidebar edge;
+                // nudge it in so it lines up with the card/row content below.
+                .padding(.leading, 8)
             Spacer()
             if model.isRefreshing {
                 ProgressView().controlSize(.mini)
