@@ -1147,6 +1147,11 @@ struct SidebarPane: View {
         let diffStat = worktreeDiffs.stat(for: wt.path)
         let showsDiff = !isHovered && diffStat.map { !$0.isEmpty } == true
         let showsSessionCount = !isHovered && wt.sessions.count > 1
+        // Candidate set for the data-stream cable: sessions the registry
+        // considers active. The cable itself only lights while one is *actually
+        // streaming a turn* (input → cache → thinking → output) — observed live
+        // by `WorktreeStreamCable` below, not inferred from this coarse status.
+        let activeSessions = wt.sessions.filter { $0.status == .running || $0.status == .planning }
         let archiveAction = {
             let sessions = wt.sessions
             let ids = sessions.map(\.id)
@@ -1210,6 +1215,19 @@ struct SidebarPane: View {
                 emphasizedDiff: isOpen,
                 onArchive: archiveAction
             )
+        }
+        // Cable sits between the row fill and the content: applied before the
+        // fill `.background`, it layers nearer the content (behind icon/name,
+        // above the tint). `WorktreeStreamCable` lights it only while a turn is
+        // live-streaming; idle worktrees draw nothing.
+        .background {
+            if !activeSessions.isEmpty {
+                WorktreeStreamCable(
+                    activeSessions: activeSessions,
+                    isOpen: isOpen,
+                    resolveStore: { model.chatStore(for: $0) }
+                )
+            }
         }
         .background(
             isOpen
