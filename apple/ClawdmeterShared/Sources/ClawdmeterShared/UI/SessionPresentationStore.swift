@@ -63,6 +63,33 @@ public struct RepoIdentityBadge: Codable, Hashable, Sendable {
     }
 }
 
+/// User-chosen icon for a Code-sidebar project (repo), replacing the
+/// auto-generated hue+initial monogram. Keyed by repo key in
+/// `SessionPresentationSnapshot.repoIconOverrides`. `emoji` and `imagePath`
+/// are mutually exclusive — setting one clears the other — so render
+/// precedence is simply imagePath → emoji → fall back to the monogram.
+/// Kept separate from the auto-resolved `repoIdentityBadges` so a later git
+/// remote re-resolve never clobbers the user's explicit pick.
+public struct RepoIconOverride: Codable, Hashable, Sendable {
+    public var emoji: String?
+    /// Absolute path to a copied image under
+    /// `Application Support/Clawdmeter/repo-icons/`.
+    public var imagePath: String?
+    public var updatedAt: Date
+
+    public init(emoji: String? = nil, imagePath: String? = nil, updatedAt: Date = Date()) {
+        self.emoji = emoji
+        self.imagePath = imagePath
+        self.updatedAt = updatedAt
+    }
+
+    /// True when neither an emoji nor an image is set — the entry should be
+    /// dropped rather than persisted empty.
+    public var isEmpty: Bool {
+        (emoji?.isEmpty ?? true) && (imagePath?.isEmpty ?? true)
+    }
+}
+
 public enum DiffDisplayMode: String, Codable, CaseIterable, Hashable, Sendable {
     case unified
     case split
@@ -144,6 +171,9 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
     public var recentPathActions: [String]
     public var externalToolPreferences: [String: String]
     public var repoIdentityBadges: [String: RepoIdentityBadge]
+    /// User-chosen project icons (emoji / custom image), keyed by repo key.
+    /// Overrides the auto-generated monogram in the Code sidebar.
+    public var repoIconOverrides: [String: RepoIconOverride]
     public var syntaxTheme: CodeSyntaxTheme
     public var diffDisplayMode: DiffDisplayMode
     /// How densely the Code-tab chat transcript renders tool runs and
@@ -177,6 +207,7 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         recentPathActions: [String] = [],
         externalToolPreferences: [String: String] = [:],
         repoIdentityBadges: [String: RepoIdentityBadge] = [:],
+        repoIconOverrides: [String: RepoIconOverride] = [:],
         syntaxTheme: CodeSyntaxTheme = .tahoe,
         diffDisplayMode: DiffDisplayMode = .unified,
         transcriptDensity: TranscriptDensity = .balanced,
@@ -205,6 +236,7 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         self.recentPathActions = recentPathActions
         self.externalToolPreferences = externalToolPreferences
         self.repoIdentityBadges = repoIdentityBadges
+        self.repoIconOverrides = repoIconOverrides
         self.syntaxTheme = syntaxTheme
         self.diffDisplayMode = diffDisplayMode
         self.transcriptDensity = transcriptDensity
@@ -236,6 +268,7 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         self.recentPathActions = try c.decodeIfPresent([String].self, forKey: .recentPathActions) ?? []
         self.externalToolPreferences = try c.decodeIfPresent([String: String].self, forKey: .externalToolPreferences) ?? [:]
         self.repoIdentityBadges = try c.decodeIfPresent([String: RepoIdentityBadge].self, forKey: .repoIdentityBadges) ?? [:]
+        self.repoIconOverrides = try c.decodeIfPresent([String: RepoIconOverride].self, forKey: .repoIconOverrides) ?? [:]
         self.syntaxTheme = try c.decodeIfPresent(CodeSyntaxTheme.self, forKey: .syntaxTheme) ?? .tahoe
         self.diffDisplayMode = try c.decodeIfPresent(DiffDisplayMode.self, forKey: .diffDisplayMode) ?? .unified
         self.transcriptDensity = try c.decodeIfPresent(TranscriptDensity.self, forKey: .transcriptDensity) ?? .balanced
@@ -267,6 +300,7 @@ public struct SessionPresentationSnapshot: Codable, Hashable, Sendable {
         case recentPathActions
         case externalToolPreferences
         case repoIdentityBadges
+        case repoIconOverrides
         case syntaxTheme
         case diffDisplayMode
         case transcriptDensity
@@ -497,6 +531,46 @@ public final class SessionPresentationStore: ObservableObject, @unchecked Sendab
     public func cacheRepoIdentity(_ badge: RepoIdentityBadge) throws {
         try update { snapshot in
             snapshot.repoIdentityBadges[badge.repoKey] = badge
+        }
+    }
+
+    /// Assign an emoji to a project's sidebar icon. Clears any custom image
+    /// (emoji and image are mutually exclusive). An empty/nil emoji removes
+    /// the whole override so the monogram returns.
+    public func setRepoIconEmoji(repoKey: String, emoji: String?) throws {
+        let key = repoKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        let trimmed = emoji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        try update { snapshot in
+            if trimmed.isEmpty {
+                snapshot.repoIconOverrides.removeValue(forKey: key)
+            } else {
+                snapshot.repoIconOverrides[key] = RepoIconOverride(emoji: trimmed)
+            }
+        }
+    }
+
+    /// Assign a copied custom image to a project's sidebar icon. Clears any
+    /// emoji. A nil/empty path removes the override.
+    public func setRepoIconImagePath(repoKey: String, path: String?) throws {
+        let key = repoKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        let trimmed = path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        try update { snapshot in
+            if trimmed.isEmpty {
+                snapshot.repoIconOverrides.removeValue(forKey: key)
+            } else {
+                snapshot.repoIconOverrides[key] = RepoIconOverride(imagePath: trimmed)
+            }
+        }
+    }
+
+    /// Remove a project's icon override entirely, restoring the monogram.
+    public func clearRepoIcon(repoKey: String) throws {
+        let key = repoKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        try update { snapshot in
+            snapshot.repoIconOverrides.removeValue(forKey: key)
         }
     }
 

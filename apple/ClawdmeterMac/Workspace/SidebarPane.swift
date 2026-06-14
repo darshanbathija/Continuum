@@ -618,12 +618,11 @@ struct SidebarPane: View {
                     .font(TahoeFont.body(12, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer()
-                // The "+" yields to a settings gear (overlay below) while
-                // hovering, so the gear lands where the eye already is.
+                // The "+" stays put; on hover a settings gear (overlay below)
+                // slides in just to its left, so the gear never covers the "+".
                 Image(systemName: "plus")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(t.fg3)
-                    .opacity(spawnButtonHovering ? 0 : 1)
             }
             .padding(.horizontal, 10)
             .frame(height: 30)
@@ -657,7 +656,9 @@ struct SidebarPane: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.trailing, 5)
+                // Sit to the LEFT of the persistent "+" (which ends ~10pt from
+                // the trailing edge and is ~10pt wide) so the two don't overlap.
+                .padding(.trailing, 24)
                 .help("Spawn settings")
                 .accessibilityLabel("Open Spawn settings")
                 .accessibilityIdentifier("code.sidebar.spawn.settings")
@@ -1497,6 +1498,9 @@ struct SidebarPane: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        // The repo header carries .grabIdle (drag-to-reorder palm). Override it
+        // here so the gear reads as clickable, matching the title toggle's cursor.
+        .pointerStyle(.link)
         .help("Workspace settings — archive, env variables, remove")
         .accessibilityIdentifier("code.repo.settings")
     }
@@ -1964,30 +1968,21 @@ struct SidebarPane: View {
         let hoverKey = reorderKey ?? repo.key
         let isHeaderHovered = hoveredRepoHeaderKey == hoverKey
         let row = HStack(spacing: 8) {
+            // Chevron + title toggle the section; the glyph between them is its
+            // own button that opens the icon tray. Splitting the old single
+            // toggle button into chevron-button + glyph-button + title-button
+            // is what lets the user click the monogram to assign an emoji /
+            // image without also collapsing the project.
             Button(action: ContinuumAnalytics.wrapButton("sidebar_toggle_repo", onToggle)) {
-                HStack(spacing: 8) {
-                    TahoeIcon(isExpanded ? "chevD" : "chevR", size: 10)
-                        .foregroundStyle(t.fg3)
-                        .frame(width: 10)
-                        .opacity(isHeaderHovered ? 1 : 0)
-                        .animation(.easeOut(duration: 0.12), value: isHeaderHovered)
-                    projectGlyph(repo)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(repo.displayName)
-                            .font(TahoeFont.body(13, weight: .semibold))
-                            .foregroundStyle(t.fg)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        if let subtitle, !subtitle.isEmpty {
-                            Text(subtitle)
-                                .font(TahoeFont.body(10))
-                                .foregroundStyle(t.fg3)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
-                }
-                .contentShape(Rectangle())
+                // #484 split this into a chevron-only button; #482 makes the
+                // chevron hover-only. Reserved 10pt frame keeps the glyph/title
+                // from shifting when the chevron fades in.
+                TahoeIcon(isExpanded ? "chevD" : "chevR", size: 10)
+                    .foregroundStyle(t.fg3)
+                    .frame(width: 10)
+                    .opacity(isHeaderHovered ? 1 : 0)
+                    .animation(.easeOut(duration: 0.12), value: isHeaderHovered)
+                    .contentShape(Rectangle())
             }
             // Plain (not HoverableButtonStyle): the whole repo header row now
             // paints one uniform hover wash below, so a per-button fill here
@@ -1996,6 +1991,28 @@ struct SidebarPane: View {
             .buttonStyle(.plain)
             .pointerStyle(.link)
             .accessibilityIdentifier("code.repo.toggle")
+
+            RepoGlyphButton(presentationStore: presentationStore, repo: repo)
+
+            Button(action: ContinuumAnalytics.wrapButton("sidebar_toggle_repo", onToggle)) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(repo.displayName)
+                        .font(TahoeFont.body(13, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(TahoeFont.body(10))
+                            .foregroundStyle(t.fg3)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerStyle(.link)
 
             Spacer()
 
@@ -2033,6 +2050,8 @@ struct SidebarPane: View {
                     .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             .buttonStyle(HoverableButtonStyle(cornerRadius: 6))
+            // Override the header's .grabIdle palm so this reads as clickable.
+            .pointerStyle(.link)
             .help("New workspace — Codex · GPT-5.5 · extra-high effort · plan mode (option-click to customize)")
             .accessibilityIdentifier("code.repo.new-session")
         }
@@ -2117,21 +2136,6 @@ struct SidebarPane: View {
                 else { model.expandedRepoKeys.insert(repo.key) }
             }
         )
-    }
-
-    private func projectGlyph(_ repo: AgentRepo) -> some View {
-        let hueSeed = repo.key.unicodeScalars.reduce(UInt32(5381)) { ($0 &* 33) &+ $1.value }
-        let hue = Double(hueSeed % 360) / 360.0
-        let tint = Color(hue: hue, saturation: 0.52, brightness: colorScheme == .dark ? 0.86 : 0.78)
-        let initial = repo.displayName.trimmingCharacters(in: .whitespacesAndNewlines).first.map(String.init)?.uppercased() ?? "*"
-        return RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(tint.opacity(colorScheme == .dark ? 0.28 : 0.20))
-            .overlay(
-                Text(initial)
-                    .font(TahoeFont.body(10, weight: .bold))
-                    .foregroundStyle(tint)
-            )
-            .frame(width: 22, height: 22)
     }
 
     private func sessionRow(_ session: AgentSession, isOpen: Bool, depth: Int = 0) -> some View {
@@ -2377,10 +2381,21 @@ struct SidebarPane: View {
 
     private func repoIdentityBadge(for session: AgentSession) -> RepoIdentityBadge {
         let key = repoIdentityKey(for: session)
-        if let cached = presentationStore.snapshot.repoIdentityBadges[key] {
-            return cached
+        var badge = presentationStore.snapshot.repoIdentityBadges[key]
+            ?? RepoIdentityResolver.badge(repoKey: key, displayName: session.repoDisplayName)
+        // A user-assigned project icon (set on the repo header) flows onto its
+        // session rows too, so a repo reads consistently. Image wins over emoji;
+        // emoji clears any auto-resolved remote avatar so it actually shows.
+        if let override = presentationStore.snapshot.repoIconOverrides[key] {
+            if let path = override.imagePath, !path.isEmpty {
+                badge.iconURL = URL(fileURLWithPath: path).absoluteString
+                badge.emoji = nil
+            } else if let emoji = override.emoji, !emoji.isEmpty {
+                badge.emoji = emoji
+                badge.iconURL = nil
+            }
         }
-        return RepoIdentityResolver.badge(repoKey: key, displayName: session.repoDisplayName)
+        return badge
     }
 
     private func repoIdentityKey(for session: AgentSession) -> String {

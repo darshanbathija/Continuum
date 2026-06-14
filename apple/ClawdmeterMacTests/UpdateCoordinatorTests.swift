@@ -214,6 +214,53 @@ final class UpdateCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.state, .userCancelled(version: "0.29.17"))
     }
 
+    func testInstallProgressFlowsToCoordinator() {
+        let (coordinator, driver) = makeCoordinator()
+        let update = SparkleUpdateInfo(version: "156", displayVersion: "0.29.17")
+        driver.emitInstalling(update)
+        XCTAssertEqual(coordinator.installProgress, UpdateInstallProgress(phase: .downloading, fraction: nil))
+
+        driver.emitProgress(UpdateInstallProgress(phase: .downloading, fraction: 0.5))
+        XCTAssertEqual(coordinator.installProgress, UpdateInstallProgress(phase: .downloading, fraction: 0.5))
+        XCTAssertEqual(coordinator.state, .installing(update))
+        XCTAssertTrue(coordinator.canCancelInstall)
+
+        driver.emitProgress(UpdateInstallProgress(phase: .extracting, fraction: nil))
+        XCTAssertFalse(coordinator.canCancelInstall, "Extraction phase is not cancellable")
+    }
+
+    func testProgressBeforeInstallingFlipsState() {
+        // A resumed background download can deliver progress without a prior
+        // `didStartInstalling` — the coordinator must still enter `.installing`.
+        let (coordinator, driver) = makeCoordinator()
+        driver.emitProgress(UpdateInstallProgress(phase: .extracting, fraction: 0.2))
+        XCTAssertEqual(coordinator.state, .installing(nil))
+        XCTAssertEqual(coordinator.installProgress, UpdateInstallProgress(phase: .extracting, fraction: 0.2))
+    }
+
+    func testInstallProgressClearsOnTerminalStates() {
+        let (coordinator, driver) = makeCoordinator()
+        driver.emitInstalling(SparkleUpdateInfo(version: "156", displayVersion: "0.29.17"))
+        XCTAssertNotNil(coordinator.installProgress)
+        driver.emitRelaunch(version: "0.29.17")
+        XCTAssertNil(coordinator.installProgress)
+
+        driver.emitInstalling(SparkleUpdateInfo(version: "157", displayVersion: "0.29.18"))
+        XCTAssertNotNil(coordinator.installProgress)
+        driver.emitCancelled(version: "0.29.18")
+        XCTAssertNil(coordinator.installProgress)
+    }
+
+    func testCancelInstallForwardsToDriverOnlyWhileInstalling() {
+        let (coordinator, driver) = makeCoordinator()
+        coordinator.cancelInstall()
+        XCTAssertEqual(driver.cancelInstalls, 0, "No-op when not installing")
+
+        driver.emitInstalling(SparkleUpdateInfo(version: "156", displayVersion: "0.29.17"))
+        coordinator.cancelInstall()
+        XCTAssertEqual(driver.cancelInstalls, 1)
+    }
+
     func testInvalidAppcastErrorClassification() {
         let error = NSError(domain: "SUSparkleErrorDomain", code: 100, userInfo: [
             NSLocalizedDescriptionKey: "The appcast signature is invalid"
@@ -438,6 +485,7 @@ final class FakeSparkleUpdateDriver: SparkleUpdateDriving {
     var manualChecks = 0
     var informationChecks = 0
     var backgroundChecks = 0
+    var cancelInstalls = 0
     var startError: Error?
 
     func start() throws {
@@ -460,8 +508,16 @@ final class FakeSparkleUpdateDriver: SparkleUpdateDriving {
         delegate?.updateDriverDidStartChecking()
     }
 
+    func cancelInstall() {
+        cancelInstalls += 1
+    }
+
     func emitFound(_ update: SparkleUpdateInfo) {
         delegate?.updateDriverDidFindUpdate(update)
+    }
+
+    func emitProgress(_ progress: UpdateInstallProgress) {
+        delegate?.updateDriverDidUpdateProgress(progress)
     }
 
     func emitNoUpdate() {

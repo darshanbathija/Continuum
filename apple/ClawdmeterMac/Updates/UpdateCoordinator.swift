@@ -39,6 +39,29 @@ struct SparkleUpdateInfo: Equatable {
     }
 }
 
+/// Live download / extraction / install progress surfaced inside the top-right
+/// updater popover. There is no separate Sparkle window — the popover is the
+/// only update UI, so this drives its inline progress bar.
+struct UpdateInstallProgress: Equatable {
+    enum Phase: Equatable {
+        case downloading
+        case extracting
+        case installing
+    }
+
+    var phase: Phase
+    /// 0...1 when the total is known; nil renders an indeterminate bar.
+    var fraction: Double?
+
+    var label: String {
+        switch phase {
+        case .downloading: return "Downloading update"
+        case .extracting: return "Preparing update"
+        case .installing: return "Installing update"
+        }
+    }
+}
+
 enum AppUpdateState: Equatable {
     case idle
     case checking
@@ -73,6 +96,7 @@ protocol SparkleUpdateDriverDelegate: AnyObject {
     func updateDriverDidFindUpdate(_ update: SparkleUpdateInfo)
     func updateDriverDidNotFindUpdate()
     func updateDriverDidStartInstalling(_ update: SparkleUpdateInfo?)
+    func updateDriverDidUpdateProgress(_ progress: UpdateInstallProgress)
     func updateDriverDidInstallAndAwaitRelaunch(version: String?)
     func updateDriverDidCancel(version: String?)
     func updateDriverDidFail(_ error: Error)
@@ -90,6 +114,8 @@ protocol SparkleUpdateDriving: AnyObject {
     func checkForUpdates()
     func checkForUpdateInformation()
     func checkForUpdatesInBackground()
+    /// Cancel an in-flight download, if one is cancellable. No-op otherwise.
+    func cancelInstall()
 }
 
 // MARK: - Coordinator
@@ -111,6 +137,9 @@ final class UpdateCoordinator: ObservableObject {
     @Published private(set) var awaitingManualCheckPopover: Bool = false
     /// True while a manual check is refreshing an already-displayed status.
     @Published private(set) var isRefreshingUpdateStatus: Bool = false
+    /// Download / extraction / install progress for the popover bar. Non-nil
+    /// only while `state == .installing`.
+    @Published private(set) var installProgress: UpdateInstallProgress?
 
     static let manualCheckDebounce: TimeInterval = 2
 
@@ -224,6 +253,20 @@ final class UpdateCoordinator: ObservableObject {
         let version = currentUpdate?.displayVersion
         currentUpdate = nil
         state = .userCancelled(version: version)
+    }
+
+    /// Cancel an in-flight download. Sparkle reports the cancellation back
+    /// through the driver, which transitions the state to `.userCancelled`.
+    func cancelInstall() {
+        guard case .installing = state else { return }
+        driver?.cancelInstall()
+    }
+
+    /// True only while a download is actively cancellable (not during the
+    /// non-interruptible extraction/install phases).
+    var canCancelInstall: Bool {
+        guard case .installing = state else { return false }
+        return installProgress?.phase == .downloading
     }
 
     func openReleasePageFallback() {
@@ -471,6 +514,7 @@ extension UpdateCoordinator: SparkleUpdateDriverDelegate {
 
     func updateDriverDidFindUpdate(_ update: SparkleUpdateInfo) {
         isRefreshingUpdateStatus = false
+        installProgress = nil
         currentUpdate = update
         state = .updateAvailable(update)
         persistCompletedStatus()
@@ -479,6 +523,7 @@ extension UpdateCoordinator: SparkleUpdateDriverDelegate {
 
     func updateDriverDidNotFindUpdate() {
         isRefreshingUpdateStatus = false
+        installProgress = nil
         currentUpdate = nil
         lastCheckedAt = driver?.lastUpdateCheckDate ?? nowProvider()
         state = .upToDate(lastCheckedAt: lastCheckedAt)
@@ -488,22 +533,36 @@ extension UpdateCoordinator: SparkleUpdateDriverDelegate {
 
     func updateDriverDidStartInstalling(_ update: SparkleUpdateInfo?) {
         if let update { currentUpdate = update }
+        if installProgress == nil { installProgress = UpdateInstallProgress(phase: .downloading, fraction: nil) }
         state = .installing(update ?? currentUpdate)
         UpdateStatusPersistence.clear()
     }
 
+    func updateDriverDidUpdateProgress(_ progress: UpdateInstallProgress) {
+        // Progress only makes sense while installing; flip the state if a
+        // resumed (already-downloaded) update jumps straight to extraction.
+        if case .installing = state {} else {
+            state = .installing(currentUpdate)
+            UpdateStatusPersistence.clear()
+        }
+        installProgress = progress
+    }
+
     func updateDriverDidInstallAndAwaitRelaunch(version: String?) {
+        installProgress = nil
         state = .installedRelaunchPending(version: version ?? currentUpdate?.displayVersion)
         UpdateStatusPersistence.clear()
     }
 
     func updateDriverDidCancel(version: String?) {
         isRefreshingUpdateStatus = false
+        installProgress = nil
         state = .userCancelled(version: version ?? currentUpdate?.displayVersion)
     }
 
     func updateDriverDidFail(_ error: Error) {
         isRefreshingUpdateStatus = false
+        installProgress = nil
         state = SparkleErrorClassifier.state(for: error, fallbackURL: fallbackURL)
     }
 
@@ -574,62 +633,92 @@ enum UpdateSetupError: LocalizedError {
 // MARK: - Sparkle adapter
 
 #if canImport(Sparkle)
+/// Drives Sparkle through a *headless* user driver so the entire update flow —
+/// availability, download progress, extraction, install — renders inside the
+/// top-right `UpdateAppControl` popover. We deliberately do NOT use
+/// `SPUStandardUpdaterController` / `SPUStandardUserDriver`: those pop Sparkle's
+/// own center-of-screen window, which is exactly the overlay we're replacing.
 @MainActor
-final class SparkleUpdateDriver: NSObject, SparkleUpdateDriving, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
+final class SparkleUpdateDriver: NSObject, SparkleUpdateDriving, SPUUpdaterDelegate {
     private weak var delegate: SparkleUpdateDriverDelegate?
-    private lazy var updaterController = SPUStandardUpdaterController(
-        startingUpdater: false,
-        updaterDelegate: self,
-        userDriverDelegate: self
+    private let userDriver = ContinuumUserDriver()
+    private lazy var updater = SPUUpdater(
+        hostBundle: .main,
+        applicationBundle: .main,
+        userDriver: userDriver,
+        delegate: self
     )
     private var installingUpdate: SparkleUpdateInfo?
+    private var downloadExpectedLength: UInt64 = 0
+    private var downloadReceivedLength: UInt64 = 0
+    /// Guards the single `.installing` flip per session (a resumed background
+    /// download can skip `showDownloadInitiated` and jump to extraction).
+    private var installingSessionActive = false
+    /// Latest in-flight cancellation block (download phase only).
+    private var activeCancellation: (() -> Void)?
 
     init(delegate: SparkleUpdateDriverDelegate) {
         self.delegate = delegate
         super.init()
+        userDriver.host = self
     }
 
-    var canCheckForUpdates: Bool {
-        updaterController.updater.canCheckForUpdates
-    }
+    var canCheckForUpdates: Bool { updater.canCheckForUpdates }
 
     var automaticallyChecksForUpdates: Bool {
-        get { updaterController.updater.automaticallyChecksForUpdates }
+        get { updater.automaticallyChecksForUpdates }
         set {
-            updaterController.updater.automaticallyChecksForUpdates = newValue
+            updater.automaticallyChecksForUpdates = newValue
             delegate?.updateDriverPreferencesChanged()
         }
     }
 
     var automaticallyDownloadsUpdates: Bool {
-        get { updaterController.updater.automaticallyDownloadsUpdates }
+        get { updater.automaticallyDownloadsUpdates }
         set {
-            updaterController.updater.automaticallyDownloadsUpdates = newValue
+            updater.automaticallyDownloadsUpdates = newValue
             delegate?.updateDriverPreferencesChanged()
         }
     }
 
-    var lastUpdateCheckDate: Date? {
-        updaterController.updater.lastUpdateCheckDate
-    }
+    var lastUpdateCheckDate: Date? { updater.lastUpdateCheckDate }
 
-    func start() throws {
-        try updaterController.updater.start()
-    }
+    func start() throws { try updater.start() }
 
     func checkForUpdates() {
+        resetInstallSession()
         delegate?.updateDriverDidStartChecking()
-        updaterController.updater.checkForUpdates()
+        updater.checkForUpdates()
     }
 
     func checkForUpdateInformation() {
+        resetInstallSession()
         delegate?.updateDriverDidStartChecking()
-        updaterController.updater.checkForUpdateInformation()
+        updater.checkForUpdateInformation()
     }
 
     func checkForUpdatesInBackground() {
-        updaterController.updater.checkForUpdatesInBackground()
+        updater.checkForUpdatesInBackground()
     }
+
+    func cancelInstall() {
+        cancelActiveDownload()
+    }
+
+    private func resetInstallSession() {
+        installingSessionActive = false
+        activeCancellation = nil
+        downloadExpectedLength = 0
+        downloadReceivedLength = 0
+    }
+
+    private func beginInstallSessionIfNeeded() {
+        guard !installingSessionActive else { return }
+        installingSessionActive = true
+        delegate?.updateDriverDidStartInstalling(installingUpdate)
+    }
+
+    // MARK: - SPUUpdaterDelegate
 
     func feedURLString(for updater: SPUUpdater) -> String? {
         ReleaseUpdateConfig.appcastURL.absoluteString
@@ -658,25 +747,25 @@ final class SparkleUpdateDriver: NSObject, SparkleUpdateDriving, SPUUpdaterDeleg
     }
 
     func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
-        let update = Self.info(from: item)
-        installingUpdate = update
-        delegate?.updateDriverDidStartInstalling(update)
-    }
-
-    func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
-        delegate?.updateDriverDidFail(error)
-    }
-
-    func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: any Error) {
-        delegate?.updateDriverDidFail(error)
-    }
-
-    func userDidCancelDownload(_ updater: SPUUpdater) {
-        delegate?.updateDriverDidCancel(version: installingUpdate?.displayVersion)
+        installingUpdate = Self.info(from: item)
     }
 
     func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
         delegate?.updateDriverDidInstallAndAwaitRelaunch(version: installingUpdate?.displayVersion)
+    }
+
+    func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
+        if SparkleErrorClassifier.isNoUpdate(error) {
+            delegate?.updateDriverDidNotFindUpdate()
+        } else if SparkleErrorClassifier.isUserCancellation(error) {
+            delegate?.updateDriverDidCancel(version: installingUpdate?.displayVersion)
+        } else {
+            delegate?.updateDriverDidFail(error)
+        }
+    }
+
+    func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: any Error) {
+        delegate?.updateDriverDidFail(error)
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
@@ -693,6 +782,114 @@ final class SparkleUpdateDriver: NSObject, SparkleUpdateDriving, SPUUpdaterDeleg
         }
     }
 
+    // MARK: - Cancellation surfaced to the popover
+
+    /// Called by the popover's Cancel affordance while a download is in flight.
+    func cancelActiveDownload() {
+        activeCancellation?()
+        activeCancellation = nil
+    }
+
+    var canCancelActiveDownload: Bool { activeCancellation != nil }
+
+    // MARK: - ContinuumUserDriver bridge (all on the main actor)
+
+    func userDriverWillCheck(cancellation: @escaping () -> Void) {
+        // The coordinator already painted "Checking"/cached status. Nothing to
+        // show here — keep the in-flight cancellation only during download.
+    }
+
+    func userDriverFoundUpdate(
+        _ item: SUAppcastItem,
+        userInitiated: Bool,
+        reply: @escaping (SPUUserUpdateChoice) -> Void
+    ) {
+        installingUpdate = Self.info(from: item)
+        // `didFindValidUpdate` already surfaced `.updateAvailable` for the
+        // popover. A user-initiated check means they pressed Update, so proceed
+        // straight into download/install; a background-found update is parked
+        // (kept, but not auto-installed) until they press Update themselves.
+        reply(userInitiated ? .install : .dismiss)
+    }
+
+    func userDriverDownloadInitiated(cancellation: @escaping () -> Void) {
+        activeCancellation = cancellation
+        downloadExpectedLength = 0
+        downloadReceivedLength = 0
+        beginInstallSessionIfNeeded()
+        delegate?.updateDriverDidUpdateProgress(UpdateInstallProgress(phase: .downloading, fraction: nil))
+    }
+
+    func userDriverDownloadExpectedLength(_ length: UInt64) {
+        downloadExpectedLength = length
+        downloadReceivedLength = 0
+        emitDownloadProgress()
+    }
+
+    func userDriverDownloadReceived(_ length: UInt64) {
+        downloadReceivedLength &+= length
+        emitDownloadProgress()
+    }
+
+    private func emitDownloadProgress() {
+        beginInstallSessionIfNeeded()
+        let fraction: Double? = downloadExpectedLength > 0
+            ? min(1, Double(downloadReceivedLength) / Double(downloadExpectedLength))
+            : nil
+        delegate?.updateDriverDidUpdateProgress(UpdateInstallProgress(phase: .downloading, fraction: fraction))
+    }
+
+    func userDriverExtractionStarted() {
+        // Past the point of a clean download cancel.
+        activeCancellation = nil
+        beginInstallSessionIfNeeded()
+        delegate?.updateDriverDidUpdateProgress(UpdateInstallProgress(phase: .extracting, fraction: nil))
+    }
+
+    func userDriverExtractionProgress(_ progress: Double) {
+        beginInstallSessionIfNeeded()
+        delegate?.updateDriverDidUpdateProgress(
+            UpdateInstallProgress(phase: .extracting, fraction: min(1, max(0, progress)))
+        )
+    }
+
+    func userDriverReadyToInstall(reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        activeCancellation = nil
+        beginInstallSessionIfNeeded()
+        delegate?.updateDriverDidUpdateProgress(UpdateInstallProgress(phase: .installing, fraction: nil))
+        reply(.install)
+    }
+
+    func userDriverInstalling() {
+        beginInstallSessionIfNeeded()
+        delegate?.updateDriverDidUpdateProgress(UpdateInstallProgress(phase: .installing, fraction: nil))
+    }
+
+    func userDriverInstalledAndRelaunched() {
+        delegate?.updateDriverDidInstallAndAwaitRelaunch(version: installingUpdate?.displayVersion)
+    }
+
+    func userDriverNotFound(error: Error?) {
+        delegate?.updateDriverDidNotFindUpdate()
+    }
+
+    func userDriverError(_ error: Error) {
+        activeCancellation = nil
+        installingSessionActive = false
+        if SparkleErrorClassifier.isUserCancellation(error) {
+            delegate?.updateDriverDidCancel(version: installingUpdate?.displayVersion)
+        } else {
+            delegate?.updateDriverDidFail(error)
+        }
+    }
+
+    func userDriverDismiss() {
+        // Sparkle tore down its (headless) session. The coordinator owns the
+        // visible state; nothing on-screen to dismiss here.
+        activeCancellation = nil
+        installingSessionActive = false
+    }
+
     private static func info(from item: SUAppcastItem) -> SparkleUpdateInfo {
         SparkleUpdateInfo(
             version: item.versionString,
@@ -704,6 +901,96 @@ final class SparkleUpdateDriver: NSObject, SparkleUpdateDriving, SPUUpdaterDeleg
             minimumSystemVersion: item.minimumSystemVersion
         )
     }
+}
+
+/// Headless `SPUUserDriver`: every callback routes into `SparkleUpdateDriver`
+/// (and thence the coordinator + popover). No windows, alerts, or panels are
+/// ever shown — Sparkle's UI is entirely our top-right popover.
+@MainActor
+final class ContinuumUserDriver: NSObject, SPUUserDriver {
+    weak var host: SparkleUpdateDriver?
+
+    func show(
+        _ request: SPUUpdatePermissionRequest,
+        reply: @escaping (SUUpdatePermissionResponse) -> Void
+    ) {
+        // Never prompt with a dialog; honor the current automatic-check setting.
+        reply(SUUpdatePermissionResponse(
+            automaticUpdateChecks: host?.automaticallyChecksForUpdates ?? true,
+            sendSystemProfile: false
+        ))
+    }
+
+    func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
+        host?.userDriverWillCheck(cancellation: cancellation)
+    }
+
+    func showUpdateFound(
+        with appcastItem: SUAppcastItem,
+        state: SPUUserUpdateState,
+        reply: @escaping (SPUUserUpdateChoice) -> Void
+    ) {
+        host?.userDriverFoundUpdate(appcastItem, userInitiated: state.userInitiated, reply: reply)
+    }
+
+    func showUpdateReleaseNotes(with downloadData: SPUDownloadData) {}
+
+    func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) {}
+
+    func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
+        host?.userDriverNotFound(error: error)
+        acknowledgement()
+    }
+
+    func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) {
+        host?.userDriverError(error)
+        acknowledgement()
+    }
+
+    func showDownloadInitiated(cancellation: @escaping () -> Void) {
+        host?.userDriverDownloadInitiated(cancellation: cancellation)
+    }
+
+    func showDownloadDidReceiveExpectedContentLength(_ expectedContentLength: UInt64) {
+        host?.userDriverDownloadExpectedLength(expectedContentLength)
+    }
+
+    func showDownloadDidReceiveData(ofLength length: UInt64) {
+        host?.userDriverDownloadReceived(length)
+    }
+
+    func showDownloadDidStartExtractingUpdate() {
+        host?.userDriverExtractionStarted()
+    }
+
+    func showExtractionReceivedProgress(_ progress: Double) {
+        host?.userDriverExtractionProgress(progress)
+    }
+
+    func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        host?.userDriverReadyToInstall(reply: reply)
+    }
+
+    func showInstallingUpdate(
+        withApplicationTerminated applicationTerminated: Bool,
+        retryTerminatingApplication: @escaping () -> Void
+    ) {
+        host?.userDriverInstalling()
+    }
+
+    func showUpdateInstalledAndRelaunched(
+        _ relaunched: Bool,
+        acknowledgement: @escaping () -> Void
+    ) {
+        host?.userDriverInstalledAndRelaunched()
+        acknowledgement()
+    }
+
+    func dismissUpdateInstallation() {
+        host?.userDriverDismiss()
+    }
+
+    func showUpdateInFocus() {}
 }
 #endif
 
