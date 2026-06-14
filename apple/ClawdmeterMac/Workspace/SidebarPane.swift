@@ -1963,6 +1963,10 @@ struct SidebarPane: View {
         reorderKey: String? = nil,
         onToggle: @escaping () -> Void
     ) -> some View {
+        // Disclosure chevron is hover-only (Finder-sidebar style): the 10pt
+        // frame stays reserved so revealing it never shifts the glyph/title.
+        let hoverKey = reorderKey ?? repo.key
+        let isHeaderHovered = hoveredRepoHeaderKey == hoverKey
         let row = HStack(spacing: 8) {
             // Chevron + title toggle the section; the glyph between them is its
             // own button that opens the icon tray. Splitting the old single
@@ -1970,9 +1974,14 @@ struct SidebarPane: View {
             // is what lets the user click the monogram to assign an emoji /
             // image without also collapsing the project.
             Button(action: ContinuumAnalytics.wrapButton("sidebar_toggle_repo", onToggle)) {
+                // #484 split this into a chevron-only button; #482 makes the
+                // chevron hover-only. Reserved 10pt frame keeps the glyph/title
+                // from shifting when the chevron fades in.
                 TahoeIcon(isExpanded ? "chevD" : "chevR", size: 10)
                     .foregroundStyle(t.fg3)
                     .frame(width: 10)
+                    .opacity(isHeaderHovered ? 1 : 0)
+                    .animation(.easeOut(duration: 0.12), value: isHeaderHovered)
                     .contentShape(Rectangle())
             }
             // Plain (not HoverableButtonStyle): the whole repo header row now
@@ -2055,8 +2064,8 @@ struct SidebarPane: View {
         // hover wash is independent of the palm-cursor drag affordance below:
         // `hoveredRepoHeaderKey` paints the highlight, `pressedRepoHeaderKey`
         // (a @GestureState) drives the closed-palm cursor — they coexist.
-        let hoverKey = reorderKey ?? repo.key
-        let isHeaderHovered = hoveredRepoHeaderKey == hoverKey
+        // (`hoverKey` / `isHeaderHovered` are computed at the top of this fn so
+        // the disclosure chevron can also gate its opacity on the same hover.)
         let decorated = row
             // Inset the wash inside the row frame rather than padding the row
             // itself, so the highlight gets a small side margin without nudging
