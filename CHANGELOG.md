@@ -4,6 +4,35 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.41.0 build 246] - 2026-06-14 - Smooth pane resize, numbered terminal tabs, Code-tab polish, delta updates
+
+Smooth Code-workspace divider dragging, positional terminal-tab labels, a
+quieter Code tab, and Sparkle binary-delta auto-updates under the hood.
+
+### Added
+
+- **Smooth pane resizing** for the Code-workspace sidebar + review dividers,
+  with persisted widths. (#476)
+- **Positional terminal-tab labels** (T1, T2, T3…). (#475)
+- **Drag-to-reorder projects** via a palm-cursor whole-row handle (grip dots
+  removed); repo header lights up on hover. (#468, #469)
+- **Sparkle binary-delta auto-updates** (zip enclosure + delta feed) so
+  updates download only what changed. (#470)
+
+### Fixed
+
+- **Terminal pane recalibrates** after a review-pane resize instead of
+  staying stuck at its old width. (#473)
+- **Review pane keeps a constant width** across tabs (no longer widens for
+  Diff). (#477)
+
+### Changed
+
+- **Cleaner Code tab:** removed the session-detail metadata strip and the
+  hairline divider above the composer. (#467, #471)
+- **Hover + pointing-hand cursor** on review-pane tabs, terminal tabs (with a
+  hover-close affordance), and the worktree archive button. (#472, #474, #478)
+
 ## [0.40.0 build 244] - 2026-06-14 - Spawn settings + live resize, redesigned new-session box, Code-tab polish
 
 A Spawn section in Settings with a deep-linking gear, a 4/6/8 live-resize
