@@ -852,7 +852,7 @@ public struct IOSSessionDetailView: View {
                             // the session falls outside the activity window.
                             HStack {
                                 LiveSessionActivityIndicator(
-                                    agent: session.agent,
+                                    agent: session.agent.agentKind,
                                     lastEventAt: chatStore.snapshot.lastEventAt
                                 )
                                 Spacer()

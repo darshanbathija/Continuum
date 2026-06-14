@@ -46,6 +46,20 @@ public extension ChatVendor {
 }
 
 public extension TahoeProvider {
+    /// The wire `AgentKind` this branded provider lane maps back to.
+    /// OpenRouter BYOK has no distinct AgentKind — it's backed by `.opencode`.
+    var agentKind: AgentKind {
+        switch self {
+        case .claude: return .claude
+        case .codex: return .codex
+        case .gemini: return .gemini
+        case .opencode: return .opencode
+        case .openrouter: return .opencode
+        case .cursor: return .cursor
+        case .grok: return .grok
+        }
+    }
+
     /// Resolve the branded glyph lane when the wire agent is shared
     /// (`AgentKind.opencode` backs both OpenCode Go and OpenRouter BYOK).
     static func resolved(
