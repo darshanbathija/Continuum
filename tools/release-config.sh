@@ -22,3 +22,14 @@ CLAWDMETER_RELEASE_SIGNING_IDENTITY="${CLAWDMETER_RELEASE_SIGNING_IDENTITY:-Deve
 CLAWDMETER_SPARKLE_PUBLIC_ED_KEY="${CLAWDMETER_SPARKLE_PUBLIC_ED_KEY:-dA6tbvVkaBnCj16gub64AzmBY+peo39LeTOowaFHRIY=}"
 CLAWDMETER_MAC_PROFILE_NAME="${CLAWDMETER_MAC_PROFILE_NAME:-Continuum DeveloperID ai.continuum.mac}"
 CLAWDMETER_MAC_WIDGET_PROFILE_NAME="${CLAWDMETER_MAC_WIDGET_PROFILE_NAME:-Continuum DeveloperID ai.continuum.mac.widgets}"
+
+# Sparkle incremental-update feed. Auto-updates ship a .zip of the stapled
+# .app (delta-able) instead of the DMG; all archives + binary deltas live under
+# one stable GitHub release tag so generate_appcast's single download-url-prefix
+# resolves every full + delta enclosure. The per-version v<ver>-mac DMG release
+# stays the website/first-install download.
+CLAWDMETER_SPARKLE_FEED_TAG="${CLAWDMETER_SPARKLE_FEED_TAG:-mac-updates}"
+CLAWDMETER_SPARKLE_FEED_TITLE="${CLAWDMETER_SPARKLE_FEED_TITLE:-Continuum Mac auto-update feed}"
+CLAWDMETER_SPARKLE_FEED_KEEP="${CLAWDMETER_SPARKLE_FEED_KEEP:-3}"     # full versions retained on feed + appcast
+CLAWDMETER_SPARKLE_MAX_DELTAS="${CLAWDMETER_SPARKLE_MAX_DELTAS:-5}"   # deltas against newest version
+CLAWDMETER_SPARKLE_ARCHIVE_EXT="${CLAWDMETER_SPARKLE_ARCHIVE_EXT:-zip}"

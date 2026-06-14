@@ -264,7 +264,7 @@ update_release_history() {
   local history_path="docs/${CLAWDMETER_RELEASE_HISTORY_PATH}"
   local dmg_name notes_public_name notes_url published_at
   dmg_name="$(basename "$dmg")"
-  notes_public_name="${dmg_name%.dmg}.md"
+  notes_public_name="${dmg_name%.*}.md"
   notes_url="${CLAWDMETER_PAGES_BASE_URL}/${CLAWDMETER_RELEASE_NOTES_PATH}/${notes_public_name}"
   published_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   mkdir -p "$(dirname "$history_path")"
@@ -295,31 +295,168 @@ PY
   ok "release history updated for $tag"
 }
 
+# Extract the Sparkle archive and prove the app inside is the one Sparkle will
+# reconstruct after applying a binary delta: a valid code signature, and (publish
+# only) a stapled notarization ticket that passes offline Gatekeeper. A zip of an
+# un-stapled app delta-updates into Gatekeeper friction, so fail here, not on users.
+verify_sparkle_archive_stapled() {
+  local zip="$1" tmp app
+  tmp="$(mktemp -d)"
+  /usr/bin/ditto -x -k "$zip" "$tmp" || { rm -rf "$tmp"; die "could not extract Sparkle archive $zip"; }
+  app="$tmp/${CLAWDMETER_APP_NAME}.app"
+  [[ -d "$app" ]] || { rm -rf "$tmp"; die "Sparkle archive missing ${CLAWDMETER_APP_NAME}.app at its root"; }
+  if ! codesign --verify --deep --strict "$app" 2>/dev/null; then
+    rm -rf "$tmp"; die "Sparkle archive app fails codesign --verify"
+  fi
+  if [[ "$MODE" == "publish" ]]; then
+    xcrun stapler validate "$app" >/dev/null 2>&1 \
+      || { rm -rf "$tmp"; die "Sparkle archive app is not stapled; rebuild with CLAWDMETER_NOTARIZE_APP_BUNDLE=1"; }
+    spctl --assess --type exec "$app" >/dev/null 2>&1 \
+      || { rm -rf "$tmp"; die "Sparkle archive app rejected by Gatekeeper (spctl)"; }
+  fi
+  rm -rf "$tmp"
+  ok "Sparkle archive verified ($(basename "$zip"))"
+}
+
+# Download the newest prior Sparkle archives from the feed release so
+# generate_appcast can diff against them. Tolerant of a missing feed (first run →
+# no baselines → no deltas) and of zero matching assets.
+hydrate_feed_baselines() {
+  local stage="$1"
+  if ! gh release view "$FEED_TAG" >/dev/null 2>&1; then
+    ok "feed release $FEED_TAG does not exist yet — first run, no deltas"
+    return 0
+  fi
+  # Seed the prior appcast so generate_appcast preserves already-signed items it
+  # has no archive for (e.g. older DMG entries during the DMG→zip transition).
+  if [[ -f "docs/${CLAWDMETER_APPCAST_PATH}" ]]; then
+    cp "docs/${CLAWDMETER_APPCAST_PATH}" "$stage/appcast.xml"
+  fi
+  local ext="$CLAWDMETER_SPARKLE_ARCHIVE_EXT" assets keep name
+  assets="$(gh release view "$FEED_TAG" --json assets \
+    --jq ".assets[].name | select(endswith(\".${ext}\"))" 2>/dev/null || true)"
+  if [[ -z "$assets" ]]; then
+    ok "feed release has no prior $ext archives yet"
+    return 0
+  fi
+  # Newest CLAWDMETER_SPARKLE_FEED_KEEP versions, excluding this version's own
+  # archive (a re-run must not diff a version against itself). Portable numeric
+  # semver sort — do not depend on `sort -V`.
+  keep="$(printf '%s\n' "$assets" \
+    | grep -v -- "-${VERSION}-arm64\.${ext}\$" \
+    | sed -E 's/.*-([0-9]+)\.([0-9]+)\.([0-9]+)-arm64\..*/\1 \2 \3 &/' \
+    | sort -k1,1nr -k2,2nr -k3,3nr \
+    | awk '{print $4}' \
+    | head -n "$CLAWDMETER_SPARKLE_FEED_KEEP")"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    gh release download "$FEED_TAG" --pattern "$name" --dir "$stage" --clobber \
+      || die "could not download baseline archive $name from $FEED_TAG"
+    ok "hydrated baseline $name"
+  done <<< "$keep"
+}
+
+# Upload the new full archive + every generated delta to the single stable feed
+# release. Create it on first run with --latest=false so the per-version DMG
+# release keeps /releases/latest. --clobber makes re-runs idempotent.
+upload_feed_assets() {
+  local stage="$1" zip_name="$2" d had_delta=0
+  if ! gh release view "$FEED_TAG" >/dev/null 2>&1; then
+    gh release create "$FEED_TAG" \
+      --title "$CLAWDMETER_SPARKLE_FEED_TITLE" \
+      --notes "Sparkle auto-update feed for Continuum Mac: .${CLAWDMETER_SPARKLE_ARCHIVE_EXT} app archives + binary deltas referenced by updates/appcast.xml. Managed by tools/release-mac.sh — do not delete." \
+      --latest=false \
+      || die "could not create feed release $FEED_TAG"
+    ok "created feed release $FEED_TAG"
+  fi
+  gh release upload "$FEED_TAG" "$stage/$zip_name" --clobber \
+    || die "could not upload $zip_name to $FEED_TAG"
+  shopt -s nullglob
+  for d in "$stage"/*.delta; do
+    gh release upload "$FEED_TAG" "$d" --clobber \
+      || die "could not upload $(basename "$d") to $FEED_TAG"
+    had_delta=1
+  done
+  shopt -u nullglob
+  if [[ "$had_delta" -eq 1 ]]; then
+    ok "uploaded archive + delta(s) to $FEED_TAG"
+  else
+    ok "uploaded archive to $FEED_TAG (no deltas this release)"
+  fi
+}
+
+# Keep the feed release in sync with the freshly generated appcast: survivors are
+# exactly the top-level archives + deltas left in the stage dir (generate_appcast
+# moves pruned full archives into old_updates/). Any feed asset not among them —
+# an aged-out version's archive and ALL its stale deltas — is deleted together.
+prune_feed_assets() {
+  local stage="$1" ext="$CLAWDMETER_SPARKLE_ARCHIVE_EXT" survivors existing name
+  survivors="$(cd "$stage" && ls -1 -- *."$ext" *.delta 2>/dev/null || true)"
+  existing="$(gh release view "$FEED_TAG" --json assets \
+    --jq ".assets[].name | select(endswith(\".${ext}\") or endswith(\".delta\"))" 2>/dev/null || true)"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    if ! printf '%s\n' "$survivors" | grep -qxF -- "$name"; then
+      if gh release delete-asset "$FEED_TAG" "$name" --yes 2>/dev/null; then
+        ok "pruned stale feed asset $name"
+      else
+        echo "⚠ could not delete stale feed asset $name" >&2
+      fi
+    fi
+  done <<< "$existing"
+}
+
 generate_pages_appcast() {
-  local tag="$1" dmg="$2"
-  local appcast_stage=".build/sparkle-appcast/$tag"
-  local notes_dir="$appcast_stage/${CLAWDMETER_RELEASE_NOTES_PATH}"
-  local dmg_name notes_public_name
-  dmg_name="$(basename "$dmg")"
-  notes_public_name="${dmg_name%.dmg}.md"
-  rm -rf "$appcast_stage"
-  mkdir -p "$appcast_stage" "$notes_dir"
-  cp "$dmg" "$appcast_stage/"
-  cp "docs/${CLAWDMETER_RELEASE_NOTES_PATH}/${VERSION}.md" "$appcast_stage/$notes_public_name"
+  local zip="$1"
+  local stage=".build/sparkle-appcast/$FEED_TAG"
+  local ext="$CLAWDMETER_SPARKLE_ARCHIVE_EXT"
+  local zip_name notes_public_name arch base
+  zip_name="$(basename "$zip")"
+  notes_public_name="${zip_name%.${ext}}.md"
+  rm -rf "$stage"
+  mkdir -p "$stage"
+
+  hydrate_feed_baselines "$stage"
+  cp "$zip" "$stage/"
+  cp "docs/${CLAWDMETER_RELEASE_NOTES_PATH}/${VERSION}.md" "$stage/$notes_public_name"
+
+  # Re-attach release notes for every staged archive (new + hydrated baselines)
+  # so generate_appcast keeps each item's <sparkle:releaseNotesLink>. Notes are
+  # matched to archives by basename in the same directory.
+  shopt -s nullglob
+  for arch in "$stage"/*."$ext"; do
+    base="$(basename "${arch%.*}")"
+    [[ -f "$stage/${base}.md" ]] && continue
+    [[ -f "docs/${CLAWDMETER_RELEASE_NOTES_PATH}/${base}.md" ]] \
+      && cp "docs/${CLAWDMETER_RELEASE_NOTES_PATH}/${base}.md" "$stage/${base}.md" || true
+  done
+  shopt -u nullglob
 
   "$GENERATE_APPCAST" \
     --account "$CLAWDMETER_SPARKLE_KEY_ACCOUNT" \
-    --download-url-prefix "https://github.com/${CLAWDMETER_RELEASE_OWNER}/${CLAWDMETER_RELEASE_REPO}/releases/download/${tag}/" \
+    --maximum-deltas "$CLAWDMETER_SPARKLE_MAX_DELTAS" \
+    --maximum-versions "$CLAWDMETER_SPARKLE_FEED_KEEP" \
+    --download-url-prefix "https://github.com/${CLAWDMETER_RELEASE_OWNER}/${CLAWDMETER_RELEASE_REPO}/releases/download/${FEED_TAG}/" \
     --release-notes-url-prefix "${CLAWDMETER_PAGES_BASE_URL}/${CLAWDMETER_RELEASE_NOTES_PATH}/" \
-    "$appcast_stage"
+    "$stage"
 
-  [[ -f "$appcast_stage/appcast.xml" ]] || die "generate_appcast did not create appcast.xml"
-  cp "$appcast_stage/appcast.xml" "docs/${CLAWDMETER_APPCAST_PATH}"
-  cp "$appcast_stage/$notes_public_name" "docs/${CLAWDMETER_RELEASE_NOTES_PATH}/$notes_public_name"
+  [[ -f "$stage/appcast.xml" ]] || die "generate_appcast did not create appcast.xml"
+
+  if [[ "$MODE" == "publish" ]]; then
+    upload_feed_assets "$stage" "$zip_name"
+    prune_feed_assets "$stage"
+  else
+    ok "skipping feed upload/prune (--no-publish)"
+  fi
+
+  cp "$stage/appcast.xml" "docs/${CLAWDMETER_APPCAST_PATH}"
+  cp "$stage/$notes_public_name" "docs/${CLAWDMETER_RELEASE_NOTES_PATH}/$notes_public_name"
   grep -q "sparkle:edSignature" "docs/${CLAWDMETER_APPCAST_PATH}" || die "appcast is missing Sparkle edSignature"
   grep -q "$CLAWDMETER_MAC_MIN_OS" "docs/${CLAWDMETER_APPCAST_PATH}" || die "appcast is missing minimum OS $CLAWDMETER_MAC_MIN_OS"
-  update_release_history "$tag" "$dmg"
-  ok "GitHub Pages appcast generated at docs/${CLAWDMETER_APPCAST_PATH}"
+  grep -q "<sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>" "docs/${CLAWDMETER_APPCAST_PATH}" \
+    || die "appcast newest item is not $VERSION"
+  update_release_history "$FEED_TAG" "$zip"
+  ok "GitHub Pages appcast generated at docs/${CLAWDMETER_APPCAST_PATH} ($(grep -c '<item>' "docs/${CLAWDMETER_APPCAST_PATH}") item(s))"
 }
 
 publish_pages_feed() {
@@ -414,6 +551,11 @@ export_release_env() {
   export CLAWDMETER_SPARKLE_PUBLIC_ED_KEY
   export CLAWDMETER_MAC_PROFILE_NAME
   export CLAWDMETER_MAC_WIDGET_PROFILE_NAME
+  export CLAWDMETER_SPARKLE_FEED_TAG
+  export CLAWDMETER_SPARKLE_FEED_TITLE
+  export CLAWDMETER_SPARKLE_FEED_KEEP
+  export CLAWDMETER_SPARKLE_MAX_DELTAS
+  export CLAWDMETER_SPARKLE_ARCHIVE_EXT
   [[ -z "${CLAWDMETER_ASC_KEY_PATH:-}" ]] || export CLAWDMETER_ASC_KEY_PATH
   [[ -z "${CLAWDMETER_ASC_KEY_ID:-}" ]] || export CLAWDMETER_ASC_KEY_ID
   [[ -z "${CLAWDMETER_ASC_ISSUER_ID:-}" ]] || export CLAWDMETER_ASC_ISSUER_ID
@@ -442,24 +584,46 @@ DMG_PATH="$REPO_ROOT/dist/$DMG_NAME"
 NOTES_PATH="docs/${CLAWDMETER_RELEASE_NOTES_PATH}/${VERSION}.md"
 ASSET_URL="https://github.com/${CLAWDMETER_RELEASE_OWNER}/${CLAWDMETER_RELEASE_REPO}/releases/download/${TAG}/${DMG_NAME}"
 
+# Sparkle auto-update enclosure: a flat archive of the stapled .app, hosted on the
+# stable feed release so binary deltas resolve under one --download-url-prefix.
+FEED_TAG="$CLAWDMETER_SPARKLE_FEED_TAG"
+ZIP_NAME="${CLAWDMETER_RELEASE_ASSET_PREFIX}-${VERSION}-arm64.${CLAWDMETER_SPARKLE_ARCHIVE_EXT}"
+ZIP_PATH="$REPO_ROOT/dist/$ZIP_NAME"
+ZIP_ASSET_URL="https://github.com/${CLAWDMETER_RELEASE_OWNER}/${CLAWDMETER_RELEASE_REPO}/releases/download/${FEED_TAG}/${ZIP_NAME}"
+
 export_release_env
-CLAWDMETER_RELEASE_HARDENED_RUNTIME=1 CLAWDMETER_SKIP_BUILD_SCRIPT_NOTARIZATION=1 ./tools/build-mac-dmg.sh
+# CLAWDMETER_NOTARIZE_APP_BUNDLE=1 notarizes + staples the bare .app so the Sparkle
+# archive (and every delta reconstructed from it) passes offline Gatekeeper.
+# CLAWDMETER_SKIP_BUILD_SCRIPT_NOTARIZATION=1 still defers DMG notarization to
+# notarize_and_verify_dmg below.
+CLAWDMETER_RELEASE_HARDENED_RUNTIME=1 \
+CLAWDMETER_SKIP_BUILD_SCRIPT_NOTARIZATION=1 \
+CLAWDMETER_NOTARIZE_APP_BUNDLE=1 \
+./tools/build-mac-dmg.sh
 [[ -f "$DMG_PATH" ]] || die "expected DMG missing at $DMG_PATH"
+[[ -f "$ZIP_PATH" ]] || die "expected Sparkle archive missing at $ZIP_PATH"
 
 notarize_and_verify_dmg "$DMG_PATH"
+verify_sparkle_archive_stapled "$ZIP_PATH"
 
 if [[ "$MODE" == "publish" ]]; then
   publish_asset "$TAG" "$DMG_PATH" "$NOTES_PATH"
   verify_asset_url "$ASSET_URL" "$(stat -f%z "$DMG_PATH")"
 else
-  ok "skipping GitHub asset publish (--no-publish)"
+  ok "skipping GitHub DMG asset publish (--no-publish)"
 fi
 
-generate_pages_appcast "$TAG" "$DMG_PATH"
+generate_pages_appcast "$ZIP_PATH"
 
 if [[ "$MODE" == "publish" ]]; then
-  publish_pages_feed "$TAG"
-  verify_live_appcast "$TAG" "$VERSION" "$CURRENT_BUILD" "$ASSET_URL"
+  verify_asset_url "$ZIP_ASSET_URL" "$(stat -f%z "$ZIP_PATH")"
+  publish_pages_feed "$FEED_TAG"
+  verify_live_appcast "$TAG" "$VERSION" "$CURRENT_BUILD" "$ZIP_ASSET_URL"
+  if gh release view "$FEED_TAG" --json assets --jq '.assets[].name' 2>/dev/null | grep -q '\.delta$'; then
+    curl -fsSL "${CLAWDMETER_PAGES_BASE_URL}/${CLAWDMETER_APPCAST_PATH}?ts=$(date +%s)" \
+      | grep -q 'sparkle:deltas' || die "feed has deltas but live appcast advertises none"
+    ok "live appcast advertises sparkle:deltas"
+  fi
 else
   ok "skipping GitHub Pages publish (--no-publish)"
 fi
@@ -467,7 +631,9 @@ fi
 cat <<EOF
 ✓ Mac release artifacts ready
   tag:       $TAG
-  dmg:       $DMG_PATH
+  dmg:       $DMG_PATH        (website / first-install download, release $TAG)
+  archive:   $ZIP_PATH        (Sparkle auto-update enclosure)
+  feed:      $FEED_TAG release (Sparkle .${CLAWDMETER_SPARKLE_ARCHIVE_EXT} archives + binary deltas)
   appcast:   docs/${CLAWDMETER_APPCAST_PATH}
   pages:     ${CLAWDMETER_PAGES_BASE_URL}/${CLAWDMETER_APPCAST_PATH}
 

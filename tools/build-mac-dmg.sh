@@ -373,6 +373,23 @@ elif [[ "$SIGN_MODE" == "developerid" && $NOTARIZE_READY == 1 ]]; then
 fi
 
 # ────────────────────────────────────────────────────────────────────────
+# 7b. Flat Sparkle archive from the (now stapled) .app — the auto-update
+#     enclosure. ditto -c -k --keepParent puts Continuum.app at the archive
+#     root, the exact layout Sparkle rebuilds when applying a binary delta.
+#     Must come AFTER step 7's re-seal/staple so CodeResources + the stapled
+#     ticket match the sealed bundle, and BEFORE step 8 mutates the staging copy.
+# ────────────────────────────────────────────────────────────────────────
+
+SPARKLE_ZIP="$DIST_DIR/${APP_NAME}-${VERSION}-arm64.${CLAWDMETER_SPARKLE_ARCHIVE_EXT:-zip}"
+rm -f "$SPARKLE_ZIP"
+/usr/bin/ditto -c -k --keepParent "$APP_PATH" "$SPARKLE_ZIP"
+echo "✓ Sparkle archive: $SPARKLE_ZIP ($(du -h "$SPARKLE_ZIP" | awk '{print $1}'))"
+if [[ "$SIGN_MODE" == "developerid" && "${CLAWDMETER_NOTARIZE_APP_BUNDLE:-0}" != "1" ]]; then
+  echo "⚠ Sparkle archive built from an UN-stapled app (CLAWDMETER_NOTARIZE_APP_BUNDLE!=1);" >&2
+  echo "  delta-updated installs may hit offline Gatekeeper friction. Release path sets it to 1." >&2
+fi
+
+# ────────────────────────────────────────────────────────────────────────
 # 8. Stage + build the DMG
 # ────────────────────────────────────────────────────────────────────────
 
