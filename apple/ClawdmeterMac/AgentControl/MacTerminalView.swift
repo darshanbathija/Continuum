@@ -110,8 +110,18 @@ public struct MacTerminalView: NSViewRepresentable {
     }
 
     public func makeNSView(context: Context) -> TerminalView {
-        let view = TerminalView()
+        let view = SizeSyncingTerminalView()
         view.terminalDelegate = context.coordinator
+        // Re-assert the PTY winsize over the WS resize frame on every laid-out
+        // frame change. SwiftTerm's `sizeChanged` delegate only fires on a
+        // col/row CHANGE and doesn't reliably re-fire when the review pane is
+        // dragged wider/narrower — so the remote PTY stays stranded at its old
+        // grid and the agent's TUI renders cramped (see the SpawnTerminalView
+        // note for the same SwiftTerm quirk). Idempotent: re-sending the same
+        // winsize is a no-op for the child.
+        view.onSizeSync = { [weak coordinator = context.coordinator] cols, rows in
+            coordinator?.syncSize(cols: cols, rows: rows)
+        }
         context.coordinator.terminalView = view
         context.coordinator.connect()
         return view
@@ -344,7 +354,19 @@ public struct MacTerminalView: NSViewRepresentable {
         }
 
         public func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-            let resize = TerminalResize(cols: newCols, rows: newRows)
+            sendResize(cols: newCols, rows: newRows)
+        }
+
+        /// Push the emulator's post-layout grid to the remote PTY. Backstops the
+        /// change-gated `sizeChanged` delegate, which doesn't reliably re-fire
+        /// when the hosting pane is resized (see `makeNSView`). Idempotent.
+        func syncSize(cols: Int, rows: Int) {
+            guard cols > 0, rows > 0 else { return }
+            sendResize(cols: cols, rows: rows)
+        }
+
+        private func sendResize(cols: Int, rows: Int) {
+            let resize = TerminalResize(cols: cols, rows: rows)
             guard let body = try? JSONEncoder().encode(resize) else { return }
             var frame = Data([TerminalFrameTag.resize.rawValue])
             frame.append(body)
