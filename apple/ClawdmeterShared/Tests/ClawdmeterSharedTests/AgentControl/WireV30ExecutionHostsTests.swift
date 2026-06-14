@@ -492,4 +492,34 @@ final class WireV30ExecutionHostsTests: XCTestCase {
         )
         XCTAssertEqual(decoded.autoStopIdleMinutes, 45)
     }
+
+    /// Regression: the Mac loopback client never runs `refreshAll()`, so its
+    /// `serverWireVersion` only learns the in-process daemon's version when
+    /// seeded at construction. Without the seed every Mac multi-host surface
+    /// (Settings → Devices, host pickers) renders the "Update Clawdmeter to
+    /// wire v30" fallback even though the local daemon IS v30. This locks the
+    /// seed → `supportsExecutionHosts` path the loopback factory relies on.
+    @MainActor
+    func testLoopbackClientSeedsExecutionHostSupport() {
+        let seeded = AgentControlClient(
+            host: "127.0.0.1",
+            httpPort: 21731,
+            wsPort: 21732,
+            token: "loopback",
+            assumeServerWireVersion: AgentControlWireVersion.current
+        )
+        XCTAssertEqual(seeded.serverWireVersion, AgentControlWireVersion.current)
+        XCTAssertTrue(seeded.supportsExecutionHosts)
+
+        // Default (iOS / UserDefaults path) stays byte-identical: nil until a
+        // /health refresh, gate false.
+        let unseeded = AgentControlClient(
+            host: "127.0.0.1",
+            httpPort: 21731,
+            wsPort: 21732,
+            token: "loopback"
+        )
+        XCTAssertNil(unseeded.serverWireVersion)
+        XCTAssertFalse(unseeded.supportsExecutionHosts)
+    }
 }

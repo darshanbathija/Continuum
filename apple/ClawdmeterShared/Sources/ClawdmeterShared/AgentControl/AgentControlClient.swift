@@ -129,13 +129,32 @@ public final class AgentControlClient: ObservableObject {
     /// NOT touch UserDefaults — pairing values are held in-memory for
     /// this instance only. `setPairing(...)` is a no-op on instances
     /// constructed this way.
-    public init(host: String, httpPort: Int, wsPort: Int, token: String, urlSession: URLSession = .shared) {
+    ///
+    /// `assumeServerWireVersion` seeds `serverWireVersion` synchronously.
+    /// The Mac loopback client talks to the in-process daemon, which is
+    /// literally this binary, so its wire version is always
+    /// `AgentControlWireVersion.current`. Seeding it here means every
+    /// Mac surface that gates on `supportsExecutionHosts` (and the other
+    /// `supports*` predicates) is correct from first paint — the Mac never
+    /// calls `refreshAll()`/`refreshHealth()` on the loopback client the way
+    /// iOS does, so without this seed the gate stayed `nil`/false forever and
+    /// the multi-device onboarding UI never appeared. nil keeps the
+    /// iOS/UserDefaults path byte-identical.
+    public init(
+        host: String,
+        httpPort: Int,
+        wsPort: Int,
+        token: String,
+        urlSession: URLSession = .shared,
+        assumeServerWireVersion: Int? = nil
+    ) {
         self.hostOverride = host
         self.httpPortOverride = httpPort
         self.wsPortOverride = wsPort
         self.tokenOverride = token
         self.urlSession = urlSession
         self.isConfigured = true
+        self.serverWireVersion = assumeServerWireVersion
         observeProviderDefaultsChanges()
     }
 
