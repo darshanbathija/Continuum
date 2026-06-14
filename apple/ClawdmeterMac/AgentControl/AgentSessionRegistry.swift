@@ -498,6 +498,22 @@ public final class AgentSessionRegistry: ObservableObject {
         update(id: id) { _ in projected }
     }
 
+    /// Clear the persisted Codex thread id (and the binding's external thread).
+    /// A cross-vendor switch makes the old Codex server-side thread irrelevant;
+    /// without this, a later Claude→Codex→same-vendor switch could try to resume
+    /// a dead thread.
+    public func clearCodexChatThreadId(id: UUID) async throws {
+        guard let s = session(id: id), s.codexChatThreadId != nil else { return }
+        let projected: AgentSession
+        if let binding = s.runtimeBinding?.updating(externalThreadId: .some(nil)) {
+            projected = with(s, codexChatThreadId: .some(nil), runtimeBinding: .some(binding))
+        } else {
+            projected = with(s, codexChatThreadId: .some(nil))
+        }
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
+    }
+
     public func session(id: UUID) -> AgentSession? {
         sessions.first { $0.id == id }
     }
@@ -660,14 +676,20 @@ public final class AgentSessionRegistry: ObservableObject {
     /// live SessionConfigChanger path: picker edits made while "+" provisioning
     /// is still running should alter the pending spawn request, not attempt a
     /// mid-session swap against an agent that does not exist yet.
+    /// `customProviderId` is double-optional: outer nil = keep current; inner nil
+    /// = explicitly clear (a cross-vendor switch off a custom provider). A live
+    /// cross-vendor switch reuses this to repoint agent+model+effort+provider in
+    /// one write, which also rebuilds `runtimeBinding` so the billing stack flips.
     public func setLaunchConfiguration(
         id: UUID,
         agent: AgentKind,
         model: String?,
-        effort: ReasoningEffort?
+        effort: ReasoningEffort?,
+        customProviderId: String?? = nil
     ) async throws {
         guard let s = session(id: id) else { return }
-        guard s.agent != agent || s.model != model || s.effort != effort else { return }
+        let resolvedCustom = Self.resolve(customProviderId, fallback: s.customProviderId)
+        guard s.agent != agent || s.model != model || s.effort != effort || resolvedCustom != s.customProviderId else { return }
         let binding = Self.makeRuntimeBinding(
             agent: agent,
             model: model,
@@ -678,7 +700,8 @@ public final class AgentSessionRegistry: ObservableObject {
             agent: agent,
             model: .some(model),
             effort: .some(effort),
-            runtimeBinding: binding
+            runtimeBinding: binding,
+            customProviderId: customProviderId
         )
         try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
         update(id: id) { _ in projected }

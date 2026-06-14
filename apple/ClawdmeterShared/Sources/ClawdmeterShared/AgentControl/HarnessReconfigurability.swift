@@ -32,3 +32,42 @@ public extension AgentSession {
             && agent.isReconfigurableHarness
     }
 }
+
+/// How a model pick that crosses provider/vendor families should be carried out
+/// on a *live* session. Switching from one vendor's runtime to another's is not
+/// a config tweak — it's a runtime kill+respawn, and the new runtime may even be
+/// a different *type* (Claude PTY vs managed-harness bridge). Pure + shared so
+/// the routing decision is unit-testable without the daemon, and so the Mac
+/// in-process path and the daemon endpoint agree on what's supported.
+public enum AgentSwitchTarget: Equatable, Sendable {
+    /// Same vendor — not a cross-vendor switch; callers use the in-place
+    /// same-vendor reconfigure path (`SessionConfigChanger` / harness reconfigure).
+    case notCrossVendor
+    /// Spawn a fresh Claude PTY (no cross-vendor resume — new conversation).
+    case claudePty
+    /// Spawn a managed-harness bridge for the new agent (codex/cursor/grok/gemini).
+    case harness
+    /// Not supported in place yet (OpenCode source/target has no in-place
+    /// teardown/respawn analogue; `.unknown` is forward-compat). The reason is
+    /// user-facing copy.
+    case unsupported(reason: String)
+}
+
+/// Classify a cross-vendor live switch from `oldAgent` to `newAgent`. OpenCode
+/// (either side) and `.unknown` are deferred with an honest reason rather than a
+/// silent chip-only no-op.
+public func crossVendorSwitchTarget(from oldAgent: AgentKind, to newAgent: AgentKind) -> AgentSwitchTarget {
+    if oldAgent == newAgent { return .notCrossVendor }
+    // OpenCode's runtime is an SSE-driven serve process with no in-place
+    // teardown/respawn analogue (unlike Claude PTY / managed harness), so a
+    // mid-session switch away from it isn't supported yet.
+    if oldAgent == .opencode {
+        return .unsupported(reason: "Switching away from OpenCode mid-session isn't supported yet — start a new session for the other model.")
+    }
+    if newAgent == .claude { return .claudePty }
+    if newAgent.isReconfigurableHarness { return .harness }
+    if newAgent == .opencode {
+        return .unsupported(reason: "Switching to OpenCode mid-session isn't supported yet — start a new OpenCode session.")
+    }
+    return .unsupported(reason: "That agent can't be switched into mid-session.")
+}

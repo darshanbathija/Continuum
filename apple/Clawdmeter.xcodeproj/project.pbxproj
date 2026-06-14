@@ -181,7 +181,6 @@
 		51782A95F53320B044FD225C /* SkillPluginImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A1BCAF8C4141873E43136E /* SkillPluginImporter.swift */; };
 		51F807AB2E5043005973D0AD /* CodexAppServerDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 753EB761E1DF82346FD995FC /* CodexAppServerDriver.swift */; };
 		5222E839CB29135AD4571C1D /* iOSDiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93D530AD60605887515476C0 /* iOSDiffView.swift */; };
-		5281DED2AAE3EF81A11A7207 /* clawdmeter-agents in Resources */ = {isa = PBXBuildFile; fileRef = E90EC02F84561040F698EE87 /* clawdmeter-agents */; };
 		52A767A7D70365B07FA48BA0 /* GlobalDictationEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C559DD2FE8A4BFA6C8C17C4 /* GlobalDictationEnvironment.swift */; };
 		52C4CF8A1F4419F555A4219B /* WorkspaceTerminalPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 412A35101FFC2DBB6623AD83 /* WorkspaceTerminalPane.swift */; };
 		536D0374AE837765530A760E /* CommandPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCDF9317290F56870BC0564 /* CommandPalette.swift */; };
@@ -223,6 +222,7 @@
 		65A91CCE80103A225C1D7817 /* NewSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D80CB8C8FC5763D6DD411982 /* NewSessionSheet.swift */; };
 		6619CBA15EF3D0564BAE896A /* STTModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = D41FCA235A0FDD5563075877 /* STTModelCatalog.swift */; };
 		6653C3F935F6EB49BCBE566D /* iOSChatStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BE652466D437D2E8099589C /* iOSChatStore.swift */; };
+		66819157E3A63A058C452928 /* clawdmeter-agents in Resources */ = {isa = PBXBuildFile; fileRef = EC070DEF6A2C2FC5C25DB04E /* clawdmeter-agents */; };
 		66E8795E411E0FFC14C61C7E /* MacSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD6B023408F49EF49E556DC5 /* MacSettingsView.swift */; };
 		671BACE7A783898A82C0BF2F /* AgentControlServer+VendorProvisioning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 418BA8F3A23ADC9EA3D1AB73 /* AgentControlServer+VendorProvisioning.swift */; };
 		67E34B34E7C07E13BA465A96 /* CommandRunners.swift in Sources */ = {isa = PBXBuildFile; fileRef = 631512CE8E98566FEFE5E41B /* CommandRunners.swift */; };
@@ -470,6 +470,7 @@
 		E84994FA2663A8801DD5D6B5 /* IOSWorkspaceTabStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = D125188AF31CE3501B9B8137 /* IOSWorkspaceTabStrip.swift */; };
 		E8BEE2323A8E98E9B1419E98 /* AWSComputeProvisionerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3132C44B4DB3A9F2E8ED1A5F /* AWSComputeProvisionerTests.swift */; };
 		E8E88A643114653B96748F29 /* F1aWireChatParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B2F92F537B1AC9C7C24DFCF /* F1aWireChatParityTests.swift */; };
+		E90E377E0209831EC4932E48 /* AgentSessionRegistryLaunchConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F734FF460154DBC74794464 /* AgentSessionRegistryLaunchConfigTests.swift */; };
 		E948CA597F3EDF2454033FAA /* IOSPairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5386A54412C7E7039ECF84C0 /* IOSPairingView.swift */; };
 		E9B5559B25F1D7BB248F1CB9 /* OpencodeProcessManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17C54FE27B24845DCA2BFBA /* OpencodeProcessManagerTests.swift */; };
 		EB6B0F15814A65989784DA73 /* TailscaleHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 882E7B0B1D24591A17536772 /* TailscaleHost.swift */; };
@@ -889,6 +890,7 @@
 		8E59F36ABD57B696758AE96E /* PairingScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScanView.swift; sourceTree = "<group>"; };
 		8E69E8EE279B34195CA9D241 /* ClaudePtyRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudePtyRegistry.swift; sourceTree = "<group>"; };
 		8F51A41CE73D5F9E79AE1DE9 /* RelaySubscriptionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelaySubscriptionBridge.swift; sourceTree = "<group>"; };
+		8F734FF460154DBC74794464 /* AgentSessionRegistryLaunchConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionRegistryLaunchConfigTests.swift; sourceTree = "<group>"; };
 		9097EC72698E21C98FA2D6E6 /* FffRepoSearchIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FffRepoSearchIndex.swift; sourceTree = "<group>"; };
 		925041B8C85D144E1647A0E6 /* RateLimiter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RateLimiter.swift; sourceTree = "<group>"; };
 		92BB57903BBD3AECA55B20BF /* OpencodeAuthFileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeAuthFileTests.swift; sourceTree = "<group>"; };
@@ -1068,10 +1070,10 @@
 		E7B4A49792F41E40BE5183AF /* WorkbenchStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchStateTests.swift; sourceTree = "<group>"; };
 		E81AA8A300E81E7510331C1B /* WatchUsageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchUsageModel.swift; sourceTree = "<group>"; };
 		E8B01DA7617C0DFEA3F78CF4 /* ChatProviderAuthObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatProviderAuthObserver.swift; sourceTree = "<group>"; };
-		E90EC02F84561040F698EE87 /* clawdmeter-agents */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "clawdmeter-agents"; path = "../tools/clawdmeter-agents"; sourceTree = SOURCE_ROOT; };
 		EAB65AC597AEAFE555E05819 /* PairingCTAButtons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingCTAButtons.swift; sourceTree = "<group>"; };
 		EB6CC1AA9EB4821E16119827 /* SessionWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionWorkspaceView.swift; sourceTree = "<group>"; };
 		EB8FAB3F3BA70A5A17C2DD97 /* ClawdmeterShared */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ClawdmeterShared; path = ClawdmeterShared; sourceTree = SOURCE_ROOT; };
+		EC070DEF6A2C2FC5C25DB04E /* clawdmeter-agents */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "clawdmeter-agents"; path = "../tools/clawdmeter-agents"; sourceTree = SOURCE_ROOT; };
 		ED32A7A26407941E5159C449 /* ModelPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPicker.swift; sourceTree = "<group>"; };
 		EDDCD753507E1F92989E0CB5 /* AgentControlServerVendorProvisioningRouteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentControlServerVendorProvisioningRouteTests.swift; sourceTree = "<group>"; };
 		EEBADA22B9FE7DEDE1B29545 /* SpawnPathResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpawnPathResolverTests.swift; sourceTree = "<group>"; };
@@ -1473,10 +1475,10 @@
 			path = ClawdmeterMacWidgets;
 			sourceTree = "<group>";
 		};
-		60E0F76D19BCC7D3DB006F73 /* tools */ = {
+		66D8E8E2B594C2F7A460CE87 /* tools */ = {
 			isa = PBXGroup;
 			children = (
-				E90EC02F84561040F698EE87 /* clawdmeter-agents */,
+				EC070DEF6A2C2FC5C25DB04E /* clawdmeter-agents */,
 			);
 			path = tools;
 			sourceTree = "<group>";
@@ -1568,6 +1570,7 @@
 				F29D979C11B37400CED7386D /* AgentEventStreamTests.swift */,
 				B3C6F2D7B52D4DA18E6794CD /* AgentSessionRegistryEventStoreWireTests.swift */,
 				05DEE8E4C784CCD7B7749646 /* AgentSessionRegistryFrontierTests.swift */,
+				8F734FF460154DBC74794464 /* AgentSessionRegistryLaunchConfigTests.swift */,
 				552C22F8E32AB6F8370B23A7 /* AgentSessionRegistryPlanProgressTests.swift */,
 				DE1F1B18737CE3024BDD5620 /* AgentSpawnerChatArgvTests.swift */,
 				5A0D665B12A5F825AD11FB8E /* AgentSpawnerInstanceEnvTests.swift */,
@@ -1684,19 +1687,9 @@
 			path = Fixtures;
 			sourceTree = "<group>";
 		};
-		748EB3AE0A0D4FECD545CF52 /* Clawdmeter */ = {
-			isa = PBXGroup;
-			children = (
-				60E0F76D19BCC7D3DB006F73 /* tools */,
-			);
-			name = Clawdmeter;
-			path = ..;
-			sourceTree = "<group>";
-		};
 		8355AE2A6C5D497C97998BEB = {
 			isa = PBXGroup;
 			children = (
-				748EB3AE0A0D4FECD545CF52 /* Clawdmeter */,
 				C290AE49FDFD964D084DB555 /* ClawdmeteriOS */,
 				C78CB42390923B2CF2E3751E /* ClawdmeteriOSTests */,
 				422FDAA9460ED016123451B3 /* ClawdmeteriOSWidgets */,
@@ -1709,6 +1702,7 @@
 				25D3B0B2E19085880FF62EBB /* Config */,
 				3B510F8DB65482BF3589875E /* ContinuumTelemetry */,
 				ED156242FB8C5A01DE4F8ED7 /* Packages */,
+				FF6CB4D9CB195C4A49F01BF3 /* worcester */,
 				D520BCF1F836E478A167B219 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -2000,6 +1994,15 @@
 				6C40566A9CD019426F02502C /* CodexLogo.png */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		FF6CB4D9CB195C4A49F01BF3 /* worcester */ = {
+			isa = PBXGroup;
+			children = (
+				66D8E8E2B594C2F7A460CE87 /* tools */,
+			);
+			name = worcester;
+			path = ..;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -2330,7 +2333,7 @@
 				01B45609544DA99E655C7953 /* PR instructions.md in Resources */,
 				F8FA8741CD3BB21488BF313B /* Vendor in Resources */,
 				655480897A54E74D89A8FF06 /* browser-overlay.js in Resources */,
-				5281DED2AAE3EF81A11A7207 /* clawdmeter-agents in Resources */,
+				66819157E3A63A058C452928 /* clawdmeter-agents in Resources */,
 				B54FED090644474BC4C3CBBF /* deep-research-prompt.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2454,6 +2457,7 @@
 				A8FCDD4B0B909A1F68D332CB /* AgentEventStreamTests.swift in Sources */,
 				9CB35731AEC40E3F453D39A2 /* AgentSessionRegistryEventStoreWireTests.swift in Sources */,
 				FF51BD37342BEEF6FBDBA443 /* AgentSessionRegistryFrontierTests.swift in Sources */,
+				E90E377E0209831EC4932E48 /* AgentSessionRegistryLaunchConfigTests.swift in Sources */,
 				1BFC9D566B6B84F74ABB455B /* AgentSessionRegistryPlanProgressTests.swift in Sources */,
 				B6476D12C0F54133B30C941B /* AgentSpawnerChatArgvTests.swift in Sources */,
 				ED76205B09B7A50932D3AD2C /* AgentSpawnerInstanceEnvTests.swift in Sources */,
