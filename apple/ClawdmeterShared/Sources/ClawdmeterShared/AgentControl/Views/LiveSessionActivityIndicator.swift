@@ -8,10 +8,10 @@ import SwiftUI
 /// `iOSChatStore.snapshot.lastEventAt` on iOS.
 ///
 /// Renders the shared `SteadyTenthsStream`: a faint left→right data-packet
-/// stream flowing into a live `m, ss.s` elapsed-time readout. The packets
-/// take the session's provider tint (the focused-session "one color event");
-/// the readout digits stay near-foreground. Replaces the old per-agent
-/// rotating-asterisk / pulsing-dots spinners.
+/// stream flowing into a live `m, ss.s` elapsed-time readout. The packets use
+/// the canonical orange working accent; provider-gray variants are deliberately
+/// not used here. Replaces the old per-agent rotating-asterisk / pulsing-dots
+/// spinners.
 ///
 /// The elapsed counter anchors to `activityStartedAt` (the current turn's
 /// start) when the caller knows it; otherwise the stream counts from when the
@@ -21,7 +21,8 @@ import SwiftUI
 public struct LiveSessionActivityIndicator: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var timelineVisible = false
-    /// Provider drives the accent + symbol.
+    /// Provider is retained for call-site/session context; the stream color is
+    /// the shared working accent rather than the provider identity color.
     public let agent: AgentKind
     /// Most-recent observed event on the JSONL. nil → hide.
     public let lastEventAt: Date?
@@ -57,7 +58,7 @@ public struct LiveSessionActivityIndicator: View {
         Group {
             if timelineVisible {
                 SteadyTenthsStream(
-                    color: agent.tahoeProvider.dot,
+                    color: Self.packetColor,
                     startedAt: activityStartedAt
                 )
                 .padding(.horizontal, 12)
@@ -103,6 +104,8 @@ public struct LiveSessionActivityIndicator: View {
             timelineVisible = false
         }
     }
+
+    static var packetColor: Color { SessionsV2Theme.accent }
 
 }
 #endif
