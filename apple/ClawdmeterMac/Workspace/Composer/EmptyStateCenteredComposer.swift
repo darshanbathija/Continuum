@@ -61,6 +61,11 @@ struct EmptyStateCenteredComposer: View {
     @StateObject private var store: ComposerStore
     @State private var appeared = false
     @State private var selectedAccountWireId: String?
+    @State private var accountChoices: [ProviderInstanceId] = []
+    @State private var executionHosts: [ExecutionHost] = []
+    @State private var localExecutionHostId: UUID?
+    /// Selected execution host. nil = run on this Mac (local default).
+    @State private var selectedHostId: UUID?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
@@ -85,9 +90,7 @@ struct EmptyStateCenteredComposer: View {
                     .foregroundStyle(.primary)
                     .multilineTextAlignment(.center)
             }
-            VStack(spacing: 0) {
-                repoPickerRow
-                Divider()
+            VStack(spacing: 8) {
                 ComposerInputCore(
                     store: store,
                     presentationStore: presentationStore,
@@ -103,13 +106,9 @@ struct EmptyStateCenteredComposer: View {
                     minimalChrome: true,
                     selectedAccountWireId: $selectedAccountWireId
                 )
+                metaChipRow
             }
             .frame(maxWidth: 760)
-            .background(panelBg, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
-            )
             Spacer()
         }
         .padding(.horizontal, 24)
@@ -138,6 +137,10 @@ struct EmptyStateCenteredComposer: View {
         .onChange(of: launcher.modelCatalog.updatedAt) { _, _ in
             launcher.normalize(store)
         }
+        .task { await refreshMetaChoices() }
+        .onChange(of: store.agent) { _, _ in
+            Task { await refreshMetaChoices() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .composeDraftIncoming)) { note in
             applyIncomingDraft(note: note)
         }
@@ -151,46 +154,229 @@ struct EmptyStateCenteredComposer: View {
         return "What should we build?"
     }
 
-    private var repoPickerRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "folder")
-                .foregroundStyle(.secondary)
-            Picker("Repo", selection: Binding(
-                get: { store.repoKey ?? "" },
-                set: { newKey in
-                    let key = newKey.isEmpty ? nil : newKey
-                    if let defaultAgent = launcher.selectableAgents.first(where: { $0 == .codex }) ?? launcher.selectableAgents.first {
-                        store.resetChipsForRepo(
-                            key,
-                            defaults: launcher.chipDefaults(for: defaultAgent)
-                        )
-                    } else {
-                        store.repoKey = key
-                    }
-                }
-            )) {
-                Text("(custom path)").tag("")
-                ForEach(model.repos, id: \.key) { repo in
-                    Text(repo.displayName).tag(repo.key)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            Spacer()
-            Text("Goal becomes the first user message.")
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-    }
-
     private var modelSupportsEffort: Bool {
         launcher.supportsEffort(modelId: store.modelId)
     }
 
-    private var panelBg: Color {
-        Color.secondary.opacity(0.06)
+    // MARK: - Below-box meta chips (repo · account · device)
+
+    /// Borderless ghost chips under the composer box — Codex-style. Repo and
+    /// the execution-host "device" picker always show; the preferred-account
+    /// picker shows only for kinds that support multi-account (Claude / Codex).
+    private var metaChipRow: some View {
+        HStack(spacing: 4) {
+            repoMenu
+            if showsAccountMenu {
+                metaChipDivider
+                accountMenu
+            }
+            metaChipDivider
+            deviceMenu
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var metaChipDivider: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.18))
+            .frame(width: 1, height: 13)
+            .padding(.horizontal, 2)
+    }
+
+    private func ghostChipLabel(icon: String, text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 28)
+        .contentShape(Rectangle())
+    }
+
+    // Repo
+    private var repoLabel: String {
+        if let key = store.repoKey, !key.isEmpty {
+            if let repo = model.repos.first(where: { $0.key == key }) {
+                return repo.displayName
+            }
+            return (key as NSString).lastPathComponent
+        }
+        return "Choose repo"
+    }
+
+    private var repoMenu: some View {
+        Menu {
+            ForEach(model.repos, id: \.key) { repo in
+                Button {
+                    selectRepo(repo.key)
+                } label: {
+                    if store.repoKey == repo.key {
+                        Label(repo.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(repo.displayName)
+                    }
+                }
+            }
+        } label: {
+            ghostChipLabel(icon: "folder", text: repoLabel)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Repository this session runs in")
+    }
+
+    private func selectRepo(_ key: String) {
+        let resolved = key.isEmpty ? nil : key
+        if let defaultAgent = launcher.selectableAgents.first(where: { $0 == .codex }) ?? launcher.selectableAgents.first {
+            store.resetChipsForRepo(resolved, defaults: launcher.chipDefaults(for: defaultAgent))
+        } else {
+            store.repoKey = resolved
+        }
+    }
+
+    // Account (preferred subscription) — only Claude / Codex have multi-account.
+    private var showsAccountMenu: Bool {
+        ProviderInstanceEnvironment.configDirVariable(for: store.agent) != nil
+    }
+
+    private func accountItemLabel(_ instance: ProviderInstanceId) -> String {
+        instance.isPrimary ? "Default" : instance.name
+    }
+
+    private var accountMenu: some View {
+        Menu {
+            ForEach(accountChoices, id: \.wireId) { instance in
+                Button {
+                    let wire = instance.isPrimary ? nil : instance.wireId
+                    selectedAccountWireId = wire
+                    CodePreferredAccountStore.setPreferred(wireId: wire, for: store.agent)
+                } label: {
+                    let isCurrent = instance.isPrimary
+                        ? selectedAccountWireId == nil
+                        : selectedAccountWireId == instance.wireId
+                    if isCurrent {
+                        Label(accountItemLabel(instance), systemImage: "checkmark")
+                    } else {
+                        Text(accountItemLabel(instance))
+                    }
+                }
+            }
+            Divider()
+            Button {
+                openSettings(section: "providers")
+            } label: {
+                Label("Add account…", systemImage: "plus")
+            }
+        } label: {
+            ghostChipLabel(
+                icon: "person.crop.circle",
+                text: ProviderAccountChip.displayLabel(for: selectedAccountWireId, in: accountChoices)
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Which account runs this session")
+    }
+
+    // Device (execution host) — This Mac / second Mac / VPC.
+    private var remoteHosts: [ExecutionHost] {
+        executionHosts.filter { $0.id != localExecutionHostId }
+    }
+
+    private var isThisMacSelected: Bool {
+        selectedHostId == nil || selectedHostId == localExecutionHostId
+    }
+
+    private var deviceLabel: String {
+        if let id = selectedHostId, id != localExecutionHostId,
+           let host = executionHosts.first(where: { $0.id == id }) {
+            return host.displayName
+        }
+        return "This Mac"
+    }
+
+    private var deviceMenu: some View {
+        Menu {
+            Button {
+                selectedHostId = nil
+            } label: {
+                if isThisMacSelected {
+                    Label("This Mac", systemImage: "checkmark")
+                } else {
+                    Text("This Mac")
+                }
+            }
+            ForEach(remoteHosts) { host in
+                Button {
+                    selectedHostId = host.id
+                } label: {
+                    if selectedHostId == host.id {
+                        Label(host.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(host.displayName)
+                    }
+                }
+            }
+            Divider()
+            Button {
+                openSettings(section: "devices")
+            } label: {
+                Label("Add device…", systemImage: "plus")
+            }
+        } label: {
+            ghostChipLabel(
+                icon: isThisMacSelected ? "laptopcomputer" : "server.rack",
+                text: deviceLabel
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Where this session runs")
+    }
+
+    private func openSettings(section: String) {
+        NotificationCenter.default.post(
+            name: .clawdmeterOpenSettingsSection,
+            object: nil,
+            userInfo: ["section": section]
+        )
+    }
+
+    /// Loads the account list (for the current agent) and the registered
+    /// execution hosts. Re-read on appear and on agent change so a newly added
+    /// account/device joins the pickers without a relaunch.
+    @MainActor
+    private func refreshMetaChoices() async {
+        if let registry = AppDelegate.runtime?.providerInstanceRegistry,
+           ProviderInstanceEnvironment.configDirVariable(for: store.agent) != nil {
+            accountChoices = await registry.instances(for: store.agent)
+        } else {
+            accountChoices = []
+        }
+        if let client = AppDelegate.runtime?.loopbackClient, client.supportsExecutionHosts {
+            await client.refreshExecutionHosts()
+            executionHosts = client.executionHosts
+            localExecutionHostId = client.localExecutionHostId
+            if let id = selectedHostId, !executionHosts.contains(where: { $0.id == id }) {
+                selectedHostId = nil
+            }
+        } else {
+            executionHosts = []
+            localExecutionHostId = nil
+            selectedHostId = nil
+        }
     }
 
     @MainActor
@@ -222,6 +408,34 @@ struct EmptyStateCenteredComposer: View {
         let bypassPicked = store.permissionMode == .bypass
         if bypassPicked {
             AutopilotState.shared.trustRepo(repoKey)
+        }
+        // Remote execution host selected → spawn on that host (mirrors the New
+        // Session sheet's remote path). The full prompt rides along as the goal;
+        // loopback attachment-staging + MacComposerSender are local-only, so
+        // attachments aren't carried to a remote host here.
+        if let client = runtime.loopbackClient,
+           client.supportsExecutionHosts,
+           let targetId = selectedHostId,
+           targetId != localExecutionHostId {
+            let session = await client.createSession(NewSessionRequest(
+                repoKey: repoKey,
+                agent: store.agent,
+                model: store.modelId,
+                planMode: store.permissionMode == .plan,
+                goal: prompt.isEmpty ? nil : prompt,
+                useWorktree: true,
+                effort: launcher.supportsEffort(modelId: store.modelId) ? store.effort : nil,
+                providerInstanceId: selectedAccountWireId,
+                customProviderId: store.customProviderId,
+                targetHostId: targetId
+            ))
+            guard let session else {
+                store.endSend(error: .spawnFailed(message: client.lastError ?? "Remote spawn failed."))
+                return
+            }
+            model.openSessionId = session.id
+            store.endSend()
+            return
         }
         do {
             let firstSendPlan = EmptyStateFirstSendPlan.make(

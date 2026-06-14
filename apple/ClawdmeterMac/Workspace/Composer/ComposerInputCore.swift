@@ -757,7 +757,6 @@ struct ComposerInputCore: View {
                     onChange: { newMode in onChangePermissionMode?(newMode) }
                 )
             }
-            providerAccountChip
             Spacer(minLength: 8)
             let resolvedInfo = usageStatus ?? Self.placeholderUsage(modelId: store.modelId, effort: store.effort, catalog: catalog)
             ModelEffortChip(
@@ -789,6 +788,7 @@ struct ComposerInputCore: View {
                     onChange: { store.effort = $0 }
                 )
             }
+            micButton
             sendOrStopButton
         }
     }
