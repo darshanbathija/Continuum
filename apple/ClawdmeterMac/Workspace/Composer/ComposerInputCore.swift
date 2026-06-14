@@ -148,14 +148,6 @@ struct ComposerInputCore: View {
         )
     }
 
-    static func shouldShowQueueFollowUpButton(
-        isReadOnly: Bool,
-        sessionIsRunning: Bool,
-        hasQueueHandler: Bool
-    ) -> Bool {
-        !isReadOnly && sessionIsRunning && hasQueueHandler
-    }
-
     static func pendingActionDescriptors(
         for state: OptimisticPendingMessage.State
     ) -> [PendingActionDescriptor] {
@@ -740,7 +732,6 @@ struct ComposerInputCore: View {
                 .layoutPriority(1)
             }
             providerAccountChip
-            queueFollowUpButton
 
             switch store.modeKind {
             case .bound:
@@ -1224,29 +1215,6 @@ struct ComposerInputCore: View {
             .help(planApprovalMode ? "Approve or refine the plan above" : "Send (↩ · ⇧↩ for newline)")
             .accessibilityLabel(action.accessibilityLabel)
             .accessibilityIdentifier(action.accessibilityIdentifier)
-        }
-    }
-
-    @ViewBuilder
-    private var queueFollowUpButton: some View {
-        if Self.shouldShowQueueFollowUpButton(
-            isReadOnly: isReadOnly,
-            sessionIsRunning: sessionIsRunning,
-            hasQueueHandler: onQueue != nil
-        ) {
-            Button(action: ContinuumAnalytics.wrapButton("queue_follow_up", queueCurrentDraft)) {
-                Image(systemName: store.isSending ? "tray.and.arrow.down" : "tray.and.arrow.down.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(store.canSend && !store.isSending ? t.accent : t.fg3)
-                    .frame(width: 28, height: 28)
-                    .background(t.hair2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-            .buttonStyle(PressableButtonStyle())
-            .keyboardShortcut(.return, modifiers: [.option])
-            .disabled(!store.canSend || store.isSending)
-            .help("Queue follow-up (⌥↩)")
-            .accessibilityLabel("Queue follow-up")
-            .accessibilityIdentifier("code.composer.queue-follow-up")
         }
     }
 
