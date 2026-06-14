@@ -1964,6 +1964,16 @@ public final class SessionsModel: ObservableObject {
         }
     }
 
+    func consumeDraftWorkspaceTab(_ tab: WorkspaceDraftTab, opening session: AgentSession) {
+        workspaceDraftTabs.removeAll { $0.id == tab.id }
+        draftComposerStores.removeValue(forKey: tab.id)
+        selectedWorkspaceDraftTabId = nil
+        selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = nil
+        openOutsideJSONLPath = nil
+        openSessionId = session.id
+    }
+
     /// #185-named convenience over `openDraftWorkspaceTab(from:defaults:)`.
     ///
     /// The #185 chip + shortcut-registry surface refers to "spawning a

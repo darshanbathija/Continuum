@@ -34,6 +34,15 @@ struct CodeTitlebarPRControl: View {
         .onAppear {
             prMirror.startWatching()
             prCoordinator.startWatching()
+            publishCurrentPRCache()
+        }
+        .onChange(of: prMirror.state) { _, state in
+            guard let state else { return }
+            recordPRCache(PRCacheStateSnapshot(sessionId: session.id, mirrorState: state))
+        }
+        .onChange(of: prCoordinator.snapshot) { _, snapshot in
+            guard let snapshot else { return }
+            recordPRCache(PRCacheStateSnapshot(sessionId: session.id, coordinatorSnapshot: snapshot))
         }
     }
 
@@ -168,6 +177,25 @@ struct CodeTitlebarPRControl: View {
 
     private var resolvedPR: PRMirror.PRState? {
         prMirror.state
+    }
+
+    private func publishCurrentPRCache() {
+        if let state = prMirror.state {
+            recordPRCache(PRCacheStateSnapshot(sessionId: session.id, mirrorState: state))
+        }
+        if let snapshot = prCoordinator.snapshot {
+            recordPRCache(PRCacheStateSnapshot(sessionId: session.id, coordinatorSnapshot: snapshot))
+        }
+    }
+
+    private func recordPRCache(_ cache: PRCacheStateSnapshot) {
+        let existing = workbenchState.snapshot.prCache[session.id]
+        guard existing?.prURL != cache.prURL
+            || existing?.state != cache.state
+            || existing?.checksConclusion != cache.checksConclusion
+            || existing?.updatedAt != cache.updatedAt
+        else { return }
+        workbenchState.recordPRCache(cache)
     }
 
     private var chatSnapshot: SessionChatStore.ChatSnapshot? {

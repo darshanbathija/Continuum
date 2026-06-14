@@ -4,6 +4,29 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.42.2 build 249] - 2026-06-14 - Chat/composer/Code-workspace polish: working indicators, live diff + PR status
+
+A UI polish pass across the chat thread, composer, and Code workspace.
+
+### Changed
+
+- **Working indicator:** consistent orange accent, seamless (no pill), stops on
+  turn completion. (#499, #506, #510)
+- **Composer follow-up queue** renders above the box; redundant in-composer queue
+  button removed (queue via Return while running). (#508, #509)
+- Empty chat-turn disclosure hidden (#498); jump-to-latest anchored above the
+  composer (#501); message copy affordance made a visible button (#502).
+- Removed redundant context-usage percent label (#496); edited-file chips show
+  tech-stack icons (#503).
+
+### Fixed
+
+- **Live Code diff + PR indicators:** +N/-N diff counts refresh live (#505),
+  branch PR-status icon refreshes (#504), worktree diff stays visible on archive
+  hover (#507).
+- Active-session labels resolve reliably + show live stream (#500).
+- Stuck "pending" attachment in the composer after send (#497).
+
 ## [0.42.1 build 248] - 2026-06-14 - Spawn + composer + update fixes, simpler voice picker, device onboarding
 
 A focused fix round across spawn mode, the composer, and updates, plus a flat

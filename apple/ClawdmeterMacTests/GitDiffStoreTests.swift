@@ -159,6 +159,48 @@ final class GitDiffStoreTests: XCTestCase {
         XCTAssertEqual(WorktreeDiffFormatting.compactCount(1680), "1.7k")
     }
 
+    func test_worktreeDiffTrackerIncludesUncommittedTrackedChanges() async throws {
+        let git = try XCTUnwrap(git)
+        try "baseline\nlocal fix\n".write(
+            to: repoURL.appendingPathComponent("tracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let tracker = WorktreeDiffTracker(gitLocator: { git })
+
+        await tracker.refresh(paths: [repoURL.path])
+
+        let stat = try XCTUnwrap(tracker.stat(for: repoURL.path))
+        // Exactly one added line on top of HEAD — staged and unstaged numstats
+        // must not double-count the same change.
+        XCTAssertEqual(stat.additions, 1)
+        XCTAssertEqual(stat.deletions, 0)
+    }
+
+    func test_worktreeDiffTrackerSumsStagedAndUnstagedWithoutOverlap() async throws {
+        let git = try XCTUnwrap(git)
+        // Stage one new line, then add a second uncommitted line on top.
+        try "baseline\nstaged line\n".write(
+            to: repoURL.appendingPathComponent("tracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await runGit(["add", "tracked.txt"])
+        try "baseline\nstaged line\nunstaged line\n".write(
+            to: repoURL.appendingPathComponent("tracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let tracker = WorktreeDiffTracker(gitLocator: { git })
+
+        await tracker.refresh(paths: [repoURL.path])
+
+        let stat = try XCTUnwrap(tracker.stat(for: repoURL.path))
+        // Two distinct added lines (one staged, one unstaged) — total 2, not 3+.
+        XCTAssertEqual(stat.additions, 2)
+        XCTAssertEqual(stat.deletions, 0)
+    }
+
     func test_gitDiffPaneActionDescriptorsExposeStableTargets() {
         let unstagedFile = GitDiffPane.fileActionDescriptors(for: .unstaged)
         XCTAssertEqual(GitDiffPane.FileActionDescriptors.rowAccessibilityIdentifier, "code.diff.git.file.row")

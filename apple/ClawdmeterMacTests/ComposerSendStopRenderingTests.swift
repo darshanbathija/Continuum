@@ -14,7 +14,7 @@ final class ComposerSendStopRenderingTests: XCTestCase {
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
     }
 
-    func test_idleComposerPrimaryActionIsIconOnlySendWithoutStopOrQueue() {
+    func test_idleComposerPrimaryActionIsIconOnlySendWithoutStop() {
         let action = ComposerInputCore.primaryActionDescriptor(
             isReadOnly: false,
             sessionIsRunning: false,
@@ -27,15 +27,10 @@ final class ComposerSendStopRenderingTests: XCTestCase {
         XCTAssertEqual(action.accessibilityLabel, "Send")
         XCTAssertEqual(action.accessibilityIdentifier, "code.composer.send")
         XCTAssertNil(action.visibleTitle)
-        XCTAssertFalse(ComposerInputCore.shouldShowQueueFollowUpButton(
-            isReadOnly: false,
-            sessionIsRunning: false,
-            hasQueueHandler: true
-        ))
         assertNoLegacyActionText(action)
     }
 
-    func test_runningComposerPrimaryActionIsIconOnlyStopWithQueueInsteadOfSend() {
+    func test_runningComposerPrimaryActionIsIconOnlyStopWithoutQueueOrSend() {
         let action = ComposerInputCore.primaryActionDescriptor(
             isReadOnly: false,
             sessionIsRunning: true,
@@ -48,11 +43,6 @@ final class ComposerSendStopRenderingTests: XCTestCase {
         XCTAssertEqual(action.accessibilityLabel, "Stop")
         XCTAssertEqual(action.accessibilityIdentifier, "code.composer.stop")
         XCTAssertNil(action.visibleTitle)
-        XCTAssertTrue(ComposerInputCore.shouldShowQueueFollowUpButton(
-            isReadOnly: false,
-            sessionIsRunning: true,
-            hasQueueHandler: true
-        ))
         assertNoLegacyActionText(action)
     }
 

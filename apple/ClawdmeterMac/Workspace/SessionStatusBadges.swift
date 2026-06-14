@@ -98,9 +98,11 @@ struct AttentionBadge: View {
 /// Conductor-style `+N -M` badge for a worktree's diff against the default branch.
 struct WorktreeDiffBadge: View {
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let stat: WorktreeDiffStat
     /// Selected/open rows tint the deltas; idle rows stay muted.
     let emphasized: Bool
+    @State private var bumpOffset: CGFloat = 0
 
     var body: some View {
         HStack(spacing: 4) {
@@ -115,8 +117,12 @@ struct WorktreeDiffBadge: View {
         }
         .font(TahoeFont.body(9.5, weight: .semibold))
         .monospacedDigit()
+        .offset(y: bumpOffset)
         .accessibilityIdentifier("code.worktree.diff")
         .accessibilityLabel(diffAccessibilityLabel)
+        .onChange(of: stat) { oldValue, newValue in
+            animateChange(from: oldValue, to: newValue)
+        }
     }
 
     private var diffAccessibilityLabel: String {
@@ -124,6 +130,20 @@ struct WorktreeDiffBadge: View {
         if stat.additions > 0 { parts.append("\(stat.additions) additions") }
         if stat.deletions > 0 { parts.append("\(stat.deletions) deletions") }
         return parts.isEmpty ? "No diff" : parts.joined(separator: ", ")
+    }
+
+    private func animateChange(from oldValue: WorktreeDiffStat, to newValue: WorktreeDiffStat) {
+        guard !reduceMotion, oldValue != newValue else { return }
+        let oldTotal = oldValue.additions + oldValue.deletions
+        let newTotal = newValue.additions + newValue.deletions
+        let direction: CGFloat = newTotal >= oldTotal ? -2.5 : 2.5
+        bumpOffset = 0
+        withAnimation(.easeOut(duration: 0.12)) {
+            bumpOffset = direction
+        }
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.72).delay(0.12)) {
+            bumpOffset = 0
+        }
     }
 
     private static let additionsTint = Color(red: 0x52 / 255.0, green: 0xC4 / 255.0, blue: 0x1A / 255.0)
