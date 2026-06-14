@@ -156,6 +156,15 @@ final class UpdateCoordinator: ObservableObject {
     private var lastManualCheckAt: Date?
     private var releaseMetadataTask: Task<Void, Never>?
     private var currentUpdate: SparkleUpdateInfo?
+    /// While true, ignore stale download/install progress callbacks from a
+    /// just-cancelled download so a queued frame can't flip the reverted
+    /// popover back to `.installing`. Cleared the moment a fresh cycle begins.
+    private var suppressDownloadCallbacks = false
+    /// Count of user-initiated cancels still awaiting Sparkle's async abort
+    /// callback. Each pending callback is swallowed (we already reverted the
+    /// popover) so it can't overwrite the current state — even if the user has
+    /// since re-pressed Update and a new download is underway.
+    private var pendingDownloadCancelCallbacks = 0
 
     var currentVersion: String {
         currentVersionProvider() ?? "unknown"
@@ -255,10 +264,20 @@ final class UpdateCoordinator: ObservableObject {
         state = .userCancelled(version: version)
     }
 
-    /// Cancel an in-flight download. Sparkle reports the cancellation back
-    /// through the driver, which transitions the state to `.userCancelled`.
+    /// Cancel an in-flight download. The popover snaps back to the pre-download
+    /// `.updateAvailable` state synchronously — as if Update was never pressed —
+    /// instead of waiting for Sparkle's async abort callback, which can lag the
+    /// click by hundreds of ms. The driver still tears down the live download.
     func cancelInstall() {
-        guard case .installing = state else { return }
+        guard canCancelInstall else { return }
+        suppressDownloadCallbacks = true
+        pendingDownloadCancelCallbacks += 1
+        installProgress = nil
+        if let currentUpdate {
+            state = .updateAvailable(currentUpdate)
+        } else {
+            state = .userCancelled(version: nil)
+        }
         driver?.cancelInstall()
     }
 
@@ -508,11 +527,13 @@ final class UpdateCoordinator: ObservableObject {
 
 extension UpdateCoordinator: SparkleUpdateDriverDelegate {
     func updateDriverDidStartChecking() {
+        suppressDownloadCallbacks = false
         guard !isRefreshingUpdateStatus else { return }
         state = .checking
     }
 
     func updateDriverDidFindUpdate(_ update: SparkleUpdateInfo) {
+        suppressDownloadCallbacks = false
         isRefreshingUpdateStatus = false
         installProgress = nil
         currentUpdate = update
@@ -522,6 +543,7 @@ extension UpdateCoordinator: SparkleUpdateDriverDelegate {
     }
 
     func updateDriverDidNotFindUpdate() {
+        suppressDownloadCallbacks = false
         isRefreshingUpdateStatus = false
         installProgress = nil
         currentUpdate = nil
@@ -532,6 +554,8 @@ extension UpdateCoordinator: SparkleUpdateDriverDelegate {
     }
 
     func updateDriverDidStartInstalling(_ update: SparkleUpdateInfo?) {
+        // Ignore a stale frame from a download the user just cancelled.
+        guard !suppressDownloadCallbacks else { return }
         if let update { currentUpdate = update }
         if installProgress == nil { installProgress = UpdateInstallProgress(phase: .downloading, fraction: nil) }
         state = .installing(update ?? currentUpdate)
@@ -539,6 +563,8 @@ extension UpdateCoordinator: SparkleUpdateDriverDelegate {
     }
 
     func updateDriverDidUpdateProgress(_ progress: UpdateInstallProgress) {
+        // Ignore a stale frame from a download the user just cancelled.
+        guard !suppressDownloadCallbacks else { return }
         // Progress only makes sense while installing; flip the state if a
         // resumed (already-downloaded) update jumps straight to extraction.
         if case .installing = state {} else {
@@ -556,6 +582,14 @@ extension UpdateCoordinator: SparkleUpdateDriverDelegate {
 
     func updateDriverDidCancel(version: String?) {
         isRefreshingUpdateStatus = false
+        // A user-initiated Cancel already reverted the popover synchronously;
+        // this late Sparkle callback only confirms the download stopped, so
+        // swallow it rather than overwriting the current state.
+        if pendingDownloadCancelCallbacks > 0 {
+            pendingDownloadCancelCallbacks -= 1
+            suppressDownloadCallbacks = false
+            return
+        }
         installProgress = nil
         state = .userCancelled(version: version ?? currentUpdate?.displayVersion)
     }
