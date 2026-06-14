@@ -618,12 +618,11 @@ struct SidebarPane: View {
                     .font(TahoeFont.body(12, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer()
-                // The "+" yields to a settings gear (overlay below) while
-                // hovering, so the gear lands where the eye already is.
+                // The "+" stays put; on hover a settings gear (overlay below)
+                // slides in just to its left, so the gear never covers the "+".
                 Image(systemName: "plus")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(t.fg3)
-                    .opacity(spawnButtonHovering ? 0 : 1)
             }
             .padding(.horizontal, 10)
             .frame(height: 30)
@@ -657,7 +656,9 @@ struct SidebarPane: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.trailing, 5)
+                // Sit to the LEFT of the persistent "+" (which ends ~10pt from
+                // the trailing edge and is ~10pt wide) so the two don't overlap.
+                .padding(.trailing, 24)
                 .help("Spawn settings")
                 .accessibilityLabel("Open Spawn settings")
                 .accessibilityIdentifier("code.sidebar.spawn.settings")
