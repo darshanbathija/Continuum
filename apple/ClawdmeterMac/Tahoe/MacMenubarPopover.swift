@@ -329,6 +329,11 @@ public struct MacMenubarPopover: View {
         // self-owned driver never bumps `epoch`, so the preview / legacy
         // paths keep seed-once behavior.
         .onChange(of: selectionDriver.epoch) { _, _ in
+            // The NSPopover + NSHostingController is reused across opens, so a
+            // hover left set at close time would paint a phantom wash on a tab
+            // the pointer isn't over until the user moves the mouse. The
+            // controller bumps `epoch` on every open, so clear it here.
+            hoveredProvider = nil
             let requested = enabledProviders.contains(selectionDriver.requested)
                 ? selectionDriver.requested
                 : (enabledProviders.first ?? selectionDriver.requested)
@@ -337,10 +342,20 @@ public struct MacMenubarPopover: View {
             tx.disablesAnimations = true
             withTransaction(tx) { selected = requested }
         }
+        // Belt-and-suspenders for the seed-once / self-owned-driver paths that
+        // never bump `epoch`: clear the hover when the popover detaches so it
+        // can't survive into the next open.
+        .onDisappear { hoveredProvider = nil }
         .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
             enabledProviderIDs = ProviderEnablement.enabledProviderIDs(for: .menuBar)
             if !enabledProviders.contains(selected), let first = enabledProviders.first {
                 selected = first
+            }
+            // A hovered tab may have just been removed from the segmented
+            // control; onHover(false) won't fire for a view that's gone, so
+            // drop a now-stale hover to avoid a phantom wash if it re-enables.
+            if let h = hoveredProvider, !enabledProviders.contains(h) {
+                hoveredProvider = nil
             }
         }
     }
