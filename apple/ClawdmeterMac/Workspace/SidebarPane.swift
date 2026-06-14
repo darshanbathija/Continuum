@@ -61,11 +61,13 @@ struct SidebarPane: View {
     @State private var hoveredSessionId: UUID?
     @State private var hoveredWorktreePath: String?
     @State private var hoveredRecentPath: String?
-    /// Drag-to-reorder state for the managed Projects list. `hoveredRepoHeaderKey`
-    /// reveals the grip handle on hover; `dropTargetRepoKey` paints the
-    /// insertion highlight while a project is dragged over a header.
-    @State private var hoveredRepoHeaderKey: String?
+    /// Drag-to-reorder state for the managed Projects list. The whole project
+    /// header is the drag handle now (the grip dot-grid is gone): hovering shows
+    /// an open palm, grabbing flips to a closed palm. `dropTargetRepoKey` paints
+    /// the insertion highlight while a project is dragged over a header;
+    /// `pressedRepoHeaderKey` drives the closed-palm cursor while a header is held.
     @State private var dropTargetRepoKey: String?
+    @GestureState private var pressedRepoHeaderKey: String?
     @State private var colorTagTarget: AgentSession?
     @State private var colorTagInput: String = ""
     @State private var showingColorTagAlert = false
@@ -1956,27 +1958,6 @@ struct SidebarPane: View {
         onToggle: @escaping () -> Void
     ) -> some View {
         let row = HStack(spacing: 8) {
-            // Drag handle — revealed on hover so it never competes with the
-            // chevron tap. Drag from here to reorder projects; the grip slot is
-            // always reserved (opacity, not layout) so the header doesn't jitter.
-            if let reorderKey {
-                Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(t.fg3)
-                    .frame(width: 11)
-                    .opacity(hoveredRepoHeaderKey == reorderKey ? 0.65 : 0.0)
-                    .contentShape(Rectangle())
-                    .draggable(reorderKey) {
-                        Text(repo.displayName)
-                            .font(TahoeFont.body(12, weight: .semibold))
-                            .foregroundStyle(t.fg)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    }
-                    .help("Drag to reorder project")
-                    .accessibilityIdentifier("code.repo.reorder-grip")
-            }
             Button(action: ContinuumAnalytics.wrapButton("sidebar_toggle_repo", onToggle)) {
                 HStack(spacing: 8) {
                     TahoeIcon(isExpanded ? "chevD" : "chevR", size: 10)
@@ -2045,7 +2026,7 @@ struct SidebarPane: View {
         .padding(.horizontal, SidebarLayout.edgeInset)
         .padding(.vertical, subtitle == nil ? 6 : 5)
 
-        return row
+        let decorated = row
             .overlay(alignment: .top) {
                 if let reorderKey, dropTargetRepoKey == reorderKey {
                     Rectangle()
@@ -2053,11 +2034,6 @@ struct SidebarPane: View {
                         .frame(height: 2)
                         .padding(.horizontal, SidebarLayout.edgeInset)
                 }
-            }
-            .onHover { inside in
-                guard let reorderKey else { return }
-                if inside { hoveredRepoHeaderKey = reorderKey }
-                else if hoveredRepoHeaderKey == reorderKey { hoveredRepoHeaderKey = nil }
             }
             .dropDestination(for: String.self) { items, _ in
                 guard let reorderKey, let dragged = items.first else { return false }
@@ -2069,6 +2045,32 @@ struct SidebarPane: View {
                 if targeted { dropTargetRepoKey = reorderKey }
                 else if dropTargetRepoKey == reorderKey { dropTargetRepoKey = nil }
             }
+
+        // The entire project header is the drag handle. Hovering shows an open
+        // palm (`.grabIdle`); pressing it flips to a closed palm (`.grabActive`)
+        // — the macOS affordance for "you're holding this, drag to reorder". The
+        // infinite long-press never fires; it just tracks the held state and
+        // auto-resets when the press ends or the drag session takes over.
+        guard let reorderKey else { return AnyView(decorated) }
+        return AnyView(
+            decorated
+                .draggable(reorderKey) {
+                    Text(repo.displayName)
+                        .font(TahoeFont.body(12, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                .pointerStyle(pressedRepoHeaderKey == reorderKey ? .grabActive : .grabIdle)
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: .infinity)
+                        .updating($pressedRepoHeaderKey) { _, state, _ in
+                            state = reorderKey
+                        }
+                )
+                .help("Drag to reorder project")
+        )
     }
 
     private func repoHeader(_ repo: AgentRepo, isExpanded: Bool, sessionCount: Int) -> some View {
